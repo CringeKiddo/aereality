@@ -13,12 +13,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # NEW: This creates the missing android/ folder
-      - name: Generate Android project
-        run: |
-          flutter create --platforms=android --org com.example .
-          git checkout -- lib/ shaders/ pubspec.yaml
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -30,6 +24,12 @@ jobs:
         with:
           channel: 'stable'
           flutter-version: '3.22.0'
+
+      # NOW Flutter is installed – generate the missing android/ folder
+      - name: Generate Android project
+        run: |
+          flutter create --platforms=android --org com.example .
+          git checkout -- lib/ shaders/ pubspec.yaml
 
       - name: Cache Flutter dependencies
         uses: actions/cache@v4
