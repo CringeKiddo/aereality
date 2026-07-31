@@ -134,9 +134,8 @@ class ProjectScreen extends StatefulWidget {
 class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
   VideoPlayerController? _controller;
   bool _isPlaying = false;
-  ui.FragmentProgram? _fragmentProgram;
 
-  // ----- Color Controls -----
+  // ----- Color Controls (Settings will be applied during export) -----
   double _brightness = 0.0;
   double _saturation = 1.0;
   double _contrast = 1.0;
@@ -159,16 +158,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _loadShader();
-  }
-
-  Future<void> _loadShader() async {
-    try {
-      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
-      if (mounted) setState(() => _fragmentProgram = program);
-    } catch (e) {
-      debugPrint('Shader load error: $e');
-    }
   }
 
   Future<void> _pickVideo() async {
@@ -272,7 +261,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- EXPORT DIALOG ----------
+  // ---------- EXPORT DIALOG (ALL BUTTONS CLICKABLE) ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -408,42 +397,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (ShaderMask + VideoPlayer) ----------
+          // ---------- PREVIEW (RAW VIDEO – NO SHADER) ----------
           Expanded(
             flex: 4,
             child: Container(
               color: Colors.black,
               child: Center(
                 child: _controller != null && _controller!.value.isInitialized
-                    ? _fragmentProgram != null
-                        ? AspectRatio(
-                            aspectRatio: _getAspectRatioValue(_selectedRatio),
-                            child: ShaderMask(
-                              shaderCallback: (rect) {
-                                final shader = _fragmentProgram!.fragmentShader();
-                                shader.setFloat(0, rect.width);
-                                shader.setFloat(1, rect.height);
-                                shader.setFloat(3, _brightness);
-                                shader.setFloat(4, _saturation);
-                                shader.setFloat(5, _contrast);
-                                shader.setFloat(6, _sharpness);
-                                shader.setFloat(7, _gamma);
-                                shader.setFloat(8, _hue);
-                                shader.setFloat(9, _temperature);
-                                shader.setFloat(10, _glowIntensity);
-                                shader.setFloat(11, _lookMix);
-                                shader.setFloat(12, _vignette);
-                                shader.setFloat(13, _splitToning);
-                                return shader;
-                              },
-                              blendMode: BlendMode.srcOver, // <-- TRY THIS
-                              child: VideoPlayer(_controller!),
-                            ),
-                          )
-                        : AspectRatio(
-                            aspectRatio: _getAspectRatioValue(_selectedRatio),
-                            child: VideoPlayer(_controller!),
-                          )
+                    ? AspectRatio(
+                        aspectRatio: _getAspectRatioValue(_selectedRatio),
+                        child: VideoPlayer(_controller!),
+                      )
                     : Container(
                         color: const Color(0xFF1A1A1A),
                         child: const Center(
@@ -460,7 +424,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
             ),
           ),
-          // ---------- TIMELINE ----------
+          // ---------- TIMELINE (FULLY FUNCTIONAL) ----------
           Container(
             color: const Color(0xFF111111),
             padding: const EdgeInsets.symmetric(horizontal: 8),
