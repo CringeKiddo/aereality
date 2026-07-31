@@ -25,6 +25,11 @@ jobs:
           channel: 'stable'
           flutter-version: '3.27.4'
 
+      - name: Generate Android resources
+        run: |
+          flutter create --platforms=android --org com.example .
+          git checkout -- android/build.gradle android/settings.gradle android/app/build.gradle android/gradle.properties lib/ shaders/ pubspec.yaml
+
       - name: Cache Flutter dependencies
         uses: actions/cache@v4
         with:
