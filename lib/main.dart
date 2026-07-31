@@ -135,7 +135,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   ui.FragmentProgram? _fragmentProgram;
-  int? _textureId; // <-- Store texture ID
+  int? _textureId;
 
   // ----- Color Controls -----
   double _brightness = 0.0;
@@ -160,9 +160,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _loadShader();
   }
 
+  // ----- LOADING THE RED TEST SHADER -----
   Future<void> _loadShader() async {
     try {
-      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
+      final program = await ui.FragmentProgram.fromAsset('shaders/test_red.frag'); // <-- CHANGED TO TEST
       if (mounted) setState(() => _fragmentProgram = program);
     } catch (e) {
       debugPrint('Shader load error: $e');
@@ -179,11 +180,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
             setState(() {
-              // FIXED: textureId is on the controller, not on .value
               _textureId = _controller!.textureId;
             });
             _listener = () {
-              if (mounted) setState(() {}); // Update slider
+              if (mounted) setState(() {});
             };
             _controller!.addListener(_listener);
             _controller!.play();
@@ -238,7 +238,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- FIXED EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -375,17 +374,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           final shader = _fragmentProgram!.fragmentShader();
                           shader.setFloat(0, rect.width);
                           shader.setFloat(1, rect.height);
-                          shader.setFloat(3, _brightness);
-                          shader.setFloat(4, _saturation);
-                          shader.setFloat(5, _contrast);
-                          shader.setFloat(6, _sharpness);
-                          shader.setFloat(7, _gamma);
-                          shader.setFloat(8, _hue);
-                          shader.setFloat(9, _temperature);
-                          shader.setFloat(10, _glowIntensity);
-                          shader.setFloat(11, _lookMix);
-                          shader.setFloat(12, _vignette);
-                          shader.setFloat(13, _splitToning);
+                          // No need to set sliders for the red test
                           return shader;
                         },
                         blendMode: BlendMode.srcATop,
