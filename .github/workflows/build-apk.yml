@@ -25,13 +25,16 @@ jobs:
           channel: 'stable'
           flutter-version: '3.22.0'
 
-      - name: Generate Android project
+      - name: Generate Android project & add JitPack
         run: |
+          # 1. Create the Android folder
           flutter create --platforms=android --org com.example .
-          # Restore our custom files (lib/, shaders/, pubspec.yaml)
+          
+          # 2. Restore YOUR custom files (so your main.dart doesn't get overwritten)
           git checkout -- lib/ shaders/ pubspec.yaml
-          # ADD JitPack repository to android/build.gradle
-          sed -i '/allprojects {/,/}/ s|mavenCentral()|mavenCentral()\n        maven { url "https://jitpack.io" }|' android/build.gradle
+          
+          # 3. ADD JitPack to settings.gradle (this is the CORRECT file for newer Flutter)
+          sed -i '/mavenCentral()/a \        maven { url "https://jitpack.io" }' android/settings.gradle
 
       - name: Cache Flutter dependencies
         uses: actions/cache@v4
