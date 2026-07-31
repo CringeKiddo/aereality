@@ -123,6 +123,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+// ---------- CUSTOM PAINTER ----------
+class ShaderPreviewPainter extends CustomPainter {
+  final ui.Image image;
+  final ui.FragmentProgram program;
+  final double brightness, saturation, contrast, sharpness, gamma, hue;
+  final double temperature, glowIntensity, lookMix, vignette, splitToning;
+
+  const ShaderPreviewPainter({
+    required this.image,
+    required this.program,
+    required this.brightness,
+    required this.saturation,
+    required this.contrast,
+    required this.sharpness,
+    required this.gamma,
+    required this.hue,
+    required this.temperature,
+    required this.glowIntensity,
+    required this.lookMix,
+    required this.vignette,
+    required this.splitToning,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shader = program.fragmentShader();
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
+    shader.setImageSampler(2, image);
+    shader.setFloat(3, brightness);
+    shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast);
+    shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma);
+    shader.setFloat(8, hue);
+    shader.setFloat(9, temperature);
+    shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix);
+    shader.setFloat(12, vignette);
+    shader.setFloat(13, splitToning);
+
+    final paint = Paint()..shader = shader;
+    canvas.drawRect(Offset.zero & size, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.brightness != brightness ||
+        oldDelegate.saturation != saturation ||
+        oldDelegate.contrast != contrast ||
+        oldDelegate.sharpness != sharpness ||
+        oldDelegate.gamma != gamma ||
+        oldDelegate.hue != hue ||
+        oldDelegate.temperature != temperature ||
+        oldDelegate.glowIntensity != glowIntensity ||
+        oldDelegate.lookMix != lookMix ||
+        oldDelegate.vignette != vignette ||
+        oldDelegate.splitToning != splitToning;
+  }
+}
+
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -135,7 +197,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   ui.FragmentProgram? _fragmentProgram;
-  int? _textureId;
+
+  // ----- FRAME CAPTURE -----
+  ui.Image? _currentFrame;
+  bool _frameBusy = false;
+  VoidCallback _listener = () {};
 
   // ----- Color Controls -----
   double _brightness = 0.0;
@@ -150,8 +216,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _vignette = 0.0;
   double _splitToning = 0.0;
 
+  // ----- ASPECT RATIO (NEW/BACK) -----
+  String _selectedRatio = "16:9";
+
   late TabController _tabController;
-  VoidCallback _listener = () {};
 
   @override
   void initState() {
@@ -160,14 +228,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _loadShader();
   }
 
-  // ----- LOADING THE RED TEST SHADER -----
   Future<void> _loadShader() async {
     try {
-      final program = await ui.FragmentProgram.fromAsset('shaders/test_red.frag'); // <-- CHANGED TO TEST
+      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       if (mounted) setState(() => _fragmentProgram = program);
     } catch (e) {
       debugPrint('Shader load error: $e');
     }
+  }
+
+  void _updateFrame() async {
+    if (_frameBusy || _controller == null || !_controller!.value.isInitialized) return;
+    _frameBusy = true;
+    try {
+      final img = await _controller!.copyCurrentFrame();
+      if (img != null && mounted) {
+        final old = _currentFrame;
+        setState(() {
+          _currentFrame = img;
+        });
+        old?.dispose();
+      }
+    } catch (e) {
+      // ignore
+    }
+    _frameBusy = false;
   }
 
   Future<void> _pickVideo() async {
@@ -176,13 +261,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final path = result.files.single.path!;
       setState(() {
         _controller?.removeListener(_listener);
+        _currentFrame?.dispose();
+        _currentFrame = null;
         _controller?.dispose();
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
-            setState(() {
-              _textureId = _controller!.textureId;
-            });
+            setState(() {});
             _listener = () {
+              _updateFrame();
               if (mounted) setState(() {});
             };
             _controller!.addListener(_listener);
@@ -238,6 +324,42 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
+  // ---------- ASPECT RATIO SELECTOR (NEW/BACK) ----------
+  double _getAspectRatioValue(String ratio) {
+    switch (ratio) {
+      case "4:5": return 4 / 5;
+      case "16:9": return 16 / 9;
+      case "1:1": return 1 / 1;
+      default: return 16 / 9;
+    }
+  }
+
+  void _showRatioSelector() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (context) {
+        return SafeArea(
+          child: Wrap(
+            children: ["4:5", "16:9", "1:1"].map((ratio) {
+              return ListTile(
+                title: Text(ratio, style: const TextStyle(color: Colors.white)),
+                trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Colors.cyanAccent) : null,
+                onTap: () {
+                  setState(() {
+                    _selectedRatio = ratio;
+                  });
+                  Navigator.pop(context);
+                },
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------- FIXED EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -258,15 +380,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   const SizedBox(height: 20),
                   const Text('Resolution', style: TextStyle(color: Colors.white70)),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['720p', '1080p', '2K'].map((res) {
                       return Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: ElevatedButton(
+                          child: OutlinedButton(
                             onPressed: () => setStateModal(() => selectedRes = res),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: selectedRes == res ? Colors.white : Colors.grey[800],
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: selectedRes == res ? Colors.white : Colors.transparent,
                               foregroundColor: selectedRes == res ? Colors.black : Colors.white,
+                              side: BorderSide(color: selectedRes == res ? Colors.white : Colors.grey[800]!),
                             ),
                             child: Text(res),
                           ),
@@ -277,15 +401,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   const SizedBox(height: 16),
                   const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['30fps', '60fps', '90fps'].map((fps) {
                       return Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: ElevatedButton(
+                          child: OutlinedButton(
                             onPressed: () => setStateModal(() => selectedFps = fps),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: selectedFps == fps ? Colors.white : Colors.grey[800],
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: selectedFps == fps ? Colors.white : Colors.transparent,
                               foregroundColor: selectedFps == fps ? Colors.black : Colors.white,
+                              side: BorderSide(color: selectedFps == fps ? Colors.white : Colors.grey[800]!),
                             ),
                             child: Text(fps),
                           ),
@@ -296,15 +422,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   const SizedBox(height: 16),
                   const Text('Bitrate', style: TextStyle(color: Colors.white70)),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) {
                       return Expanded(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: ElevatedButton(
+                          child: OutlinedButton(
                             onPressed: () => setStateModal(() => selectedBit = bit),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: selectedBit == bit ? Colors.white : Colors.grey[800],
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: selectedBit == bit ? Colors.white : Colors.transparent,
                               foregroundColor: selectedBit == bit ? Colors.black : Colors.white,
+                              side: BorderSide(color: selectedBit == bit ? Colors.white : Colors.grey[800]!),
                             ),
                             child: Text(bit),
                           ),
@@ -353,6 +481,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          // ---------- ASPECT RATIO BUTTON (NEW/BACK) ----------
+          IconButton(
+            icon: const Icon(Icons.aspect_ratio),
+            onPressed: _showRatioSelector,
+            tooltip: 'Aspect Ratio',
+          ),
           IconButton(
             icon: const Icon(Icons.folder_open),
             onPressed: _pickVideo,
@@ -362,39 +496,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (Texture + ShaderMask) ----------
+          // ---------- PREVIEW (WITH ASPECT RATIO APPLIED) ----------
           Expanded(
             flex: 4,
             child: Container(
               color: Colors.black,
               child: Center(
-                child: _textureId != null && _fragmentProgram != null
-                    ? ShaderMask(
-                        shaderCallback: (rect) {
-                          final shader = _fragmentProgram!.fragmentShader();
-                          shader.setFloat(0, rect.width);
-                          shader.setFloat(1, rect.height);
-                          // No need to set sliders for the red test
-                          return shader;
-                        },
-                        blendMode: BlendMode.srcATop,
-                        child: Texture(textureId: _textureId!),
-                      )
-                    : _controller != null && _controller!.value.isInitialized
-                        ? VideoPlayer(_controller!) // Fallback raw video
-                        : Container(
-                            color: const Color(0xFF1A1A1A),
-                            child: const Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                                  SizedBox(height: 8),
-                                  Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                                ],
-                              ),
-                            ),
-                          ),
+                child: _buildPreview(), // <-- Applies selected ratio
               ),
             ),
           ),
@@ -531,6 +639,62 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // ---------- PREVIEW HELPER (APPLIES ASPECT RATIO) ----------
+  Widget _buildPreview() {
+    if (_controller == null || !_controller!.value.isInitialized) {
+      return Container(
+        color: const Color(0xFF1A1A1A),
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+              SizedBox(height: 8),
+              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Determine which ratio to use
+    double aspectRatio = _getAspectRatioValue(_selectedRatio);
+
+    // If we have a shader and a captured frame, use CustomPaint
+    if (_currentFrame != null && _fragmentProgram != null) {
+      return AspectRatio(
+        aspectRatio: aspectRatio,
+        child: CustomPaint(
+          painter: ShaderPreviewPainter(
+            image: _currentFrame!,
+            program: _fragmentProgram!,
+            brightness: _brightness,
+            saturation: _saturation,
+            contrast: _contrast,
+            sharpness: _sharpness,
+            gamma: _gamma,
+            hue: _hue,
+            temperature: _temperature,
+            glowIntensity: _glowIntensity,
+            lookMix: _lookMix,
+            vignette: _vignette,
+            splitToning: _splitToning,
+          ),
+          size: Size(
+            _currentFrame!.width.toDouble(),
+            _currentFrame!.height.toDouble(),
+          ),
+        ),
+      );
+    }
+
+    // Fallback: raw video with selected AspectRatio
+    return AspectRatio(
+      aspectRatio: aspectRatio,
+      child: VideoPlayer(_controller!),
+    );
+  }
+
   Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
     return Row(
       children: [
@@ -554,6 +718,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _controller?.removeListener(_listener);
     _controller?.dispose();
+    _currentFrame?.dispose();
     super.dispose();
   }
 }
