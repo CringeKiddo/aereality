@@ -26,3 +26,4 @@ flutter:
 
   shaders:
     - shaders/aereality_core.frag
+    
