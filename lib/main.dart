@@ -377,7 +377,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               shader.setFloat(13, _splitToning);
                               return shader;
                             },
-                            blendMode: BlendMode.srcATop, // <-- BEST FOR VIDEO
+                            blendMode: BlendMode.dstATop, // <-- BEST FOR VIDEO
                             child: VideoPlayer(_controller!),
                           )
                         : VideoPlayer(_controller!)
