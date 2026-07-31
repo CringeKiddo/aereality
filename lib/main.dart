@@ -179,7 +179,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
             setState(() {
-              _textureId = _controller!.value.textureId; // <-- Get texture ID
+              // FIXED: textureId is on the controller, not on .value
+              _textureId = _controller!.textureId;
             });
             _listener = () {
               if (mounted) setState(() {}); // Update slider
@@ -372,10 +373,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ? ShaderMask(
                         shaderCallback: (rect) {
                           final shader = _fragmentProgram!.fragmentShader();
-                          // Resolution (indices 0 & 1)
                           shader.setFloat(0, rect.width);
                           shader.setFloat(1, rect.height);
-                          // Color sliders (indices 3-13)
                           shader.setFloat(3, _brightness);
                           shader.setFloat(4, _saturation);
                           shader.setFloat(5, _contrast);
@@ -389,7 +388,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           shader.setFloat(13, _splitToning);
                           return shader;
                         },
-                        blendMode: BlendMode.srcATop, // <-- Works with Texture
+                        blendMode: BlendMode.srcATop,
                         child: Texture(textureId: _textureId!),
                       )
                     : _controller != null && _controller!.value.isInitialized
