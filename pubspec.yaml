@@ -10,31 +10,18 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Video playback
   video_player: ^2.13.0
-
-  # File picking for importing videos
   file_picker: ^11.0.2
-
-  # Access to device storage (for saving projects and exports)
   path_provider: ^2.1.6
-
-  # Image processing (decoding/encoding frames)
   image: ^4.8.0
-
-  # FFmpegKit LTS – community-maintained fork (replaces the retired arthenica version)
-  ffmpeg_kit_flutter_min_lts: ^6.0.3
+  ffmpeg_kit_flutter_lts: ^6.0.3  # <-- CORRECT LTS PACKAGE
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  # Linting rules (optional but helpful)
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
-
-  # Your custom GLSL shader
   shaders:
     - shaders/aereality_core.frag
