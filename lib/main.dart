@@ -1,7 +1,12 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter/return_code.dart';
+import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 
 void main() {
@@ -35,15 +40,82 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-class HomeScreen extends StatelessWidget {
+// ---------- PROJECT DATA MODEL ----------
+class ProjectData {
+  String videoPath;
+  double brightness, saturation, contrast, sharpness, gamma, hue;
+  double temperature, glowIntensity, lookMix, vignette, splitToning;
+  String aspectRatio;
+
+  ProjectData({
+    required this.videoPath,
+    this.brightness = 0.0,
+    this.saturation = 1.0,
+    this.contrast = 1.0,
+    this.sharpness = 0.0,
+    this.gamma = 1.0,
+    this.hue = 0.0,
+    this.temperature = 6500.0,
+    this.glowIntensity = 0.3,
+    this.lookMix = 0.0,
+    this.vignette = 0.0,
+    this.splitToning = 0.0,
+    this.aspectRatio = "16:9",
+  });
+
+  Map<String, dynamic> toJson() => {
+    'videoPath': videoPath,
+    'brightness': brightness,
+    'saturation': saturation,
+    'contrast': contrast,
+    'sharpness': sharpness,
+    'gamma': gamma,
+    'hue': hue,
+    'temperature': temperature,
+    'glowIntensity': glowIntensity,
+    'lookMix': lookMix,
+    'vignette': vignette,
+    'splitToning': splitToning,
+    'aspectRatio': aspectRatio,
+  };
+
+  factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
+    videoPath: json['videoPath'],
+    brightness: json['brightness'] ?? 0.0,
+    saturation: json['saturation'] ?? 1.0,
+    contrast: json['contrast'] ?? 1.0,
+    sharpness: json['sharpness'] ?? 0.0,
+    gamma: json['gamma'] ?? 1.0,
+    hue: json['hue'] ?? 0.0,
+    temperature: json['temperature'] ?? 6500.0,
+    glowIntensity: json['glowIntensity'] ?? 0.3,
+    lookMix: json['lookMix'] ?? 0.0,
+    vignette: json['vignette'] ?? 0.0,
+    splitToning: json['splitToning'] ?? 0.0,
+    aspectRatio: json['aspectRatio'] ?? "16:9",
+  );
+}
+
+// ---------- HOME SCREEN ----------
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('AEReality'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            onPressed: _loadProject,
+            tooltip: 'Load Project',
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
@@ -70,13 +142,51 @@ class HomeScreen extends StatelessWidget {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
               ),
             ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: _loadProject,
+              icon: const Icon(Icons.folder_open, color: Colors.white),
+              label: const Text('Load Project', style: TextStyle(color: Colors.white)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.white),
+                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+
+  Future<void> _loadProject() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/aereality_project.json');
+      if (!await file.exists()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No saved project found'), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+      final data = await file.readAsString();
+      final json = jsonDecode(data);
+      final project = ProjectData.fromJson(json);
+      
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ProjectScreen(initialProject: project),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 }
 
+// ---------- SETTINGS ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -123,9 +233,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+// ---------- SHADER PREVIEW PAINTER ----------
+class ShaderPreviewPainter extends CustomPainter {
+  final ui.Image image;
+  final ui.FragmentProgram program;
+  final double brightness, saturation, contrast, sharpness, gamma, hue;
+  final double temperature, glowIntensity, lookMix, vignette, splitToning;
+
+  const ShaderPreviewPainter({
+    required this.image,
+    required this.program,
+    required this.brightness,
+    required this.saturation,
+    required this.contrast,
+    required this.sharpness,
+    required this.gamma,
+    required this.hue,
+    required this.temperature,
+    required this.glowIntensity,
+    required this.lookMix,
+    required this.vignette,
+    required this.splitToning,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shader = program.fragmentShader();
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
+    shader.setImageSampler(2, image);
+    shader.setFloat(3, brightness);
+    shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast);
+    shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma);
+    shader.setFloat(8, hue);
+    shader.setFloat(9, temperature);
+    shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix);
+    shader.setFloat(12, vignette);
+    shader.setFloat(13, splitToning);
+
+    final paint = Paint()..shader = shader;
+    canvas.drawRect(Offset.zero & size, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.brightness != brightness ||
+        oldDelegate.saturation != saturation ||
+        oldDelegate.contrast != contrast ||
+        oldDelegate.sharpness != sharpness ||
+        oldDelegate.gamma != gamma ||
+        oldDelegate.hue != hue ||
+        oldDelegate.temperature != temperature ||
+        oldDelegate.glowIntensity != glowIntensity ||
+        oldDelegate.lookMix != lookMix ||
+        oldDelegate.vignette != vignette ||
+        oldDelegate.splitToning != splitToning;
+  }
+}
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
-  const ProjectScreen({super.key});
+  final ProjectData? initialProject;
+  const ProjectScreen({super.key, this.initialProject});
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
@@ -134,8 +306,9 @@ class ProjectScreen extends StatefulWidget {
 class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
   VideoPlayerController? _controller;
   bool _isPlaying = false;
+  String? _currentVideoPath;
 
-  // ----- Color Controls (Settings will be applied during export) -----
+  // Color Controls
   double _brightness = 0.0;
   double _saturation = 1.0;
   double _contrast = 1.0;
@@ -148,36 +321,53 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _vignette = 0.0;
   double _splitToning = 0.0;
 
-  // ----- ASPECT RATIO -----
   String _selectedRatio = "16:9";
-
   late TabController _tabController;
   VoidCallback _listener = () {};
+  bool _isPreviewing = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    if (widget.initialProject != null) {
+      final p = widget.initialProject!;
+      _brightness = p.brightness;
+      _saturation = p.saturation;
+      _contrast = p.contrast;
+      _sharpness = p.sharpness;
+      _gamma = p.gamma;
+      _hue = p.hue;
+      _temperature = p.temperature;
+      _glowIntensity = p.glowIntensity;
+      _lookMix = p.lookMix;
+      _vignette = p.vignette;
+      _splitToning = p.splitToning;
+      _selectedRatio = p.aspectRatio;
+      _loadVideo(p.videoPath);
+    }
+  }
+
+  Future<void> _loadVideo(String path) async {
+    setState(() {
+      _controller?.removeListener(_listener);
+      _controller?.dispose();
+      _currentVideoPath = path;
+      _controller = VideoPlayerController.file(File(path))
+        ..initialize().then((_) {
+          setState(() {});
+          _listener = () { if (mounted) setState(() {}); };
+          _controller!.addListener(_listener);
+          _controller!.play();
+          _isPlaying = true;
+        });
+    });
   }
 
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
-      final path = result.files.single.path!;
-      setState(() {
-        _controller?.removeListener(_listener);
-        _controller?.dispose();
-        _controller = VideoPlayerController.file(File(path))
-          ..initialize().then((_) {
-            setState(() {});
-            _listener = () {
-              if (mounted) setState(() {}); // Update slider
-            };
-            _controller!.addListener(_listener);
-            _controller!.play();
-            _isPlaying = true;
-          });
-      });
+      await _loadVideo(result.files.single.path!);
     }
   }
 
@@ -185,48 +375,49 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     setState(() {
       switch (name) {
         case 'Gojo Edit':
-          _brightness = -0.05;
-          _saturation = 1.5;
-          _contrast = 1.5;
-          _sharpness = 0.6;
-          _gamma = 0.9;
-          _hue = -8.0;
-          _temperature = 4800;
-          _glowIntensity = 0.7;
-          _vignette = 0.4;
-          _splitToning = 0.3;
+          _brightness = -0.05; _saturation = 1.5; _contrast = 1.5; _sharpness = 0.6;
+          _gamma = 0.9; _hue = -8.0; _temperature = 4800; _glowIntensity = 0.7;
+          _vignette = 0.4; _splitToning = 0.3;
           break;
         case 'Magic Bullet':
-          _brightness = 0.1;
-          _saturation = 1.4;
-          _contrast = 1.2;
-          _sharpness = 0.3;
-          _gamma = 1.0;
-          _hue = 5.0;
-          _temperature = 6500;
-          _glowIntensity = 0.6;
-          _vignette = 0.1;
-          _splitToning = 0.0;
+          _brightness = 0.1; _saturation = 1.4; _contrast = 1.2; _sharpness = 0.3;
+          _gamma = 1.0; _hue = 5.0; _temperature = 6500; _glowIntensity = 0.6;
+          _vignette = 0.1; _splitToning = 0.0;
           break;
         case 'Teal & Orange':
-          _brightness = 0.0;
-          _saturation = 1.2;
-          _contrast = 1.3;
-          _sharpness = 0.2;
-          _gamma = 0.9;
-          _hue = -10.0;
-          _temperature = 5500;
-          _glowIntensity = 0.2;
-          _vignette = 0.0;
-          _splitToning = 0.2;
+          _brightness = 0.0; _saturation = 1.2; _contrast = 1.3; _sharpness = 0.2;
+          _gamma = 0.9; _hue = -10.0; _temperature = 5500; _glowIntensity = 0.2;
+          _vignette = 0.0; _splitToning = 0.2;
           break;
-        default:
-          break;
+        default: break;
       }
     });
   }
 
-  // ---------- ASPECT RATIO SELECTOR ----------
+  // ---------- SAVE PROJECT ----------
+  Future<void> _saveCurrentProject() async {
+    if (_currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/aereality_project.json');
+      final project = ProjectData(
+        videoPath: _currentVideoPath!,
+        brightness: _brightness, saturation: _saturation, contrast: _contrast,
+        sharpness: _sharpness, gamma: _gamma, hue: _hue, temperature: _temperature,
+        glowIntensity: _glowIntensity, lookMix: _lookMix, vignette: _vignette,
+        splitToning: _splitToning, aspectRatio: _selectedRatio,
+      );
+      await file.writeAsString(jsonEncode(project.toJson()));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project Saved!'), backgroundColor: Colors.green));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  // ---------- ASPECT RATIO ----------
   double _getAspectRatioValue(String ratio) {
     switch (ratio) {
       case "4:5": return 4 / 5;
@@ -235,33 +426,248 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       default: return 16 / 9;
     }
   }
-
   void _showRatioSelector() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E1E1E),
-      builder: (context) {
-        return SafeArea(
-          child: Wrap(
-            children: ["4:5", "16:9", "1:1"].map((ratio) {
-              return ListTile(
-                title: Text(ratio, style: const TextStyle(color: Colors.white)),
-                trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Colors.cyanAccent) : null,
-                onTap: () {
-                  setState(() {
-                    _selectedRatio = ratio;
-                  });
-                  Navigator.pop(context);
-                },
-              );
-            }).toList(),
-          ),
-        );
-      },
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: ["4:5", "16:9", "1:1"].map((ratio) => ListTile(
+            title: Text(ratio, style: const TextStyle(color: Colors.white)),
+            trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Colors.cyanAccent) : null,
+            onTap: () { setState(() => _selectedRatio = ratio); Navigator.pop(context); },
+          )).toList(),
+        ),
+      ),
     );
   }
 
-  // ---------- EXPORT DIALOG (ALL BUTTONS CLICKABLE) ----------
+  // ---------- PREVIEW FRAME ----------
+  Future<void> _previewFrame() async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+    setState(() => _isPreviewing = true);
+    try {
+      final timestamp = _controller!.value.position.inSeconds;
+      final dir = await getTemporaryDirectory();
+      final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
+      final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
+      final session = await FFmpegKit.execute(cmd);
+      if (!ReturnCode.isSuccess(await session.getReturnCode())) throw Exception('FFmpeg failed');
+      final bytes = await File(outputPath).readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) throw Exception('Failed to decode');
+      final uiImage = await _convertToUiImage(image);
+      if (uiImage == null) throw Exception('Failed to convert');
+      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => Dialog(
+          backgroundColor: Colors.black,
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            height: MediaQuery.of(context).size.height * 0.7,
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              children: [
+                Expanded(
+                  child: CustomPaint(
+                    painter: ShaderPreviewPainter(
+                      image: uiImage, program: program,
+                      brightness: _brightness, saturation: _saturation, contrast: _contrast,
+                      sharpness: _sharpness, gamma: _gamma, hue: _hue,
+                      temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
+                      vignette: _vignette, splitToning: _splitToning,
+                    ),
+                    size: Size(uiImage.width.toDouble(), uiImage.height.toDouble()),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text('Frame at ${timestamp}s', style: const TextStyle(color: Colors.white54)),
+                ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('Close Preview')),
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Preview Error: $e'), backgroundColor: Colors.red));
+    } finally {
+      setState(() => _isPreviewing = false);
+    }
+  }
+
+  Future<ui.Image?> _convertToUiImage(img.Image image) async {
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromList(img.encodePng(image), completer.complete);
+    return completer.future;
+  }
+
+  // ---------- FULL EXPORT (WITH PROGRESS & ETA) ----------
+  Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Exporting...', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const SizedBox(height: 16),
+            ValueListenableBuilder<double>(
+              valueListenable: progressNotifier,
+              builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: Colors.white),
+            ),
+            const SizedBox(height: 12),
+            ValueListenableBuilder<String>(
+              valueListenable: statusNotifier,
+              builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70)),
+            ),
+            ValueListenableBuilder<String>(
+              valueListenable: etaNotifier,
+              builder: (_, eta, __) => Text('Estimated time remaining: $eta', style: const TextStyle(color: Colors.white54)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create();
+      await processedDir.create();
+
+      statusNotifier.value = 'Extracting frames...';
+      final extractCmd = '-i "${_currentVideoPath!}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractSession = await FFmpegKit.execute(extractCmd);
+      if (!ReturnCode.isSuccess(await extractSession.getReturnCode())) throw Exception('Extract failed');
+
+      final frameFiles = await framesDir.list().toList();
+      final totalFrames = frameFiles.length;
+      int processedFrames = 0;
+      stopwatch.start();
+
+      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
+      const batchSize = 10;
+
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          try {
+            final bytes = await file.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded == null) return;
+            final uiImage = await _convertToUiImage(decoded);
+            if (uiImage == null) return;
+            final processed = await _applyShaderToImage(
+              uiImage, program,
+              brightness: _brightness, saturation: _saturation, contrast: _contrast,
+              sharpness: _sharpness, gamma: _gamma, hue: _hue,
+              temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
+              vignette: _vignette, splitToning: _splitToning,
+            );
+            if (processed != null) {
+              final pngBytes = await processed.toByteData(format: ui.ImageByteFormat.png);
+              if (pngBytes != null) {
+                await File('${processedDir.path}/${file.path.split('/').last}').writeAsBytes(pngBytes.buffer.asUint8List());
+              }
+            }
+            processedFrames++;
+            final p = processedFrames / totalFrames;
+            progressNotifier.value = p;
+            statusNotifier.value = 'Processing frame $processedFrames of $totalFrames';
+            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+              final remaining = totalSec - stopwatch.elapsed.inSeconds;
+              final mins = remaining ~/ 60;
+              final secs = remaining % 60;
+              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+            }
+          } catch (_) {}
+        }));
+      }
+      stopwatch.stop();
+
+      statusNotifier.value = 'Encoding video...';
+      int width = 1920, height = 1080;
+      switch (resolution) {
+        case '720p': width = 1280; height = 720; break;
+        case '1080p': width = 1920; height = 1080; break;
+        case '2K': width = 2560; height = 1440; break;
+      }
+      final targetFps = int.parse(fps.replaceAll('fps', ''));
+      final outputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                        '-c:v libx264 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
+                        '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$outputPath"';
+      final encodeSession = await FFmpegKit.execute(encodeCmd);
+      if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) throw Exception('Encode failed');
+
+      final docsDir = await getApplicationDocumentsDirectory();
+      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await File(outputPath).copy(finalFile.path);
+
+      await framesDir.delete(recursive: true);
+      await processedDir.delete(recursive: true);
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Saved to: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Error: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
+    required double brightness, required double saturation, required double contrast,
+    required double sharpness, required double gamma, required double hue,
+    required double temperature, required double glowIntensity, required double lookMix,
+    required double vignette, required double splitToning,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = Size(image.width.toDouble(), image.height.toDouble());
+    final shader = program.fragmentShader();
+    shader.setFloat(0, size.width); shader.setFloat(1, size.height);
+    shader.setImageSampler(2, image);
+    shader.setFloat(3, brightness); shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast); shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma); shader.setFloat(8, hue);
+    shader.setFloat(9, temperature); shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix); shader.setFloat(12, vignette);
+    shader.setFloat(13, splitToning);
+    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+    final picture = recorder.endRecording();
+    return picture.toImage(image.width, image.height);
+  }
+
+  // ---------- EXPORT DIALOG (100% CLICKABLE) ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -281,66 +687,39 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   const Text('Export Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 20),
                   const Text('Resolution', style: TextStyle(color: Colors.white70)),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: ['720p', '1080p', '2K'].map((res) {
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: OutlinedButton(
-                            onPressed: () => setStateModal(() => selectedRes = res),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: selectedRes == res ? Colors.white : Colors.transparent,
-                              foregroundColor: selectedRes == res ? Colors.black : Colors.white,
-                              side: BorderSide(color: selectedRes == res ? Colors.white : Colors.grey[800]!),
-                            ),
-                            child: Text(res),
-                          ),
-                        ),
-                      );
-                    }).toList(),
+                  Wrap(
+                    spacing: 8,
+                    children: ['720p', '1080p', '2K'].map((res) => ChoiceChip(
+                      label: Text(res),
+                      selected: selectedRes == res,
+                      selectedColor: Colors.white,
+                      labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedRes = res),
+                    )).toList(),
                   ),
                   const SizedBox(height: 16),
                   const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: ['30fps', '60fps', '90fps'].map((fps) {
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: OutlinedButton(
-                            onPressed: () => setStateModal(() => selectedFps = fps),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: selectedFps == fps ? Colors.white : Colors.transparent,
-                              foregroundColor: selectedFps == fps ? Colors.black : Colors.white,
-                              side: BorderSide(color: selectedFps == fps ? Colors.white : Colors.grey[800]!),
-                            ),
-                            child: Text(fps),
-                          ),
-                        ),
-                      );
-                    }).toList(),
+                  Wrap(
+                    spacing: 8,
+                    children: ['30fps', '60fps', '90fps'].map((fps) => ChoiceChip(
+                      label: Text(fps),
+                      selected: selectedFps == fps,
+                      selectedColor: Colors.white,
+                      labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedFps = fps),
+                    )).toList(),
                   ),
                   const SizedBox(height: 16),
                   const Text('Bitrate', style: TextStyle(color: Colors.white70)),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) {
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: OutlinedButton(
-                            onPressed: () => setStateModal(() => selectedBit = bit),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: selectedBit == bit ? Colors.white : Colors.transparent,
-                              foregroundColor: selectedBit == bit ? Colors.black : Colors.white,
-                              side: BorderSide(color: selectedBit == bit ? Colors.white : Colors.grey[800]!),
-                            ),
-                            child: Text(bit),
-                          ),
-                        ),
-                      );
-                    }).toList(),
+                  Wrap(
+                    spacing: 8,
+                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) => ChoiceChip(
+                      label: Text(bit),
+                      selected: selectedBit == bit,
+                      selectedColor: Colors.white,
+                      labelStyle: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedBit = bit),
+                    )).toList(),
                   ),
                   const SizedBox(height: 24),
                   SizedBox(
@@ -348,12 +727,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     child: ElevatedButton(
                       onPressed: () {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Exporting: $selectedRes | $selectedFps | $selectedBit'),
-                            backgroundColor: Colors.green,
-                          ),
-                        );
+                        _exportVideo(selectedRes, selectedFps, selectedBit);
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
@@ -364,6 +738,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                   ),
                   const SizedBox(height: 12),
+                  const Text('Full 32-bit export may take several minutes.', style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             );
@@ -372,7 +747,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       },
     );
   }
-    @override
+    // ---------- BUILD METHOD ----------
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -383,21 +759,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.aspect_ratio),
-            onPressed: _showRatioSelector,
-            tooltip: 'Aspect Ratio',
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _pickVideo,
-            tooltip: 'Import',
-          ),
+          IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
+          IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
+          IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
         ],
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (RAW VIDEO – NO SHADER) ----------
+          // ---------- PREVIEW (RAW VIDEO) ----------
           Expanded(
             flex: 4,
             child: Container(
@@ -424,7 +793,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
             ),
           ),
-          // ---------- TIMELINE (FULLY FUNCTIONAL) ----------
+          // ---------- TIMELINE (FRAME-ACCURATE) ----------
           Container(
             color: const Color(0xFF111111),
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -457,7 +826,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     inactiveColor: Colors.grey[800],
                     onChanged: (val) {
                       if (_controller != null && _controller!.value.isInitialized) {
-                        _controller!.seekTo(Duration(seconds: val.toInt()));
+                        // FIXED: Seeks by MILLISECONDS for frame-accurate control
+                        _controller!.seekTo(Duration(milliseconds: (val * 1000).round()));
                       }
                     },
                   ),
@@ -535,16 +905,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         }).toList(),
                       ),
                       // EXPORT
-                      Center(
-                        child: ElevatedButton(
-                          onPressed: _showExportSheet,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 20),
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _isPreviewing ? null : _previewFrame,
+                                icon: const Icon(Icons.image, color: Colors.black),
+                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.cyanAccent,
+                                  foregroundColor: Colors.black,
+                                ),
+                              ),
+                              ElevatedButton(
+                                onPressed: _showExportSheet,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
+                                ),
+                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
+                              ),
+                            ],
                           ),
-                          child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
+                          const SizedBox(height: 8),
+                          const Text('Preview applies shader to the frame on your timeline',
+                            style: TextStyle(color: Colors.white38, fontSize: 10)),
+                        ],
                       ),
                     ],
                   ),
