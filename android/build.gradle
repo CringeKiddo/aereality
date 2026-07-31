@@ -63,7 +63,4 @@ flutter {
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-    
-    // Community-maintained FFmpegKit LTS (drop-in replacement for the retired arthenica version)
-    implementation 'dev.ffmpegkit-maintained:ffmpeg-kit-min:6.0.3.LTS'
 }
