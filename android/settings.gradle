@@ -1,5 +1,3 @@
-import org.gradle.api.artifacts.repositories.RepositoriesMode
-
 include ':app'
 
 def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
@@ -13,7 +11,8 @@ assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
 apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    // Use the fully qualified name to avoid import issues
+    repositoriesMode = org.gradle.api.artifacts.repositories.RepositoriesMode.PREFER_SETTINGS
     repositories {
         google()
         mavenCentral()
