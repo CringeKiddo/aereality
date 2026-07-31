@@ -1,4 +1,4 @@
-import 'dart:async';          // <-- ADD THIS
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -453,18 +453,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final timestamp = _controller!.value.position.inSeconds;
       final dir = await getTemporaryDirectory();
       final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
-      
-      // Simple command with scale to reduce memory
-      final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -vf "scale=720:-1" -q:v 2 "$outputPath"';
+      final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
       final session = await FFmpegKit.execute(cmd);
       final returnCode = await session.getReturnCode();
-      final output = await session.getOutput();
-      final error = await session.getError();
       
       if (!ReturnCode.isSuccess(returnCode)) {
-        final details = error ?? output ?? "Unknown error";
+        final output = await session.getOutput();
+        final error = await session.getOutput(); // getOutput() usually contains the error
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('FFmpeg error: $details'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('FFmpeg error: ${error ?? output ?? "Unknown error"}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 8),
+          ),
         );
         setState(() => _isPreviewing = false);
         return;
@@ -477,7 +478,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (uiImage == null) throw Exception('Failed to convert');
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       if (!mounted) return;
-      
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -524,31 +524,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- TEST FFMPEG (to verify binary) ----------
-  Future<void> _testFFmpeg() async {
-    try {
-      final session = await FFmpegKit.execute("-version");
-      final returnCode = await session.getReturnCode();
-      final output = await session.getOutput();
-      final error = await session.getError();
-      if (ReturnCode.isSuccess(returnCode)) {
-        final version = output?.split('\n').first ?? "unknown";
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ FFmpeg works!\n$version'), backgroundColor: Colors.green),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ FFmpeg error: ${error ?? output}'), backgroundColor: Colors.red),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Exception: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  // ---------- FULL EXPORT (SIMPLIFIED + ERROR REPORTING) ----------
+  // ---------- FULL EXPORT (WITH AUDIO + ERROR REPORTING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -600,9 +576,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       statusNotifier.value = 'Extracting frames...';
       final extractCmd = '-i "${_currentVideoPath!}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
       final extractSession = await FFmpegKit.execute(extractCmd);
-      if (!ReturnCode.isSuccess(await extractSession.getReturnCode())) {
-        final err = await extractSession.getError() ?? 'Extract failed';
-        throw Exception('Extract failed: $err');
+      final extractReturnCode = await extractSession.getReturnCode();
+      if (!ReturnCode.isSuccess(extractReturnCode)) {
+        final err = await extractSession.getOutput();
+        throw Exception('Extract failed: ${err ?? "Unknown error"}');
       }
 
       final frameFiles = await framesDir.list().toList();
@@ -653,18 +630,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding video...';
-      // Remove scaling to isolate issue – keep original resolution
+      int width = 1920, height = 1080;
+      switch (resolution) {
+        case '720p': width = 1280; height = 720; break;
+        case '1080p': width = 1920; height = 1080; break;
+        case '2K': width = 2560; height = 1440; break;
+      }
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
       final encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                        '-c:v libx264 -pix_fmt yuv420p -preset ultrafast -crf 23 "$silentOutputPath"';
+                        '-c:v libx264 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
+                        '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$silentOutputPath"';
       final encodeSession = await FFmpegKit.execute(encodeCmd);
-      final returnCode = await encodeSession.getReturnCode();
-      final errOutput = await encodeSession.getError();
-      final outOutput = await encodeSession.getOutput();
-      if (!ReturnCode.isSuccess(returnCode)) {
-        final details = errOutput ?? outOutput ?? "Unknown error";
-        throw Exception('Encode failed: $details');
+      final encodeReturnCode = await encodeSession.getReturnCode();
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        final err = await encodeSession.getOutput();
+        throw Exception('Encode failed: ${err ?? "Unknown error"}');
       }
 
       // ---------- EXTRACT AUDIO ----------
@@ -697,14 +678,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Saved to: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+          SnackBar(content: Text('Saved to: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
         );
       }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ Export Error: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Export Error: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 10)),
         );
       }
     }
@@ -733,7 +714,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return picture.toImage(image.width, image.height);
   }
 
-  // ---------- EXPORT DIALOG (with Test FFmpeg button) ----------
+  // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -788,32 +769,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     )).toList(),
                   ),
                   const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _exportVideo(selectedRes, selectedFps, selectedBit);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      minimumSize: const Size(double.infinity, 50),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _exportVideo(selectedRes, selectedFps, selectedBit);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('RENDER VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
-                    child: const Text('RENDER VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _testFFmpeg();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey[800],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      minimumSize: const Size(double.infinity, 40),
-                    ),
-                    child: const Text('🔧 Test FFmpeg'),
                   ),
                   const SizedBox(height: 12),
                   const Text('Full 32-bit export may take several minutes.', style: TextStyle(color: Colors.white38, fontSize: 10)),
