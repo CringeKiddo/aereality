@@ -23,4 +23,4 @@ flutter:
   uses-material-design: true
 
   shaders:
-    - shaders/test_red.frag   # <-- POINTING TO TEST SHADER
+    - shaders/aereality_core.frag   # <-- BACK TO YOUR MAIN SHADER
