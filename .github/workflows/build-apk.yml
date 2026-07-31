@@ -25,11 +25,13 @@ jobs:
           channel: 'stable'
           flutter-version: '3.22.0'
 
-      # NOW Flutter is installed – generate the missing android/ folder
       - name: Generate Android project
         run: |
           flutter create --platforms=android --org com.example .
+          # Restore our custom files (lib/, shaders/, pubspec.yaml)
           git checkout -- lib/ shaders/ pubspec.yaml
+          # ADD JitPack repository to android/build.gradle
+          sed -i '/allprojects {/,/}/ s|mavenCentral()|mavenCentral()\n        maven { url "https://jitpack.io" }|' android/build.gradle
 
       - name: Cache Flutter dependencies
         uses: actions/cache@v4
