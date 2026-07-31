@@ -3,6 +3,8 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://storage.googleapis.com/download.flutter.io' }
     }
 
     dependencies {
@@ -15,10 +17,17 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // Add the Flutter repository that the plugin needs
-        maven {
-            url "https://storage.googleapis.com/download.flutter.io"
-        }
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://storage.googleapis.com/download.flutter.io' }
+    }
+}
+
+subprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+        maven { url 'https://storage.googleapis.com/download.flutter.io' }
     }
 }
 
