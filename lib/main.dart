@@ -123,68 +123,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- CUSTOM PAINTER ----------
-class ShaderPreviewPainter extends CustomPainter {
-  final ui.Image image;
-  final ui.FragmentProgram program;
-  final double brightness, saturation, contrast, sharpness, gamma, hue;
-  final double temperature, glowIntensity, lookMix, vignette, splitToning;
-
-  const ShaderPreviewPainter({
-    required this.image,
-    required this.program,
-    required this.brightness,
-    required this.saturation,
-    required this.contrast,
-    required this.sharpness,
-    required this.gamma,
-    required this.hue,
-    required this.temperature,
-    required this.glowIntensity,
-    required this.lookMix,
-    required this.vignette,
-    required this.splitToning,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final shader = program.fragmentShader();
-    shader.setFloat(0, size.width);
-    shader.setFloat(1, size.height);
-    shader.setImageSampler(2, image);
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
-
-    final paint = Paint()..shader = shader;
-    canvas.drawRect(Offset.zero & size, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
-    return oldDelegate.image != image ||
-        oldDelegate.brightness != brightness ||
-        oldDelegate.saturation != saturation ||
-        oldDelegate.contrast != contrast ||
-        oldDelegate.sharpness != sharpness ||
-        oldDelegate.gamma != gamma ||
-        oldDelegate.hue != hue ||
-        oldDelegate.temperature != temperature ||
-        oldDelegate.glowIntensity != glowIntensity ||
-        oldDelegate.lookMix != lookMix ||
-        oldDelegate.vignette != vignette ||
-        oldDelegate.splitToning != splitToning;
-  }
-}
-
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -197,11 +135,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   ui.FragmentProgram? _fragmentProgram;
-
-  // ----- FRAME CAPTURE -----
-  ui.Image? _currentFrame;
-  bool _frameBusy = false;
-  VoidCallback _listener = () {};
 
   // ----- Color Controls -----
   double _brightness = 0.0;
@@ -216,10 +149,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _vignette = 0.0;
   double _splitToning = 0.0;
 
-  // ----- ASPECT RATIO (NEW/BACK) -----
+  // ----- ASPECT RATIO -----
   String _selectedRatio = "16:9";
 
   late TabController _tabController;
+  VoidCallback _listener = () {};
 
   @override
   void initState() {
@@ -237,39 +171,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  void _updateFrame() async {
-    if (_frameBusy || _controller == null || !_controller!.value.isInitialized) return;
-    _frameBusy = true;
-    try {
-      final img = await _controller!.copyCurrentFrame();
-      if (img != null && mounted) {
-        final old = _currentFrame;
-        setState(() {
-          _currentFrame = img;
-        });
-        old?.dispose();
-      }
-    } catch (e) {
-      // ignore
-    }
-    _frameBusy = false;
-  }
-
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
       final path = result.files.single.path!;
       setState(() {
         _controller?.removeListener(_listener);
-        _currentFrame?.dispose();
-        _currentFrame = null;
         _controller?.dispose();
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
             setState(() {});
             _listener = () {
-              _updateFrame();
-              if (mounted) setState(() {});
+              if (mounted) setState(() {}); // Update slider
             };
             _controller!.addListener(_listener);
             _controller!.play();
@@ -324,7 +237,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- ASPECT RATIO SELECTOR (NEW/BACK) ----------
+  // ---------- ASPECT RATIO SELECTOR ----------
   double _getAspectRatioValue(String ratio) {
     switch (ratio) {
       case "4:5": return 4 / 5;
@@ -359,7 +272,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- FIXED EXPORT DIALOG ----------
+  // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -481,7 +394,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          // ---------- ASPECT RATIO BUTTON (NEW/BACK) ----------
           IconButton(
             icon: const Icon(Icons.aspect_ratio),
             onPressed: _showRatioSelector,
@@ -496,13 +408,55 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (WITH ASPECT RATIO APPLIED) ----------
+          // ---------- PREVIEW (ShaderMask + VideoPlayer) ----------
           Expanded(
             flex: 4,
             child: Container(
               color: Colors.black,
               child: Center(
-                child: _buildPreview(), // <-- Applies selected ratio
+                child: _controller != null && _controller!.value.isInitialized
+                    ? _fragmentProgram != null
+                        ? AspectRatio(
+                            aspectRatio: _getAspectRatioValue(_selectedRatio),
+                            child: ShaderMask(
+                              shaderCallback: (rect) {
+                                final shader = _fragmentProgram!.fragmentShader();
+                                shader.setFloat(0, rect.width);
+                                shader.setFloat(1, rect.height);
+                                shader.setFloat(3, _brightness);
+                                shader.setFloat(4, _saturation);
+                                shader.setFloat(5, _contrast);
+                                shader.setFloat(6, _sharpness);
+                                shader.setFloat(7, _gamma);
+                                shader.setFloat(8, _hue);
+                                shader.setFloat(9, _temperature);
+                                shader.setFloat(10, _glowIntensity);
+                                shader.setFloat(11, _lookMix);
+                                shader.setFloat(12, _vignette);
+                                shader.setFloat(13, _splitToning);
+                                return shader;
+                              },
+                              blendMode: BlendMode.srcOver, // <-- TRY THIS
+                              child: VideoPlayer(_controller!),
+                            ),
+                          )
+                        : AspectRatio(
+                            aspectRatio: _getAspectRatioValue(_selectedRatio),
+                            child: VideoPlayer(_controller!),
+                          )
+                    : Container(
+                        color: const Color(0xFF1A1A1A),
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                              SizedBox(height: 8),
+                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                            ],
+                          ),
+                        ),
+                      ),
               ),
             ),
           ),
@@ -639,62 +593,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- PREVIEW HELPER (APPLIES ASPECT RATIO) ----------
-  Widget _buildPreview() {
-    if (_controller == null || !_controller!.value.isInitialized) {
-      return Container(
-        color: const Color(0xFF1A1A1A),
-        child: const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-              SizedBox(height: 8),
-              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Determine which ratio to use
-    double aspectRatio = _getAspectRatioValue(_selectedRatio);
-
-    // If we have a shader and a captured frame, use CustomPaint
-    if (_currentFrame != null && _fragmentProgram != null) {
-      return AspectRatio(
-        aspectRatio: aspectRatio,
-        child: CustomPaint(
-          painter: ShaderPreviewPainter(
-            image: _currentFrame!,
-            program: _fragmentProgram!,
-            brightness: _brightness,
-            saturation: _saturation,
-            contrast: _contrast,
-            sharpness: _sharpness,
-            gamma: _gamma,
-            hue: _hue,
-            temperature: _temperature,
-            glowIntensity: _glowIntensity,
-            lookMix: _lookMix,
-            vignette: _vignette,
-            splitToning: _splitToning,
-          ),
-          size: Size(
-            _currentFrame!.width.toDouble(),
-            _currentFrame!.height.toDouble(),
-          ),
-        ),
-      );
-    }
-
-    // Fallback: raw video with selected AspectRatio
-    return AspectRatio(
-      aspectRatio: aspectRatio,
-      child: VideoPlayer(_controller!),
-    );
-  }
-
   Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
     return Row(
       children: [
@@ -718,7 +616,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _controller?.removeListener(_listener);
     _controller?.dispose();
-    _currentFrame?.dispose();
     super.dispose();
   }
 }
