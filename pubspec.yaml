@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  video_player: ^2.9.5        # <-- PINNED for copyCurrentFrame
+  video_player: ^2.9.5
   file_picker: ^8.1.0
   path_provider: ^2.1.2
 
@@ -23,4 +23,4 @@ flutter:
   uses-material-design: true
 
   shaders:
-    - shaders/aereality_core.frag   # <-- BACK TO YOUR MAIN SHADER
+    - shaders/test_red.frag   # <-- POINTING TO TEST SHADER
