@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';   // <-- UPDATED
-import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart'; // <-- UPDATED
+import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';   // <-- UPDATED
+import 'package:ffmpeg_kit_flutter_new_min/return_code.dart'; // <-- UPDATED
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 
