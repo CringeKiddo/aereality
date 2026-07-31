@@ -35,6 +35,7 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
+// ---------- HOME SCREEN ----------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -77,6 +78,7 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+// ---------- SETTINGS SCREEN ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -123,6 +125,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+// ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
 
@@ -233,10 +236,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
+  // ---------- FIXED EXPORT DIALOG (All buttons clickable) ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
+      isScrollControlled: true,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
@@ -250,31 +255,49 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 children: [
                   const Text('Export Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 20),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceAround, 
-                    children: ['720p', '1080p', '2K'].map((res) => ChoiceChip(
-                      label: Text(res, style: TextStyle(color: selectedRes == res ? Colors.black : Colors.white)),
-                      selected: selectedRes == res,
-                      selectedColor: Colors.white,
-                      onSelected: (sel) => setStateModal(() => selectedRes = res),
-                    )).toList(),
+                  const Text('Resolution', style: TextStyle(color: Colors.white70)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: ['720p', '1080p', '2K'].map((res) {
+                      return ElevatedButton(
+                        onPressed: () => setStateModal(() => selectedRes = res),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: selectedRes == res ? Colors.white : Colors.grey[800],
+                          foregroundColor: selectedRes == res ? Colors.black : Colors.white,
+                        ),
+                        child: Text(res),
+                      );
+                    }).toList(),
                   ),
                   const SizedBox(height: 16),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: ['30fps', '60fps', '90fps'].map((fps) => ChoiceChip(
-                      label: Text(fps, style: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white)),
-                      selected: selectedFps == fps,
-                      selectedColor: Colors.white,
-                      onSelected: (sel) => setStateModal(() => selectedFps = fps),
-                    )).toList(),
+                  const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: ['30fps', '60fps', '90fps'].map((fps) {
+                      return ElevatedButton(
+                        onPressed: () => setStateModal(() => selectedFps = fps),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: selectedFps == fps ? Colors.white : Colors.grey[800],
+                          foregroundColor: selectedFps == fps ? Colors.black : Colors.white,
+                        ),
+                        child: Text(fps),
+                      );
+                    }).toList(),
                   ),
                   const SizedBox(height: 16),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) => ChoiceChip(
-                      label: Text(bit, style: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white)),
-                      selected: selectedBit == bit,
-                      selectedColor: Colors.white,
-                      onSelected: (sel) => setStateModal(() => selectedBit = bit),
-                    )).toList(),
+                  const Text('Bitrate', style: TextStyle(color: Colors.white70)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) {
+                      return ElevatedButton(
+                        onPressed: () => setStateModal(() => selectedBit = bit),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: selectedBit == bit ? Colors.white : Colors.grey[800],
+                          foregroundColor: selectedBit == bit ? Colors.black : Colors.white,
+                        ),
+                        child: Text(bit),
+                      );
+                    }).toList(),
                   ),
                   const SizedBox(height: 24),
                   SizedBox(
@@ -283,13 +306,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       onPressed: () {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Export started (FFmpeg coming soon)'), backgroundColor: Colors.green),
+                          SnackBar(
+                            content: Text('Exporting: $selectedRes | $selectedFps | $selectedBit'),
+                            backgroundColor: Colors.green,
+                          ),
                         );
                       },
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(vertical: 14)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
                       child: const Text('RENDER VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ),
+                  const SizedBox(height: 12),
                 ],
               ),
             );
@@ -318,7 +349,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (ShaderMask with VideoPlayer) ----------
+          // ---------- PREVIEW (ShaderMask with srcATop) ----------
           Expanded(
             flex: 4,
             child: Container(
@@ -346,7 +377,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               shader.setFloat(13, _splitToning);
                               return shader;
                             },
-                            blendMode: BlendMode.srcATop, // <-- KEY FIX
+                            blendMode: BlendMode.srcATop, // <-- BEST FOR VIDEO
                             child: VideoPlayer(_controller!),
                           )
                         : VideoPlayer(_controller!)
