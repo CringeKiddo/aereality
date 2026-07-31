@@ -118,13 +118,13 @@ void main() {
     // 10. TEAL & ORANGE LOOK (Magic Bullet style)
     color = applyTealOrange(color, uLookMix);
 
-    // 11. VIGNETTE (NEW - Darkens the edges)
+    // 11. VIGNETTE (Darkens the edges)
     vec2 vigUV = uv - 0.5;
     float vigDist = length(vigUV);
     float vignetteAmount = 1.0 - (vigDist * uVignette * 1.5);
     color *= vignetteAmount;
 
-    // 12. SPLIT TONING (NEW - Shadows -> Blue, Highlights -> Orange)
+    // 12. SPLIT TONING (Shadows -> Blue, Highlights -> Orange)
     float lumaSplit = dot(color, vec3(0.2126, 0.7152, 0.0722));
     vec3 shadowTint = vec3(0.1, 0.2, 0.6);   // Deep blue
     vec3 highlightTint = vec3(1.0, 0.5, 0.1); // Warm orange
