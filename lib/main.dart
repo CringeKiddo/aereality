@@ -506,8 +506,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     ui.decodeImageFromList(img.encodePng(image), completer.complete);
     return completer.future;
   }
-
-  // ---------- FULL EXPORT (WITH PROGRESS & ETA) ----------
+    // ---------- FULL EXPORT (WITH AUDIO) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -616,19 +615,41 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         case '2K': width = 2560; height = 1440; break;
       }
       final targetFps = int.parse(fps.replaceAll('fps', ''));
-      final outputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
       final encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                         '-c:v libx264 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
-                        '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$outputPath"';
+                        '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$silentOutputPath"';
       final encodeSession = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) throw Exception('Encode failed');
 
+      // ---------- EXTRACT AUDIO ----------
+      statusNotifier.value = 'Extracting audio...';
+      final audioPath = '${dir.path}/extracted_audio.aac';
+      final audioCmd = '-i "${_currentVideoPath!}" -vn -acodec copy "$audioPath"';
+      final audioSession = await FFmpegKit.execute(audioCmd);
+      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
+        // If audio extraction fails, we continue anyway (silent export)
+        print('Audio extraction skipped');
+      }
+
+      // ---------- MUX AUDIO + VIDEO ----------
+      statusNotifier.value = 'Muxing audio and video...';
+      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
+      final muxSession = await FFmpegKit.execute(muxCmd);
+      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
+        // If muxing fails, fallback to the silent video
+        await File(silentOutputPath).copy(File(finalOutputPath).path);
+      }
+
       final docsDir = await getApplicationDocumentsDirectory();
       final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-      await File(outputPath).copy(finalFile.path);
+      await File(finalOutputPath).copy(finalFile.path);
 
       await framesDir.delete(recursive: true);
       await processedDir.delete(recursive: true);
+      try { await File(audioPath).delete(); } catch (_) {}
+      try { await File(silentOutputPath).delete(); } catch (_) {}
 
       if (mounted) {
         Navigator.pop(context);
