@@ -35,7 +35,6 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// ---------- HOME SCREEN ----------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -78,7 +77,6 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-// ---------- SETTINGS SCREEN ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -125,6 +123,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+// ---------- CUSTOM PAINTER (Bypasses ShaderMask entirely) ----------
+class ShaderPreviewPainter extends CustomPainter {
+  final ui.Image image;
+  final ui.FragmentProgram program;
+  final double brightness, saturation, contrast, sharpness, gamma, hue;
+  final double temperature, glowIntensity, lookMix, vignette, splitToning;
+
+  const ShaderPreviewPainter({
+    required this.image,
+    required this.program,
+    required this.brightness,
+    required this.saturation,
+    required this.contrast,
+    required this.sharpness,
+    required this.gamma,
+    required this.hue,
+    required this.temperature,
+    required this.glowIntensity,
+    required this.lookMix,
+    required this.vignette,
+    required this.splitToning,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shader = program.fragmentShader();
+    // Resolution (indices 0 & 1)
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
+    // Video texture (index 2)
+    shader.setImageSampler(2, image);
+    // Color sliders (indices 3-13)
+    shader.setFloat(3, brightness);
+    shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast);
+    shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma);
+    shader.setFloat(8, hue);
+    shader.setFloat(9, temperature);
+    shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix);
+    shader.setFloat(12, vignette);
+    shader.setFloat(13, splitToning);
+
+    final paint = Paint()..shader = shader;
+    canvas.drawRect(Offset.zero & size, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.brightness != brightness ||
+        oldDelegate.saturation != saturation ||
+        oldDelegate.contrast != contrast ||
+        oldDelegate.sharpness != sharpness ||
+        oldDelegate.gamma != gamma ||
+        oldDelegate.hue != hue ||
+        oldDelegate.temperature != temperature ||
+        oldDelegate.glowIntensity != glowIntensity ||
+        oldDelegate.lookMix != lookMix ||
+        oldDelegate.vignette != vignette ||
+        oldDelegate.splitToning != splitToning;
+  }
+}
+
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
@@ -137,6 +200,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   ui.FragmentProgram? _fragmentProgram;
+
+  // ----- FRAME CAPTURE (Now works with pinned version) -----
+  ui.Image? _currentFrame;
+  bool _frameBusy = false;
+  VoidCallback _listener = () {};
 
   // ----- Color Controls -----
   double _brightness = 0.0;
@@ -152,7 +220,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _splitToning = 0.0;
 
   late TabController _tabController;
-  VoidCallback _listener = () {};
 
   @override
   void initState() {
@@ -170,17 +237,39 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ----- CAPTURE FRAME (Now uses copyCurrentFrame) -----
+  void _updateFrame() async {
+    if (_frameBusy || _controller == null || !_controller!.value.isInitialized) return;
+    _frameBusy = true;
+    try {
+      final img = await _controller!.copyCurrentFrame();
+      if (img != null && mounted) {
+        final old = _currentFrame;
+        setState(() {
+          _currentFrame = img;
+        });
+        old?.dispose();
+      }
+    } catch (e) {
+      // Silently fall back to raw video if shader fails
+    }
+    _frameBusy = false;
+  }
+
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
       final path = result.files.single.path!;
       setState(() {
         _controller?.removeListener(_listener);
+        _currentFrame?.dispose();
+        _currentFrame = null;
         _controller?.dispose();
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
             setState(() {});
             _listener = () {
+              _updateFrame();        // Capture the frame
               if (mounted) setState(() {}); // Update slider
             };
             _controller!.addListener(_listener);
@@ -257,45 +346,57 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   const SizedBox(height: 20),
                   const Text('Resolution', style: TextStyle(color: Colors.white70)),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['720p', '1080p', '2K'].map((res) {
-                      return ElevatedButton(
-                        onPressed: () => setStateModal(() => selectedRes = res),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: selectedRes == res ? Colors.white : Colors.grey[800],
-                          foregroundColor: selectedRes == res ? Colors.black : Colors.white,
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ElevatedButton(
+                            onPressed: () => setStateModal(() => selectedRes = res),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: selectedRes == res ? Colors.white : Colors.grey[800],
+                              foregroundColor: selectedRes == res ? Colors.black : Colors.white,
+                            ),
+                            child: Text(res),
+                          ),
                         ),
-                        child: Text(res),
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 16),
                   const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['30fps', '60fps', '90fps'].map((fps) {
-                      return ElevatedButton(
-                        onPressed: () => setStateModal(() => selectedFps = fps),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: selectedFps == fps ? Colors.white : Colors.grey[800],
-                          foregroundColor: selectedFps == fps ? Colors.black : Colors.white,
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ElevatedButton(
+                            onPressed: () => setStateModal(() => selectedFps = fps),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: selectedFps == fps ? Colors.white : Colors.grey[800],
+                              foregroundColor: selectedFps == fps ? Colors.black : Colors.white,
+                            ),
+                            child: Text(fps),
+                          ),
                         ),
-                        child: Text(fps),
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 16),
                   const Text('Bitrate', style: TextStyle(color: Colors.white70)),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) {
-                      return ElevatedButton(
-                        onPressed: () => setStateModal(() => selectedBit = bit),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: selectedBit == bit ? Colors.white : Colors.grey[800],
-                          foregroundColor: selectedBit == bit ? Colors.black : Colors.white,
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ElevatedButton(
+                            onPressed: () => setStateModal(() => selectedBit = bit),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: selectedBit == bit ? Colors.white : Colors.grey[800],
+                              foregroundColor: selectedBit == bit ? Colors.black : Colors.white,
+                            ),
+                            child: Text(bit),
+                          ),
                         ),
-                        child: Text(bit),
                       );
                     }).toList(),
                   ),
@@ -349,51 +450,52 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (ShaderMask with srcATop) ----------
+          // ---------- PREVIEW (CustomPaint with Shader) ----------
           Expanded(
             flex: 4,
             child: Container(
               color: Colors.black,
               child: Center(
-                child: _controller != null && _controller!.value.isInitialized
-                    ? _fragmentProgram != null
-                        ? ShaderMask(
-                            shaderCallback: (rect) {
-                              final shader = _fragmentProgram!.fragmentShader();
-                              // Resolution (indices 0 & 1)
-                              shader.setFloat(0, rect.width);
-                              shader.setFloat(1, rect.height);
-                              // Color sliders (indices 3-13)
-                              shader.setFloat(3, _brightness);
-                              shader.setFloat(4, _saturation);
-                              shader.setFloat(5, _contrast);
-                              shader.setFloat(6, _sharpness);
-                              shader.setFloat(7, _gamma);
-                              shader.setFloat(8, _hue);
-                              shader.setFloat(9, _temperature);
-                              shader.setFloat(10, _glowIntensity);
-                              shader.setFloat(11, _lookMix);
-                              shader.setFloat(12, _vignette);
-                              shader.setFloat(13, _splitToning);
-                              return shader;
-                            },
-                            blendMode: BlendMode.dstATop, // <-- BEST FOR VIDEO
-                            child: VideoPlayer(_controller!),
-                          )
-                        : VideoPlayer(_controller!)
-                    : Container(
-                        color: const Color(0xFF1A1A1A),
-                        child: const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                              SizedBox(height: 8),
-                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                            ],
+                child: _currentFrame != null && _fragmentProgram != null
+                    ? AspectRatio(
+                        aspectRatio: _currentFrame!.width / _currentFrame!.height,
+                        child: CustomPaint(
+                          painter: ShaderPreviewPainter(
+                            image: _currentFrame!,
+                            program: _fragmentProgram!,
+                            brightness: _brightness,
+                            saturation: _saturation,
+                            contrast: _contrast,
+                            sharpness: _sharpness,
+                            gamma: _gamma,
+                            hue: _hue,
+                            temperature: _temperature,
+                            glowIntensity: _glowIntensity,
+                            lookMix: _lookMix,
+                            vignette: _vignette,
+                            splitToning: _splitToning,
+                          ),
+                          size: Size(
+                            _currentFrame!.width.toDouble(),
+                            _currentFrame!.height.toDouble(),
                           ),
                         ),
-                      ),
+                      )
+                    : _controller != null && _controller!.value.isInitialized
+                        ? VideoPlayer(_controller!) // Fallback raw video
+                        : Container(
+                            color: const Color(0xFF1A1A1A),
+                            child: const Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                                  SizedBox(height: 8),
+                                  Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                                ],
+                              ),
+                            ),
+                          ),
               ),
             ),
           ),
@@ -553,6 +655,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _controller?.removeListener(_listener);
     _controller?.dispose();
+    _currentFrame?.dispose();
     super.dispose();
   }
 }
