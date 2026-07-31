@@ -35,7 +35,6 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// ---------- HOME SCREEN ----------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -78,7 +77,6 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-// ---------- SETTINGS SCREEN ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -125,7 +123,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   const ProjectScreen({super.key});
 
@@ -137,11 +134,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   ui.FragmentProgram? _fragmentProgram;
-
-  // ----- FRAME CAPTURE (Fixes black screen) -----
-  ui.Image? _currentFrame;
-  bool _frameBusy = false;
-  VoidCallback _listener = () {};
 
   // ----- Color Controls -----
   double _brightness = 0.0;
@@ -157,6 +149,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _splitToning = 0.0;
 
   late TabController _tabController;
+  VoidCallback _listener = () {};
 
   @override
   void initState() {
@@ -174,40 +167,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ----- CAPTURE FRAME (Called every video frame) -----
-  void _updateFrame() async {
-    if (_frameBusy || _controller == null || !_controller!.value.isInitialized) return;
-    _frameBusy = true;
-    try {
-      final img = await _controller!.copyCurrentFrame();
-      if (img != null && mounted) {
-        final old = _currentFrame;
-        setState(() {
-          _currentFrame = img;
-        });
-        old?.dispose();
-      }
-    } catch (e) {
-      // ignore
-    }
-    _frameBusy = false;
-  }
-
-  // ----- IMPORT VIDEO -----
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
       final path = result.files.single.path!;
       setState(() {
         _controller?.removeListener(_listener);
-        _currentFrame?.dispose();
-        _currentFrame = null;
         _controller?.dispose();
         _controller = VideoPlayerController.file(File(path))
           ..initialize().then((_) {
             setState(() {});
             _listener = () {
-              _updateFrame();      // Capture frame
               if (mounted) setState(() {}); // Update slider
             };
             _controller!.addListener(_listener);
@@ -218,7 +188,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ----- PRESETS -----
   void _applyPreset(String name) {
     setState(() {
       switch (name) {
@@ -264,7 +233,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ----- EXPORT DIALOG (Removed "Pro" & "Vulkan") -----
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -350,57 +318,55 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (FIXED BLACK SCREEN) ----------
+          // ---------- PREVIEW (ShaderMask with VideoPlayer) ----------
           Expanded(
             flex: 4,
             child: Container(
               color: Colors.black,
               child: Center(
-                child: _currentFrame != null && _fragmentProgram != null
-                    ? ShaderMask(
-                        shaderCallback: (rect) {
-                          final shader = _fragmentProgram!.fragmentShader();
-                          // Resolution (indices 0 & 1)
-                          shader.setFloat(0, rect.width);
-                          shader.setFloat(1, rect.height);
-                          // Video texture (index 2) - THIS FIXES BLACK SCREEN
-                          shader.setImageSampler(2, _currentFrame!);
-                          // Color sliders (indices 3-13)
-                          shader.setFloat(3, _brightness);
-                          shader.setFloat(4, _saturation);
-                          shader.setFloat(5, _contrast);
-                          shader.setFloat(6, _sharpness);
-                          shader.setFloat(7, _gamma);
-                          shader.setFloat(8, _hue);
-                          shader.setFloat(9, _temperature);
-                          shader.setFloat(10, _glowIntensity);
-                          shader.setFloat(11, _lookMix);
-                          shader.setFloat(12, _vignette);
-                          shader.setFloat(13, _splitToning);
-                          return shader;
-                        },
-                        blendMode: BlendMode.srcATop,
-                        child: const SizedBox.expand(),
-                      )
-                    : _controller != null && _controller!.value.isInitialized
-                        ? VideoPlayer(_controller!) // Fallback: raw video if shader not ready
-                        : Container(
-                            color: const Color(0xFF1A1A1A),
-                            child: const Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                                  SizedBox(height: 8),
-                                  Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                                ],
-                              ),
-                            ),
+                child: _controller != null && _controller!.value.isInitialized
+                    ? _fragmentProgram != null
+                        ? ShaderMask(
+                            shaderCallback: (rect) {
+                              final shader = _fragmentProgram!.fragmentShader();
+                              // Resolution (indices 0 & 1)
+                              shader.setFloat(0, rect.width);
+                              shader.setFloat(1, rect.height);
+                              // Color sliders (indices 3-13)
+                              shader.setFloat(3, _brightness);
+                              shader.setFloat(4, _saturation);
+                              shader.setFloat(5, _contrast);
+                              shader.setFloat(6, _sharpness);
+                              shader.setFloat(7, _gamma);
+                              shader.setFloat(8, _hue);
+                              shader.setFloat(9, _temperature);
+                              shader.setFloat(10, _glowIntensity);
+                              shader.setFloat(11, _lookMix);
+                              shader.setFloat(12, _vignette);
+                              shader.setFloat(13, _splitToning);
+                              return shader;
+                            },
+                            blendMode: BlendMode.modulate, // <-- KEY FIX
+                            child: VideoPlayer(_controller!),
+                          )
+                        : VideoPlayer(_controller!)
+                    : Container(
+                        color: const Color(0xFF1A1A1A),
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                              SizedBox(height: 8),
+                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                            ],
                           ),
+                        ),
+                      ),
               ),
             ),
           ),
-          // ---------- TIMELINE (SLIDER MOVES SMOOTHLY) ----------
+          // ---------- TIMELINE ----------
           Container(
             color: const Color(0xFF111111),
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -447,7 +413,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-          // ---------- BOTTOM TOOLBAR (CapCut Style) ----------
+          // ---------- BOTTOM TOOLBAR ----------
           Container(
             color: const Color(0xFF141414),
             child: Column(
@@ -468,7 +434,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      // TAB 1: ADJUST (All sliders)
+                      // ADJUST
                       ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         children: [
@@ -484,7 +450,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
                         ],
                       ),
-                      // TAB 2: PRESETS (Grid)
+                      // PRESETS
                       GridView.count(
                         crossAxisCount: 3,
                         padding: const EdgeInsets.all(8),
@@ -510,7 +476,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           );
                         }).toList(),
                       ),
-                      // TAB 3: EXPORT
+                      // EXPORT
                       Center(
                         child: ElevatedButton(
                           onPressed: _showExportSheet,
@@ -556,7 +522,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _controller?.removeListener(_listener);
     _controller?.dispose();
-    _currentFrame?.dispose();
     super.dispose();
   }
 }
