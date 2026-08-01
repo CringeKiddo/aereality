@@ -234,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER ----------
+// ---------- SHADER PREVIEW PAINTER (FIXED SAMPLER INDEX) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
@@ -260,9 +260,15 @@ class ShaderPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final shader = program.fragmentShader();
-    shader.setFloat(0, size.width);
-    shader.setFloat(1, size.height);
-    shader.setImageSampler(2, image);
+    
+    // FIX: Use index 0 for sampler (matches _applyShaderToImage)
+    shader.setImageSampler(0, image);
+    
+    // Resolution floats at 1 and 2
+    shader.setFloat(1, size.width);
+    shader.setFloat(2, size.height);
+    
+    // Sliders at 3-13
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
@@ -442,7 +448,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (with detailed error reporting) ----------
+    // ---------- PREVIEW FRAME (FIXED: captures stdout + stderr) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -459,18 +465,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final returnCode = await session.getReturnCode();
       
       if (!ReturnCode.isSuccess(returnCode)) {
+        // Get BOTH output and logs
+        final output = await session.getOutput() ?? "No stdout";
         final allLogs = await session.getAllLogs();
-        String errorMessage = "No output";
+        String logMessages = "";
         if (allLogs != null && allLogs.isNotEmpty) {
-          // Convert Log objects to strings and find the first error message
-          final messages = allLogs.map((log) => log.getMessage()).toList();
-          final errorMsg = messages.lastWhere(
-            (msg) => msg.contains("Error") || msg.contains("error"),
-            orElse: () => "Unknown error",
-          );
-          errorMessage = errorMsg;
+          logMessages = allLogs.map((log) => log.getMessage()).join("\n");
         }
-        throw Exception('FFmpeg error: $errorMessage');
+        final combined = "Stdout: $output\nLogs: $logMessages";
+        throw Exception('FFmpeg error:\n$combined');
       }
 
       final file = File(outputPath);
@@ -752,6 +755,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ---------- APPLY SHADER TO IMAGE (FIXED SAMPLER INDEX) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -762,14 +766,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final canvas = Canvas(recorder);
     final size = Size(image.width.toDouble(), image.height.toDouble());
     final shader = program.fragmentShader();
-    shader.setFloat(0, size.width); shader.setFloat(1, size.height);
-    shader.setImageSampler(2, image);
-    shader.setFloat(3, brightness); shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast); shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma); shader.setFloat(8, hue);
-    shader.setFloat(9, temperature); shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix); shader.setFloat(12, vignette);
+    
+    // FIX: Use index 0 for sampler (instead of 2)
+    shader.setImageSampler(0, image);
+    
+    // Resolution floats at 1 and 2
+    shader.setFloat(1, size.width);
+    shader.setFloat(2, size.height);
+    
+    // Sliders at 3-13
+    shader.setFloat(3, brightness);
+    shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast);
+    shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma);
+    shader.setFloat(8, hue);
+    shader.setFloat(9, temperature);
+    shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix);
+    shader.setFloat(12, vignette);
     shader.setFloat(13, splitToning);
+    
     canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
     final picture = recorder.endRecording();
     return picture.toImage(image.width, image.height);
