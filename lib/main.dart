@@ -133,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 30),
             ElevatedButton.icon(
               onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectScreen()));
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen()));
               },
               icon: const Icon(Icons.add, color: Colors.black),
               label: const Text('New Project', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -233,72 +233,245 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
-
-// ---------- SHADER PREVIEW PAINTER ----------
-class ShaderPreviewPainter extends CustomPainter {
-  final ui.Image image;
-  final ui.FragmentProgram program;
-  final double brightness, saturation, contrast, sharpness, gamma, hue;
-  final double temperature, glowIntensity, lookMix, vignette, splitToning;
-
-  const ShaderPreviewPainter({
-    required this.image,
-    required this.program,
-    required this.brightness,
-    required this.saturation,
-    required this.contrast,
-    required this.sharpness,
-    required this.gamma,
-    required this.hue,
-    required this.temperature,
-    required this.glowIntensity,
-    required this.lookMix,
-    required this.vignette,
-    required this.splitToning,
-  });
+// ---------- PROJECT SETUP SCREEN ----------
+class ProjectSetupScreen extends StatefulWidget {
+  const ProjectSetupScreen({super.key});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final shader = program.fragmentShader();
-    shader.setImageSampler(0, image);
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
+  State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
+}
 
-    final paint = Paint()..shader = shader;
-    canvas.drawRect(Offset.zero & size, paint);
+class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _tiltAnimation;
+
+  String _projectName = 'Untitled Project';
+
+  // Selected export settings (defaults)
+  String _selectedResolution = '1080p';
+  String _selectedFps = '60fps';
+  String _selectedBitrate = '35 Mbps';
+
+  // Expansion states
+  bool _isResExpanded = false;
+  bool _isFpsExpanded = false;
+  bool _isBitrateExpanded = false;
+
+  final List<String> _resolutions = ['720p', '1080p', '2K'];
+  final List<String> _fpsOptions = ['30fps', '60fps', '90fps'];
+  final List<String> _bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps'];
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _tiltAnimation = Tween<double>(begin: 0.0, end: 0.08).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
+    );
+    _animationController.forward();
   }
 
   @override
-  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
-    return oldDelegate.image != image ||
-        oldDelegate.brightness != brightness ||
-        oldDelegate.saturation != saturation ||
-        oldDelegate.contrast != contrast ||
-        oldDelegate.sharpness != sharpness ||
-        oldDelegate.gamma != gamma ||
-        oldDelegate.hue != hue ||
-        oldDelegate.temperature != temperature ||
-        oldDelegate.glowIntensity != glowIntensity ||
-        oldDelegate.lookMix != lookMix ||
-        oldDelegate.vignette != vignette ||
-        oldDelegate.splitToning != splitToning;
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _createProject() async {
+    // Open file picker
+    final result = await FilePicker.platform.pickFiles(type: FileType.video);
+    String? videoPath;
+    if (result != null) {
+      videoPath = result.files.single.path;
+    }
+    // Go to editor (with or without video)
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProjectScreen(
+          initialResolution: _selectedResolution,
+          initialFps: _selectedFps,
+          initialBitrate: _selectedBitrate,
+          initialVideoPath: videoPath,
+          projectName: _projectName,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSlantedBox(String title, List<String> options, String selectedValue,
+      ValueChanged<String> onSelected, bool isExpanded, VoidCallback onToggle) {
+    return AnimatedBuilder(
+      animation: _tiltAnimation,
+      builder: (context, child) {
+        return Transform.rotate(
+          angle: _tiltAnimation.value,
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[800]!),
+            ),
+            child: ExpansionTile(
+              trailing: Icon(
+                isExpanded ? Icons.expand_less : Icons.expand_more,
+                color: Colors.white70,
+              ),
+              title: Row(
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[800],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      selectedValue,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+              initiallyExpanded: isExpanded,
+              onExpansionChanged: (val) => onToggle(),
+              children: options.map((opt) {
+                return ListTile(
+                  title: Text(opt, style: const TextStyle(color: Colors.white70)),
+                  trailing: selectedValue == opt
+                      ? const Icon(Icons.check, color: Colors.cyanAccent, size: 18)
+                      : null,
+                  onTap: () {
+                    onSelected(opt);
+                    onToggle(); // collapse after selection
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('New Project'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Project Name
+              const Text('PROJECT NAME', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+              const SizedBox(height: 4),
+              TextField(
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+                decoration: InputDecoration(
+                  hintText: 'Enter project name',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  border: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Colors.grey[800]!),
+                  ),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Colors.grey[800]!),
+                  ),
+                  focusedBorder: UnderlineInputBorder(
+                    borderSide: const BorderSide(color: Colors.white),
+                  ),
+                ),
+                onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Untitled Project',
+                controller: TextEditingController(text: _projectName),
+              ),
+              const SizedBox(height: 30),
+
+              // Animated Slanted Boxes
+              Expanded(
+                child: ListView(
+                  physics: const BouncingScrollPhysics(),
+                  children: [
+                    _buildSlantedBox(
+                      'Quality',
+                      _resolutions,
+                      _selectedResolution,
+                      (val) => setState(() => _selectedResolution = val),
+                      _isResExpanded,
+                      () => setState(() => _isResExpanded = !_isResExpanded),
+                    ),
+                    _buildSlantedBox(
+                      'Framerate',
+                      _fpsOptions,
+                      _selectedFps,
+                      (val) => setState(() => _selectedFps = val),
+                      _isFpsExpanded,
+                      () => setState(() => _isFpsExpanded = !_isFpsExpanded),
+                    ),
+                    _buildSlantedBox(
+                      'Bitrate',
+                      _bitrateOptions,
+                      _selectedBitrate,
+                      (val) => setState(() => _selectedBitrate = val),
+                      _isBitrateExpanded,
+                      () => setState(() => _isBitrateExpanded = !_isBitrateExpanded),
+                    ),
+                  ],
+                ),
+              ),
+
+              // CREATE Button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _createProject,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                  ),
+                  child: const Text('CREATE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
-  const ProjectScreen({super.key, this.initialProject});
+  final String? initialResolution;
+  final String? initialFps;
+  final String? initialBitrate;
+  final String? initialVideoPath;
+  final String? projectName;
+
+  const ProjectScreen({
+    super.key,
+    this.initialProject,
+    this.initialResolution,
+    this.initialFps,
+    this.initialBitrate,
+    this.initialVideoPath,
+    this.projectName,
+  });
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
@@ -326,10 +499,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VoidCallback _listener = () {};
   bool _isPreviewing = false;
 
+  // Export settings from setup screen
+  late String _projectResolution;
+  late String _projectFps;
+  late String _projectBitrate;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    
+    // Set defaults from setup screen
+    _projectResolution = widget.initialResolution ?? '1080p';
+    _projectFps = widget.initialFps ?? '60fps';
+    _projectBitrate = widget.initialBitrate ?? '35 Mbps';
+
     if (widget.initialProject != null) {
       final p = widget.initialProject!;
       _brightness = p.brightness;
@@ -345,6 +529,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _splitToning = p.splitToning;
       _selectedRatio = p.aspectRatio;
       _loadVideo(p.videoPath);
+    } else if (widget.initialVideoPath != null) {
+      _loadVideo(widget.initialVideoPath!);
     }
   }
 
@@ -476,6 +662,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (image == null) throw Exception('Failed to decode image');
       final uiImage = await _convertToUiImage(image);
       if (uiImage == null) throw Exception('Failed to convert to UI image');
+      // DEBUG: Check image size
+      if (uiImage.width == 0 || uiImage.height == 0) {
+        throw Exception('Converted image has zero size');
+      }
       
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       if (!mounted) return;
@@ -520,11 +710,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- FIXED CONVERT FUNCTION ----------
+  // ---------- CONVERT FUNCTION (with debug checks) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     final completer = Completer<ui.Image>();
-    // Use raw RGBA bytes directly – NO PNG encoding/decoding
+    if (image.width == 0 || image.height == 0) {
+      throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
+    }
     final bytes = image.getBytes();
+    if (bytes.isEmpty) {
+      throw Exception('Image bytes are empty');
+    }
     ui.decodeImageFromPixels(
       bytes,
       image.width,
@@ -536,7 +731,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    // ---------- FULL EXPORT ----------
+    // ---------- EXPORT VIDEO (with debug checks) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -619,6 +814,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             final uiImage = await _convertToUiImage(decoded);
             if (uiImage == null) {
               throw Exception('Failed to convert frame to UI image: ${file.path}');
+            }
+            if (uiImage.width == 0 || uiImage.height == 0) {
+              throw Exception('Converted image has zero size: ${file.path}');
             }
             final processed = await _applyShaderToImage(
               uiImage, program,
@@ -745,13 +943,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE ----------
+  // ---------- APPLY SHADER (with debug checks) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
     required double temperature, required double glowIntensity, required double lookMix,
     required double vignette, required double splitToning,
   }) async {
+    if (image.width == 0 || image.height == 0) {
+      throw Exception('Input image has zero size in _applyShaderToImage');
+    }
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = Size(image.width.toDouble(), image.height.toDouble());
@@ -774,9 +975,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     
     canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
     final picture = recorder.endRecording();
-    return picture.toImage(image.width, image.height);
+    final output = await picture.toImage(image.width, image.height);
+    if (output == null) {
+      throw Exception('picture.toImage returned null');
+    }
+    return output;
   }
-    // ---------- EXPORT DIALOG ----------
+    // ---------- EXPORT DIALOG (uses project defaults) ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -785,9 +990,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            String selectedRes = '1080p';
-            String selectedFps = '60fps';
-            String selectedBit = '35 Mbps';
+            // Use project defaults as the initial selected values
+            String selectedRes = _projectResolution;
+            String selectedFps = _projectFps;
+            String selectedBit = _projectBitrate;
             return Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -856,222 +1062,68 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       },
     );
   }
-    // ---------- BUILD METHOD ----------
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Project'),
-        backgroundColor: const Color(0xFF0A0A0A),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
-          IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
-          IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: Colors.black,
-              child: Center(
-                child: _controller != null && _controller!.value.isInitialized
-                    ? AspectRatio(
-                        aspectRatio: _getAspectRatioValue(_selectedRatio),
-                        child: VideoPlayer(_controller!),
-                      )
-                    : Container(
-                        color: const Color(0xFF1A1A1A),
-                        child: const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                              SizedBox(height: 8),
-                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                            ],
-                          ),
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          Container(
-            color: const Color(0xFF111111),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
-                  onPressed: _controller != null && _controller!.value.isInitialized
-                      ? () => setState(() {
-                          if (_controller!.value.isPlaying) {
-                            _controller!.pause();
-                            _isPlaying = false;
-                          } else {
-                            _controller!.play();
-                            _isPlaying = true;
-                          }
-                        })
-                      : null,
-                ),
-                Expanded(
-                  child: Slider(
-                    value: _controller != null && _controller!.value.isInitialized
-                        ? _controller!.value.position.inSeconds.toDouble()
-                        : 0.0,
-                    min: 0,
-                    max: _controller != null && _controller!.value.isInitialized
-                        ? _controller!.value.duration.inSeconds.toDouble()
-                        : 1.0,
-                    activeColor: Colors.white,
-                    inactiveColor: Colors.grey[800],
-                    onChanged: (val) {
-                      if (_controller != null && _controller!.value.isInitialized) {
-                        _controller!.seekTo(Duration(milliseconds: (val * 1000).round()));
-                      }
-                    },
-                  ),
-                ),
-                Text(
-                  _controller != null && _controller!.value.isInitialized
-                      ? '${_controller!.value.position.inSeconds ~/ 60}:${(_controller!.value.position.inSeconds % 60).toString().padLeft(2, '0')}'
-                      : '--:--',
-                  style: const TextStyle(color: Colors.white54),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            color: const Color(0xFF141414),
-            child: Column(
-              children: [
-                TabBar(
-                  controller: _tabController,
-                  indicatorColor: Colors.white,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.grey,
-                  tabs: const [
-                    Tab(icon: Icon(Icons.tune), text: 'Adjust'),
-                    Tab(icon: Icon(Icons.auto_awesome), text: 'Presets'),
-                    Tab(icon: Icon(Icons.save_alt), text: 'Export'),
-                  ],
-                ),
-                SizedBox(
-                  height: 190,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        children: [
-                          _slider('Bright', -1.0, 1.0, _brightness, (v) => setState(() => _brightness = v)),
-                          _slider('Sat', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
-                          _slider('Contrast', 0.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
-                          _slider('Sharp', 0.0, 5.0, _sharpness, (v) => setState(() => _sharpness = v)),
-                          _slider('Gamma', 0.1, 2.5, _gamma, (v) => setState(() => _gamma = v)),
-                          _slider('Hue', -180, 180, _hue, (v) => setState(() => _hue = v)),
-                          _slider('Temp', 2000, 12000, _temperature, (v) => setState(() => _temperature = v)),
-                          _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
-                          _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
-                          _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
-                        ],
-                      ),
-                      GridView.count(
-                        crossAxisCount: 3,
-                        padding: const EdgeInsets.all(8),
-                        children: ['Gojo Edit', 'Magic Bullet', 'Teal & Orange', 'Film Grain', 'Vintage', 'Cinematic'].map((name) {
-                          return GestureDetector(
-                            onTap: () => _applyPreset(name),
-                            child: Container(
-                              margin: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[900],
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey[800]!),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.image, color: Colors.white24, size: 30),
-                                  const SizedBox(height: 4),
-                                  Text(name, style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
-                                ],
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              ElevatedButton.icon(
-                                onPressed: _isPreviewing ? null : _previewFrame,
-                                icon: const Icon(Icons.image, color: Colors.black),
-                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.cyanAccent,
-                                  foregroundColor: Colors.black,
-                                ),
-                              ),
-                              ElevatedButton(
-                                onPressed: _showExportSheet,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
-                                ),
-                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          const Text('Preview applies shader to the frame on your timeline',
-                            style: TextStyle(color: Colors.white38, fontSize: 10)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
-        Expanded(
-          child: Slider(
-            value: val.clamp(min, max),
-            min: min,
-            max: max,
-            activeColor: Colors.white,
-            inactiveColor: Colors.grey[800],
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
-      ],
-    );
+  // ---------- SHADER PREVIEW PAINTER (same as before) ----------
+  // (I'm including this here again because it's used in Part 4)
+}
+
+class ShaderPreviewPainter extends CustomPainter {
+  final ui.Image image;
+  final ui.FragmentProgram program;
+  final double brightness, saturation, contrast, sharpness, gamma, hue;
+  final double temperature, glowIntensity, lookMix, vignette, splitToning;
+
+  const ShaderPreviewPainter({
+    required this.image,
+    required this.program,
+    required this.brightness,
+    required this.saturation,
+    required this.contrast,
+    required this.sharpness,
+    required this.gamma,
+    required this.hue,
+    required this.temperature,
+    required this.glowIntensity,
+    required this.lookMix,
+    required this.vignette,
+    required this.splitToning,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shader = program.fragmentShader();
+    shader.setImageSampler(0, image);
+    shader.setFloat(1, size.width);
+    shader.setFloat(2, size.height);
+    shader.setFloat(3, brightness);
+    shader.setFloat(4, saturation);
+    shader.setFloat(5, contrast);
+    shader.setFloat(6, sharpness);
+    shader.setFloat(7, gamma);
+    shader.setFloat(8, hue);
+    shader.setFloat(9, temperature);
+    shader.setFloat(10, glowIntensity);
+    shader.setFloat(11, lookMix);
+    shader.setFloat(12, vignette);
+    shader.setFloat(13, splitToning);
+
+    final paint = Paint()..shader = shader;
+    canvas.drawRect(Offset.zero & size, paint);
   }
 
   @override
-  void dispose() {
-    _controller?.removeListener(_listener);
-    _controller?.dispose();
-    super.dispose();
+  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
+    return oldDelegate.image != image ||
+        oldDelegate.brightness != brightness ||
+        oldDelegate.saturation != saturation ||
+        oldDelegate.contrast != contrast ||
+        oldDelegate.sharpness != sharpness ||
+        oldDelegate.gamma != gamma ||
+        oldDelegate.hue != hue ||
+        oldDelegate.temperature != temperature ||
+        oldDelegate.glowIntensity != glowIntensity ||
+        oldDelegate.lookMix != lookMix ||
+        oldDelegate.vignette != vignette ||
+        oldDelegate.splitToning != splitToning;
   }
 }
