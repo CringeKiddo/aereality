@@ -234,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (FIXED SAMPLER INDEX) ----------
+// ---------- SHADER PREVIEW PAINTER (FIXED: uses getUniformLocation) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
@@ -261,25 +261,26 @@ class ShaderPreviewPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final shader = program.fragmentShader();
     
-    // FIX: Use index 0 for sampler (matches _applyShaderToImage)
-    shader.setImageSampler(0, image);
+    // Get the correct location for the sampler
+    final samplerLoc = shader.getUniformLocation('uTexture');
+    shader.setImageSampler(samplerLoc, image);
     
-    // Resolution floats at 1 and 2
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
+    // Resolution floats at 0 and 1
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
     
-    // Sliders at 3-13
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
+    // Sliders at 2-12
+    shader.setFloat(2, brightness);
+    shader.setFloat(3, saturation);
+    shader.setFloat(4, contrast);
+    shader.setFloat(5, sharpness);
+    shader.setFloat(6, gamma);
+    shader.setFloat(7, hue);
+    shader.setFloat(8, temperature);
+    shader.setFloat(9, glowIntensity);
+    shader.setFloat(10, lookMix);
+    shader.setFloat(11, vignette);
+    shader.setFloat(12, splitToning);
 
     final paint = Paint()..shader = shader;
     canvas.drawRect(Offset.zero & size, paint);
@@ -448,7 +449,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (FIXED: captures stdout + stderr) ----------
+    // ---------- PREVIEW FRAME (captures stdout + stderr) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -536,7 +537,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- FULL EXPORT (with zero-frame check) ----------
+  // ---------- FULL EXPORT (with percentage, zero-frame check, fixed sampler) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -607,7 +608,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       const batchSize = 10;
 
-      // ---------- UPDATED FRAME PROCESSING LOOP WITH CHECKS ----------
+      // ---------- UPDATED FRAME PROCESSING LOOP WITH PERCENTAGE ----------
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
         await Future.wait(batch.map((file) async {
@@ -641,7 +642,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes.buffer.asUint8List());
             
-            // Verify the file was written
             if (!await outputFile.exists()) {
               throw Exception('Failed to write processed frame to: ${outputFile.path}');
             }
@@ -649,7 +649,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             processedFrames++;
             final p = processedFrames / totalFrames;
             progressNotifier.value = p;
-            statusNotifier.value = 'Processing frame $processedFrames of $totalFrames';
+            // ---- CHANGE: percentage instead of frame count ----
+            final percent = (processedFrames / totalFrames * 100).toInt();
+            statusNotifier.value = 'Processing... $percent%';
+            // ------------------------------------------------
             if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
               final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
               final remaining = totalSec - stopwatch.elapsed.inSeconds;
@@ -755,7 +758,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (FIXED SAMPLER INDEX) ----------
+  // ---------- APPLY SHADER TO IMAGE (FIXED: uses getUniformLocation) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -767,25 +770,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final size = Size(image.width.toDouble(), image.height.toDouble());
     final shader = program.fragmentShader();
     
-    // FIX: Use index 0 for sampler (instead of 2)
-    shader.setImageSampler(0, image);
+    // Get the correct location for the sampler
+    final samplerLoc = shader.getUniformLocation('uTexture');
+    shader.setImageSampler(samplerLoc, image);
     
-    // Resolution floats at 1 and 2
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
+    // Resolution floats at 0 and 1
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
     
-    // Sliders at 3-13
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
+    // Sliders at 2-12
+    shader.setFloat(2, brightness);
+    shader.setFloat(3, saturation);
+    shader.setFloat(4, contrast);
+    shader.setFloat(5, sharpness);
+    shader.setFloat(6, gamma);
+    shader.setFloat(7, hue);
+    shader.setFloat(8, temperature);
+    shader.setFloat(9, glowIntensity);
+    shader.setFloat(10, lookMix);
+    shader.setFloat(11, vignette);
+    shader.setFloat(12, splitToning);
     
     canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
     final picture = recorder.endRecording();
