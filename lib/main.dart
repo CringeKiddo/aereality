@@ -598,6 +598,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       default: return 16 / 9;
     }
   }
+
   void _showRatioSelector() {
     showModalBottomSheet(
       context: context,
@@ -697,18 +698,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (USING DECODEIMAGEFROMPIXELS) ----------
+  // ---------- CONVERT FUNCTION (FIXED: explicit RGBA) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
-    final completer = Completer<ui.Image>();
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
-    final bytes = image.getBytes();
-    if (bytes.isEmpty) {
-      throw Exception('Image bytes are empty');
-    }
+
+    final rgbaBytes = image.getBytes(format: img.Format.rgba);
+    final completer = Completer<ui.Image>();
+
     ui.decodeImageFromPixels(
-      bytes,
+      rgbaBytes,
       image.width,
       image.height,
       ui.PixelFormat.rgba8888,
@@ -716,6 +716,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         completer.complete(result);
       },
     );
+
     return completer.future;
   }
     // ---------- EXPORT VIDEO ----------
@@ -930,7 +931,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (FINAL) ----------
+  // ---------- APPLY SHADER TO IMAGE (CORRECT INDEXING) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -946,14 +947,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final size = Size(image.width.toDouble(), image.height.toDouble());
     final shader = program.fragmentShader();
 
-    // Set the image sampler at index 0
-    shader.setImageSampler(0, image);
+    // uResolution (float indices 0 and 1)
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
 
-    // Set resolution floats at 1 and 2
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
+    // uTexture (sampler index 2)
+    shader.setImageSampler(2, image);
 
-    // Set sliders at 3-13
+    // uBrightness..uSplitToning (float indices 3..13)
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
@@ -1268,7 +1269,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- DISPOSE ----------
   @override
   void dispose() {
     _controller?.removeListener(_listener);
@@ -1277,7 +1277,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER ----------
+// ---------- SHADER PREVIEW PAINTER (CORRECT INDEXING) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
@@ -1303,9 +1303,15 @@ class ShaderPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final shader = program.fragmentShader();
-    shader.setImageSampler(0, image);
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
+
+    // uResolution (float indices 0 and 1)
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
+
+    // uTexture (sampler index 2)
+    shader.setImageSampler(2, image);
+
+    // uBrightness..uSplitToning (float indices 3..13)
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
