@@ -638,8 +638,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      // CHANGED ENCODER: libx264 -> mpeg4
       final encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                        '-c:v libx264 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
+                        '-c:v mpeg4 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
                         '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$silentOutputPath"';
       final encodeSession = await FFmpegKit.execute(encodeCmd);
       final encodeReturnCode = await encodeSession.getReturnCode();
@@ -666,8 +667,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      final docsDir = await getApplicationDocumentsDirectory();
-      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      // ---------- SAVE TO DOWNLOADS FOLDER (PUBLIC) ----------
+      final downloadsDir = Directory('/storage/emulated/0/Download/');
+      if (!await downloadsDir.exists()) {
+        // Fallback to app's documents if Downloads not accessible
+        final docsDir = await getApplicationDocumentsDirectory();
+        final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+        await File(finalOutputPath).copy(finalFile.path);
+        await framesDir.delete(recursive: true);
+        await processedDir.delete(recursive: true);
+        try { await File(audioPath).delete(); } catch (_) {}
+        try { await File(silentOutputPath).delete(); } catch (_) {}
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('⚠️ Saved to app folder: ${finalFile.path}'), backgroundColor: Colors.orange, duration: const Duration(seconds: 5)),
+          );
+        }
+        return;
+      }
+
+      final finalFile = File('${downloadsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
 
       await framesDir.delete(recursive: true);
@@ -678,7 +698,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved to: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
         );
       }
     } catch (e) {
