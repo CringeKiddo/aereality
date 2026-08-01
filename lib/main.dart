@@ -460,9 +460,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       
       if (!ReturnCode.isSuccess(returnCode)) {
         final allLogs = await session.getAllLogs();
-        final errorMessage = allLogs?.isNotEmpty == true 
-            ? allLogs!.lastWhere((log) => log.contains("Error") || log.contains("error"), orElse: () => "Unknown error") 
-            : "No output";
+        String errorMessage = "No output";
+        if (allLogs != null && allLogs.isNotEmpty) {
+          // Convert Log objects to strings and find the first error message
+          final messages = allLogs.map((log) => log.getMessage()).toList();
+          final errorMsg = messages.lastWhere(
+            (msg) => msg.contains("Error") || msg.contains("error"),
+            orElse: () => "Unknown error",
+          );
+          errorMessage = errorMsg;
+        }
         throw Exception('FFmpeg error: $errorMessage');
       }
 
@@ -526,7 +533,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- FULL EXPORT (with detailed frame processing) ----------
+  // ---------- FULL EXPORT (with zero-frame check) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -585,6 +592,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
 
       final frameFiles = await framesDir.list().toList();
+      // --- CHECK FOR ZERO FRAMES ---
+      if (frameFiles.isEmpty) {
+        throw Exception('No frames extracted. The video may be corrupted, unsupported, or the path is incorrect.');
+      }
+
       final totalFrames = frameFiles.length;
       int processedFrames = 0;
       stopwatch.start();
