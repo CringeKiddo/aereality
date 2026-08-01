@@ -718,7 +718,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    // ---------- EXPORT VIDEO ----------
+    // ---------- EXPORT VIDEO (RAW FRAMES – NO SHADER) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -785,7 +785,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int processedFrames = 0;
       stopwatch.start();
 
-      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       const batchSize = 10;
 
       for (int i = 0; i < totalFrames; i += batchSize) {
@@ -805,16 +804,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             if (uiImage.width == 0 || uiImage.height == 0) {
               throw Exception('Converted image has zero size: ${file.path}');
             }
-            final processed = await _applyShaderToImage(
-              uiImage, program,
-              brightness: _brightness, saturation: _saturation, contrast: _contrast,
-              sharpness: _sharpness, gamma: _gamma, hue: _hue,
-              temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
-              vignette: _vignette, splitToning: _splitToning,
-            );
-            if (processed == null) {
-              throw Exception('_applyShaderToImage returned null for frame: ${file.path}');
-            }
+            
+            // NO SHADER – just use the raw converted image
+            final processed = uiImage;
             
             final pngBytes = await processed.toByteData(format: ui.ImageByteFormat.png);
             if (pngBytes == null) {
@@ -928,36 +920,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         );
       }
     }
-  }
-
-  // ---------- APPLY SHADER TO IMAGE (DEBUG: ONLY DRAW GREEN RECTANGLE) ----------
-  Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
-    required double brightness, required double saturation, required double contrast,
-    required double sharpness, required double gamma, required double hue,
-    required double temperature, required double glowIntensity, required double lookMix,
-    required double vignette, required double splitToning,
-  }) async {
-    if (image.width == 0 || image.height == 0) {
-      throw Exception('Input image has zero size in _applyShaderToImage');
-    }
-
-    // DEBUG: Print to console to confirm this function is called
-    debugPrint('_applyShaderToImage called for image ${image.width}x${image.height}');
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(image.width.toDouble(), image.height.toDouble());
-
-    // Draw a bright green rectangle (no shader)
-    final greenPaint = Paint()..color = const Color(0xFF00FF00);
-    canvas.drawRect(Offset.zero & size, greenPaint);
-
-    final picture = recorder.endRecording();
-    final output = await picture.toImage(image.width, image.height);
-    if (output == null) {
-      throw Exception('picture.toImage returned null');
-    }
-    return output;
   }
     // ---------- EXPORT DIALOG (uses project defaults) ----------
   void _showExportSheet() {
