@@ -1,24 +1,24 @@
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-uniform vec2 uResolution;
-uniform sampler2D uTexture;
+uniform sampler2D uTexture;   // index 0 (sampler)
+uniform vec2 uResolution;     // indices 1,2 (float)
 
-uniform float uBrightness;
-uniform float uSaturation;
-uniform float uContrast;
-uniform float uSharpness;
-uniform float uGamma;
-uniform float uHue;
-uniform float uTemperature;
-uniform float uGlowIntensity;
-uniform float uLookMix;
-uniform float uVignette;
-uniform float uSplitToning;
+uniform float uBrightness;    // index 3
+uniform float uSaturation;    // index 4
+uniform float uContrast;      // index 5
+uniform float uSharpness;     // index 6
+uniform float uGamma;         // index 7
+uniform float uHue;           // index 8
+uniform float uTemperature;   // index 9
+uniform float uGlowIntensity; // index 10
+uniform float uLookMix;       // index 11
+uniform float uVignette;      // index 12
+uniform float uSplitToning;   // index 13
 
 out vec4 fragColor;
 
-// ---------- HELPER FUNCTIONS ----------
+// ---------- HELPER FUNCTIONS (keep the same) ----------
 vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
     vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
