@@ -234,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (fixed sampler index 0) ----------
+// ---------- SHADER PREVIEW PAINTER ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
@@ -260,15 +260,9 @@ class ShaderPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final shader = program.fragmentShader();
-    
-    // Use index 0 for the sampler (uTexture)
     shader.setImageSampler(0, image);
-    
-    // Resolution floats at 1 and 2
     shader.setFloat(1, size.width);
     shader.setFloat(2, size.height);
-    
-    // Sliders at 3-13
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
@@ -315,7 +309,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isPlaying = false;
   String? _currentVideoPath;
 
-  // Color Controls
   double _brightness = 0.0;
   double _saturation = 1.0;
   double _contrast = 1.0;
@@ -401,7 +394,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- SAVE PROJECT ----------
   Future<void> _saveCurrentProject() async {
     if (_currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -424,7 +416,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- ASPECT RATIO ----------
   double _getAspectRatioValue(String ratio) {
     switch (ratio) {
       case "4:5": return 4 / 5;
@@ -448,7 +439,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (captures stdout + stderr) ----------
+    // ---------- PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -465,7 +456,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final returnCode = await session.getReturnCode();
       
       if (!ReturnCode.isSuccess(returnCode)) {
-        // Get BOTH output and logs
         final output = await session.getOutput() ?? "No stdout";
         final allLogs = await session.getAllLogs();
         String logMessages = "";
@@ -530,12 +520,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ---------- FIXED CONVERT FUNCTION ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     final completer = Completer<ui.Image>();
-    ui.decodeImageFromList(img.encodePng(image), completer.complete);
+    // Use raw RGBA bytes directly – NO PNG encoding/decoding
+    final bytes = image.getBytes();
+    ui.decodeImageFromPixels(
+      bytes,
+      image.width,
+      image.height,
+      ui.PixelFormat.rgba8888,
+      (ui.Image result) {
+        completer.complete(result);
+      },
+    );
     return completer.future;
   }
-    // ---------- FULL EXPORT (with percentage, zero-frame check, fixed sampler) ----------
+    // ---------- FULL EXPORT ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -594,9 +595,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
 
       final frameFiles = await framesDir.list().toList();
-      // --- CHECK FOR ZERO FRAMES ---
       if (frameFiles.isEmpty) {
-        throw Exception('No frames extracted. The video may be corrupted, unsupported, or the path is incorrect.');
+        throw Exception('No frames extracted.');
       }
 
       final totalFrames = frameFiles.length;
@@ -606,7 +606,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       const batchSize = 10;
 
-      // ---------- FRAME PROCESSING LOOP WITH PERCENTAGE ----------
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
         await Future.wait(batch.map((file) async {
@@ -661,21 +660,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           }
         }));
       }
-      // ---------- END OF LOOP ----------
-
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding video...';
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
       
-      // Try libx264 first
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       var encodeReturnCode = await encodeSession.getReturnCode();
 
-      // If libx264 fails, fallback to mpeg4
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
         statusNotifier.value = 'Retrying with mpeg4...';
         final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
@@ -684,7 +679,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         encodeReturnCode = await encodeSession.getReturnCode();
       }
 
-      // Now read the actual error if it still fails
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
         final combined = await encodeSession.getOutput() ?? "No output";
         final errorSnippet = combined.length > 500 
@@ -693,7 +687,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         throw Exception('Encode failed:\n$errorSnippet');
       }
 
-      // ---------- EXTRACT AUDIO ----------
       statusNotifier.value = 'Extracting audio...';
       final audioPath = '${dir.path}/extracted_audio.aac';
       final audioCmd = '-i "${_currentVideoPath!}" -vn -acodec copy "$audioPath"';
@@ -702,7 +695,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         print('Audio extraction skipped');
       }
 
-      // ---------- MUX AUDIO + VIDEO ----------
       statusNotifier.value = 'Muxing audio and video...';
       final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
       final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
@@ -711,7 +703,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      // ---------- SAVE TO DOWNLOADS FOLDER ----------
       final downloadsDir = Directory('/storage/emulated/0/Download/');
       if (!await downloadsDir.exists()) {
         final docsDir = await getApplicationDocumentsDirectory();
@@ -754,7 +745,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (fixed sampler index 0) ----------
+  // ---------- APPLY SHADER TO IMAGE ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -766,14 +757,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final size = Size(image.width.toDouble(), image.height.toDouble());
     final shader = program.fragmentShader();
     
-    // Use index 0 for the sampler
     shader.setImageSampler(0, image);
-    
-    // Resolution floats at 1 and 2
     shader.setFloat(1, size.width);
     shader.setFloat(2, size.height);
-    
-    // Sliders at 3-13
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
@@ -790,8 +776,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final picture = recorder.endRecording();
     return picture.toImage(image.width, image.height);
   }
-
-  // ---------- EXPORT DIALOG ----------
+    // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -890,7 +875,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // ---------- PREVIEW (RAW VIDEO) ----------
           Expanded(
             flex: 4,
             child: Container(
@@ -917,7 +901,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
             ),
           ),
-          // ---------- TIMELINE (FRAME-ACCURATE) ----------
           Container(
             color: const Color(0xFF111111),
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -964,7 +947,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-          // ---------- BOTTOM TOOLBAR ----------
           Container(
             color: const Color(0xFF141414),
             child: Column(
@@ -985,7 +967,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      // ADJUST
                       ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         children: [
@@ -1001,7 +982,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
                         ],
                       ),
-                      // PRESETS
                       GridView.count(
                         crossAxisCount: 3,
                         padding: const EdgeInsets.all(8),
@@ -1027,7 +1007,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           );
                         }).toList(),
                       ),
-                      // EXPORT
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
