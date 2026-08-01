@@ -247,12 +247,10 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
 
   String _projectName = 'Untitled Project';
 
-  // Selected export settings (defaults)
   String _selectedResolution = '1080p';
   String _selectedFps = '60fps';
   String _selectedBitrate = '35 Mbps';
 
-  // Expansion states
   bool _isResExpanded = false;
   bool _isFpsExpanded = false;
   bool _isBitrateExpanded = false;
@@ -281,13 +279,11 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
   }
 
   void _createProject() async {
-    // Open file picker
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     String? videoPath;
     if (result != null) {
       videoPath = result.files.single.path;
     }
-    // Go to editor (with or without video)
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -348,7 +344,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                       : null,
                   onTap: () {
                     onSelected(opt);
-                    onToggle(); // collapse after selection
+                    onToggle();
                   },
                 );
               }).toList(),
@@ -376,7 +372,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Project Name
               const Text('PROJECT NAME', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
               const SizedBox(height: 4),
               TextField(
@@ -398,8 +393,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                 controller: TextEditingController(text: _projectName),
               ),
               const SizedBox(height: 30),
-
-              // Animated Slanted Boxes
               Expanded(
                 child: ListView(
                   physics: const BouncingScrollPhysics(),
@@ -431,8 +424,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                   ],
                 ),
               ),
-
-              // CREATE Button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -499,7 +490,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VoidCallback _listener = () {};
   bool _isPreviewing = false;
 
-  // Export settings from setup screen
   late String _projectResolution;
   late String _projectFps;
   late String _projectBitrate;
@@ -508,8 +498,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    
-    // Set defaults from setup screen
     _projectResolution = widget.initialResolution ?? '1080p';
     _projectFps = widget.initialFps ?? '60fps';
     _projectBitrate = widget.initialBitrate ?? '35 Mbps';
@@ -662,7 +650,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (image == null) throw Exception('Failed to decode image');
       final uiImage = await _convertToUiImage(image);
       if (uiImage == null) throw Exception('Failed to convert to UI image');
-      // DEBUG: Check image size
       if (uiImage.width == 0 || uiImage.height == 0) {
         throw Exception('Converted image has zero size');
       }
@@ -710,7 +697,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (with debug checks) ----------
+  // ---------- CONVERT FUNCTION ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     final completer = Completer<ui.Image>();
     if (image.width == 0 || image.height == 0) {
@@ -731,7 +718,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    // ---------- EXPORT VIDEO (with debug checks) ----------
+    // ---------- EXPORT VIDEO ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -943,7 +930,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER (with debug checks) ----------
+  // ---------- APPLY SHADER TO IMAGE (with red debug fallback) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -953,27 +940,40 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (image.width == 0 || image.height == 0) {
       throw Exception('Input image has zero size in _applyShaderToImage');
     }
+
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = Size(image.width.toDouble(), image.height.toDouble());
-    final shader = program.fragmentShader();
-    
-    shader.setImageSampler(0, image);
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
-    
-    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+
+    // --- DEBUG: Draw a solid red rectangle first (no shader) ---
+    final redPaint = Paint()..color = const Color(0xFFFF0000);
+    canvas.drawRect(Offset.zero & size, redPaint);
+
+    // --- Then attempt to draw the shader on top ---
+    try {
+      final shader = program.fragmentShader();
+      shader.setImageSampler(0, image);
+      shader.setFloat(1, size.width);
+      shader.setFloat(2, size.height);
+      shader.setFloat(3, brightness);
+      shader.setFloat(4, saturation);
+      shader.setFloat(5, contrast);
+      shader.setFloat(6, sharpness);
+      shader.setFloat(7, gamma);
+      shader.setFloat(8, hue);
+      shader.setFloat(9, temperature);
+      shader.setFloat(10, glowIntensity);
+      shader.setFloat(11, lookMix);
+      shader.setFloat(12, vignette);
+      shader.setFloat(13, splitToning);
+
+      final shaderPaint = Paint()..shader = shader;
+      canvas.drawRect(Offset.zero & size, shaderPaint);
+    } catch (e) {
+      // If shader fails, keep the red rectangle so we know something rendered
+      print('Shader error: $e');
+    }
+
     final picture = recorder.endRecording();
     final output = await picture.toImage(image.width, image.height);
     if (output == null) {
@@ -990,7 +990,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            // Use project defaults
             String selectedRes = _projectResolution;
             String selectedFps = _projectFps;
             String selectedBit = _projectBitrate;
@@ -1063,7 +1062,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- BUILD METHOD (MUST BE INSIDE _ProjectScreenState) ----------
+  // ---------- BUILD METHOD ----------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1285,7 +1284,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (defined outside the state class) ----------
+// ---------- SHADER PREVIEW PAINTER ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
