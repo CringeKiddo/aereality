@@ -698,17 +698,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (FIXED: explicit RGBA) ----------
+  // ---------- CONVERT FUNCTION (FIXED: no format parameter) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
-
-    final rgbaBytes = image.getBytes(format: img.Format.rgba);
+    // Get raw bytes (assumed RGBA, as decoded from PNG)
+    final bytes = image.getBytes();
     final completer = Completer<ui.Image>();
 
     ui.decodeImageFromPixels(
-      rgbaBytes,
+      bytes,
       image.width,
       image.height,
       ui.PixelFormat.rgba8888,
