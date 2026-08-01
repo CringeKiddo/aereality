@@ -442,7 +442,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (FIXED) ----------
+    // ---------- PREVIEW FRAME (with detailed error reporting) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -459,8 +459,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final returnCode = await session.getReturnCode();
       
       if (!ReturnCode.isSuccess(returnCode)) {
-        final output = await session.getOutput();
-        throw Exception('FFmpeg error: ${output ?? "Unknown"}');
+        final allLogs = await session.getAllLogs();
+        final errorMessage = allLogs?.isNotEmpty == true 
+            ? allLogs!.lastWhere((log) => log.contains("Error") || log.contains("error"), orElse: () => "Unknown error") 
+            : "No output";
+        throw Exception('FFmpeg error: $errorMessage');
       }
 
       final file = File(outputPath);
@@ -523,7 +526,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- FULL EXPORT (with detailed error reporting, fixed getError) ----------
+  // ---------- FULL EXPORT (with detailed frame processing) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -589,6 +592,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       const batchSize = 10;
 
+      // ---------- UPDATED FRAME PROCESSING LOOP WITH CHECKS ----------
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
         await Future.wait(batch.map((file) async {
@@ -596,9 +600,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           try {
             final bytes = await file.readAsBytes();
             final decoded = img.decodeImage(bytes);
-            if (decoded == null) return;
+            if (decoded == null) {
+              throw Exception('Failed to decode frame: ${file.path}');
+            }
             final uiImage = await _convertToUiImage(decoded);
-            if (uiImage == null) return;
+            if (uiImage == null) {
+              throw Exception('Failed to convert frame to UI image: ${file.path}');
+            }
             final processed = await _applyShaderToImage(
               uiImage, program,
               brightness: _brightness, saturation: _saturation, contrast: _contrast,
@@ -606,12 +614,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
               vignette: _vignette, splitToning: _splitToning,
             );
-            if (processed != null) {
-              final pngBytes = await processed.toByteData(format: ui.ImageByteFormat.png);
-              if (pngBytes != null) {
-                await File('${processedDir.path}/${file.path.split('/').last}').writeAsBytes(pngBytes.buffer.asUint8List());
-              }
+            if (processed == null) {
+              throw Exception('_applyShaderToImage returned null for frame: ${file.path}');
             }
+            
+            final pngBytes = await processed.toByteData(format: ui.ImageByteFormat.png);
+            if (pngBytes == null) {
+              throw Exception('Failed to get PNG bytes for frame: ${file.path}');
+            }
+            
+            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+            await outputFile.writeAsBytes(pngBytes.buffer.asUint8List());
+            
+            // Verify the file was written
+            if (!await outputFile.exists()) {
+              throw Exception('Failed to write processed frame to: ${outputFile.path}');
+            }
+            
             processedFrames++;
             final p = processedFrames / totalFrames;
             progressNotifier.value = p;
@@ -623,9 +642,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               final secs = remaining % 60;
               etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
             }
-          } catch (_) {}
+          } catch (e) {
+            throw Exception('Frame processing failed at $processedFrames: $e');
+          }
         }));
       }
+      // ---------- END OF UPDATED LOOP ----------
+
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding video...';
@@ -647,7 +670,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         encodeReturnCode = await encodeSession.getReturnCode();
       }
 
-      // Now read the actual error if it still fails (FIXED: removed getError)
+      // Now read the actual error if it still fails
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
         final combined = await encodeSession.getOutput() ?? "No output";
         final errorSnippet = combined.length > 500 
