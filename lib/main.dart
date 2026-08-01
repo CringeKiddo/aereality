@@ -442,7 +442,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (with error reporting) ----------
+    // ---------- PREVIEW FRAME (FIXED) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -453,31 +453,30 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final timestamp = _controller!.value.position.inSeconds;
       final dir = await getTemporaryDirectory();
       final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
+      
       final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
       final session = await FFmpegKit.execute(cmd);
       final returnCode = await session.getReturnCode();
       
       if (!ReturnCode.isSuccess(returnCode)) {
         final output = await session.getOutput();
-        final error = await session.getOutput(); // getOutput() usually contains the error
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('FFmpeg error: ${error ?? output ?? "Unknown error"}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 8),
-          ),
-        );
-        setState(() => _isPreviewing = false);
-        return;
+        throw Exception('FFmpeg error: ${output ?? "Unknown"}');
       }
 
-      final bytes = await File(outputPath).readAsBytes();
+      final file = File(outputPath);
+      if (!await file.exists()) {
+        throw Exception('Frame not saved (file missing)');
+      }
+
+      final bytes = await file.readAsBytes();
       final image = img.decodeImage(bytes);
-      if (image == null) throw Exception('Failed to decode');
+      if (image == null) throw Exception('Failed to decode image');
       final uiImage = await _convertToUiImage(image);
-      if (uiImage == null) throw Exception('Failed to convert');
+      if (uiImage == null) throw Exception('Failed to convert to UI image');
+      
       final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       if (!mounted) return;
+      
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -524,7 +523,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- FULL EXPORT (WITH AUDIO + ERROR REPORTING) ----------
+  // ---------- FULL EXPORT (with libx264 + mpeg4 fallback + Downloads) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -630,23 +629,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding video...';
-      int width = 1920, height = 1080;
-      switch (resolution) {
-        case '720p': width = 1280; height = 720; break;
-        case '1080p': width = 1920; height = 1080; break;
-        case '2K': width = 2560; height = 1440; break;
-      }
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      // CHANGED ENCODER: libx264 -> mpeg4
-      final encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                        '-c:v mpeg4 -pix_fmt yuv420p -vf "scale=$width:$height" ' +
-                        '-b:v ${bitrate.replaceAll(' Mbps', '')}M -preset medium -crf 23 "$silentOutputPath"';
-      final encodeSession = await FFmpegKit.execute(encodeCmd);
-      final encodeReturnCode = await encodeSession.getReturnCode();
+      
+      // Try libx264 first
+      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
+      var encodeSession = await FFmpegKit.execute(encodeCmd);
+      var encodeReturnCode = await encodeSession.getReturnCode();
+
+      // If libx264 fails, fallback to mpeg4
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        statusNotifier.value = 'Retrying with mpeg4...';
+        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeSession = await FFmpegKit.execute(fallbackCmd);
+        encodeReturnCode = await encodeSession.getReturnCode();
+      }
+
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
         final err = await encodeSession.getOutput();
-        throw Exception('Encode failed: ${err ?? "Unknown error"}');
+        throw Exception('Encode failed: ${err ?? "Unknown"}');
       }
 
       // ---------- EXTRACT AUDIO ----------
@@ -667,10 +670,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      // ---------- SAVE TO DOWNLOADS FOLDER (PUBLIC) ----------
+      // ---------- SAVE TO DOWNLOADS FOLDER ----------
       final downloadsDir = Directory('/storage/emulated/0/Download/');
       if (!await downloadsDir.exists()) {
-        // Fallback to app's documents if Downloads not accessible
         final docsDir = await getApplicationDocumentsDirectory();
         final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
         await File(finalOutputPath).copy(finalFile.path);
