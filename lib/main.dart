@@ -523,7 +523,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- FULL EXPORT (with libx264 + mpeg4 fallback + Downloads) ----------
+  // ---------- FULL EXPORT (with detailed error reporting) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -647,9 +647,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         encodeReturnCode = await encodeSession.getReturnCode();
       }
 
+      // Now read the actual error if it still fails
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        final err = await encodeSession.getOutput();
-        throw Exception('Encode failed: ${err ?? "Unknown"}');
+        // Get FULL output (both stdout and stderr)
+        final fullLog = await encodeSession.getOutput();
+        final errorLog = await encodeSession.getError(); // Some versions separate them
+        final combined = fullLog ?? errorLog ?? "No output";
+        
+        // Show the LAST 500 characters (which usually contains the actual error)
+        final errorSnippet = combined.length > 500 
+            ? "...${combined.substring(combined.length - 500)}" 
+            : combined;
+            
+        throw Exception('Encode failed:\n$errorSnippet');
       }
 
       // ---------- EXTRACT AUDIO ----------
