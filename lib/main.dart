@@ -698,25 +698,65 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (FIXED) ----------
+  // ---------- BULLETPROOF CONVERT FUNCTION ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
-    final bytes = image.getBytes(); // no format parameter
-    final completer = Completer<ui.Image>();
 
-    ui.decodeImageFromPixels(
-      bytes,
-      image.width,
-      image.height,
-      ui.PixelFormat.rgba8888,
-      (ui.Image result) {
-        completer.complete(result);
-      },
-    );
+    // 1. Try RGBA first (most common)
+    try {
+      final bytes = image.getBytes(); // assumed RGBA
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        bytes,
+        image.width,
+        image.height,
+        ui.PixelFormat.rgba8888,
+        (ui.Image result) {
+          completer.complete(result);
+        },
+      );
+      return await completer.future;
+    } catch (e) {
+      debugPrint('RGBA decode failed: $e');
+    }
 
-    return completer.future;
+    // 2. If RGBA fails, try BGRA
+    try {
+      // Convert to BGRA by swapping R and B
+      final bytes = image.getBytes();
+      final bgraBytes = Uint8List(bytes.length);
+      for (int i = 0; i < bytes.length; i += 4) {
+        bgraBytes[i] = bytes[i + 2];     // B
+        bgraBytes[i + 1] = bytes[i + 1]; // G
+        bgraBytes[i + 2] = bytes[i];     // R
+        bgraBytes[i + 3] = bytes[i + 3]; // A
+      }
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        bgraBytes,
+        image.width,
+        image.height,
+        ui.PixelFormat.bgra8888,
+        (ui.Image result) {
+          completer.complete(result);
+        },
+      );
+      return await completer.future;
+    } catch (e) {
+      debugPrint('BGRA decode failed: $e');
+    }
+
+    // 3. Fallback: create a solid red image as a diagnostic
+    debugPrint('⚠️ All conversions failed – falling back to RED image');
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = Size(image.width.toDouble(), image.height.toDouble());
+    final redPaint = Paint()..color = const Color(0xFFFF0000);
+    canvas.drawRect(Offset.zero & size, redPaint);
+    final picture = recorder.endRecording();
+    return picture.toImage(image.width, image.height);
   }
     // ---------- EXPORT VIDEO ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
@@ -930,7 +970,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (NEW INDEXING) ----------
+  // ---------- APPLY SHADER TO IMAGE (CORRECT INDEXING) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -974,7 +1014,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
     return output;
   }
-    // ---------- EXPORT DIALOG (uses project defaults) ----------
+    // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -1276,7 +1316,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (NEW INDEXING) ----------
+// ---------- SHADER PREVIEW PAINTER (CORRECT INDEXING) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
