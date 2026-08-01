@@ -990,7 +990,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            // Use project defaults as the initial selected values
+            // Use project defaults
             String selectedRes = _projectResolution;
             String selectedFps = _projectFps;
             String selectedBit = _projectBitrate;
@@ -1063,10 +1063,229 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- SHADER PREVIEW PAINTER (same as before) ----------
-  // (I'm including this here again because it's used in Part 4)
+  // ---------- BUILD METHOD (MUST BE INSIDE _ProjectScreenState) ----------
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.projectName ?? 'Project'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
+          IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
+          IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            flex: 4,
+            child: Container(
+              color: Colors.black,
+              child: Center(
+                child: _controller != null && _controller!.value.isInitialized
+                    ? AspectRatio(
+                        aspectRatio: _getAspectRatioValue(_selectedRatio),
+                        child: VideoPlayer(_controller!),
+                      )
+                    : Container(
+                        color: const Color(0xFF1A1A1A),
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                              SizedBox(height: 8),
+                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                            ],
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          Container(
+            color: const Color(0xFF111111),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
+                  onPressed: _controller != null && _controller!.value.isInitialized
+                      ? () => setState(() {
+                          if (_controller!.value.isPlaying) {
+                            _controller!.pause();
+                            _isPlaying = false;
+                          } else {
+                            _controller!.play();
+                            _isPlaying = true;
+                          }
+                        })
+                      : null,
+                ),
+                Expanded(
+                  child: Slider(
+                    value: _controller != null && _controller!.value.isInitialized
+                        ? _controller!.value.position.inSeconds.toDouble()
+                        : 0.0,
+                    min: 0,
+                    max: _controller != null && _controller!.value.isInitialized
+                        ? _controller!.value.duration.inSeconds.toDouble()
+                        : 1.0,
+                    activeColor: Colors.white,
+                    inactiveColor: Colors.grey[800],
+                    onChanged: (val) {
+                      if (_controller != null && _controller!.value.isInitialized) {
+                        _controller!.seekTo(Duration(milliseconds: (val * 1000).round()));
+                      }
+                    },
+                  ),
+                ),
+                Text(
+                  _controller != null && _controller!.value.isInitialized
+                      ? '${_controller!.value.position.inSeconds ~/ 60}:${(_controller!.value.position.inSeconds % 60).toString().padLeft(2, '0')}'
+                      : '--:--',
+                  style: const TextStyle(color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            color: const Color(0xFF141414),
+            child: Column(
+              children: [
+                TabBar(
+                  controller: _tabController,
+                  indicatorColor: Colors.white,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.grey,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.tune), text: 'Adjust'),
+                    Tab(icon: Icon(Icons.auto_awesome), text: 'Presets'),
+                    Tab(icon: Icon(Icons.save_alt), text: 'Export'),
+                  ],
+                ),
+                SizedBox(
+                  height: 190,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        children: [
+                          _slider('Bright', -1.0, 1.0, _brightness, (v) => setState(() => _brightness = v)),
+                          _slider('Sat', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
+                          _slider('Contrast', 0.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
+                          _slider('Sharp', 0.0, 5.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                          _slider('Gamma', 0.1, 2.5, _gamma, (v) => setState(() => _gamma = v)),
+                          _slider('Hue', -180, 180, _hue, (v) => setState(() => _hue = v)),
+                          _slider('Temp', 2000, 12000, _temperature, (v) => setState(() => _temperature = v)),
+                          _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
+                          _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
+                          _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
+                        ],
+                      ),
+                      GridView.count(
+                        crossAxisCount: 3,
+                        padding: const EdgeInsets.all(8),
+                        children: ['Gojo Edit', 'Magic Bullet', 'Teal & Orange', 'Film Grain', 'Vintage', 'Cinematic'].map((name) {
+                          return GestureDetector(
+                            onTap: () => _applyPreset(name),
+                            child: Container(
+                              margin: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[900],
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey[800]!),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.image, color: Colors.white24, size: 30),
+                                  const SizedBox(height: 4),
+                                  Text(name, style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _isPreviewing ? null : _previewFrame,
+                                icon: const Icon(Icons.image, color: Colors.black),
+                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.cyanAccent,
+                                  foregroundColor: Colors.black,
+                                ),
+                              ),
+                              ElevatedButton(
+                                onPressed: _showExportSheet,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
+                                ),
+                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          const Text('Preview applies shader to the frame on your timeline',
+                            style: TextStyle(color: Colors.white38, fontSize: 10)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- SLIDER HELPER ----------
+  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
+    return Row(
+      children: [
+        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+        Expanded(
+          child: Slider(
+            value: val.clamp(min, max),
+            min: min,
+            max: max,
+            activeColor: Colors.white,
+            inactiveColor: Colors.grey[800],
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
+      ],
+    );
+  }
+
+  // ---------- DISPOSE ----------
+  @override
+  void dispose() {
+    _controller?.removeListener(_listener);
+    _controller?.dispose();
+    super.dispose();
+  }
 }
 
+// ---------- SHADER PREVIEW PAINTER (defined outside the state class) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
