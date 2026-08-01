@@ -930,7 +930,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (with red debug fallback) ----------
+  // ---------- APPLY SHADER TO IMAGE (DEBUG: ONLY DRAW GREEN RECTANGLE) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -941,38 +941,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       throw Exception('Input image has zero size in _applyShaderToImage');
     }
 
+    // DEBUG: Print to console to confirm this function is called
+    debugPrint('_applyShaderToImage called for image ${image.width}x${image.height}');
+
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = Size(image.width.toDouble(), image.height.toDouble());
 
-    // --- DEBUG: Draw a solid red rectangle first (no shader) ---
-    final redPaint = Paint()..color = const Color(0xFFFF0000);
-    canvas.drawRect(Offset.zero & size, redPaint);
-
-    // --- Then attempt to draw the shader on top ---
-    try {
-      final shader = program.fragmentShader();
-      shader.setImageSampler(0, image);
-      shader.setFloat(1, size.width);
-      shader.setFloat(2, size.height);
-      shader.setFloat(3, brightness);
-      shader.setFloat(4, saturation);
-      shader.setFloat(5, contrast);
-      shader.setFloat(6, sharpness);
-      shader.setFloat(7, gamma);
-      shader.setFloat(8, hue);
-      shader.setFloat(9, temperature);
-      shader.setFloat(10, glowIntensity);
-      shader.setFloat(11, lookMix);
-      shader.setFloat(12, vignette);
-      shader.setFloat(13, splitToning);
-
-      final shaderPaint = Paint()..shader = shader;
-      canvas.drawRect(Offset.zero & size, shaderPaint);
-    } catch (e) {
-      // If shader fails, keep the red rectangle so we know something rendered
-      print('Shader error: $e');
-    }
+    // Draw a bright green rectangle (no shader)
+    final greenPaint = Paint()..color = const Color(0xFF00FF00);
+    canvas.drawRect(Offset.zero & size, greenPaint);
 
     final picture = recorder.endRecording();
     final output = await picture.toImage(image.width, image.height);
