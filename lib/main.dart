@@ -698,13 +698,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (FIXED: no format parameter) ----------
+  // ---------- CONVERT FUNCTION (FIXED) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
-    // Get raw bytes (assumed RGBA, as decoded from PNG)
-    final bytes = image.getBytes();
+    final bytes = image.getBytes(); // no format parameter
     final completer = Completer<ui.Image>();
 
     ui.decodeImageFromPixels(
@@ -931,7 +930,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- APPLY SHADER TO IMAGE (CORRECT INDEXING) ----------
+  // ---------- APPLY SHADER TO IMAGE (NEW INDEXING) ----------
   Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
     required double brightness, required double saturation, required double contrast,
     required double sharpness, required double gamma, required double hue,
@@ -947,14 +946,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final size = Size(image.width.toDouble(), image.height.toDouble());
     final shader = program.fragmentShader();
 
-    // uResolution (float indices 0 and 1)
-    shader.setFloat(0, size.width);
-    shader.setFloat(1, size.height);
+    // Sampler first (index 0)
+    shader.setImageSampler(0, image);
 
-    // uTexture (sampler index 2)
-    shader.setImageSampler(2, image);
+    // uResolution (floats at 1 and 2)
+    shader.setFloat(1, size.width);
+    shader.setFloat(2, size.height);
 
-    // uBrightness..uSplitToning (float indices 3..13)
+    // Sliders (indices 3..13)
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
@@ -1277,7 +1276,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (CORRECT INDEXING) ----------
+// ---------- SHADER PREVIEW PAINTER (NEW INDEXING) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
@@ -1304,14 +1303,14 @@ class ShaderPreviewPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final shader = program.fragmentShader();
 
-    // uResolution (float indices 0 and 1)
-    shader.setFloat(0, size.width);
-    shader.setFloat(1, size.height);
+    // Sampler first (index 0)
+    shader.setImageSampler(0, image);
 
-    // uTexture (sampler index 2)
-    shader.setImageSampler(2, image);
+    // uResolution (floats at 1 and 2)
+    shader.setFloat(1, size.width);
+    shader.setFloat(2, size.height);
 
-    // uBrightness..uSplitToning (float indices 3..13)
+    // Sliders (indices 3..13)
     shader.setFloat(3, brightness);
     shader.setFloat(4, saturation);
     shader.setFloat(5, contrast);
