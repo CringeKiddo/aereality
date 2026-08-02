@@ -732,8 +732,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
     // ---------- SOFTWARE GRADING (DIRECT PIXEL MANIPULATION) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a copy
-    var result = img.copyImage(image);
+    // Work on a copy using the instance method
+    var result = image.copy();
     int w = result.width, h = result.height;
 
     // Helper to extract components from ARGB pixel (0xAARRGGBB)
@@ -838,9 +838,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 7. Sharpness (simple unsharp mask) – skip for now to keep speed
-    // 8. Glow – skip
-    // 9. Split Toning – skip
+    // (Sharpness, Glow, Split Toning can be added later)
 
     return result;
   }
