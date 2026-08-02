@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
@@ -698,15 +699,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- BULLETPROOF CONVERT FUNCTION ----------
+  // ---------- SIMPLIFIED CONVERT FUNCTION ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
 
-    // 1. Try RGBA first (most common)
     try {
-      final bytes = image.getBytes(); // assumed RGBA
+      final bytes = image.getBytes(); // Assume RGBA
       final completer = Completer<ui.Image>();
       ui.decodeImageFromPixels(
         bytes,
@@ -719,44 +719,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
       return await completer.future;
     } catch (e) {
-      debugPrint('RGBA decode failed: $e');
+      // If decode fails, fallback to a red diagnostic image
+      debugPrint('⚠️ RGBA decode failed: $e – falling back to RED');
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final size = Size(image.width.toDouble(), image.height.toDouble());
+      final redPaint = Paint()..color = const Color(0xFFFF0000);
+      canvas.drawRect(Offset.zero & size, redPaint);
+      final picture = recorder.endRecording();
+      return picture.toImage(image.width, image.height);
     }
-
-    // 2. If RGBA fails, try BGRA
-    try {
-      // Convert to BGRA by swapping R and B
-      final bytes = image.getBytes();
-      final bgraBytes = Uint8List(bytes.length);
-      for (int i = 0; i < bytes.length; i += 4) {
-        bgraBytes[i] = bytes[i + 2];     // B
-        bgraBytes[i + 1] = bytes[i + 1]; // G
-        bgraBytes[i + 2] = bytes[i];     // R
-        bgraBytes[i + 3] = bytes[i + 3]; // A
-      }
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(
-        bgraBytes,
-        image.width,
-        image.height,
-        ui.PixelFormat.bgra8888,
-        (ui.Image result) {
-          completer.complete(result);
-        },
-      );
-      return await completer.future;
-    } catch (e) {
-      debugPrint('BGRA decode failed: $e');
-    }
-
-    // 3. Fallback: create a solid red image as a diagnostic
-    debugPrint('⚠️ All conversions failed – falling back to RED image');
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(image.width.toDouble(), image.height.toDouble());
-    final redPaint = Paint()..color = const Color(0xFFFF0000);
-    canvas.drawRect(Offset.zero & size, redPaint);
-    final picture = recorder.endRecording();
-    return picture.toImage(image.width, image.height);
   }
     // ---------- EXPORT VIDEO ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
