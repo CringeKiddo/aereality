@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math' as math;   // <-- ADDED
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
@@ -732,8 +732,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
     // ---------- SOFTWARE GRADING (DIRECT PIXEL MANIPULATION) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a copy using the instance method
-    var result = image.copy();
+    // Work on a copy using clone()
+    var result = image.clone();
     int w = result.width, h = result.height;
 
     // Helper to extract components from ARGB pixel (0xAARRGGBB)
