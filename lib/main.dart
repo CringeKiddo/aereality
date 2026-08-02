@@ -699,104 +699,42 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- BULLETPROOF CONVERT FUNCTION ----------
+  // ---------- BULLETPROOF CONVERT FUNCTION (USES PNG ENCODING) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
 
-    // Get raw bytes
-    final bytes = image.getBytes();
-    if (bytes.isEmpty) {
-      throw Exception('Image bytes are empty');
-    }
-
-    // Try RGBA first
     try {
+      // 1. Encode the img.Image as PNG bytes
+      final pngBytes = img.encodePng(image);
+      if (pngBytes.isEmpty) {
+        throw Exception('PNG encoding produced empty bytes');
+      }
+
+      // 2. Decode the PNG bytes into a ui.Image
       final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(
-        bytes,
-        image.width,
-        image.height,
-        ui.PixelFormat.rgba8888,
-        (ui.Image result) {
-          completer.complete(result);
-        },
-      );
-      final img = await completer.future;
-      if (img != null && img.width > 0 && img.height > 0) {
-        debugPrint('✅ Conversion succeeded with RGBA');
-        return img;
+      ui.decodeImageFromList(pngBytes, (ui.Image result) {
+        completer.complete(result);
+      });
+      final uiImage = await completer.future;
+      if (uiImage != null && uiImage.width > 0 && uiImage.height > 0) {
+        debugPrint('✅ PNG conversion succeeded');
+        return uiImage;
+      } else {
+        throw Exception('Decoded image is null or zero size');
       }
     } catch (e) {
-      debugPrint('❌ RGBA failed: $e');
+      debugPrint('❌ PNG conversion failed: $e');
+      // Fallback: red diagnostic image
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final size = Size(image.width.toDouble(), image.height.toDouble());
+      final redPaint = Paint()..color = const Color(0xFFFF0000);
+      canvas.drawRect(Offset.zero & size, redPaint);
+      final picture = recorder.endRecording();
+      return picture.toImage(image.width, image.height);
     }
-
-    // Try BGRA
-    try {
-      final bgraBytes = Uint8List(bytes.length);
-      for (int i = 0; i < bytes.length; i += 4) {
-        bgraBytes[i] = bytes[i + 2];
-        bgraBytes[i + 1] = bytes[i + 1];
-        bgraBytes[i + 2] = bytes[i];
-        bgraBytes[i + 3] = bytes[i + 3];
-      }
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(
-        bgraBytes,
-        image.width,
-        image.height,
-        ui.PixelFormat.bgra8888,
-        (ui.Image result) {
-          completer.complete(result);
-        },
-      );
-      final img = await completer.future;
-      if (img != null && img.width > 0 && img.height > 0) {
-        debugPrint('✅ Conversion succeeded with BGRA');
-        return img;
-      }
-    } catch (e) {
-      debugPrint('❌ BGRA failed: $e');
-    }
-
-    // Try manual ARGB->RGBA
-    try {
-      final rgbaBytes = Uint8List(bytes.length);
-      for (int i = 0; i < bytes.length; i += 4) {
-        rgbaBytes[i] = bytes[i + 1]; // R
-        rgbaBytes[i + 1] = bytes[i + 2]; // G
-        rgbaBytes[i + 2] = bytes[i + 3]; // B
-        rgbaBytes[i + 3] = bytes[i];     // A
-      }
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(
-        rgbaBytes,
-        image.width,
-        image.height,
-        ui.PixelFormat.rgba8888,
-        (ui.Image result) {
-          completer.complete(result);
-        },
-      );
-      final img = await completer.future;
-      if (img != null && img.width > 0 && img.height > 0) {
-        debugPrint('✅ Manual ARGB→RGBA conversion worked');
-        return img;
-      }
-    } catch (e) {
-      debugPrint('❌ Manual ARGB conversion failed: $e');
-    }
-
-    // Ultimate fallback: red diagnostic image
-    debugPrint('⚠️ All conversions failed – returning RED image');
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(image.width.toDouble(), image.height.toDouble());
-    final redPaint = Paint()..color = const Color(0xFFFF0000);
-    canvas.drawRect(Offset.zero & size, redPaint);
-    final picture = recorder.endRecording();
-    return picture.toImage(image.width, image.height);
   }
     // ---------- FULL EXPORT (RAW DUMP – NO SHADER) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
