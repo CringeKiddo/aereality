@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
@@ -615,7 +616,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME ----------
+    // ---------- PREVIEW FRAME (uses shader) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -699,34 +700,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- BULLETPROOF CONVERT FUNCTION (USES PNG ENCODING) ----------
+  // ---------- CONVERT FUNCTION (for preview – uses PNG) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
-
     try {
-      // 1. Encode the img.Image as PNG bytes
       final pngBytes = img.encodePng(image);
-      if (pngBytes.isEmpty) {
-        throw Exception('PNG encoding produced empty bytes');
-      }
-
-      // 2. Decode the PNG bytes into a ui.Image
+      if (pngBytes.isEmpty) throw Exception('PNG encoding produced empty bytes');
       final completer = Completer<ui.Image>();
       ui.decodeImageFromList(pngBytes, (ui.Image result) {
         completer.complete(result);
       });
       final uiImage = await completer.future;
       if (uiImage != null && uiImage.width > 0 && uiImage.height > 0) {
-        debugPrint('✅ PNG conversion succeeded');
         return uiImage;
       } else {
         throw Exception('Decoded image is null or zero size');
       }
     } catch (e) {
       debugPrint('❌ PNG conversion failed: $e');
-      // Fallback: red diagnostic image
+      // Fallback red
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
       final size = Size(image.width.toDouble(), image.height.toDouble());
@@ -736,7 +730,104 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL EXPORT (RAW DUMP – NO SHADER) ----------
+    // ---------- SOFTWARE GRADING (NO SHADER – WORKS EVERYWHERE) ----------
+  img.Image _applyGradingToImage(img.Image image) {
+    // Work on a copy to preserve original
+    var result = img.copy(image);
+
+    // 1. Brightness
+    if (_brightness != 0.0) {
+      final offset = (_brightness * 255).toInt();
+      for (int i = 0; i < result.length; i++) {
+        var p = result[i];
+        int r = (img.getRed(p) + offset).clamp(0, 255).toInt();
+        int g = (img.getGreen(p) + offset).clamp(0, 255).toInt();
+        int b = (img.getBlue(p) + offset).clamp(0, 255).toInt();
+        result[i] = img.ColorRgb8(r, g, b);
+      }
+    }
+
+    // 2. Contrast
+    if (_contrast != 1.0) {
+      for (int i = 0; i < result.length; i++) {
+        var p = result[i];
+        double r = img.getRed(p) / 255.0;
+        double g = img.getGreen(p) / 255.0;
+        double b = img.getBlue(p) / 255.0;
+        r = ((r - 0.5) * _contrast + 0.5).clamp(0, 1);
+        g = ((g - 0.5) * _contrast + 0.5).clamp(0, 1);
+        b = ((b - 0.5) * _contrast + 0.5).clamp(0, 1);
+        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+      }
+    }
+
+    // 3. Saturation
+    if (_saturation != 1.0) {
+      for (int i = 0; i < result.length; i++) {
+        var p = result[i];
+        double r = img.getRed(p) / 255.0;
+        double g = img.getGreen(p) / 255.0;
+        double b = img.getBlue(p) / 255.0;
+        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = luma + (r - luma) * _saturation;
+        g = luma + (g - luma) * _saturation;
+        b = luma + (b - luma) * _saturation;
+        r = r.clamp(0, 1); g = g.clamp(0, 1); b = b.clamp(0, 1);
+        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+      }
+    }
+
+    // 4. Gamma
+    if (_gamma != 1.0) {
+      double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
+      for (int i = 0; i < result.length; i++) {
+        var p = result[i];
+        double r = img.getRed(p) / 255.0;
+        double g = img.getGreen(p) / 255.0;
+        double b = img.getBlue(p) / 255.0;
+        r = math.pow(r, gammaInv).clamp(0, 1);
+        g = math.pow(g, gammaInv).clamp(0, 1);
+        b = math.pow(b, gammaInv).clamp(0, 1);
+        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+      }
+    }
+
+    // 5. Temperature (simplified)
+    if (_temperature != 6500.0) {
+      double factor = (_temperature - 6500) / 10000.0 * 0.3;
+      for (int i = 0; i < result.length; i++) {
+        var p = result[i];
+        int r = (img.getRed(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
+        int g = (img.getGreen(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
+        int b = (img.getBlue(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
+        result[i] = img.ColorRgb8(r, g, b);
+      }
+    }
+
+    // 6. Vignette
+    if (_vignette > 0.0) {
+      int w = result.width, h = result.height;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          double dx = (x / w - 0.5) * 2;
+          double dy = (y / h - 0.5) * 2;
+          double dist = math.sqrt(dx*dx + dy*dy);
+          double amount = 1.0 - (dist * _vignette * 1.5).clamp(0, 1);
+          var p = result.getPixel(x, y);
+          int r = (img.getRed(p) * amount).toInt().clamp(0, 255);
+          int g = (img.getGreen(p) * amount).toInt().clamp(0, 255);
+          int b = (img.getBlue(p) * amount).toInt().clamp(0, 255);
+          result.setPixel(x, y, img.ColorRgb8(r, g, b));
+        }
+      }
+    }
+
+    // Glow, Sharpness, Split Toning can be added later – they are more complex in software.
+
+    return result;
+  }
+
+  // ---------- FULL EXPORT (SOFTWARE GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -803,7 +894,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int processedFrames = 0;
       stopwatch.start();
 
-      const batchSize = 10;
+      const batchSize = 5; // small batches to manage memory
 
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
@@ -815,22 +906,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             if (decoded == null) {
               throw Exception('Failed to decode frame: ${file.path}');
             }
-            final uiImage = await _convertToUiImage(decoded);
-            if (uiImage == null) {
-              throw Exception('Failed to convert frame to UI image: ${file.path}');
-            }
-            if (uiImage.width == 0 || uiImage.height == 0) {
-              throw Exception('Converted image has zero size: ${file.path}');
-            }
 
-            // RAW DUMP: convert ui.Image directly to PNG bytes (NO SHADER)
-            final pngBytes = await uiImage.toByteData(format: ui.ImageByteFormat.png);
-            if (pngBytes == null) {
-              throw Exception('Failed to get PNG bytes for frame: ${file.path}');
-            }
+            // Apply grading directly on img.Image
+            final graded = _applyGradingToImage(decoded);
 
+            // Encode to PNG
+            final pngBytes = img.encodePng(graded);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-            await outputFile.writeAsBytes(pngBytes.buffer.asUint8List());
+            await outputFile.writeAsBytes(pngBytes);
 
             if (!await outputFile.exists()) {
               throw Exception('Failed to write processed frame to: ${outputFile.path}');
@@ -1239,7 +1322,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// ---------- SHADER PREVIEW PAINTER (CORRECT INDEXING) ----------
+// ---------- SHADER PREVIEW PAINTER (for Preview Frame) ----------
 class ShaderPreviewPainter extends CustomPainter {
   final ui.Image image;
   final ui.FragmentProgram program;
