@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math' as math;
+import 'dart:math' as math;   // <-- ADDED
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
@@ -616,7 +616,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (uses shader) ----------
+    // ---------- PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -730,50 +730,64 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- SOFTWARE GRADING (NO SHADER – WORKS EVERYWHERE) ----------
+    // ---------- SOFTWARE GRADING (DIRECT PIXEL MANIPULATION) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a copy to preserve original
-    var result = img.copy(image);
+    // Work on a copy
+    var result = img.copyImage(image);
+    int w = result.width, h = result.height;
+
+    // Helper to extract components from ARGB pixel (0xAARRGGBB)
+    int getR(int pixel) => (pixel >> 16) & 0xFF;
+    int getG(int pixel) => (pixel >> 8) & 0xFF;
+    int getB(int pixel) => pixel & 0xFF;
 
     // 1. Brightness
     if (_brightness != 0.0) {
       final offset = (_brightness * 255).toInt();
       for (int i = 0; i < result.length; i++) {
-        var p = result[i];
-        int r = (img.getRed(p) + offset).clamp(0, 255).toInt();
-        int g = (img.getGreen(p) + offset).clamp(0, 255).toInt();
-        int b = (img.getBlue(p) + offset).clamp(0, 255).toInt();
-        result[i] = img.ColorRgb8(r, g, b);
+        int p = result[i];
+        int r = (getR(p) + offset).clamp(0, 255);
+        int g = (getG(p) + offset).clamp(0, 255);
+        int b = (getB(p) + offset).clamp(0, 255);
+        result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
       }
     }
 
     // 2. Contrast
     if (_contrast != 1.0) {
       for (int i = 0; i < result.length; i++) {
-        var p = result[i];
-        double r = img.getRed(p) / 255.0;
-        double g = img.getGreen(p) / 255.0;
-        double b = img.getBlue(p) / 255.0;
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
         r = ((r - 0.5) * _contrast + 0.5).clamp(0, 1);
         g = ((g - 0.5) * _contrast + 0.5).clamp(0, 1);
         b = ((b - 0.5) * _contrast + 0.5).clamp(0, 1);
-        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+        int r8 = (r * 255).toInt();
+        int g8 = (g * 255).toInt();
+        int b8 = (b * 255).toInt();
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
       }
     }
 
     // 3. Saturation
     if (_saturation != 1.0) {
       for (int i = 0; i < result.length; i++) {
-        var p = result[i];
-        double r = img.getRed(p) / 255.0;
-        double g = img.getGreen(p) / 255.0;
-        double b = img.getBlue(p) / 255.0;
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
         double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         r = luma + (r - luma) * _saturation;
         g = luma + (g - luma) * _saturation;
         b = luma + (b - luma) * _saturation;
-        r = r.clamp(0, 1); g = g.clamp(0, 1); b = b.clamp(0, 1);
-        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+        r = r.clamp(0, 1);
+        g = g.clamp(0, 1);
+        b = b.clamp(0, 1);
+        int r8 = (r * 255).toInt();
+        int g8 = (g * 255).toInt();
+        int b8 = (b * 255).toInt();
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
       }
     }
 
@@ -781,14 +795,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_gamma != 1.0) {
       double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int i = 0; i < result.length; i++) {
-        var p = result[i];
-        double r = img.getRed(p) / 255.0;
-        double g = img.getGreen(p) / 255.0;
-        double b = img.getBlue(p) / 255.0;
-        r = math.pow(r, gammaInv).clamp(0, 1);
-        g = math.pow(g, gammaInv).clamp(0, 1);
-        b = math.pow(b, gammaInv).clamp(0, 1);
-        result[i] = img.ColorRgb8((r*255).toInt(), (g*255).toInt(), (b*255).toInt());
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
+        r = math.pow(r, gammaInv).toDouble().clamp(0, 1);
+        g = math.pow(g, gammaInv).toDouble().clamp(0, 1);
+        b = math.pow(b, gammaInv).toDouble().clamp(0, 1);
+        int r8 = (r * 255).toInt();
+        int g8 = (g * 255).toInt();
+        int b8 = (b * 255).toInt();
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
       }
     }
 
@@ -796,33 +813,34 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_temperature != 6500.0) {
       double factor = (_temperature - 6500) / 10000.0 * 0.3;
       for (int i = 0; i < result.length; i++) {
-        var p = result[i];
-        int r = (img.getRed(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
-        int g = (img.getGreen(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
-        int b = (img.getBlue(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
-        result[i] = img.ColorRgb8(r, g, b);
+        int p = result[i];
+        int r = (getR(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
+        int g = (getG(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
+        int b = (getB(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
+        result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
       }
     }
 
     // 6. Vignette
     if (_vignette > 0.0) {
-      int w = result.width, h = result.height;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           double dx = (x / w - 0.5) * 2;
           double dy = (y / h - 0.5) * 2;
           double dist = math.sqrt(dx*dx + dy*dy);
           double amount = 1.0 - (dist * _vignette * 1.5).clamp(0, 1);
-          var p = result.getPixel(x, y);
-          int r = (img.getRed(p) * amount).toInt().clamp(0, 255);
-          int g = (img.getGreen(p) * amount).toInt().clamp(0, 255);
-          int b = (img.getBlue(p) * amount).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorRgb8(r, g, b));
+          int p = result.getPixel(x, y);
+          int r = (getR(p) * amount).toInt().clamp(0, 255);
+          int g = (getG(p) * amount).toInt().clamp(0, 255);
+          int b = (getB(p) * amount).toInt().clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
         }
       }
     }
 
-    // Glow, Sharpness, Split Toning can be added later – they are more complex in software.
+    // 7. Sharpness (simple unsharp mask) – skip for now to keep speed
+    // 8. Glow – skip
+    // 9. Split Toning – skip
 
     return result;
   }
