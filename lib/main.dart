@@ -699,14 +699,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- SIMPLIFIED CONVERT FUNCTION ----------
+  // ---------- BULLETPROOF CONVERT FUNCTION ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
     }
 
+    // Get raw bytes
+    final bytes = image.getBytes();
+    if (bytes.isEmpty) {
+      throw Exception('Image bytes are empty');
+    }
+
+    // Try RGBA first
     try {
-      final bytes = image.getBytes(); // Assume RGBA
       final completer = Completer<ui.Image>();
       ui.decodeImageFromPixels(
         bytes,
@@ -717,20 +723,82 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           completer.complete(result);
         },
       );
-      return await completer.future;
+      final img = await completer.future;
+      if (img != null && img.width > 0 && img.height > 0) {
+        debugPrint('✅ Conversion succeeded with RGBA');
+        return img;
+      }
     } catch (e) {
-      // If decode fails, fallback to a red diagnostic image
-      debugPrint('⚠️ RGBA decode failed: $e – falling back to RED');
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final size = Size(image.width.toDouble(), image.height.toDouble());
-      final redPaint = Paint()..color = const Color(0xFFFF0000);
-      canvas.drawRect(Offset.zero & size, redPaint);
-      final picture = recorder.endRecording();
-      return picture.toImage(image.width, image.height);
+      debugPrint('❌ RGBA failed: $e');
     }
+
+    // Try BGRA
+    try {
+      final bgraBytes = Uint8List(bytes.length);
+      for (int i = 0; i < bytes.length; i += 4) {
+        bgraBytes[i] = bytes[i + 2];
+        bgraBytes[i + 1] = bytes[i + 1];
+        bgraBytes[i + 2] = bytes[i];
+        bgraBytes[i + 3] = bytes[i + 3];
+      }
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        bgraBytes,
+        image.width,
+        image.height,
+        ui.PixelFormat.bgra8888,
+        (ui.Image result) {
+          completer.complete(result);
+        },
+      );
+      final img = await completer.future;
+      if (img != null && img.width > 0 && img.height > 0) {
+        debugPrint('✅ Conversion succeeded with BGRA');
+        return img;
+      }
+    } catch (e) {
+      debugPrint('❌ BGRA failed: $e');
+    }
+
+    // Try manual ARGB->RGBA
+    try {
+      final rgbaBytes = Uint8List(bytes.length);
+      for (int i = 0; i < bytes.length; i += 4) {
+        rgbaBytes[i] = bytes[i + 1]; // R
+        rgbaBytes[i + 1] = bytes[i + 2]; // G
+        rgbaBytes[i + 2] = bytes[i + 3]; // B
+        rgbaBytes[i + 3] = bytes[i];     // A
+      }
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        rgbaBytes,
+        image.width,
+        image.height,
+        ui.PixelFormat.rgba8888,
+        (ui.Image result) {
+          completer.complete(result);
+        },
+      );
+      final img = await completer.future;
+      if (img != null && img.width > 0 && img.height > 0) {
+        debugPrint('✅ Manual ARGB→RGBA conversion worked');
+        return img;
+      }
+    } catch (e) {
+      debugPrint('❌ Manual ARGB conversion failed: $e');
+    }
+
+    // Ultimate fallback: red diagnostic image
+    debugPrint('⚠️ All conversions failed – returning RED image');
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = Size(image.width.toDouble(), image.height.toDouble());
+    final redPaint = Paint()..color = const Color(0xFFFF0000);
+    canvas.drawRect(Offset.zero & size, redPaint);
+    final picture = recorder.endRecording();
+    return picture.toImage(image.width, image.height);
   }
-    // ---------- EXPORT VIDEO ----------
+    // ---------- FULL EXPORT (RAW DUMP – NO SHADER) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -797,7 +865,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int processedFrames = 0;
       stopwatch.start();
 
-      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
       const batchSize = 10;
 
       for (int i = 0; i < totalFrames; i += batchSize) {
@@ -817,29 +884,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             if (uiImage.width == 0 || uiImage.height == 0) {
               throw Exception('Converted image has zero size: ${file.path}');
             }
-            final processed = await _applyShaderToImage(
-              uiImage, program,
-              brightness: _brightness, saturation: _saturation, contrast: _contrast,
-              sharpness: _sharpness, gamma: _gamma, hue: _hue,
-              temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
-              vignette: _vignette, splitToning: _splitToning,
-            );
-            if (processed == null) {
-              throw Exception('_applyShaderToImage returned null for frame: ${file.path}');
-            }
-            
-            final pngBytes = await processed.toByteData(format: ui.ImageByteFormat.png);
+
+            // RAW DUMP: convert ui.Image directly to PNG bytes (NO SHADER)
+            final pngBytes = await uiImage.toByteData(format: ui.ImageByteFormat.png);
             if (pngBytes == null) {
               throw Exception('Failed to get PNG bytes for frame: ${file.path}');
             }
-            
+
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes.buffer.asUint8List());
-            
+
             if (!await outputFile.exists()) {
               throw Exception('Failed to write processed frame to: ${outputFile.path}');
             }
-            
+
             processedFrames++;
             final p = processedFrames / totalFrames;
             progressNotifier.value = p;
@@ -862,7 +920,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       statusNotifier.value = 'Encoding video...';
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      
+
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
@@ -940,51 +998,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         );
       }
     }
-  }
-
-  // ---------- APPLY SHADER TO IMAGE (CORRECT INDEXING) ----------
-  Future<ui.Image?> _applyShaderToImage(ui.Image image, ui.FragmentProgram program, {
-    required double brightness, required double saturation, required double contrast,
-    required double sharpness, required double gamma, required double hue,
-    required double temperature, required double glowIntensity, required double lookMix,
-    required double vignette, required double splitToning,
-  }) async {
-    if (image.width == 0 || image.height == 0) {
-      throw Exception('Input image has zero size in _applyShaderToImage');
-    }
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final size = Size(image.width.toDouble(), image.height.toDouble());
-    final shader = program.fragmentShader();
-
-    // Sampler first (index 0)
-    shader.setImageSampler(0, image);
-
-    // uResolution (floats at 1 and 2)
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
-
-    // Sliders (indices 3..13)
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
-
-    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
-    final picture = recorder.endRecording();
-    final output = await picture.toImage(image.width, image.height);
-    if (output == null) {
-      throw Exception('picture.toImage returned null');
-    }
-    return output;
   }
     // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
