@@ -1074,356 +1074,196 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
-    // ---------- FULL CPU GRADING (MANUAL RGB→RGBA + BOUNDS SAFETY) ----------
-  img.Image _applyGradingToImage(img.Image image) {
-    // Get raw bytes and dimensions
-    Uint8List data = image.getBytes();
-    int w = image.width, h = image.height;
+    // ---------- FULL EXPORT (CPU GRADING) ----------
+  Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
 
-    // Detect if the image is RGB (3 bytes per pixel) and convert to RGBA (4 bytes)
-    int bytesPerPixel = data.length ~/ (w * h);
-    if (bytesPerPixel == 3) {
-      // Convert RGB to RGBA by adding an alpha channel (opaque)
-      Uint8List newData = Uint8List(w * h * 4);
-      for (int i = 0; i < w * h; i++) {
-        int src = i * 3;
-        int dst = i * 4;
-        newData[dst] = data[src];         // R
-        newData[dst + 1] = data[src + 1]; // G
-        newData[dst + 2] = data[src + 2]; // B
-        newData[dst + 3] = 255;           // A
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Exporting... (CPU Grading)', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const SizedBox(height: 16),
+            ValueListenableBuilder<double>(
+              valueListenable: progressNotifier,
+              builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: Colors.white),
+            ),
+            const SizedBox(height: 12),
+            ValueListenableBuilder<String>(
+              valueListenable: statusNotifier,
+              builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70)),
+            ),
+            ValueListenableBuilder<String>(
+              valueListenable: etaNotifier,
+              builder: (_, eta, __) => Text('Estimated time remaining: $eta', style: const TextStyle(color: Colors.white54)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create();
+      await processedDir.create();
+
+      statusNotifier.value = 'Extracting frames...';
+      final extractCmd = '-i "${_currentVideoPath!}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractSession = await FFmpegKit.execute(extractCmd);
+      final extractReturnCode = await extractSession.getReturnCode();
+      if (!ReturnCode.isSuccess(extractReturnCode)) {
+        final err = await extractSession.getOutput();
+        throw Exception('Extract failed: ${err ?? "Unknown error"}');
       }
-      data = newData;
-    }
-    // Now data is always RGBA (4 bytes per pixel)
-    int len = data.length;
 
-    // Safe pixel accessors – clamp to valid range
-    int getR(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx];
-    }
-    int getG(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx + 1];
-    }
-    int getB(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx + 2];
-    }
-    void setRGB(int x, int y, int r, int g, int b) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      if (idx + 2 >= len) return; // safety guard
-      data[idx] = r.clamp(0, 255);
-      data[idx + 1] = g.clamp(0, 255);
-      data[idx + 2] = b.clamp(0, 255);
-    }
-
-    // 1. SHARPENING
-    if (_sharpness > 0) {
-      Uint8List sharpData = Uint8List.fromList(data);
-      for (int y = 1; y < h - 1; y++) {
-        for (int x = 1; x < w - 1; x++) {
-          int idx = (y * w + x) * 4;
-          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
-          int rL = data[(y * w + (x - 1)) * 4];
-          int rR = data[(y * w + (x + 1)) * 4];
-          int rU = data[((y - 1) * w + x) * 4];
-          int rD = data[((y + 1) * w + x) * 4];
-          int gL = data[(y * w + (x - 1)) * 4 + 1];
-          int gR = data[(y * w + (x + 1)) * 4 + 1];
-          int gU = data[((y - 1) * w + x) * 4 + 1];
-          int gD = data[((y + 1) * w + x) * 4 + 1];
-          int bL = data[(y * w + (x - 1)) * 4 + 2];
-          int bR = data[(y * w + (x + 1)) * 4 + 2];
-          int bU = data[((y - 1) * w + x) * 4 + 2];
-          int bD = data[((y + 1) * w + x) * 4 + 2];
-          int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
-          int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
-          int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
-          r = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
-          g = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
-          b = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
-          sharpData[idx] = r;
-          sharpData[idx + 1] = g;
-          sharpData[idx + 2] = b;
-        }
+      final frameFiles = await framesDir.list().toList();
+      if (frameFiles.isEmpty) {
+        throw Exception('No frames extracted.');
       }
-      data = sharpData;
-    }
 
-    // 2. GLOW
-    if (_glowIntensity > 0) {
-      Uint8List glowData = Uint8List.fromList(data);
-      int radius = 1;
-      for (int y = radius; y < h - radius; y++) {
-        for (int x = radius; x < w - radius; x++) {
-          double lumaSum = 0.0;
-          for (int ky = -radius; ky <= radius; ky++) {
-            for (int kx = -radius; kx <= radius; kx++) {
-              int idx = ((y + ky) * w + (x + kx)) * 4;
-              double rr = data[idx] / 255.0;
-              double gg = data[idx + 1] / 255.0;
-              double bb = data[idx + 2] / 255.0;
-              lumaSum += 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+      final totalFrames = frameFiles.length;
+      int processedFrames = 0;
+      stopwatch.start();
+
+      const batchSize = 5;
+
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          try {
+            final bytes = await file.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded == null) {
+              throw Exception('Failed to decode frame: ${file.path}');
             }
-          }
-          double avgLuma = lumaSum / 9.0;
-          double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
-          double glowAmount = glowMask * _glowIntensity * 0.6;
-          int idx = (y * w + x) * 4;
-          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
-          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          glowData[idx] = r;
-          glowData[idx + 1] = g;
-          glowData[idx + 2] = b;
-        }
-      }
-      data = glowData;
-    }
 
-    // 3. TEMPERATURE
-    if (_temperature != 6500.0) {
-      double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
-      double rGain = 1.0 + (t * 0.3);
-      double gGain = 1.0 + (t * 0.1) - ((1.0 - t) * 0.1);
-      double bGain = 1.0 + ((1.0 - t) * 0.3);
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] * rGain).toInt().clamp(0, 255);
-          int g = (data[idx + 1] * gGain).toInt().clamp(0, 255);
-          int b = (data[idx + 2] * bGain).toInt().clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-        }
-      }
-    }
+            final graded = _applyGradingToImage(decoded);
 
-    // 4. HUE
-    if (_hue != 0.0) {
-      double hueShift = _hue / 360.0;
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-          double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-          double h = 0, s = 0, v = max;
-          double delta = max - min;
-          if (delta != 0) {
-            s = delta / max;
-            if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
-            else if (g == max) h = (b - r) / delta + 2;
-            else h = (r - g) / delta + 4;
-            h /= 6;
-          }
-          h = (h + hueShift) % 1.0;
-          if (h < 0) h += 1.0;
-          if (s == 0) {
-            r = g = b = v;
-          } else {
-            double h6 = h * 6;
-            int hi = h6.floor();
-            double f = h6 - hi;
-            double pv = v * (1 - s);
-            double q = v * (1 - f * s);
-            double t = v * (1 - (1 - f) * s);
-            switch (hi) {
-              case 0: r = v; g = t; b = pv; break;
-              case 1: r = q; g = v; b = pv; break;
-              case 2: r = pv; g = v; b = t; break;
-              case 3: r = pv; g = q; b = v; break;
-              case 4: r = t; g = pv; b = v; break;
-              case 5: r = v; g = pv; b = q; break;
-              default: r = v; g = t; b = pv; break;
+            final pngBytes = img.encodePng(graded);
+            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+            await outputFile.writeAsBytes(pngBytes);
+
+            if (!await outputFile.exists()) {
+              throw Exception('Failed to write processed frame to: ${outputFile.path}');
             }
+
+            processedFrames++;
+            final p = processedFrames / totalFrames;
+            progressNotifier.value = p;
+            final percent = (processedFrames / totalFrames * 100).toInt();
+            statusNotifier.value = 'Processing... $percent%';
+            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+              final remaining = totalSec - stopwatch.elapsed.inSeconds;
+              final mins = remaining ~/ 60;
+              final secs = remaining % 60;
+              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+            }
+          } catch (e) {
+            throw Exception('Frame processing failed at $processedFrames: $e');
           }
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
+        }));
+      }
+      stopwatch.stop();
+
+      statusNotifier.value = 'Encoding video...';
+      final targetFps = int.parse(fps.replaceAll('fps', ''));
+      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
+      var encodeSession = await FFmpegKit.execute(encodeCmd);
+      var encodeReturnCode = await encodeSession.getReturnCode();
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        statusNotifier.value = 'Retrying with mpeg4...';
+        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeSession = await FFmpegKit.execute(fallbackCmd);
+        encodeReturnCode = await encodeSession.getReturnCode();
+      }
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        final combined = await encodeSession.getOutput() ?? "No output";
+        final errorSnippet = combined.length > 500 
+            ? "...${combined.substring(combined.length - 500)}" 
+            : combined;
+        throw Exception('Encode failed:\n$errorSnippet');
+      }
+
+      statusNotifier.value = 'Extracting audio...';
+      final audioPath = '${dir.path}/extracted_audio.aac';
+      final audioCmd = '-i "${_currentVideoPath!}" -vn -acodec copy "$audioPath"';
+      final audioSession = await FFmpegKit.execute(audioCmd);
+      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
+        print('Audio extraction skipped');
+      }
+
+      statusNotifier.value = 'Muxing audio and video...';
+      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
+      final muxSession = await FFmpegKit.execute(muxCmd);
+      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
+        await File(silentOutputPath).copy(File(finalOutputPath).path);
+      }
+
+      final downloadsDir = Directory('/storage/emulated/0/Download/');
+      if (!await downloadsDir.exists()) {
+        final docsDir = await getApplicationDocumentsDirectory();
+        final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+        await File(finalOutputPath).copy(finalFile.path);
+        await framesDir.delete(recursive: true);
+        await processedDir.delete(recursive: true);
+        try { await File(audioPath).delete(); } catch (_) {}
+        try { await File(silentOutputPath).delete(); } catch (_) {}
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('⚠️ Saved to app folder: ${finalFile.path}'), backgroundColor: Colors.orange, duration: const Duration(seconds: 5)),
+          );
         }
+        return;
+      }
+
+      final finalFile = File('${downloadsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await File(finalOutputPath).copy(finalFile.path);
+
+      await framesDir.delete(recursive: true);
+      await processedDir.delete(recursive: true);
+      try { await File(audioPath).delete(); } catch (_) {}
+      try { await File(silentOutputPath).delete(); } catch (_) {}
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export Error: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 10)),
+        );
       }
     }
-
-    // 5. SATURATION
-    if (_saturation != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          r = luma + (r - luma) * _saturation;
-          g = luma + (g - luma) * _saturation;
-          b = luma + (b - luma) * _saturation;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
-      }
-    }
-
-    // 6. CONTRAST
-    if (_contrast != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          r = ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          g = ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          b = ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
-      }
-    }
-
-    // 7. BRIGHTNESS
-    if (_brightness != 0.0) {
-      int offset = (_brightness * 255).toInt();
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] + offset).clamp(0, 255);
-          int g = (data[idx + 1] + offset).clamp(0, 255);
-          int b = (data[idx + 2] + offset).clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-        }
-      }
-    }
-
-    // 8. GAMMA
-    if (_gamma != 1.0) {
-      double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          r = math.pow(r, invGamma).toDouble().clamp(0.0, 1.0);
-          g = math.pow(g, invGamma).toDouble().clamp(0.0, 1.0);
-          b = math.pow(b, invGamma).toDouble().clamp(0.0, 1.0);
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
-      }
-    }
-
-    // 9. TEAL & ORANGE (LookMix)
-    if (_lookMix > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double tealR = 0.0, tealG = 0.6, tealB = 0.6;
-          double orangeR = 1.0, orangeG = 0.6, orangeB = 0.1;
-          double gradedR = tealR + (orangeR - tealR) * luma;
-          double gradedG = tealG + (orangeG - tealG) * luma;
-          double gradedB = tealB + (orangeB - tealB) * luma;
-          double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
-          double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
-          double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
-          r = r * (1.0 - _lookMix) + mixedR * _lookMix;
-          g = g * (1.0 - _lookMix) + mixedG * _lookMix;
-          b = b * (1.0 - _lookMix) + mixedB * _lookMix;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
-      }
-    }
-
-    // 10. VIGNETTE
-    if (_vignette > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          double dx = (x / w - 0.5) * 2.0;
-          double dy = (y / h - 0.5) * 2.0;
-          double dist = math.sqrt(dx * dx + dy * dy);
-          double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] * amount).toInt().clamp(0, 255);
-          int g = (data[idx + 1] * amount).toInt().clamp(0, 255);
-          int b = (data[idx + 2] * amount).toInt().clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-        }
-      }
-    }
-
-    // 11. SPLIT TONING
-    if (_splitToning > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double shadowR = 0.1, shadowG = 0.2, shadowB = 0.6;
-          double highlightR = 1.0, highlightG = 0.5, highlightB = 0.1;
-          double tintR = shadowR + (highlightR - shadowR) * luma;
-          double tintG = shadowG + (highlightG - shadowG) * luma;
-          double tintB = shadowB + (highlightB - shadowB) * luma;
-          r = r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4;
-          g = g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4;
-          b = b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
-      }
-    }
-
-    // 12. FILMIC TONE MAPPING
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        int idx = (y * w + x) * 4;
-        double r = data[idx] / 255.0;
-        double g = data[idx + 1] / 255.0;
-        double b = data[idx + 2] / 255.0;
-        double xr = math.max(0.0, r - 0.004);
-        double xg = math.max(0.0, g - 0.004);
-        double xb = math.max(0.0, b - 0.004);
-        double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
-        double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
-        double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        data[idx] = (r * 255).toInt().clamp(0, 255);
-        data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-        data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-      }
-    }
-
-    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
     // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
