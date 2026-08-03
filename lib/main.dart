@@ -723,48 +723,57 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (CORRECTED ORDER + MATH) ----------
+    // ---------- FULL CPU GRADING (CORRECTED API) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
 
+    // Helper: get R/G/B from ARGB int
     int getR(int pixel) => (pixel >> 16) & 0xFF;
     int getG(int pixel) => (pixel >> 8) & 0xFF;
     int getB(int pixel) => pixel & 0xFF;
 
-    // 1. SHARPENING (Unsharp Mask) - Matches Shader
+    // Helper: set pixel from r,g,b (creates a Color)
+    void setPixel(img.Image img, int x, int y, int r, int g, int b) {
+      r = r.clamp(0, 255);
+      g = g.clamp(0, 255);
+      b = b.clamp(0, 255);
+      int value = (0xFF << 24) | (r << 16) | (g << 8) | b;
+      img.setPixel(x, y, img.Color(value));
+    }
+
+    // 1. SHARPENING (Unsharp Mask)
     if (_sharpness > 0) {
       var sharp = result.clone();
       for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           int r = getR(p), g = getG(p), b = getB(p);
-          int rL = getR(result.getPixel(x - 1, y).toInt());
-          int rR = getR(result.getPixel(x + 1, y).toInt());
-          int rU = getR(result.getPixel(x, y - 1).toInt());
-          int rD = getR(result.getPixel(x, y + 1).toInt());
-          int gL = getG(result.getPixel(x - 1, y).toInt());
-          int gR = getG(result.getPixel(x + 1, y).toInt());
-          int gU = getG(result.getPixel(x, y - 1).toInt());
-          int gD = getG(result.getPixel(x, y + 1).toInt());
-          int bL = getB(result.getPixel(x - 1, y).toInt());
-          int bR = getB(result.getPixel(x + 1, y).toInt());
-          int bU = getB(result.getPixel(x, y - 1).toInt());
-          int bD = getB(result.getPixel(x, y + 1).toInt());
+          int rL = getR(result.getPixel(x - 1, y).toColor().value);
+          int rR = getR(result.getPixel(x + 1, y).toColor().value);
+          int rU = getR(result.getPixel(x, y - 1).toColor().value);
+          int rD = getR(result.getPixel(x, y + 1).toColor().value);
+          int gL = getG(result.getPixel(x - 1, y).toColor().value);
+          int gR = getG(result.getPixel(x + 1, y).toColor().value);
+          int gU = getG(result.getPixel(x, y - 1).toColor().value);
+          int gD = getG(result.getPixel(x, y + 1).toColor().value);
+          int bL = getB(result.getPixel(x - 1, y).toColor().value);
+          int bR = getB(result.getPixel(x + 1, y).toColor().value);
+          int bU = getB(result.getPixel(x, y - 1).toColor().value);
+          int bD = getB(result.getPixel(x, y + 1).toColor().value);
           int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
           int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
           int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
           r = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
           g = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
           b = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
-          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-          sharp.setPixel(x, y, color);
+          setPixel(sharp, x, y, r, g, b);
         }
       }
       result = sharp;
     }
 
-    // 2. GLOW / BLOOM (9-tap blur on bright areas) - Matches Shader
+    // 2. GLOW / BLOOM
     if (_glowIntensity > 0) {
       var glow = result.clone();
       int radius = 1;
@@ -773,29 +782,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double lumaSum = 0.0;
           for (int ky = -radius; ky <= radius; ky++) {
             for (int kx = -radius; kx <= radius; kx++) {
-              int p = result.getPixel(x + kx, y + ky).toInt();
-              double r = getR(p) / 255.0;
-              double g = getG(p) / 255.0;
-              double b = getB(p) / 255.0;
-              lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+              int p = result.getPixel(x + kx, y + ky).toColor().value;
+              double rr = getR(p) / 255.0;
+              double gg = getG(p) / 255.0;
+              double bb = getB(p) / 255.0;
+              lumaSum += 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
             }
           }
           double avgLuma = lumaSum / 9.0;
           double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
           double glowAmount = glowMask * _glowIntensity * 0.6;
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           int r = getR(p), g = getG(p), b = getB(p);
           r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
           g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
           b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-          glow.setPixel(x, y, color);
+          setPixel(glow, x, y, r, g, b);
         }
       }
       result = glow;
     }
 
-    // 3. TEMPERATURE (White Balance) - Exact Shader Math
+    // 3. TEMPERATURE
     if (_temperature != 6500.0) {
       double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
       double rGain = 1.0 + (t * 0.3);
@@ -803,22 +811,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       double bGain = 1.0 + ((1.0 - t) * 0.3);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           int r = (getR(p) * rGain).toInt().clamp(0, 255);
           int g = (getG(p) * gGain).toInt().clamp(0, 255);
           int b = (getB(p) * bGain).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r, g, b);
         }
       }
     }
 
-    // 4. HUE ROTATION - Matches Shader
+    // 4. HUE ROTATION
     if (_hue != 0.0) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -857,17 +864,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 5. SATURATION - Matches Shader
+    // 5. SATURATION
     if (_saturation != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -878,17 +884,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 6. CONTRAST - Matches Shader
+    // 6. CONTRAST
     if (_contrast != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -898,33 +903,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 7. BRIGHTNESS - Matches Shader
+    // 7. BRIGHTNESS
     if (_brightness != 0.0) {
       int offset = (_brightness * 255).toInt();
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           int r = (getR(p) + offset).clamp(0, 255);
           int g = (getG(p) + offset).clamp(0, 255);
           int b = (getB(p) + offset).clamp(0, 255);
-          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r, g, b);
         }
       }
     }
 
-    // 8. GAMMA - Matches Shader
+    // 8. GAMMA
     if (_gamma != 1.0) {
       double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -934,45 +937,40 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 9. TEAL & ORANGE (LookMix) - Exact Shader Math
+    // 9. TEAL & ORANGE (LookMix)
     if (_lookMix > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          // Teal (shadows) and Orange (highlights)
           double tealR = 0.0, tealG = 0.6, tealB = 0.6;
           double orangeR = 1.0, orangeG = 0.6, orangeB = 0.1;
           double gradedR = tealR + (orangeR - tealR) * luma;
           double gradedG = tealG + (orangeG - tealG) * luma;
           double gradedB = tealB + (orangeB - tealB) * luma;
-          // Apply 70% mix of graded to original, exactly like shader
           double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
           double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
           double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
-          // Then blend with LookMix
           r = r * (1.0 - _lookMix) + mixedR * _lookMix;
           g = g * (1.0 - _lookMix) + mixedG * _lookMix;
           b = b * (1.0 - _lookMix) + mixedB * _lookMix;
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 10. VIGNETTE - Matches Shader
+    // 10. VIGNETTE
     if (_vignette > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -980,21 +978,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double dy = (y / h - 0.5) * 2.0;
           double dist = math.sqrt(dx * dx + dy * dy);
           double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           int r = (getR(p) * amount).toInt().clamp(0, 255);
           int g = (getG(p) * amount).toInt().clamp(0, 255);
           int b = (getB(p) * amount).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r, g, b);
         }
       }
     }
 
-    // 11. SPLIT TONING - Matches Shader
+    // 11. SPLIT TONING
     if (_splitToning > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toInt();
+          int p = result.getPixel(x, y).toColor().value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -1010,16 +1007,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-          result.setPixel(x, y, color);
+          setPixel(result, x, y, r8, g8, b8);
         }
       }
     }
 
-    // 12. FILMIC TONE MAPPING (Final) - Matches Shader exactly
+    // 12. FILMIC TONE MAPPING
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y).toInt();
+        int p = result.getPixel(x, y).toColor().value;
         double r = getR(p) / 255.0;
         double g = getG(p) / 255.0;
         double b = getB(p) / 255.0;
@@ -1035,8 +1031,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         int r8 = (r * 255).toInt().clamp(0, 255);
         int g8 = (g * 255).toInt().clamp(0, 255);
         int b8 = (b * 255).toInt().clamp(0, 255);
-        int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
-        result.setPixel(x, y, color);
+        setPixel(result, x, y, r8, g8, b8);
       }
     }
 
