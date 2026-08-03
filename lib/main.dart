@@ -663,7 +663,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         throw Exception('Converted image has zero size');
       }
       
-      // Show in dialog (no shader – just the CPU-graded image)
+      // Show in dialog using RawImage (no async PNG conversion)
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -676,8 +676,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             child: Column(
               children: [
                 Expanded(
-                  child: Image.memory(
-                    await _uiImageToPng(uiImage),
+                  child: RawImage(
+                    image: uiImage,
                     fit: BoxFit.contain,
                   ),
                 ),
@@ -696,12 +696,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     } finally {
       setState(() => _isPreviewing = false);
     }
-  }
-
-  // Helper to convert ui.Image to PNG bytes for display
-  Future<Uint8List> _uiImageToPng(ui.Image image) async {
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
   }
 
   // ---------- CONVERT FUNCTION (for preview – uses PNG) ----------
@@ -748,129 +742,141 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     // 1. BRIGHTNESS
     if (_brightness != 0.0) {
       final offset = (_brightness * 255).toInt();
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        int r = (getR(p) + offset).clamp(0, 255);
-        int g = (getG(p) + offset).clamp(0, 255);
-        int b = (getB(p) + offset).clamp(0, 255);
-        result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          int r = (getR(p) + offset).clamp(0, 255);
+          int g = (getG(p) + offset).clamp(0, 255);
+          int b = (getB(p) + offset).clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+        }
       }
     }
 
     // 2. CONTRAST
     if (_contrast != 1.0) {
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        r = ((r - 0.5) * _contrast + 0.5).clamp(0, 1);
-        g = ((g - 0.5) * _contrast + 0.5).clamp(0, 1);
-        b = ((b - 0.5) * _contrast + 0.5).clamp(0, 1);
-        int r8 = (r * 255).toInt();
-        int g8 = (g * 255).toInt();
-        int b8 = (b * 255).toInt();
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          r = ((r - 0.5) * _contrast + 0.5).clamp(0, 1);
+          g = ((g - 0.5) * _contrast + 0.5).clamp(0, 1);
+          b = ((b - 0.5) * _contrast + 0.5).clamp(0, 1);
+          int r8 = (r * 255).toInt();
+          int g8 = (g * 255).toInt();
+          int b8 = (b * 255).toInt();
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        }
       }
     }
 
     // 3. SATURATION
     if (_saturation != 1.0) {
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        r = luma + (r - luma) * _saturation;
-        g = luma + (g - luma) * _saturation;
-        b = luma + (b - luma) * _saturation;
-        r = r.clamp(0, 1);
-        g = g.clamp(0, 1);
-        b = b.clamp(0, 1);
-        int r8 = (r * 255).toInt();
-        int g8 = (g * 255).toInt();
-        int b8 = (b * 255).toInt();
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          r = luma + (r - luma) * _saturation;
+          g = luma + (g - luma) * _saturation;
+          b = luma + (b - luma) * _saturation;
+          r = r.clamp(0, 1);
+          g = g.clamp(0, 1);
+          b = b.clamp(0, 1);
+          int r8 = (r * 255).toInt();
+          int g8 = (g * 255).toInt();
+          int b8 = (b * 255).toInt();
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        }
       }
     }
 
     // 4. GAMMA
     if (_gamma != 1.0) {
       double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        r = math.pow(r, gammaInv).toDouble().clamp(0, 1);
-        g = math.pow(g, gammaInv).toDouble().clamp(0, 1);
-        b = math.pow(b, gammaInv).toDouble().clamp(0, 1);
-        int r8 = (r * 255).toInt();
-        int g8 = (g * 255).toInt();
-        int b8 = (b * 255).toInt();
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          r = math.pow(r, gammaInv).toDouble().clamp(0, 1);
+          g = math.pow(g, gammaInv).toDouble().clamp(0, 1);
+          b = math.pow(b, gammaInv).toDouble().clamp(0, 1);
+          int r8 = (r * 255).toInt();
+          int g8 = (g * 255).toInt();
+          int b8 = (b * 255).toInt();
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        }
       }
     }
 
     // 5. HUE ROTATION (HSV)
     if (_hue != 0.0) {
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        // RGB -> HSV
-        double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-        double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-        double h = 0, s = 0, v = max;
-        double delta = max - min;
-        if (delta != 0) {
-          s = delta / max;
-          if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
-          else if (g == max) h = (b - r) / delta + 2;
-          else h = (r - g) / delta + 4;
-          h /= 6;
-        }
-        // Rotate hue
-        h = (h + (_hue / 360.0)) % 1.0;
-        if (h < 0) h += 1.0;
-        // HSV -> RGB
-        if (s == 0) {
-          r = g = b = v;
-        } else {
-          double h6 = h * 6;
-          int hi = h6.floor();
-          double f = h6 - hi;
-          double pv = v * (1 - s);
-          double q = v * (1 - f * s);
-          double t = v * (1 - (1 - f) * s);
-          switch (hi) {
-            case 0: r = v; g = t; b = pv; break;
-            case 1: r = q; g = v; b = pv; break;
-            case 2: r = pv; g = v; b = t; break;
-            case 3: r = pv; g = q; b = v; break;
-            case 4: r = t; g = pv; b = v; break;
-            case 5: r = v; g = pv; b = q; break;
-            default: r = v; g = t; b = pv; break;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          // RGB -> HSV
+          double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+          double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+          double h = 0, s = 0, v = max;
+          double delta = max - min;
+          if (delta != 0) {
+            s = delta / max;
+            if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
+            else if (g == max) h = (b - r) / delta + 2;
+            else h = (r - g) / delta + 4;
+            h /= 6;
           }
+          // Rotate hue
+          h = (h + (_hue / 360.0)) % 1.0;
+          if (h < 0) h += 1.0;
+          // HSV -> RGB
+          if (s == 0) {
+            r = g = b = v;
+          } else {
+            double h6 = h * 6;
+            int hi = h6.floor();
+            double f = h6 - hi;
+            double pv = v * (1 - s);
+            double q = v * (1 - f * s);
+            double t = v * (1 - (1 - f) * s);
+            switch (hi) {
+              case 0: r = v; g = t; b = pv; break;
+              case 1: r = q; g = v; b = pv; break;
+              case 2: r = pv; g = v; b = t; break;
+              case 3: r = pv; g = q; b = v; break;
+              case 4: r = t; g = pv; b = v; break;
+              case 5: r = v; g = pv; b = q; break;
+              default: r = v; g = t; b = pv; break;
+            }
+          }
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
         }
-        int r8 = (r * 255).toInt().clamp(0, 255);
-        int g8 = (g * 255).toInt().clamp(0, 255);
-        int b8 = (b * 255).toInt().clamp(0, 255);
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
       }
     }
 
     // 6. TEMPERATURE (simplified)
     if (_temperature != 6500.0) {
       double factor = (_temperature - 6500) / 10000.0 * 0.3;
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        int r = (getR(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
-        int g = (getG(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
-        int b = (getB(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
-        result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          int r = (getR(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
+          int g = (getG(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
+          int b = (getB(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+        }
       }
     }
 
@@ -881,7 +887,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         for (int x = 1; x < w-1; x++) {
           int p = result.getPixel(x, y);
           int r = getR(p), g = getG(p), b = getB(p);
-          // Neighbors
           int rL = getR(result.getPixel(x-1, y));
           int rR = getR(result.getPixel(x+1, y));
           int rU = getR(result.getPixel(x, y-1));
@@ -923,7 +928,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             }
           }
           double avgLuma = lumaSum / (kernelSize*kernelSize);
-          double glowAmount = (avgLuma - 0.3) / 0.5; // smoothstep 0.3-0.8
+          double glowAmount = (avgLuma - 0.3) / 0.5;
           glowAmount = glowAmount.clamp(0, 1);
           glowAmount *= _glowIntensity * 0.6;
           int p = result.getPixel(x, y);
@@ -956,87 +961,89 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     // 10. SPLIT TONING (shadows -> blue, highlights -> orange)
     if (_splitToning > 0.0) {
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        // shadow tint: (0.1, 0.2, 0.6) ; highlight tint: (1.0, 0.5, 0.1)
-        double sr = 0.1, sg = 0.2, sb = 0.6;
-        double hr = 1.0, hg = 0.5, hb = 0.1;
-        // mix based on luma
-        double tr = sr + (hr - sr) * luma;
-        double tg = sg + (hg - sg) * luma;
-        double tb = sb + (hb - sb) * luma;
-        // apply splitToning strength
-        r = r * (1 - _splitToning * 0.4) + r * tr * _splitToning * 0.4;
-        g = g * (1 - _splitToning * 0.4) + g * tg * _splitToning * 0.4;
-        b = b * (1 - _splitToning * 0.4) + b * tb * _splitToning * 0.4;
-        int r8 = (r * 255).toInt().clamp(0, 255);
-        int g8 = (g * 255).toInt().clamp(0, 255);
-        int b8 = (b * 255).toInt().clamp(0, 255);
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          double sr = 0.1, sg = 0.2, sb = 0.6;
+          double hr = 1.0, hg = 0.5, hb = 0.1;
+          double tr = sr + (hr - sr) * luma;
+          double tg = sg + (hg - sg) * luma;
+          double tb = sb + (hb - sb) * luma;
+          r = r * (1 - _splitToning * 0.4) + r * tr * _splitToning * 0.4;
+          g = g * (1 - _splitToning * 0.4) + g * tg * _splitToning * 0.4;
+          b = b * (1 - _splitToning * 0.4) + b * tb * _splitToning * 0.4;
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        }
       }
     }
 
     // 11. TEAL & ORANGE LOOK (Magic Bullet style)
     if (_lookMix > 0.0) {
-      for (int i = 0; i < result.length; i++) {
-        int p = result[i];
-        double r = getR(p) / 255.0;
-        double g = getG(p) / 255.0;
-        double b = getB(p) / 255.0;
-        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        // teal: (0.0, 0.6, 0.6) ; orange: (1.0, 0.6, 0.1)
-        double tr = 0.0, tg = 0.6, tb = 0.6;
-        double or = 1.0, og = 0.6, ob = 0.1;
-        double gr = tr + (or - tr) * luma;
-        double gg = tg + (og - tg) * luma;
-        double gb = tb + (ob - tb) * luma;
-        // result = mix(color, color * graded, 0.7)
-        double rr = r * (1 - 0.7) + r * gr * 0.7;
-        double rg = g * (1 - 0.7) + g * gg * 0.7;
-        double rb = b * (1 - 0.7) + b * gb * 0.7;
-        // blend with lookMix
-        r = r * (1 - _lookMix) + rr * _lookMix;
-        g = g * (1 - _lookMix) + rg * _lookMix;
-        b = b * (1 - _lookMix) + rb * _lookMix;
-        int r8 = (r * 255).toInt().clamp(0, 255);
-        int g8 = (g * 255).toInt().clamp(0, 255);
-        int b8 = (b * 255).toInt().clamp(0, 255);
-        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y);
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          double tr = 0.0, tg = 0.6, tb = 0.6;
+          double or = 1.0, og = 0.6, ob = 0.1;
+          double gr = tr + (or - tr) * luma;
+          double gg = tg + (og - tg) * luma;
+          double gb = tb + (ob - tb) * luma;
+          double rr = r * (1 - 0.7) + r * gr * 0.7;
+          double rg = g * (1 - 0.7) + g * gg * 0.7;
+          double rb = b * (1 - 0.7) + b * gb * 0.7;
+          r = r * (1 - _lookMix) + rr * _lookMix;
+          g = g * (1 - _lookMix) + rg * _lookMix;
+          b = b * (1 - _lookMix) + rb * _lookMix;
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        }
       }
     }
 
     // 12. FILMIC TONE MAP (Reinhard-like)
-    for (int i = 0; i < result.length; i++) {
-      int p = result[i];
-      double r = getR(p) / 255.0;
-      double g = getG(p) / 255.0;
-      double b = getB(p) / 255.0;
-      double xr = math.max(0.0, r - 0.004);
-      double xg = math.max(0.0, g - 0.004);
-      double xb = math.max(0.0, b - 0.004);
-      double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
-      double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
-      double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-      r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0, 1);
-      g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0, 1);
-      b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0, 1);
-      int r8 = (r * 255).toInt().clamp(0, 255);
-      int g8 = (g * 255).toInt().clamp(0, 255);
-      int b8 = (b * 255).toInt().clamp(0, 255);
-      result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int p = result.getPixel(x, y);
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
+        double xr = math.max(0.0, r - 0.004);
+        double xg = math.max(0.0, g - 0.004);
+        double xb = math.max(0.0, b - 0.004);
+        double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
+        double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
+        double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
+        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0, 1);
+        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0, 1);
+        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0, 1);
+        int r8 = (r * 255).toInt().clamp(0, 255);
+        int g8 = (g * 255).toInt().clamp(0, 255);
+        int b8 = (b * 255).toInt().clamp(0, 255);
+        result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+      }
     }
 
-    // Clamp final (redundant but safe)
-    for (int i = 0; i < result.length; i++) {
-      int p = result[i];
-      int r = getR(p).clamp(0, 255);
-      int g = getG(p).clamp(0, 255);
-      int b = getB(p).clamp(0, 255);
-      result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    // Final clamp (redundant but safe)
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int p = result.getPixel(x, y);
+        int r = getR(p).clamp(0, 255);
+        int g = getG(p).clamp(0, 255);
+        int b = getB(p).clamp(0, 255);
+        result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+      }
     }
 
     return result;
