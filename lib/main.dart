@@ -723,36 +723,61 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (RAW RGBA BYTES – RELIABLE) ----------
+    // ---------- FULL CPU GRADING (MANUAL RGB→RGBA + BOUNDS SAFETY) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Force RGBA format – this gives us 4 bytes per pixel: R,G,B,A
-    Uint8List data = image.getBytes(format: img.Format.rgba);
+    // Get raw bytes and dimensions
+    Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
+
+    // Detect bytes per pixel (3 = RGB, 4 = RGBA, etc.)
+    int bytesPerPixel = data.length ~/ (w * h);
+    if (bytesPerPixel == 3) {
+      // Convert RGB to RGBA by adding an opaque alpha channel
+      Uint8List newData = Uint8List(w * h * 4);
+      for (int i = 0; i < w * h; i++) {
+        int src = i * 3;
+        int dst = i * 4;
+        newData[dst]     = data[src];
+        newData[dst + 1] = data[src + 1];
+        newData[dst + 2] = data[src + 2];
+        newData[dst + 3] = 255;
+      }
+      data = newData;
+      bytesPerPixel = 4; // now RGBA
+    }
+    // Now we assume 4 bytes per pixel (RGBA)
     int len = data.length;
 
-    // Helper: get R/G/B from the byte array (ignore alpha)
+    // Safe pixel accessors (all clamps to valid range)
     int getR(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx];
     }
     int getG(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx + 1];
     }
     int getB(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx + 2];
     }
     void setRGB(int x, int y, int r, int g, int b) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       if (idx + 2 >= len) return;
       data[idx] = r.clamp(0, 255);
       data[idx + 1] = g.clamp(0, 255);
       data[idx + 2] = b.clamp(0, 255);
-      // keep alpha as is (we never touch it)
     }
 
-    // 1. SHARPENING
+    // ---------- 1. SHARPENING ----------
     if (_sharpness > 0) {
       Uint8List sharpData = Uint8List.fromList(data);
       for (int y = 1; y < h - 1; y++) {
@@ -785,7 +810,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data = sharpData;
     }
 
-    // 2. GLOW
+    // ---------- 2. GLOW ----------
     if (_glowIntensity > 0) {
       Uint8List glowData = Uint8List.fromList(data);
       int radius = 1;
@@ -817,7 +842,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data = glowData;
     }
 
-    // 3. TEMPERATURE
+    // ---------- 3. TEMPERATURE ----------
     if (_temperature != 6500.0) {
       double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
       double rGain = 1.0 + (t * 0.3);
@@ -836,7 +861,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 4. HUE
+    // ---------- 4. HUE ----------
     if (_hue != 0.0) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
@@ -884,7 +909,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 5. SATURATION
+    // ---------- 5. SATURATION ----------
     if (_saturation != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -903,7 +928,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 6. CONTRAST
+    // ---------- 6. CONTRAST ----------
     if (_contrast != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -921,7 +946,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 7. BRIGHTNESS
+    // ---------- 7. BRIGHTNESS ----------
     if (_brightness != 0.0) {
       int offset = (_brightness * 255).toInt();
       for (int y = 0; y < h; y++) {
@@ -937,7 +962,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 8. GAMMA
+    // ---------- 8. GAMMA ----------
     if (_gamma != 1.0) {
       double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int y = 0; y < h; y++) {
@@ -956,7 +981,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 9. TEAL & ORANGE (LookMix)
+    // ---------- 9. TEAL & ORANGE (LookMix) ----------
     if (_lookMix > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -983,7 +1008,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 10. VIGNETTE
+    // ---------- 10. VIGNETTE ----------
     if (_vignette > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -1002,7 +1027,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 11. SPLIT TONING
+    // ---------- 11. SPLIT TONING ----------
     if (_splitToning > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -1026,7 +1051,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 12. FILMIC TONE MAPPING
+    // ---------- 12. FILMIC TONE MAPPING ----------
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
         int idx = (y * w + x) * 4;
@@ -1048,13 +1073,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // Rebuild the image – keep the RGBA format
-    return img.Image.fromBytes(
-      width: w,
-      height: h,
-      bytes: data.buffer,
-      format: img.Format.rgba,
-    );
+    // Rebuild the image – the byte length determines RGBA
+    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
