@@ -615,8 +615,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-
-  // ---------- PREVIEW FRAME (CPU-BASED) ----------
+    // ---------- PREVIEW FRAME (CPU-BASED) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -723,288 +722,194 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (MANUAL RGB→RGBA + BOUNDS SAFETY) ----------
+    // ---------- FULL CPU GRADING (FIXED) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Get raw bytes and dimensions
-    Uint8List data = image.getBytes();
-    int w = image.width, h = image.height;
-
-    // Detect bytes per pixel (3 = RGB, 4 = RGBA, etc.)
-    int bytesPerPixel = data.length ~/ (w * h);
-    if (bytesPerPixel == 3) {
-      // Convert RGB to RGBA by adding an opaque alpha channel
-      Uint8List newData = Uint8List(w * h * 4);
-      for (int i = 0; i < w * h; i++) {
-        int src = i * 3;
-        int dst = i * 4;
-        newData[dst]     = data[src];
-        newData[dst + 1] = data[src + 1];
-        newData[dst + 2] = data[src + 2];
-        newData[dst + 3] = 255;
-      }
-      data = newData;
-      bytesPerPixel = 4; // now RGBA
-    }
-    // Now we assume 4 bytes per pixel (RGBA)
-    int len = data.length;
-
-    // Safe pixel accessors (all clamps to valid range)
-    int getR(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx];
-    }
-    int getG(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx + 1];
-    }
-    int getB(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      return data[idx + 2];
-    }
-    void setRGB(int x, int y, int r, int g, int b) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
-      int idx = (y * w + x) * 4;
-      if (idx + 2 >= len) return;
-      data[idx] = r.clamp(0, 255);
-      data[idx + 1] = g.clamp(0, 255);
-      data[idx + 2] = b.clamp(0, 255);
-    }
+    // Force a clean RGBA copy first
+    final src = image.convert(numChannels: 4);
+    final w = src.width;
+    final h = src.height;
+    final data = Uint8List.fromList(src.getBytes(order: img.ChannelOrder.rgba));
 
     // ---------- 1. SHARPENING ----------
     if (_sharpness > 0) {
-      Uint8List sharpData = Uint8List.fromList(data);
+      final sharpData = Uint8List.fromList(data);
       for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
-          int idx = (y * w + x) * 4;
-          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
-          int rL = data[(y * w + (x - 1)) * 4];
-          int rR = data[(y * w + (x + 1)) * 4];
-          int rU = data[((y - 1) * w + x) * 4];
-          int rD = data[((y + 1) * w + x) * 4];
-          int gL = data[(y * w + (x - 1)) * 4 + 1];
-          int gR = data[(y * w + (x + 1)) * 4 + 1];
-          int gU = data[((y - 1) * w + x) * 4 + 1];
-          int gD = data[((y + 1) * w + x) * 4 + 1];
-          int bL = data[(y * w + (x - 1)) * 4 + 2];
-          int bR = data[(y * w + (x + 1)) * 4 + 2];
-          int bU = data[((y - 1) * w + x) * 4 + 2];
-          int bD = data[((y + 1) * w + x) * 4 + 2];
-          int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
-          int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
-          int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
-          r = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
-          g = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
-          b = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
-          sharpData[idx] = r;
-          sharpData[idx + 1] = g;
-          sharpData[idx + 2] = b;
+          final idx = (y * w + x) * 4;
+          final r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          final rL = data[(y * w + (x - 1)) * 4];
+          final rR = data[(y * w + (x + 1)) * 4];
+          final rU = data[((y - 1) * w + x) * 4];
+          final rD = data[((y + 1) * w + x) * 4];
+          final gL = data[(y * w + (x - 1)) * 4 + 1];
+          final gR = data[(y * w + (x + 1)) * 4 + 1];
+          final gU = data[((y - 1) * w + x) * 4 + 1];
+          final gD = data[((y + 1) * w + x) * 4 + 1];
+          final bL = data[(y * w + (x - 1)) * 4 + 2];
+          final bR = data[(y * w + (x + 1)) * 4 + 2];
+          final bU = data[((y - 1) * w + x) * 4 + 2];
+          final bD = data[((y + 1) * w + x) * 4 + 2];
+
+          final rSharp = r - ((rL + rR + rU + rD) ~/ 4);
+          final gSharp = g - ((gL + gR + gU + gD) ~/ 4);
+          final bSharp = b - ((bL + bR + bU + bD) ~/ 4);
+
+          sharpData[idx]     = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
+          sharpData[idx + 1] = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
+          sharpData[idx + 2] = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
         }
       }
-      data = sharpData;
+      data.setAll(0, sharpData);
     }
 
     // ---------- 2. GLOW ----------
     if (_glowIntensity > 0) {
-      Uint8List glowData = Uint8List.fromList(data);
-      int radius = 1;
+      final glowData = Uint8List.fromList(data);
+      const radius = 1;
       for (int y = radius; y < h - radius; y++) {
         for (int x = radius; x < w - radius; x++) {
           double lumaSum = 0.0;
           for (int ky = -radius; ky <= radius; ky++) {
             for (int kx = -radius; kx <= radius; kx++) {
-              int idx = ((y + ky) * w + (x + kx)) * 4;
-              double rr = data[idx] / 255.0;
-              double gg = data[idx + 1] / 255.0;
-              double bb = data[idx + 2] / 255.0;
+              final idx = ((y + ky) * w + (x + kx)) * 4;
+              final rr = data[idx] / 255.0;
+              final gg = data[idx + 1] / 255.0;
+              final bb = data[idx + 2] / 255.0;
               lumaSum += 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
             }
           }
-          double avgLuma = lumaSum / 9.0;
-          double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
-          double glowAmount = glowMask * _glowIntensity * 0.6;
-          int idx = (y * w + x) * 4;
-          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
-          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          glowData[idx] = r;
-          glowData[idx + 1] = g;
-          glowData[idx + 2] = b;
+          final avgLuma = lumaSum / 9.0;
+          final glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
+          final glowAmount = glowMask * _glowIntensity * 0.6;
+          final idx = (y * w + x) * 4;
+          glowData[idx]     = (data[idx]     + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          glowData[idx + 1] = (data[idx + 1] + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          glowData[idx + 2] = (data[idx + 2] + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
         }
       }
-      data = glowData;
+      data.setAll(0, glowData);
     }
 
     // ---------- 3. TEMPERATURE ----------
     if (_temperature != 6500.0) {
-      double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
-      double rGain = 1.0 + (t * 0.3);
-      double gGain = 1.0 + (t * 0.1) - ((1.0 - t) * 0.1);
-      double bGain = 1.0 + ((1.0 - t) * 0.3);
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] * rGain).toInt().clamp(0, 255);
-          int g = (data[idx + 1] * gGain).toInt().clamp(0, 255);
-          int b = (data[idx + 2] * bGain).toInt().clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-        }
+      final t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
+      final rGain = 1.0 + (t * 0.3);
+      final gGain = 1.0 + (t * 0.1) - ((1.0 - t) * 0.1);
+      final bGain = 1.0 + ((1.0 - t) * 0.3);
+      for (int i = 0; i < data.length; i += 4) {
+        data[i]     = (data[i]     * rGain).toInt().clamp(0, 255);
+        data[i + 1] = (data[i + 1] * gGain).toInt().clamp(0, 255);
+        data[i + 2] = (data[i + 2] * bGain).toInt().clamp(0, 255);
       }
     }
 
     // ---------- 4. HUE ----------
     if (_hue != 0.0) {
-      double hueShift = _hue / 360.0;
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-          double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-          double h = 0, s = 0, v = max;
-          double delta = max - min;
-          if (delta != 0) {
-            s = delta / max;
-            if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
-            else if (g == max) h = (b - r) / delta + 2;
-            else h = (r - g) / delta + 4;
-            h /= 6;
-          }
-          h = (h + hueShift) % 1.0;
-          if (h < 0) h += 1.0;
-          if (s == 0) {
-            r = g = b = v;
-          } else {
-            double h6 = h * 6;
-            int hi = h6.floor();
-            double f = h6 - hi;
-            double pv = v * (1 - s);
-            double q = v * (1 - f * s);
-            double t = v * (1 - (1 - f) * s);
-            switch (hi) {
-              case 0: r = v; g = t; b = pv; break;
-              case 1: r = q; g = v; b = pv; break;
-              case 2: r = pv; g = v; b = t; break;
-              case 3: r = pv; g = q; b = v; break;
-              case 4: r = t; g = pv; b = v; break;
-              case 5: r = v; g = pv; b = q; break;
-              default: r = v; g = t; b = pv; break;
-            }
-          }
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
+      final hueShift = _hue / 360.0;
+      for (int i = 0; i < data.length; i += 4) {
+        double r = data[i] / 255.0;
+        double g = data[i + 1] / 255.0;
+        double b = data[i + 2] / 255.0;
+
+        final max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        final min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        double h = 0, s = 0, v = max;
+        final delta = max - min;
+
+        if (delta != 0) {
+          s = delta / max;
+          if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
+          else if (g == max) h = (b - r) / delta + 2;
+          else h = (r - g) / delta + 4;
+          h /= 6;
         }
+
+        h = (h + hueShift) % 1.0;
+        if (h < 0) h += 1.0;
+
+        if (s == 0) {
+          r = g = b = v;
+        } else {
+          final h6 = h * 6;
+          final hi = h6.floor();
+          final f = h6 - hi;
+          final p = v * (1 - s);
+          final q = v * (1 - f * s);
+          final t = v * (1 - (1 - f) * s);
+          switch (hi) {
+            case 0: r = v; g = t; b = p; break;
+            case 1: r = q; g = v; b = p; break;
+            case 2: r = p; g = v; b = t; break;
+            case 3: r = p; g = q; b = v; break;
+            case 4: r = t; g = p; b = v; break;
+            default: r = v; g = p; b = q; break;
+          }
+        }
+
+        data[i]     = (r * 255).toInt().clamp(0, 255);
+        data[i + 1] = (g * 255).toInt().clamp(0, 255);
+        data[i + 2] = (b * 255).toInt().clamp(0, 255);
       }
     }
 
     // ---------- 5. SATURATION ----------
     if (_saturation != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          r = luma + (r - luma) * _saturation;
-          g = luma + (g - luma) * _saturation;
-          b = luma + (b - luma) * _saturation;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
+      for (int i = 0; i < data.length; i += 4) {
+        final r = data[i] / 255.0;
+        final g = data[i + 1] / 255.0;
+        final b = data[i + 2] / 255.0;
+        final luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        data[i]     = ((luma + (r - luma) * _saturation) * 255).toInt().clamp(0, 255);
+        data[i + 1] = ((luma + (g - luma) * _saturation) * 255).toInt().clamp(0, 255);
+        data[i + 2] = ((luma + (b - luma) * _saturation) * 255).toInt().clamp(0, 255);
       }
     }
 
     // ---------- 6. CONTRAST ----------
     if (_contrast != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          r = ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          g = ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          b = ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
+      for (int i = 0; i < data.length; i += 4) {
+        data[i]     = ((((data[i]     / 255.0) - 0.5) * _contrast + 0.5).clamp(0.0, 1.0) * 255).toInt();
+        data[i + 1] = ((((data[i + 1] / 255.0) - 0.5) * _contrast + 0.5).clamp(0.0, 1.0) * 255).toInt();
+        data[i + 2] = ((((data[i + 2] / 255.0) - 0.5) * _contrast + 0.5).clamp(0.0, 1.0) * 255).toInt();
       }
     }
 
     // ---------- 7. BRIGHTNESS ----------
     if (_brightness != 0.0) {
-      int offset = (_brightness * 255).toInt();
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] + offset).clamp(0, 255);
-          int g = (data[idx + 1] + offset).clamp(0, 255);
-          int b = (data[idx + 2] + offset).clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-        }
+      final offset = (_brightness * 255).toInt();
+      for (int i = 0; i < data.length; i += 4) {
+        data[i]     = (data[i]     + offset).clamp(0, 255);
+        data[i + 1] = (data[i + 1] + offset).clamp(0, 255);
+        data[i + 2] = (data[i + 2] + offset).clamp(0, 255);
       }
     }
 
     // ---------- 8. GAMMA ----------
     if (_gamma != 1.0) {
-      double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          r = math.pow(r, invGamma).toDouble().clamp(0.0, 1.0);
-          g = math.pow(g, invGamma).toDouble().clamp(0.0, 1.0);
-          b = math.pow(b, invGamma).toDouble().clamp(0.0, 1.0);
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
+      final invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
+      for (int i = 0; i < data.length; i += 4) {
+        data[i]     = (math.pow(data[i]     / 255.0, invGamma) * 255).toInt().clamp(0, 255);
+        data[i + 1] = (math.pow(data[i + 1] / 255.0, invGamma) * 255).toInt().clamp(0, 255);
+        data[i + 2] = (math.pow(data[i + 2] / 255.0, invGamma) * 255).toInt().clamp(0, 255);
       }
     }
 
-    // ---------- 9. TEAL & ORANGE (LookMix) ----------
+    // ---------- 9. TEAL & ORANGE ----------
     if (_lookMix > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double tealR = 0.0, tealG = 0.6, tealB = 0.6;
-          double orangeR = 1.0, orangeG = 0.6, orangeB = 0.1;
-          double gradedR = tealR + (orangeR - tealR) * luma;
-          double gradedG = tealG + (orangeG - tealG) * luma;
-          double gradedB = tealB + (orangeB - tealB) * luma;
-          double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
-          double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
-          double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
-          r = r * (1.0 - _lookMix) + mixedR * _lookMix;
-          g = g * (1.0 - _lookMix) + mixedG * _lookMix;
-          b = b * (1.0 - _lookMix) + mixedB * _lookMix;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
+      for (int i = 0; i < data.length; i += 4) {
+        double r = data[i] / 255.0;
+        double g = data[i + 1] / 255.0;
+        double b = data[i + 2] / 255.0;
+        final luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        final gradedR = 0.0 + (1.0 - 0.0) * luma;
+        final gradedG = 0.6 + (0.6 - 0.6) * luma;
+        final gradedB = 0.6 + (0.1 - 0.6) * luma;
+        r = r * (1.0 - _lookMix) + (r * gradedR * 0.7 + r * 0.3) * _lookMix;
+        g = g * (1.0 - _lookMix) + (g * gradedG * 0.7 + g * 0.3) * _lookMix;
+        b = b * (1.0 - _lookMix) + (b * gradedB * 0.7 + b * 0.3) * _lookMix;
+        data[i]     = (r * 255).toInt().clamp(0, 255);
+        data[i + 1] = (g * 255).toInt().clamp(0, 255);
+        data[i + 2] = (b * 255).toInt().clamp(0, 255);
       }
     }
 
@@ -1012,69 +917,65 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_vignette > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          double dx = (x / w - 0.5) * 2.0;
-          double dy = (y / h - 0.5) * 2.0;
-          double dist = math.sqrt(dx * dx + dy * dy);
-          double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
-          int idx = (y * w + x) * 4;
-          int r = (data[idx] * amount).toInt().clamp(0, 255);
-          int g = (data[idx + 1] * amount).toInt().clamp(0, 255);
-          int b = (data[idx + 2] * amount).toInt().clamp(0, 255);
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
+          final dx = (x / w - 0.5) * 2.0;
+          final dy = (y / h - 0.5) * 2.0;
+          final dist = math.sqrt(dx * dx + dy * dy);
+          final amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
+          final idx = (y * w + x) * 4;
+          data[idx]     = (data[idx]     * amount).toInt().clamp(0, 255);
+          data[idx + 1] = (data[idx + 1] * amount).toInt().clamp(0, 255);
+          data[idx + 2] = (data[idx + 2] * amount).toInt().clamp(0, 255);
         }
       }
     }
 
     // ---------- 11. SPLIT TONING ----------
     if (_splitToning > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int idx = (y * w + x) * 4;
-          double r = data[idx] / 255.0;
-          double g = data[idx + 1] / 255.0;
-          double b = data[idx + 2] / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double shadowR = 0.1, shadowG = 0.2, shadowB = 0.6;
-          double highlightR = 1.0, highlightG = 0.5, highlightB = 0.1;
-          double tintR = shadowR + (highlightR - shadowR) * luma;
-          double tintG = shadowG + (highlightG - shadowG) * luma;
-          double tintB = shadowB + (highlightB - shadowB) * luma;
-          r = r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4;
-          g = g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4;
-          b = b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4;
-          data[idx] = (r * 255).toInt().clamp(0, 255);
-          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-        }
+      for (int i = 0; i < data.length; i += 4) {
+        double r = data[i] / 255.0;
+        double g = data[i + 1] / 255.0;
+        double b = data[i + 2] / 255.0;
+        final luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        final tintR = 0.1 + (1.0 - 0.1) * luma;
+        final tintG = 0.2 + (0.5 - 0.2) * luma;
+        final tintB = 0.6 + (0.1 - 0.6) * luma;
+        final amount = _splitToning * 0.4;
+        r = r * (1.0 - amount) + r * tintR * amount;
+        g = g * (1.0 - amount) + g * tintG * amount;
+        b = b * (1.0 - amount) + b * tintB * amount;
+        data[i]     = (r * 255).toInt().clamp(0, 255);
+        data[i + 1] = (g * 255).toInt().clamp(0, 255);
+        data[i + 2] = (b * 255).toInt().clamp(0, 255);
       }
     }
 
     // ---------- 12. FILMIC TONE MAPPING ----------
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        int idx = (y * w + x) * 4;
-        double r = data[idx] / 255.0;
-        double g = data[idx + 1] / 255.0;
-        double b = data[idx + 2] / 255.0;
-        double xr = math.max(0.0, r - 0.004);
-        double xg = math.max(0.0, g - 0.004);
-        double xb = math.max(0.0, b - 0.004);
-        double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
-        double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
-        double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        data[idx] = (r * 255).toInt().clamp(0, 255);
-        data[idx + 1] = (g * 255).toInt().clamp(0, 255);
-        data[idx + 2] = (b * 255).toInt().clamp(0, 255);
-      }
+    for (int i = 0; i < data.length; i += 4) {
+      double r = data[i] / 255.0;
+      double g = data[i + 1] / 255.0;
+      double b = data[i + 2] / 255.0;
+
+      double xr = math.max(0.0, r - 0.004);
+      double xg = math.max(0.0, g - 0.004);
+      double xb = math.max(0.0, b - 0.004);
+
+      double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
+      double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
+      double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
+
+      data[i]     = (math.pow(rr, 1.0 / 2.2) * 255).toInt().clamp(0, 255);
+      data[i + 1] = (math.pow(rg, 1.0 / 2.2) * 255).toInt().clamp(0, 255);
+      data[i + 2] = (math.pow(rb, 1.0 / 2.2) * 255).toInt().clamp(0, 255);
     }
 
-    // Rebuild the image – the byte length determines RGBA
-    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
+    // ★★★ CRITICAL FIX ★★★
+    return img.Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: data.buffer,
+      order: img.ChannelOrder.rgba,
+      numChannels: 4,
+    );
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
@@ -1267,7 +1168,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
-    // ---------- EXPORT DIALOG ----------
+
+  // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -1502,68 +1404,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              ElevatedButton.icon(
-                                onPressed: _isPreviewing ? null : _previewFrame,
-                                icon: const Icon(Icons.image, color: Colors.black),
-                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.cyanAccent,
-                                  foregroundColor: Colors.black,
-                                ),
-                              ),
-                              ElevatedButton(
-                                onPressed: _showExportSheet,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
-                                ),
-                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          const Text('Preview applies CPU grading to the frame',
-                            style: TextStyle(color: Colors.white38, fontSize: 10)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
-        Expanded(
-          child: Slider(
-            value: val.clamp(min, max),
-            min: min,
-            max: max,
-            activeColor: Colors.white,
-            inactiveColor: Colors.grey[800],
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
-      ],
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller?.removeListener(_listener);
-    _controller?.dispose();
-    super.dispose();
-  }
-}
+        
