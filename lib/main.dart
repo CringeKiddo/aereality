@@ -729,7 +729,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
 
-    // Helper to get R,G,B from byte array at pixel (x,y)
     int getR(int x, int y) => data[(y * w + x) * 4];
     int getG(int x, int y) => data[(y * w + x) * 4 + 1];
     int getB(int x, int y) => data[(y * w + x) * 4 + 2];
@@ -1036,14 +1035,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // ✅ FIX: pass data.buffer and specify offset/length
-    return img.Image.fromBytes(
-      width: w,
-      height: h,
-      bytes: data.buffer,
-      offset: 0,
-      length: data.lengthInBytes,
-    );
+    // ✅ FIXED – passes ByteBuffer (data.buffer)
+    return img.Image.fromBytes(w, h, data.buffer);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
