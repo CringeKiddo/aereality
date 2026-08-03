@@ -723,57 +723,33 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (MANUAL RGB→RGBA + BOUNDS SAFETY) ----------
+    // ---------- FULL CPU GRADING (RAW RGBA BYTES – RELIABLE) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Get raw bytes and dimensions
-    Uint8List data = image.getBytes();
+    // Force RGBA format – this gives us 4 bytes per pixel: R,G,B,A
+    Uint8List data = image.getBytes(format: img.Format.rgba);
     int w = image.width, h = image.height;
-
-    // Detect if the image is RGB (3 bytes per pixel) and convert to RGBA (4 bytes)
-    int bytesPerPixel = data.length ~/ (w * h);
-    if (bytesPerPixel == 3) {
-      // Convert RGB to RGBA by adding an alpha channel (opaque)
-      Uint8List newData = Uint8List(w * h * 4);
-      for (int i = 0; i < w * h; i++) {
-        int src = i * 3;
-        int dst = i * 4;
-        newData[dst] = data[src];         // R
-        newData[dst + 1] = data[src + 1]; // G
-        newData[dst + 2] = data[src + 2]; // B
-        newData[dst + 3] = 255;           // A
-      }
-      data = newData;
-    }
-    // Now data is always RGBA (4 bytes per pixel)
     int len = data.length;
 
-    // Safe pixel accessors – clamp to valid range
+    // Helper: get R/G/B from the byte array (ignore alpha)
     int getR(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx];
     }
     int getG(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx + 1];
     }
     int getB(int x, int y) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
       return data[idx + 2];
     }
     void setRGB(int x, int y, int r, int g, int b) {
-      x = x.clamp(0, w - 1);
-      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
-      if (idx + 2 >= len) return; // safety guard
+      if (idx + 2 >= len) return;
       data[idx] = r.clamp(0, 255);
       data[idx + 1] = g.clamp(0, 255);
       data[idx + 2] = b.clamp(0, 255);
+      // keep alpha as is (we never touch it)
     }
 
     // 1. SHARPENING
@@ -1072,7 +1048,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
+    // Rebuild the image – keep the RGBA format
+    return img.Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: data.buffer,
+      format: img.Format.rgba,
+    );
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
