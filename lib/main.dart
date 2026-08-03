@@ -723,17 +723,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (RAW BYTES – FINAL FIX) ----------
+    // ---------- FULL CPU GRADING (WITH BOUNDS SAFETY) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Get raw RGBA bytes
     Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
+    int len = data.length;
 
-    int getR(int x, int y) => data[(y * w + x) * 4];
-    int getG(int x, int y) => data[(y * w + x) * 4 + 1];
-    int getB(int x, int y) => data[(y * w + x) * 4 + 2];
-    void setRGB(int x, int y, int r, int g, int b) {
+    // Safe pixel accessors – clamp to valid range
+    int getR(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
       int idx = (y * w + x) * 4;
+      return data[idx];
+    }
+    int getG(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
+      int idx = (y * w + x) * 4;
+      return data[idx + 1];
+    }
+    int getB(int x, int y) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
+      int idx = (y * w + x) * 4;
+      return data[idx + 2];
+    }
+    void setRGB(int x, int y, int r, int g, int b) {
+      x = x.clamp(0, w - 1);
+      y = y.clamp(0, h - 1);
+      int idx = (y * w + x) * 4;
+      if (idx + 2 >= len) return; // safety guard
       data[idx] = r.clamp(0, 255);
       data[idx + 1] = g.clamp(0, 255);
       data[idx + 2] = b.clamp(0, 255);
@@ -1035,7 +1054,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // ✅ FINAL FIX – named parameters, data.buffer as ByteBuffer
     return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
