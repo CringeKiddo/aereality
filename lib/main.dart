@@ -98,7 +98,6 @@ class ProjectData {
     aspectRatio: json['aspectRatio'] ?? "16:9",
   );
 }
-
 // ---------- HOME SCREEN ----------
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -616,7 +615,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (CPU-BASED) ----------
+
+  // ---------- PREVIEW FRAME (CPU-BASED) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -723,7 +723,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (CORRECTED) ----------
+    // ---------- FULL CPU GRADING (CORRECTED ORDER + MATH) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
@@ -732,82 +732,93 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     int getG(int pixel) => (pixel >> 8) & 0xFF;
     int getB(int pixel) => pixel & 0xFF;
 
-    if (_brightness != 0.0) {
-      final offset = (_brightness * 255).toInt();
+    // 1. SHARPENING (Unsharp Mask) - Matches Shader
+    if (_sharpness > 0) {
+      var sharp = result.clone();
+      for (int y = 1; y < h - 1; y++) {
+        for (int x = 1; x < w - 1; x++) {
+          int p = result.getPixel(x, y).toInt();
+          int r = getR(p), g = getG(p), b = getB(p);
+          int rL = getR(result.getPixel(x - 1, y).toInt());
+          int rR = getR(result.getPixel(x + 1, y).toInt());
+          int rU = getR(result.getPixel(x, y - 1).toInt());
+          int rD = getR(result.getPixel(x, y + 1).toInt());
+          int gL = getG(result.getPixel(x - 1, y).toInt());
+          int gR = getG(result.getPixel(x + 1, y).toInt());
+          int gU = getG(result.getPixel(x, y - 1).toInt());
+          int gD = getG(result.getPixel(x, y + 1).toInt());
+          int bL = getB(result.getPixel(x - 1, y).toInt());
+          int bR = getB(result.getPixel(x + 1, y).toInt());
+          int bU = getB(result.getPixel(x, y - 1).toInt());
+          int bD = getB(result.getPixel(x, y + 1).toInt());
+          int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
+          int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
+          int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
+          r = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
+          g = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
+          b = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
+          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          sharp.setPixel(x, y, color);
+        }
+      }
+      result = sharp;
+    }
+
+    // 2. GLOW / BLOOM (9-tap blur on bright areas) - Matches Shader
+    if (_glowIntensity > 0) {
+      var glow = result.clone();
+      int radius = 1;
+      for (int y = radius; y < h - radius; y++) {
+        for (int x = radius; x < w - radius; x++) {
+          double lumaSum = 0.0;
+          for (int ky = -radius; ky <= radius; ky++) {
+            for (int kx = -radius; kx <= radius; kx++) {
+              int p = result.getPixel(x + kx, y + ky).toInt();
+              double r = getR(p) / 255.0;
+              double g = getG(p) / 255.0;
+              double b = getB(p) / 255.0;
+              lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            }
+          }
+          double avgLuma = lumaSum / 9.0;
+          double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
+          double glowAmount = glowMask * _glowIntensity * 0.6;
+          int p = result.getPixel(x, y).toInt();
+          int r = getR(p), g = getG(p), b = getB(p);
+          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          glow.setPixel(x, y, color);
+        }
+      }
+      result = glow;
+    }
+
+    // 3. TEMPERATURE (White Balance) - Exact Shader Math
+    if (_temperature != 6500.0) {
+      double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
+      double rGain = 1.0 + (t * 0.3);
+      double gGain = 1.0 + (t * 0.1) - ((1.0 - t) * 0.1);
+      double bGain = 1.0 + ((1.0 - t) * 0.3);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          int r = (getR(p) + offset).clamp(0, 255);
-          int g = (getG(p) + offset).clamp(0, 255);
-          int b = (getB(p) + offset).clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
+          int p = result.getPixel(x, y).toInt();
+          int r = (getR(p) * rGain).toInt().clamp(0, 255);
+          int g = (getG(p) * gGain).toInt().clamp(0, 255);
+          int b = (getB(p) * bGain).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          result.setPixel(x, y, color);
         }
       }
     }
 
-    if (_contrast != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          double r = getR(p) / 255.0;
-          double g = getG(p) / 255.0;
-          double b = getB(p) / 255.0;
-          r = ((r - 0.5) * _contrast + 0.5).clamp(0, 1);
-          g = ((g - 0.5) * _contrast + 0.5).clamp(0, 1);
-          b = ((b - 0.5) * _contrast + 0.5).clamp(0, 1);
-          int r8 = (r * 255).toInt();
-          int g8 = (g * 255).toInt();
-          int b8 = (b * 255).toInt();
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
-        }
-      }
-    }
-
-    if (_saturation != 1.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          double r = getR(p) / 255.0;
-          double g = getG(p) / 255.0;
-          double b = getB(p) / 255.0;
-          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          r = luma + (r - luma) * _saturation;
-          g = luma + (g - luma) * _saturation;
-          b = luma + (b - luma) * _saturation;
-          r = r.clamp(0, 1);
-          g = g.clamp(0, 1);
-          b = b.clamp(0, 1);
-          int r8 = (r * 255).toInt();
-          int g8 = (g * 255).toInt();
-          int b8 = (b * 255).toInt();
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
-        }
-      }
-    }
-
-    if (_gamma != 1.0) {
-      double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          double r = getR(p) / 255.0;
-          double g = getG(p) / 255.0;
-          double b = getB(p) / 255.0;
-          r = math.pow(r, gammaInv).toDouble().clamp(0, 1);
-          g = math.pow(g, gammaInv).toDouble().clamp(0, 1);
-          b = math.pow(b, gammaInv).toDouble().clamp(0, 1);
-          int r8 = (r * 255).toInt();
-          int g8 = (g * 255).toInt();
-          int b8 = (b * 255).toInt();
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
-        }
-      }
-    }
-
+    // 4. HUE ROTATION - Matches Shader
     if (_hue != 0.0) {
+      double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
+          int p = result.getPixel(x, y).toInt();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -822,7 +833,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             else h = (r - g) / delta + 4;
             h /= 6;
           }
-          h = (h + (_hue / 360.0)) % 1.0;
+          h = (h + hueShift) % 1.0;
           if (h < 0) h += 1.0;
           if (s == 0) {
             r = g = b = v;
@@ -846,154 +857,169 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
         }
       }
     }
 
-    if (_temperature != 6500.0) {
-      double factor = (_temperature - 6500) / 10000.0 * 0.3;
+    // 5. SATURATION - Matches Shader
+    if (_saturation != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          int r = (getR(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
-          int g = (getG(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
-          int b = (getB(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
-        }
-      }
-    }
-
-    if (_sharpness > 0) {
-      var sharp = result.clone();
-      for (int y = 1; y < h-1; y++) {
-        for (int x = 1; x < w-1; x++) {
-          int p = result.getPixel(x, y).toArgb();
-          int r = getR(p), g = getG(p), b = getB(p);
-          int rL = getR(result.getPixel(x-1, y).toArgb());
-          int rR = getR(result.getPixel(x+1, y).toArgb());
-          int rU = getR(result.getPixel(x, y-1).toArgb());
-          int rD = getR(result.getPixel(x, y+1).toArgb());
-          int gL = getG(result.getPixel(x-1, y).toArgb());
-          int gR = getG(result.getPixel(x+1, y).toArgb());
-          int gU = getG(result.getPixel(x, y-1).toArgb());
-          int gD = getG(result.getPixel(x, y+1).toArgb());
-          int bL = getB(result.getPixel(x-1, y).toArgb());
-          int bR = getB(result.getPixel(x+1, y).toArgb());
-          int bU = getB(result.getPixel(x, y-1).toArgb());
-          int bD = getB(result.getPixel(x, y+1).toArgb());
-          int rSharp = (r - (rL + rR + rU + rD) ~/ 4);
-          int gSharp = (g - (gL + gR + gU + gD) ~/ 4);
-          int bSharp = (b - (bL + bR + bU + bD) ~/ 4);
-          r = (r + (_sharpness * rSharp * 0.5).toInt()).clamp(0, 255);
-          g = (g + (_sharpness * gSharp * 0.5).toInt()).clamp(0, 255);
-          b = (b + (_sharpness * bSharp * 0.5).toInt()).clamp(0, 255);
-          sharp.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
-        }
-      }
-      result = sharp;
-    }
-
-    if (_glowIntensity > 0) {
-      var glow = result.clone();
-      int blurRadius = 2;
-      int kernelSize = 2*blurRadius+1;
-      for (int y = blurRadius; y < h - blurRadius; y++) {
-        for (int x = blurRadius; x < w - blurRadius; x++) {
-          double lumaSum = 0;
-          for (int ky = -blurRadius; ky <= blurRadius; ky++) {
-            for (int kx = -blurRadius; kx <= blurRadius; kx++) {
-              int p = result.getPixel(x+kx, y+ky).toArgb();
-              double r = getR(p)/255.0, g = getG(p)/255.0, b = getB(p)/255.0;
-              double l = 0.2126*r + 0.7152*g + 0.0722*b;
-              lumaSum += l;
-            }
-          }
-          double avgLuma = lumaSum / (kernelSize*kernelSize);
-          double glowAmount = (avgLuma - 0.3) / 0.5;
-          glowAmount = glowAmount.clamp(0, 1);
-          glowAmount *= _glowIntensity * 0.6;
-          int p = result.getPixel(x, y).toArgb();
-          int r = getR(p), g = getG(p), b = getB(p);
-          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          glow.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
-        }
-      }
-      result = glow;
-    }
-
-    if (_vignette > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          double dx = (x / w - 0.5) * 2;
-          double dy = (y / h - 0.5) * 2;
-          double dist = math.sqrt(dx*dx + dy*dy);
-          double amount = 1.0 - (dist * _vignette * 1.5).clamp(0, 1);
-          int p = result.getPixel(x, y).toArgb();
-          int r = (getR(p) * amount).toInt().clamp(0, 255);
-          int g = (getG(p) * amount).toInt().clamp(0, 255);
-          int b = (getB(p) * amount).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
-        }
-      }
-    }
-
-    if (_splitToning > 0.0) {
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
+          int p = result.getPixel(x, y).toInt();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double sr = 0.1, sg = 0.2, sb = 0.6;
-          double hr = 1.0, hg = 0.5, hb = 0.1;
-          double tr = sr + (hr - sr) * luma;
-          double tg = sg + (hg - sg) * luma;
-          double tb = sb + (hb - sb) * luma;
-          r = r * (1 - _splitToning * 0.4) + r * tr * _splitToning * 0.4;
-          g = g * (1 - _splitToning * 0.4) + g * tg * _splitToning * 0.4;
-          b = b * (1 - _splitToning * 0.4) + b * tb * _splitToning * 0.4;
+          r = luma + (r - luma) * _saturation;
+          g = luma + (g - luma) * _saturation;
+          b = luma + (b - luma) * _saturation;
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
         }
       }
     }
 
+    // 6. CONTRAST - Matches Shader
+    if (_contrast != 1.0) {
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y).toInt();
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          r = ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          g = ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          b = ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
+        }
+      }
+    }
+
+    // 7. BRIGHTNESS - Matches Shader
+    if (_brightness != 0.0) {
+      int offset = (_brightness * 255).toInt();
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y).toInt();
+          int r = (getR(p) + offset).clamp(0, 255);
+          int g = (getG(p) + offset).clamp(0, 255);
+          int b = (getB(p) + offset).clamp(0, 255);
+          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          result.setPixel(x, y, color);
+        }
+      }
+    }
+
+    // 8. GAMMA - Matches Shader
+    if (_gamma != 1.0) {
+      double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y).toInt();
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          r = math.pow(r, invGamma).toDouble().clamp(0.0, 1.0);
+          g = math.pow(g, invGamma).toDouble().clamp(0.0, 1.0);
+          b = math.pow(b, invGamma).toDouble().clamp(0.0, 1.0);
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
+        }
+      }
+    }
+
+    // 9. TEAL & ORANGE (LookMix) - Exact Shader Math
     if (_lookMix > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toArgb();
+          int p = result.getPixel(x, y).toInt();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double tr = 0.0, tg = 0.6, tb = 0.6;
-          double or = 1.0, og = 0.6, ob = 0.1;
-          double gr = tr + (or - tr) * luma;
-          double gg = tg + (og - tg) * luma;
-          double gb = tb + (ob - tb) * luma;
-          double rr = r * (1 - 0.7) + r * gr * 0.7;
-          double rg = g * (1 - 0.7) + g * gg * 0.7;
-          double rb = b * (1 - 0.7) + b * gb * 0.7;
-          r = r * (1 - _lookMix) + rr * _lookMix;
-          g = g * (1 - _lookMix) + rg * _lookMix;
-          b = b * (1 - _lookMix) + rb * _lookMix;
+          // Teal (shadows) and Orange (highlights)
+          double tealR = 0.0, tealG = 0.6, tealB = 0.6;
+          double orangeR = 1.0, orangeG = 0.6, orangeB = 0.1;
+          double gradedR = tealR + (orangeR - tealR) * luma;
+          double gradedG = tealG + (orangeG - tealG) * luma;
+          double gradedB = tealB + (orangeB - tealB) * luma;
+          // Apply 70% mix of graded to original, exactly like shader
+          double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
+          double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
+          double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
+          // Then blend with LookMix
+          r = r * (1.0 - _lookMix) + mixedR * _lookMix;
+          g = g * (1.0 - _lookMix) + mixedG * _lookMix;
+          b = b * (1.0 - _lookMix) + mixedB * _lookMix;
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
         }
       }
     }
 
+    // 10. VIGNETTE - Matches Shader
+    if (_vignette > 0.0) {
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          double dx = (x / w - 0.5) * 2.0;
+          double dy = (y / h - 0.5) * 2.0;
+          double dist = math.sqrt(dx * dx + dy * dy);
+          double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
+          int p = result.getPixel(x, y).toInt();
+          int r = (getR(p) * amount).toInt().clamp(0, 255);
+          int g = (getG(p) * amount).toInt().clamp(0, 255);
+          int b = (getB(p) * amount).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          result.setPixel(x, y, color);
+        }
+      }
+    }
+
+    // 11. SPLIT TONING - Matches Shader
+    if (_splitToning > 0.0) {
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          int p = result.getPixel(x, y).toInt();
+          double r = getR(p) / 255.0;
+          double g = getG(p) / 255.0;
+          double b = getB(p) / 255.0;
+          double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          double shadowR = 0.1, shadowG = 0.2, shadowB = 0.6;
+          double highlightR = 1.0, highlightG = 0.5, highlightB = 0.1;
+          double tintR = shadowR + (highlightR - shadowR) * luma;
+          double tintG = shadowG + (highlightG - shadowG) * luma;
+          double tintB = shadowB + (highlightB - shadowB) * luma;
+          r = r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4;
+          g = g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4;
+          b = b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4;
+          int r8 = (r * 255).toInt().clamp(0, 255);
+          int g8 = (g * 255).toInt().clamp(0, 255);
+          int b8 = (b * 255).toInt().clamp(0, 255);
+          int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+          result.setPixel(x, y, color);
+        }
+      }
+    }
+
+    // 12. FILMIC TONE MAPPING (Final) - Matches Shader exactly
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y).toArgb();
+        int p = result.getPixel(x, y).toInt();
         double r = getR(p) / 255.0;
         double g = getG(p) / 255.0;
         double b = getB(p) / 255.0;
@@ -1003,23 +1029,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
         double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
         double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0, 1);
-        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0, 1);
-        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0, 1);
+        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
+        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
+        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
         int r8 = (r * 255).toInt().clamp(0, 255);
         int g8 = (g * 255).toInt().clamp(0, 255);
         int b8 = (b * 255).toInt().clamp(0, 255);
-        result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
-      }
-    }
-
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y).toArgb();
-        int r = getR(p).clamp(0, 255);
-        int g = getG(p).clamp(0, 255);
-        int b = getB(p).clamp(0, 255);
-        result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
+        int color = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+        result.setPixel(x, y, color);
       }
     }
 
