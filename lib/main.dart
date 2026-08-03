@@ -616,7 +616,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME ----------
+    // ---------- PREVIEW FRAME (CPU-BASED – GUARANTEED) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -628,6 +628,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final dir = await getTemporaryDirectory();
       final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
       
+      // Extract frame using FFmpeg
       final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
       final session = await FFmpegKit.execute(cmd);
       final returnCode = await session.getReturnCode();
@@ -651,15 +652,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final bytes = await file.readAsBytes();
       final image = img.decodeImage(bytes);
       if (image == null) throw Exception('Failed to decode image');
-      final uiImage = await _convertToUiImage(image);
+      
+      // Apply CPU grading
+      final gradedImage = _applyGradingToImage(image);
+      
+      // Convert graded img.Image to ui.Image for display
+      final uiImage = await _convertToUiImage(gradedImage);
       if (uiImage == null) throw Exception('Failed to convert to UI image');
       if (uiImage.width == 0 || uiImage.height == 0) {
         throw Exception('Converted image has zero size');
       }
       
-      final program = await ui.FragmentProgram.fromAsset('shaders/aereality_core.frag');
-      if (!mounted) return;
-      
+      // Show in dialog (no shader – just the CPU-graded image)
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -672,19 +676,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             child: Column(
               children: [
                 Expanded(
-                  child: CustomPaint(
-                    painter: ShaderPreviewPainter(
-                      image: uiImage, program: program,
-                      brightness: _brightness, saturation: _saturation, contrast: _contrast,
-                      sharpness: _sharpness, gamma: _gamma, hue: _hue,
-                      temperature: _temperature, glowIntensity: _glowIntensity, lookMix: _lookMix,
-                      vignette: _vignette, splitToning: _splitToning,
-                    ),
-                    size: Size(uiImage.width.toDouble(), uiImage.height.toDouble()),
+                  child: Image.memory(
+                    await _uiImageToPng(uiImage),
+                    fit: BoxFit.contain,
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text('Frame at ${timestamp}s', style: const TextStyle(color: Colors.white54)),
+                Text('Frame at ${timestamp}s (CPU Graded)', style: const TextStyle(color: Colors.white54)),
                 ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('Close Preview')),
               ],
             ),
@@ -698,6 +696,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     } finally {
       setState(() => _isPreviewing = false);
     }
+  }
+
+  // Helper to convert ui.Image to PNG bytes for display
+  Future<Uint8List> _uiImageToPng(ui.Image image) async {
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 
   // ---------- CONVERT FUNCTION (for preview – uses PNG) ----------
@@ -730,18 +734,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- SOFTWARE GRADING (DIRECT PIXEL MANIPULATION) ----------
+    // ---------- FULL CPU GRADING (EXACT SHADER TRANSLATION) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a copy using clone()
+    // Work on a copy
     var result = image.clone();
     int w = result.width, h = result.height;
 
-    // Helper to extract components from ARGB pixel (0xAARRGGBB)
+    // Helper to extract RGB from ARGB pixel (0xAARRGGBB)
     int getR(int pixel) => (pixel >> 16) & 0xFF;
     int getG(int pixel) => (pixel >> 8) & 0xFF;
     int getB(int pixel) => pixel & 0xFF;
 
-    // 1. Brightness
+    // 1. BRIGHTNESS
     if (_brightness != 0.0) {
       final offset = (_brightness * 255).toInt();
       for (int i = 0; i < result.length; i++) {
@@ -753,7 +757,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 2. Contrast
+    // 2. CONTRAST
     if (_contrast != 1.0) {
       for (int i = 0; i < result.length; i++) {
         int p = result[i];
@@ -770,7 +774,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 3. Saturation
+    // 3. SATURATION
     if (_saturation != 1.0) {
       for (int i = 0; i < result.length; i++) {
         int p = result[i];
@@ -791,7 +795,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 4. Gamma
+    // 4. GAMMA
     if (_gamma != 1.0) {
       double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int i = 0; i < result.length; i++) {
@@ -809,7 +813,56 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 5. Temperature (simplified)
+    // 5. HUE ROTATION (HSV)
+    if (_hue != 0.0) {
+      for (int i = 0; i < result.length; i++) {
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
+        // RGB -> HSV
+        double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        double h = 0, s = 0, v = max;
+        double delta = max - min;
+        if (delta != 0) {
+          s = delta / max;
+          if (r == max) h = (g - b) / delta + (g < b ? 6 : 0);
+          else if (g == max) h = (b - r) / delta + 2;
+          else h = (r - g) / delta + 4;
+          h /= 6;
+        }
+        // Rotate hue
+        h = (h + (_hue / 360.0)) % 1.0;
+        if (h < 0) h += 1.0;
+        // HSV -> RGB
+        if (s == 0) {
+          r = g = b = v;
+        } else {
+          double h6 = h * 6;
+          int hi = h6.floor();
+          double f = h6 - hi;
+          double pv = v * (1 - s);
+          double q = v * (1 - f * s);
+          double t = v * (1 - (1 - f) * s);
+          switch (hi) {
+            case 0: r = v; g = t; b = pv; break;
+            case 1: r = q; g = v; b = pv; break;
+            case 2: r = pv; g = v; b = t; break;
+            case 3: r = pv; g = q; b = v; break;
+            case 4: r = t; g = pv; b = v; break;
+            case 5: r = v; g = pv; b = q; break;
+            default: r = v; g = t; b = pv; break;
+          }
+        }
+        int r8 = (r * 255).toInt().clamp(0, 255);
+        int g8 = (g * 255).toInt().clamp(0, 255);
+        int b8 = (b * 255).toInt().clamp(0, 255);
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      }
+    }
+
+    // 6. TEMPERATURE (simplified)
     if (_temperature != 6500.0) {
       double factor = (_temperature - 6500) / 10000.0 * 0.3;
       for (int i = 0; i < result.length; i++) {
@@ -821,7 +874,70 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 6. Vignette
+    // 7. SHARPENING (Unsharp Mask – simple 3x3)
+    if (_sharpness > 0) {
+      var sharp = result.clone();
+      for (int y = 1; y < h-1; y++) {
+        for (int x = 1; x < w-1; x++) {
+          int p = result.getPixel(x, y);
+          int r = getR(p), g = getG(p), b = getB(p);
+          // Neighbors
+          int rL = getR(result.getPixel(x-1, y));
+          int rR = getR(result.getPixel(x+1, y));
+          int rU = getR(result.getPixel(x, y-1));
+          int rD = getR(result.getPixel(x, y+1));
+          int gL = getG(result.getPixel(x-1, y));
+          int gR = getG(result.getPixel(x+1, y));
+          int gU = getG(result.getPixel(x, y-1));
+          int gD = getG(result.getPixel(x, y+1));
+          int bL = getB(result.getPixel(x-1, y));
+          int bR = getB(result.getPixel(x+1, y));
+          int bU = getB(result.getPixel(x, y-1));
+          int bD = getB(result.getPixel(x, y+1));
+          int rSharp = (r - (rL + rR + rU + rD) ~/ 4);
+          int gSharp = (g - (gL + gR + gU + gD) ~/ 4);
+          int bSharp = (b - (bL + bR + bU + bD) ~/ 4);
+          r = (r + (_sharpness * rSharp * 0.5).toInt()).clamp(0, 255);
+          g = (g + (_sharpness * gSharp * 0.5).toInt()).clamp(0, 255);
+          b = (b + (_sharpness * bSharp * 0.5).toInt()).clamp(0, 255);
+          sharp.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+        }
+      }
+      result = sharp;
+    }
+
+    // 8. GLOW (Box blur on luma with threshold)
+    if (_glowIntensity > 0) {
+      var glow = result.clone();
+      int blurRadius = 2;
+      int kernelSize = 2*blurRadius+1;
+      for (int y = blurRadius; y < h - blurRadius; y++) {
+        for (int x = blurRadius; x < w - blurRadius; x++) {
+          double lumaSum = 0;
+          for (int ky = -blurRadius; ky <= blurRadius; ky++) {
+            for (int kx = -blurRadius; kx <= blurRadius; kx++) {
+              int p = result.getPixel(x+kx, y+ky);
+              double r = getR(p)/255.0, g = getG(p)/255.0, b = getB(p)/255.0;
+              double l = 0.2126*r + 0.7152*g + 0.0722*b;
+              lumaSum += l;
+            }
+          }
+          double avgLuma = lumaSum / (kernelSize*kernelSize);
+          double glowAmount = (avgLuma - 0.3) / 0.5; // smoothstep 0.3-0.8
+          glowAmount = glowAmount.clamp(0, 1);
+          glowAmount *= _glowIntensity * 0.6;
+          int p = result.getPixel(x, y);
+          int r = getR(p), g = getG(p), b = getB(p);
+          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          glow.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+        }
+      }
+      result = glow;
+    }
+
+    // 9. VIGNETTE
     if (_vignette > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -838,12 +954,94 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // (Sharpness, Glow, Split Toning can be added later)
+    // 10. SPLIT TONING (shadows -> blue, highlights -> orange)
+    if (_splitToning > 0.0) {
+      for (int i = 0; i < result.length; i++) {
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
+        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        // shadow tint: (0.1, 0.2, 0.6) ; highlight tint: (1.0, 0.5, 0.1)
+        double sr = 0.1, sg = 0.2, sb = 0.6;
+        double hr = 1.0, hg = 0.5, hb = 0.1;
+        // mix based on luma
+        double tr = sr + (hr - sr) * luma;
+        double tg = sg + (hg - sg) * luma;
+        double tb = sb + (hb - sb) * luma;
+        // apply splitToning strength
+        r = r * (1 - _splitToning * 0.4) + r * tr * _splitToning * 0.4;
+        g = g * (1 - _splitToning * 0.4) + g * tg * _splitToning * 0.4;
+        b = b * (1 - _splitToning * 0.4) + b * tb * _splitToning * 0.4;
+        int r8 = (r * 255).toInt().clamp(0, 255);
+        int g8 = (g * 255).toInt().clamp(0, 255);
+        int b8 = (b * 255).toInt().clamp(0, 255);
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      }
+    }
+
+    // 11. TEAL & ORANGE LOOK (Magic Bullet style)
+    if (_lookMix > 0.0) {
+      for (int i = 0; i < result.length; i++) {
+        int p = result[i];
+        double r = getR(p) / 255.0;
+        double g = getG(p) / 255.0;
+        double b = getB(p) / 255.0;
+        double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        // teal: (0.0, 0.6, 0.6) ; orange: (1.0, 0.6, 0.1)
+        double tr = 0.0, tg = 0.6, tb = 0.6;
+        double or = 1.0, og = 0.6, ob = 0.1;
+        double gr = tr + (or - tr) * luma;
+        double gg = tg + (og - tg) * luma;
+        double gb = tb + (ob - tb) * luma;
+        // result = mix(color, color * graded, 0.7)
+        double rr = r * (1 - 0.7) + r * gr * 0.7;
+        double rg = g * (1 - 0.7) + g * gg * 0.7;
+        double rb = b * (1 - 0.7) + b * gb * 0.7;
+        // blend with lookMix
+        r = r * (1 - _lookMix) + rr * _lookMix;
+        g = g * (1 - _lookMix) + rg * _lookMix;
+        b = b * (1 - _lookMix) + rb * _lookMix;
+        int r8 = (r * 255).toInt().clamp(0, 255);
+        int g8 = (g * 255).toInt().clamp(0, 255);
+        int b8 = (b * 255).toInt().clamp(0, 255);
+        result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+      }
+    }
+
+    // 12. FILMIC TONE MAP (Reinhard-like)
+    for (int i = 0; i < result.length; i++) {
+      int p = result[i];
+      double r = getR(p) / 255.0;
+      double g = getG(p) / 255.0;
+      double b = getB(p) / 255.0;
+      double xr = math.max(0.0, r - 0.004);
+      double xg = math.max(0.0, g - 0.004);
+      double xb = math.max(0.0, b - 0.004);
+      double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
+      double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
+      double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
+      r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0, 1);
+      g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0, 1);
+      b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0, 1);
+      int r8 = (r * 255).toInt().clamp(0, 255);
+      int g8 = (g * 255).toInt().clamp(0, 255);
+      int b8 = (b * 255).toInt().clamp(0, 255);
+      result[i] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+    }
+
+    // Clamp final (redundant but safe)
+    for (int i = 0; i < result.length; i++) {
+      int p = result[i];
+      int r = getR(p).clamp(0, 255);
+      int g = getG(p).clamp(0, 255);
+      int b = getB(p).clamp(0, 255);
+      result[i] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    }
 
     return result;
   }
-
-  // ---------- FULL EXPORT (SOFTWARE GRADING) ----------
+    // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -863,7 +1061,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Exporting...', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const Text('Exporting... (CPU Grading)', style: TextStyle(color: Colors.white, fontSize: 16)),
             const SizedBox(height: 16),
             ValueListenableBuilder<double>(
               valueListenable: progressNotifier,
@@ -923,7 +1121,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               throw Exception('Failed to decode frame: ${file.path}');
             }
 
-            // Apply grading directly on img.Image
+            // Apply CPU grading
             final graded = _applyGradingToImage(decoded);
 
             // Encode to PNG
@@ -1107,7 +1305,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Full 32-bit export may take several minutes.', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  const Text('Full 32-bit CPU export may take several minutes.', style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             );
@@ -1295,7 +1493,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             ],
                           ),
                           const SizedBox(height: 8),
-                          const Text('Preview applies shader to the frame on your timeline',
+                          const Text('Preview applies CPU grading to the frame',
                             style: TextStyle(color: Colors.white38, fontSize: 10)),
                         ],
                       ),
@@ -1335,73 +1533,5 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _controller?.removeListener(_listener);
     _controller?.dispose();
     super.dispose();
-  }
-}
-
-// ---------- SHADER PREVIEW PAINTER (for Preview Frame) ----------
-class ShaderPreviewPainter extends CustomPainter {
-  final ui.Image image;
-  final ui.FragmentProgram program;
-  final double brightness, saturation, contrast, sharpness, gamma, hue;
-  final double temperature, glowIntensity, lookMix, vignette, splitToning;
-
-  const ShaderPreviewPainter({
-    required this.image,
-    required this.program,
-    required this.brightness,
-    required this.saturation,
-    required this.contrast,
-    required this.sharpness,
-    required this.gamma,
-    required this.hue,
-    required this.temperature,
-    required this.glowIntensity,
-    required this.lookMix,
-    required this.vignette,
-    required this.splitToning,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final shader = program.fragmentShader();
-
-    // Sampler first (index 0)
-    shader.setImageSampler(0, image);
-
-    // uResolution (floats at 1 and 2)
-    shader.setFloat(1, size.width);
-    shader.setFloat(2, size.height);
-
-    // Sliders (indices 3..13)
-    shader.setFloat(3, brightness);
-    shader.setFloat(4, saturation);
-    shader.setFloat(5, contrast);
-    shader.setFloat(6, sharpness);
-    shader.setFloat(7, gamma);
-    shader.setFloat(8, hue);
-    shader.setFloat(9, temperature);
-    shader.setFloat(10, glowIntensity);
-    shader.setFloat(11, lookMix);
-    shader.setFloat(12, vignette);
-    shader.setFloat(13, splitToning);
-
-    final paint = Paint()..shader = shader;
-    canvas.drawRect(Offset.zero & size, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant ShaderPreviewPainter oldDelegate) {
-    return oldDelegate.image != image ||
-        oldDelegate.brightness != brightness ||
-        oldDelegate.saturation != saturation ||
-        oldDelegate.contrast != contrast ||
-        oldDelegate.sharpness != sharpness ||
-        oldDelegate.gamma != gamma ||
-        oldDelegate.hue != hue ||
-        oldDelegate.temperature != temperature ||
-        oldDelegate.glowIntensity != glowIntensity ||
-        oldDelegate.lookMix != lookMix ||
-        oldDelegate.vignette != vignette ||
-        oldDelegate.splitToning != splitToning;
   }
 }
