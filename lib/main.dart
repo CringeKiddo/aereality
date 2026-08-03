@@ -1036,8 +1036,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // Create a new image – format auto-detected as RGBA
-    return img.Image.fromBytes(w, h, data);
+    // Create a new image – named parameters required for image 4.8.0
+    return img.Image.fromBytes(width: w, height: h, bytes: data);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
