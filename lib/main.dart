@@ -723,8 +723,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (WITH BOUNDS SAFETY) ----------
+    // ---------- FULL CPU GRADING (WITH RGBA CONVERSION + BOUNDS SAFETY) ----------
   img.Image _applyGradingToImage(img.Image image) {
+    // Ensure we have RGBA format (4 bytes per pixel)
+    if (image.format != img.Format.rgba) {
+      image = img.convert(image, format: img.Format.rgba);
+    }
+
     Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
     int len = data.length;
