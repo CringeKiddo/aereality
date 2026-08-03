@@ -723,7 +723,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (CORRECTED API) ----------
+    // ---------- FULL CPU GRADING (CORRECTED API v4.8.0) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
@@ -733,13 +733,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     int getG(int pixel) => (pixel >> 8) & 0xFF;
     int getB(int pixel) => pixel & 0xFF;
 
-    // Helper: set pixel from r,g,b (creates a Color)
+    // Helper: set pixel with r,g,b using Color constructor
     void setPixel(img.Image img, int x, int y, int r, int g, int b) {
       r = r.clamp(0, 255);
       g = g.clamp(0, 255);
       b = b.clamp(0, 255);
-      int value = (0xFF << 24) | (r << 16) | (g << 8) | b;
-      img.setPixel(x, y, img.Color(value));
+      img.setPixel(x, y, img.Color(r, g, b));
     }
 
     // 1. SHARPENING (Unsharp Mask)
@@ -747,20 +746,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       var sharp = result.clone();
       for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           int r = getR(p), g = getG(p), b = getB(p);
-          int rL = getR(result.getPixel(x - 1, y).toColor().value);
-          int rR = getR(result.getPixel(x + 1, y).toColor().value);
-          int rU = getR(result.getPixel(x, y - 1).toColor().value);
-          int rD = getR(result.getPixel(x, y + 1).toColor().value);
-          int gL = getG(result.getPixel(x - 1, y).toColor().value);
-          int gR = getG(result.getPixel(x + 1, y).toColor().value);
-          int gU = getG(result.getPixel(x, y - 1).toColor().value);
-          int gD = getG(result.getPixel(x, y + 1).toColor().value);
-          int bL = getB(result.getPixel(x - 1, y).toColor().value);
-          int bR = getB(result.getPixel(x + 1, y).toColor().value);
-          int bU = getB(result.getPixel(x, y - 1).toColor().value);
-          int bD = getB(result.getPixel(x, y + 1).toColor().value);
+          int rL = getR(result.getPixel(x - 1, y).color.value);
+          int rR = getR(result.getPixel(x + 1, y).color.value);
+          int rU = getR(result.getPixel(x, y - 1).color.value);
+          int rD = getR(result.getPixel(x, y + 1).color.value);
+          int gL = getG(result.getPixel(x - 1, y).color.value);
+          int gR = getG(result.getPixel(x + 1, y).color.value);
+          int gU = getG(result.getPixel(x, y - 1).color.value);
+          int gD = getG(result.getPixel(x, y + 1).color.value);
+          int bL = getB(result.getPixel(x - 1, y).color.value);
+          int bR = getB(result.getPixel(x + 1, y).color.value);
+          int bU = getB(result.getPixel(x, y - 1).color.value);
+          int bD = getB(result.getPixel(x, y + 1).color.value);
           int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
           int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
           int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
@@ -773,7 +772,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       result = sharp;
     }
 
-    // 2. GLOW / BLOOM
+    // 2. GLOW / BLOOM (9-tap box blur on bright areas)
     if (_glowIntensity > 0) {
       var glow = result.clone();
       int radius = 1;
@@ -782,7 +781,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double lumaSum = 0.0;
           for (int ky = -radius; ky <= radius; ky++) {
             for (int kx = -radius; kx <= radius; kx++) {
-              int p = result.getPixel(x + kx, y + ky).toColor().value;
+              int p = result.getPixel(x + kx, y + ky).color.value;
               double rr = getR(p) / 255.0;
               double gg = getG(p) / 255.0;
               double bb = getB(p) / 255.0;
@@ -792,7 +791,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double avgLuma = lumaSum / 9.0;
           double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
           double glowAmount = glowMask * _glowIntensity * 0.6;
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           int r = getR(p), g = getG(p), b = getB(p);
           r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
           g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
@@ -803,7 +802,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       result = glow;
     }
 
-    // 3. TEMPERATURE
+    // 3. TEMPERATURE (White Balance) – exact shader math
     if (_temperature != 6500.0) {
       double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
       double rGain = 1.0 + (t * 0.3);
@@ -811,7 +810,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       double bGain = 1.0 + ((1.0 - t) * 0.3);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           int r = (getR(p) * rGain).toInt().clamp(0, 255);
           int g = (getG(p) * gGain).toInt().clamp(0, 255);
           int b = (getB(p) * bGain).toInt().clamp(0, 255);
@@ -825,7 +824,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -873,7 +872,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_saturation != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -893,7 +892,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_contrast != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -913,7 +912,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int offset = (_brightness * 255).toInt();
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           int r = (getR(p) + offset).clamp(0, 255);
           int g = (getG(p) + offset).clamp(0, 255);
           int b = (getB(p) + offset).clamp(0, 255);
@@ -927,7 +926,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -942,11 +941,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 9. TEAL & ORANGE (LookMix)
+    // 9. TEAL & ORANGE (LookMix) – exact shader math
     if (_lookMix > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -978,7 +977,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double dy = (y / h - 0.5) * 2.0;
           double dist = math.sqrt(dx * dx + dy * dy);
           double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           int r = (getR(p) * amount).toInt().clamp(0, 255);
           int g = (getG(p) * amount).toInt().clamp(0, 255);
           int b = (getB(p) * amount).toInt().clamp(0, 255);
@@ -991,7 +990,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_splitToning > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y).toColor().value;
+          int p = result.getPixel(x, y).color.value;
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -1012,10 +1011,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 12. FILMIC TONE MAPPING
+    // 12. FILMIC TONE MAPPING (final clamp)
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y).toColor().value;
+        int p = result.getPixel(x, y).color.value;
         double r = getR(p) / 255.0;
         double g = getG(p) / 255.0;
         double b = getB(p) / 255.0;
