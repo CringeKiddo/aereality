@@ -616,7 +616,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- PREVIEW FRAME (CPU-BASED – GUARANTEED) ----------
+    // ---------- PREVIEW FRAME (CPU-BASED) ----------
   Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -628,7 +628,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final dir = await getTemporaryDirectory();
       final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
       
-      // Extract frame using FFmpeg
       final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
       final session = await FFmpegKit.execute(cmd);
       final returnCode = await session.getReturnCode();
@@ -653,17 +652,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final image = img.decodeImage(bytes);
       if (image == null) throw Exception('Failed to decode image');
       
-      // Apply CPU grading
       final gradedImage = _applyGradingToImage(image);
       
-      // Convert graded img.Image to ui.Image for display
       final uiImage = await _convertToUiImage(gradedImage);
       if (uiImage == null) throw Exception('Failed to convert to UI image');
       if (uiImage.width == 0 || uiImage.height == 0) {
         throw Exception('Converted image has zero size');
       }
       
-      // Show in dialog using RawImage (no async PNG conversion)
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -698,7 +694,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- CONVERT FUNCTION (for preview – uses PNG) ----------
+  // ---------- CONVERT FUNCTION (for preview) ----------
   Future<ui.Image?> _convertToUiImage(img.Image image) async {
     if (image.width == 0 || image.height == 0) {
       throw Exception('Invalid image dimensions: ${image.width}x${image.height}');
@@ -718,7 +714,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     } catch (e) {
       debugPrint('❌ PNG conversion failed: $e');
-      // Fallback red
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
       final size = Size(image.width.toDouble(), image.height.toDouble());
@@ -728,36 +723,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (EXACT SHADER TRANSLATION) ----------
+    // ---------- FULL CPU GRADING (CORRECTED) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a copy
     var result = image.clone();
     int w = result.width, h = result.height;
 
-    // Helper to extract RGB from ARGB pixel (0xAARRGGBB)
     int getR(int pixel) => (pixel >> 16) & 0xFF;
     int getG(int pixel) => (pixel >> 8) & 0xFF;
     int getB(int pixel) => pixel & 0xFF;
 
-    // 1. BRIGHTNESS
     if (_brightness != 0.0) {
       final offset = (_brightness * 255).toInt();
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           int r = (getR(p) + offset).clamp(0, 255);
           int g = (getG(p) + offset).clamp(0, 255);
           int b = (getB(p) + offset).clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
         }
       }
     }
 
-    // 2. CONTRAST
     if (_contrast != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -767,16 +758,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt();
           int g8 = (g * 255).toInt();
           int b8 = (b * 255).toInt();
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 3. SATURATION
     if (_saturation != 1.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -790,17 +780,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt();
           int g8 = (g * 255).toInt();
           int b8 = (b * 255).toInt();
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 4. GAMMA
     if (_gamma != 1.0) {
       double gammaInv = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -810,20 +799,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt();
           int g8 = (g * 255).toInt();
           int b8 = (b * 255).toInt();
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 5. HUE ROTATION (HSV)
     if (_hue != 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
-          // RGB -> HSV
           double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
           double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
           double h = 0, s = 0, v = max;
@@ -835,10 +822,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             else h = (r - g) / delta + 4;
             h /= 6;
           }
-          // Rotate hue
           h = (h + (_hue / 360.0)) % 1.0;
           if (h < 0) h += 1.0;
-          // HSV -> RGB
           if (s == 0) {
             r = g = b = v;
           } else {
@@ -861,57 +846,54 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 6. TEMPERATURE (simplified)
     if (_temperature != 6500.0) {
       double factor = (_temperature - 6500) / 10000.0 * 0.3;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           int r = (getR(p) * (1 + factor * 0.3)).toInt().clamp(0, 255);
           int g = (getG(p) * (1 + factor * 0.1)).toInt().clamp(0, 255);
           int b = (getB(p) * (1 - factor * 0.3)).toInt().clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
         }
       }
     }
 
-    // 7. SHARPENING (Unsharp Mask – simple 3x3)
     if (_sharpness > 0) {
       var sharp = result.clone();
       for (int y = 1; y < h-1; y++) {
         for (int x = 1; x < w-1; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           int r = getR(p), g = getG(p), b = getB(p);
-          int rL = getR(result.getPixel(x-1, y));
-          int rR = getR(result.getPixel(x+1, y));
-          int rU = getR(result.getPixel(x, y-1));
-          int rD = getR(result.getPixel(x, y+1));
-          int gL = getG(result.getPixel(x-1, y));
-          int gR = getG(result.getPixel(x+1, y));
-          int gU = getG(result.getPixel(x, y-1));
-          int gD = getG(result.getPixel(x, y+1));
-          int bL = getB(result.getPixel(x-1, y));
-          int bR = getB(result.getPixel(x+1, y));
-          int bU = getB(result.getPixel(x, y-1));
-          int bD = getB(result.getPixel(x, y+1));
+          int rL = getR(result.getPixel(x-1, y).toArgb());
+          int rR = getR(result.getPixel(x+1, y).toArgb());
+          int rU = getR(result.getPixel(x, y-1).toArgb());
+          int rD = getR(result.getPixel(x, y+1).toArgb());
+          int gL = getG(result.getPixel(x-1, y).toArgb());
+          int gR = getG(result.getPixel(x+1, y).toArgb());
+          int gU = getG(result.getPixel(x, y-1).toArgb());
+          int gD = getG(result.getPixel(x, y+1).toArgb());
+          int bL = getB(result.getPixel(x-1, y).toArgb());
+          int bR = getB(result.getPixel(x+1, y).toArgb());
+          int bU = getB(result.getPixel(x, y-1).toArgb());
+          int bD = getB(result.getPixel(x, y+1).toArgb());
           int rSharp = (r - (rL + rR + rU + rD) ~/ 4);
           int gSharp = (g - (gL + gR + gU + gD) ~/ 4);
           int bSharp = (b - (bL + bR + bU + bD) ~/ 4);
           r = (r + (_sharpness * rSharp * 0.5).toInt()).clamp(0, 255);
           g = (g + (_sharpness * gSharp * 0.5).toInt()).clamp(0, 255);
           b = (b + (_sharpness * bSharp * 0.5).toInt()).clamp(0, 255);
-          sharp.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+          sharp.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
         }
       }
       result = sharp;
     }
 
-    // 8. GLOW (Box blur on luma with threshold)
     if (_glowIntensity > 0) {
       var glow = result.clone();
       int blurRadius = 2;
@@ -921,7 +903,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double lumaSum = 0;
           for (int ky = -blurRadius; ky <= blurRadius; ky++) {
             for (int kx = -blurRadius; kx <= blurRadius; kx++) {
-              int p = result.getPixel(x+kx, y+ky);
+              int p = result.getPixel(x+kx, y+ky).toArgb();
               double r = getR(p)/255.0, g = getG(p)/255.0, b = getB(p)/255.0;
               double l = 0.2126*r + 0.7152*g + 0.0722*b;
               lumaSum += l;
@@ -931,18 +913,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double glowAmount = (avgLuma - 0.3) / 0.5;
           glowAmount = glowAmount.clamp(0, 1);
           glowAmount *= _glowIntensity * 0.6;
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           int r = getR(p), g = getG(p), b = getB(p);
           r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
           g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
           b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
-          glow.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+          glow.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
         }
       }
       result = glow;
     }
 
-    // 9. VIGNETTE
     if (_vignette > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -950,20 +931,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double dy = (y / h - 0.5) * 2;
           double dist = math.sqrt(dx*dx + dy*dy);
           double amount = 1.0 - (dist * _vignette * 1.5).clamp(0, 1);
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           int r = (getR(p) * amount).toInt().clamp(0, 255);
           int g = (getG(p) * amount).toInt().clamp(0, 255);
           int b = (getB(p) * amount).toInt().clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
         }
       }
     }
 
-    // 10. SPLIT TONING (shadows -> blue, highlights -> orange)
     if (_splitToning > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -979,16 +959,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 11. TEAL & ORANGE LOOK (Magic Bullet style)
     if (_lookMix > 0.0) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          int p = result.getPixel(x, y);
+          int p = result.getPixel(x, y).toArgb();
           double r = getR(p) / 255.0;
           double g = getG(p) / 255.0;
           double b = getB(p) / 255.0;
@@ -1007,15 +986,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int r8 = (r * 255).toInt().clamp(0, 255);
           int g8 = (g * 255).toInt().clamp(0, 255);
           int b8 = (b * 255).toInt().clamp(0, 255);
-          result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+          result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
         }
       }
     }
 
-    // 12. FILMIC TONE MAP (Reinhard-like)
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y);
+        int p = result.getPixel(x, y).toArgb();
         double r = getR(p) / 255.0;
         double g = getG(p) / 255.0;
         double b = getB(p) / 255.0;
@@ -1031,18 +1009,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         int r8 = (r * 255).toInt().clamp(0, 255);
         int g8 = (g * 255).toInt().clamp(0, 255);
         int b8 = (b * 255).toInt().clamp(0, 255);
-        result.setPixel(x, y, (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8);
+        result.setPixel(x, y, img.ColorArgb(0xFF, r8, g8, b8));
       }
     }
 
-    // Final clamp (redundant but safe)
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        int p = result.getPixel(x, y);
+        int p = result.getPixel(x, y).toArgb();
         int r = getR(p).clamp(0, 255);
         int g = getG(p).clamp(0, 255);
         int b = getB(p).clamp(0, 255);
-        result.setPixel(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+        result.setPixel(x, y, img.ColorArgb(0xFF, r, g, b));
       }
     }
 
@@ -1115,7 +1092,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int processedFrames = 0;
       stopwatch.start();
 
-      const batchSize = 5; // small batches to manage memory
+      const batchSize = 5;
 
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
@@ -1128,10 +1105,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               throw Exception('Failed to decode frame: ${file.path}');
             }
 
-            // Apply CPU grading
             final graded = _applyGradingToImage(decoded);
 
-            // Encode to PNG
             final pngBytes = img.encodePng(graded);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes);
@@ -1515,7 +1490,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- SLIDER HELPER ----------
   Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
     return Row(
       children: [
