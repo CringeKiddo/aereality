@@ -723,12 +723,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (RAW BYTES – 100% RELIABLE) ----------
+    // ---------- FULL CPU GRADING (RAW BYTES – FINAL FIX) ----------
   img.Image _applyGradingToImage(img.Image image) {
     // Get raw RGBA bytes
-    Uint8List data = image.getBytes(); // returns RGBA
+    Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
-    int length = data.length;
 
     // Helper to get R,G,B from byte array at pixel (x,y)
     int getR(int x, int y) => data[(y * w + x) * 4];
@@ -739,10 +738,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data[idx] = r.clamp(0, 255);
       data[idx + 1] = g.clamp(0, 255);
       data[idx + 2] = b.clamp(0, 255);
-      // Alpha stays as is (we keep it)
     }
 
-    // 1. SHARPENING (Unsharp Mask)
+    // 1. SHARPENING
     if (_sharpness > 0) {
       Uint8List sharpData = Uint8List.fromList(data);
       for (int y = 1; y < h - 1; y++) {
@@ -775,7 +773,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data = sharpData;
     }
 
-    // 2. GLOW / BLOOM (9‑tap box blur on bright areas)
+    // 2. GLOW
     if (_glowIntensity > 0) {
       Uint8List glowData = Uint8List.fromList(data);
       int radius = 1;
@@ -826,7 +824,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 4. HUE ROTATION
+    // 4. HUE
     if (_hue != 0.0) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
@@ -1038,8 +1036,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // Create a new image from the processed bytes
-    return img.Image.fromBytes(w, h, data, format: img.Format.rgba);
+    // Create a new image – format auto-detected as RGBA
+    return img.Image.fromBytes(w, h, data);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
