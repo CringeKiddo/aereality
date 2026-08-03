@@ -1035,8 +1035,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // ✅ FIXED – passes ByteBuffer (data.buffer)
-    return img.Image.fromBytes(w, h, data.buffer);
+    // ✅ FINAL FIX – named parameters, data.buffer as ByteBuffer
+    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
