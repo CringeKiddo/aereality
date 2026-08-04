@@ -22,8 +22,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'main'          # ✅ switch to main channel
-          flutter-version: 'latest' # or keep your specific version if you want
+          channel: 'main'          # ✅ Use the main channel (no version specified – gets latest)
 
       - name: Generate Android resources
         run: |
