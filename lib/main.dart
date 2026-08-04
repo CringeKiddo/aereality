@@ -1441,7 +1441,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1471,4 +1471,3 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _controller?.dispose();
     super.dispose();
   }
-}
