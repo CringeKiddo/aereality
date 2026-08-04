@@ -723,19 +723,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (HIGH-LEVEL API – FINAL) ----------
+    // ---------- FULL CPU GRADING (BGR-CORRECTED) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
 
+    // Get pixel as normalized (0..1) R,G,B
     (double r, double g, double b) getPixel(int x, int y) {
       final c = result.getPixel(x, y);
       return (c.r / 255.0, c.g / 255.0, c.b / 255.0);
     }
+
+    // Set pixel – SWAP R AND B (BGR fix)
     void setPixel(int x, int y, double r, double g, double b) {
-      int rr = (r.clamp(0.0, 1.0) * 255).toInt();
+      int bb = (r.clamp(0.0, 1.0) * 255).toInt(); // red → blue
       int gg = (g.clamp(0.0, 1.0) * 255).toInt();
-      int bb = (b.clamp(0.0, 1.0) * 255).toInt();
+      int rr = (b.clamp(0.0, 1.0) * 255).toInt(); // blue → red
       result.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
     }
 
@@ -755,10 +758,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double rNew = (r + _sharpness * rSharp * 0.15).clamp(0.0, 1.0);
           double gNew = (g + _sharpness * gSharp * 0.15).clamp(0.0, 1.0);
           double bNew = (b + _sharpness * bSharp * 0.15).clamp(0.0, 1.0);
-          int rr = (rNew * 255).toInt();
-          int gg = (gNew * 255).toInt();
-          int bb = (bNew * 255).toInt();
-          sharp.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
+          setPixel(x, y, rNew, gNew, bNew);
         }
       }
       result = sharp;
@@ -783,10 +783,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double rNew = (r + glowAmount * avgLuma).clamp(0.0, 1.0);
           double gNew = (g + glowAmount * avgLuma).clamp(0.0, 1.0);
           double bNew = (b + glowAmount * avgLuma).clamp(0.0, 1.0);
-          int rr = (rNew * 255).toInt();
-          int gg = (gNew * 255).toInt();
-          int bb = (bNew * 255).toInt();
-          glow.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
+          setPixel(x, y, rNew, gNew, bNew);
         }
       }
       result = glow;
