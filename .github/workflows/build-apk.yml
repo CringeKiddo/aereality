@@ -22,8 +22,8 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
-          flutter-version: '3.27.4'
+          channel: 'main'          # ✅ switch to main channel
+          flutter-version: 'latest' # or keep your specific version if you want
 
       - name: Generate Android resources
         run: |
@@ -43,8 +43,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build release APK
-        run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096
+      - name: Build release APK with Impeller
+        run: flutter build apk --release --enable-impeller --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
