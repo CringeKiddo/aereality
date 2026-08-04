@@ -723,23 +723,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (USING Color.fromARGB) ----------
+    // ---------- FULL CPU GRADING (USING ColorRgb8) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
 
-    // Get normalized (0..1) R,G,B from a pixel
     (double r, double g, double b) getPixel(int x, int y) {
       final c = result.getPixel(x, y);
       return (c.r / 255.0, c.g / 255.0, c.b / 255.0);
     }
 
-    // Set pixel from normalized R,G,B using Color.fromARGB
     void setPixel(int x, int y, double r, double g, double b) {
       int rr = (r.clamp(0.0, 1.0) * 255).toInt();
       int gg = (g.clamp(0.0, 1.0) * 255).toInt();
       int bb = (b.clamp(0.0, 1.0) * 255).toInt();
-      result.setPixel(x, y, img.Color.fromARGB(255, rr, gg, bb));
+      result.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
     }
 
     // 1. SHARPENING
@@ -761,7 +759,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int rr = (rNew * 255).toInt();
           int gg = (gNew * 255).toInt();
           int bb = (bNew * 255).toInt();
-          sharp.setPixel(x, y, img.Color.fromARGB(255, rr, gg, bb));
+          sharp.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
         }
       }
       result = sharp;
@@ -789,7 +787,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int rr = (rNew * 255).toInt();
           int gg = (gNew * 255).toInt();
           int bb = (bNew * 255).toInt();
-          glow.setPixel(x, y, img.Color.fromARGB(255, rr, gg, bb));
+          glow.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
         }
       }
       result = glow;
