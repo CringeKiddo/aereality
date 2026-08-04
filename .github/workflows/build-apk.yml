@@ -29,6 +29,12 @@ jobs:
           flutter create --platforms=android --org com.example .
           git checkout -- android/build.gradle android/settings.gradle android/app/build.gradle android/gradle.properties lib/ shaders/ pubspec.yaml
 
+      - name: Clean Gradle cache
+        run: |
+          rm -rf android/.gradle
+          rm -rf android/app/build
+          rm -rf android/build
+
       - name: Cache Flutter dependencies
         uses: actions/cache@v4
         with:
