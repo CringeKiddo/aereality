@@ -550,19 +550,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     setState(() {
       switch (name) {
         case 'Gojo Edit':
-          _brightness = -0.05; _saturation = 1.5; _contrast = 1.5; _sharpness = 0.6;
-          _gamma = 0.9; _hue = -8.0; _temperature = 4800; _glowIntensity = 0.7;
-          _vignette = 0.4; _splitToning = 0.3;
+          _brightness = 0.0; _saturation = 1.25; _contrast = 1.3; _sharpness = 0.2;
+          _gamma = 0.95; _hue = -5.0; _temperature = 6000; _glowIntensity = 0.1;
+          _vignette = 0.0; _splitToning = 0.1; _lookMix = 0.3;
           break;
         case 'Magic Bullet':
-          _brightness = 0.1; _saturation = 1.4; _contrast = 1.2; _sharpness = 0.3;
-          _gamma = 1.0; _hue = 5.0; _temperature = 6500; _glowIntensity = 0.6;
-          _vignette = 0.1; _splitToning = 0.0;
+          _brightness = 0.05; _saturation = 1.3; _contrast = 1.2; _sharpness = 0.2;
+          _gamma = 1.0; _hue = 2.0; _temperature = 6500; _glowIntensity = 0.2;
+          _vignette = 0.0; _splitToning = 0.0; _lookMix = 0.0;
           break;
         case 'Teal & Orange':
-          _brightness = 0.0; _saturation = 1.2; _contrast = 1.3; _sharpness = 0.2;
-          _gamma = 0.9; _hue = -10.0; _temperature = 5500; _glowIntensity = 0.2;
-          _vignette = 0.0; _splitToning = 0.2;
+          _brightness = 0.0; _saturation = 1.2; _contrast = 1.3; _sharpness = 0.15;
+          _gamma = 0.95; _hue = -8.0; _temperature = 5500; _glowIntensity = 0.05;
+          _vignette = 0.0; _splitToning = 0.15; _lookMix = 0.6;
           break;
         default: break;
       }
@@ -723,99 +723,130 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (USING ColorRgb8) ----------
+    // ---------- FULL CPU GRADING (RAW RGBA BYTES – FINAL) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    var result = image.clone();
-    int w = result.width, h = result.height;
+    // Force the image to RGBA format (4 bytes per pixel: R,G,B,A)
+    Uint8List data = image.getBytes(format: img.Format.rgba);
+    int w = image.width, h = image.height;
+    int len = data.length;
 
-    (double r, double g, double b) getPixel(int x, int y) {
-      final c = result.getPixel(x, y);
-      return (c.r / 255.0, c.g / 255.0, c.b / 255.0);
+    // Safe pixel accessors – read/write from the byte array
+    int getR(int x, int y) {
+      int idx = (y * w + x) * 4;
+      if (idx >= len) return 0;
+      return data[idx];
+    }
+    int getG(int x, int y) {
+      int idx = (y * w + x) * 4;
+      if (idx + 1 >= len) return 0;
+      return data[idx + 1];
+    }
+    int getB(int x, int y) {
+      int idx = (y * w + x) * 4;
+      if (idx + 2 >= len) return 0;
+      return data[idx + 2];
+    }
+    void setRGB(int x, int y, int r, int g, int b) {
+      int idx = (y * w + x) * 4;
+      if (idx + 2 >= len) return;
+      data[idx] = r.clamp(0, 255);
+      data[idx + 1] = g.clamp(0, 255);
+      data[idx + 2] = b.clamp(0, 255);
     }
 
-    void setPixel(int x, int y, double r, double g, double b) {
-      int rr = (r.clamp(0.0, 1.0) * 255).toInt();
-      int gg = (g.clamp(0.0, 1.0) * 255).toInt();
-      int bb = (b.clamp(0.0, 1.0) * 255).toInt();
-      result.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
-    }
-
-    // 1. SHARPENING
-    if (_sharpness > 0) {
-      var sharp = result.clone();
+    // 1. SHARPENING (Unsharp Mask)
+    if (_sharpness > 0.01) {
+      Uint8List sharpData = Uint8List.fromList(data);
       for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
-          final (r, g, b) = getPixel(x, y);
-          final (rL, gL, bL) = getPixel(x - 1, y);
-          final (rR, gR, bR) = getPixel(x + 1, y);
-          final (rU, gU, bU) = getPixel(x, y - 1);
-          final (rD, gD, bD) = getPixel(x, y + 1);
-          double rSharp = r - (rL + rR + rU + rD) / 4.0;
-          double gSharp = g - (gL + gR + gU + gD) / 4.0;
-          double bSharp = b - (bL + bR + bU + bD) / 4.0;
-          double rNew = (r + _sharpness * rSharp * 0.15).clamp(0.0, 1.0);
-          double gNew = (g + _sharpness * gSharp * 0.15).clamp(0.0, 1.0);
-          double bNew = (b + _sharpness * bSharp * 0.15).clamp(0.0, 1.0);
-          int rr = (rNew * 255).toInt();
-          int gg = (gNew * 255).toInt();
-          int bb = (bNew * 255).toInt();
-          sharp.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
+          int idx = (y * w + x) * 4;
+          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          int rL = data[(y * w + (x - 1)) * 4];
+          int rR = data[(y * w + (x + 1)) * 4];
+          int rU = data[((y - 1) * w + x) * 4];
+          int rD = data[((y + 1) * w + x) * 4];
+          int gL = data[(y * w + (x - 1)) * 4 + 1];
+          int gR = data[(y * w + (x + 1)) * 4 + 1];
+          int gU = data[((y - 1) * w + x) * 4 + 1];
+          int gD = data[((y + 1) * w + x) * 4 + 1];
+          int bL = data[(y * w + (x - 1)) * 4 + 2];
+          int bR = data[(y * w + (x + 1)) * 4 + 2];
+          int bU = data[((y - 1) * w + x) * 4 + 2];
+          int bD = data[((y + 1) * w + x) * 4 + 2];
+          int rSharp = r - ((rL + rR + rU + rD) ~/ 4);
+          int gSharp = g - ((gL + gR + gU + gD) ~/ 4);
+          int bSharp = b - ((bL + bR + bU + bD) ~/ 4);
+          r = (r + (_sharpness * rSharp * 0.15).toInt()).clamp(0, 255);
+          g = (g + (_sharpness * gSharp * 0.15).toInt()).clamp(0, 255);
+          b = (b + (_sharpness * bSharp * 0.15).toInt()).clamp(0, 255);
+          sharpData[idx] = r;
+          sharpData[idx + 1] = g;
+          sharpData[idx + 2] = b;
         }
       }
-      result = sharp;
+      data = sharpData;
     }
 
-    // 2. GLOW
-    if (_glowIntensity > 0) {
-      var glow = result.clone();
-      for (int y = 1; y < h - 1; y++) {
-        for (int x = 1; x < w - 1; x++) {
+    // 2. GLOW (9-tap box blur on bright areas)
+    if (_glowIntensity > 0.01) {
+      Uint8List glowData = Uint8List.fromList(data);
+      int radius = 1;
+      for (int y = radius; y < h - radius; y++) {
+        for (int x = radius; x < w - radius; x++) {
           double lumaSum = 0.0;
-          for (int ky = -1; ky <= 1; ky++) {
-            for (int kx = -1; kx <= 1; kx++) {
-              final (rr, gg, bb) = getPixel(x + kx, y + ky);
+          for (int ky = -radius; ky <= radius; ky++) {
+            for (int kx = -radius; kx <= radius; kx++) {
+              int idx = ((y + ky) * w + (x + kx)) * 4;
+              double rr = data[idx] / 255.0;
+              double gg = data[idx + 1] / 255.0;
+              double bb = data[idx + 2] / 255.0;
               lumaSum += 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
             }
           }
           double avgLuma = lumaSum / 9.0;
           double glowMask = ((avgLuma - 0.3) / 0.5).clamp(0.0, 1.0);
           double glowAmount = glowMask * _glowIntensity * 0.6;
-          final (r, g, b) = getPixel(x, y);
-          double rNew = (r + glowAmount * avgLuma).clamp(0.0, 1.0);
-          double gNew = (g + glowAmount * avgLuma).clamp(0.0, 1.0);
-          double bNew = (b + glowAmount * avgLuma).clamp(0.0, 1.0);
-          int rr = (rNew * 255).toInt();
-          int gg = (gNew * 255).toInt();
-          int bb = (bNew * 255).toInt();
-          glow.setPixel(x, y, img.ColorRgb8(rr, gg, bb));
+          int idx = (y * w + x) * 4;
+          int r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          r = (r + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          g = (g + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          b = (b + glowAmount * avgLuma * 255).toInt().clamp(0, 255);
+          glowData[idx] = r;
+          glowData[idx + 1] = g;
+          glowData[idx + 2] = b;
         }
       }
-      result = glow;
+      data = glowData;
     }
 
-    // 3. TEMPERATURE
-    if (_temperature != 6500.0) {
+    // 3. TEMPERATURE (White Balance)
+    if ((_temperature - 6500).abs() > 10) {
       double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
       double rGain = 1.0 + (t * 0.3);
       double gGain = 1.0 + (t * 0.1) - ((1.0 - t) * 0.1);
       double bGain = 1.0 + ((1.0 - t) * 0.3);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
-          setPixel(x, y,
-              (r * rGain).clamp(0.0, 1.0),
-              (g * gGain).clamp(0.0, 1.0),
-              (b * bGain).clamp(0.0, 1.0));
+          int idx = (y * w + x) * 4;
+          int r = (data[idx] * rGain).toInt().clamp(0, 255);
+          int g = (data[idx + 1] * gGain).toInt().clamp(0, 255);
+          int b = (data[idx + 2] * bGain).toInt().clamp(0, 255);
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
         }
       }
     }
 
-    // 4. HUE
-    if (_hue != 0.0) {
+    // 4. HUE ROTATION
+    if (_hue.abs() > 0.5) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
           double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
           double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
           double h = 0, s = 0, v = max;
@@ -830,7 +861,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           h = (h + hueShift) % 1.0;
           if (h < 0) h += 1.0;
           if (s == 0) {
-            setPixel(x, y, v, v, v);
+            r = g = b = v;
           } else {
             double h6 = h * 6;
             int hi = h6.floor();
@@ -838,81 +869,103 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             double pv = v * (1 - s);
             double q = v * (1 - f * s);
             double t = v * (1 - (1 - f) * s);
-            double rNew, gNew, bNew;
             switch (hi) {
-              case 0: rNew = v; gNew = t; bNew = pv; break;
-              case 1: rNew = q; gNew = v; bNew = pv; break;
-              case 2: rNew = pv; gNew = v; bNew = t; break;
-              case 3: rNew = pv; gNew = q; bNew = v; break;
-              case 4: rNew = t; gNew = pv; bNew = v; break;
-              case 5: rNew = v; gNew = pv; bNew = q; break;
-              default: rNew = v; gNew = t; bNew = pv; break;
+              case 0: r = v; g = t; b = pv; break;
+              case 1: r = q; g = v; b = pv; break;
+              case 2: r = pv; g = v; b = t; break;
+              case 3: r = pv; g = q; b = v; break;
+              case 4: r = t; g = pv; b = v; break;
+              case 5: r = v; g = pv; b = q; break;
+              default: r = v; g = t; b = pv; break;
             }
-            setPixel(x, y, rNew, gNew, bNew);
           }
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
 
     // 5. SATURATION
-    if (_saturation != 1.0) {
+    if ((_saturation - 1.0).abs() > 0.01) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          setPixel(x, y,
-              luma + (r - luma) * _saturation,
-              luma + (g - luma) * _saturation,
-              luma + (b - luma) * _saturation);
+          r = luma + (r - luma) * _saturation;
+          g = luma + (g - luma) * _saturation;
+          b = luma + (b - luma) * _saturation;
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
 
     // 6. CONTRAST
-    if (_contrast != 1.0) {
+    if ((_contrast - 1.0).abs() > 0.01) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
-          setPixel(x, y,
-              ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0),
-              ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0),
-              ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0));
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
+          r = ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          g = ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          b = ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
 
     // 7. BRIGHTNESS
-    if (_brightness != 0.0) {
+    if (_brightness.abs() > 0.005) {
+      int offset = (_brightness * 255).toInt();
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
-          setPixel(x, y,
-              (r + _brightness).clamp(0.0, 1.0),
-              (g + _brightness).clamp(0.0, 1.0),
-              (b + _brightness).clamp(0.0, 1.0));
+          int idx = (y * w + x) * 4;
+          int r = (data[idx] + offset).clamp(0, 255);
+          int g = (data[idx + 1] + offset).clamp(0, 255);
+          int b = (data[idx + 2] + offset).clamp(0, 255);
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
         }
       }
     }
 
     // 8. GAMMA
-    if (_gamma != 1.0) {
+    if ((_gamma - 1.0).abs() > 0.01) {
       double invGamma = 1.0 / _gamma.clamp(0.1, 2.5);
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
-          setPixel(x, y,
-              math.pow(r, invGamma).toDouble().clamp(0.0, 1.0),
-              math.pow(g, invGamma).toDouble().clamp(0.0, 1.0),
-              math.pow(b, invGamma).toDouble().clamp(0.0, 1.0));
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
+          r = math.pow(r, invGamma).toDouble().clamp(0.0, 1.0);
+          g = math.pow(g, invGamma).toDouble().clamp(0.0, 1.0);
+          b = math.pow(b, invGamma).toDouble().clamp(0.0, 1.0);
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
 
     // 9. TEAL & ORANGE (LookMix)
-    if (_lookMix > 0.0) {
+    if (_lookMix > 0.01) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
           double tealR = 0.0, tealG = 0.6, tealB = 0.6;
           double orangeR = 1.0, orangeG = 0.6, orangeB = 0.1;
@@ -922,43 +975,55 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
           double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
           double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
-          setPixel(x, y,
-              r * (1.0 - _lookMix) + mixedR * _lookMix,
-              g * (1.0 - _lookMix) + mixedG * _lookMix,
-              b * (1.0 - _lookMix) + mixedB * _lookMix);
+          r = r * (1.0 - _lookMix) + mixedR * _lookMix;
+          g = g * (1.0 - _lookMix) + mixedG * _lookMix;
+          b = b * (1.0 - _lookMix) + mixedB * _lookMix;
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
 
     // 10. VIGNETTE
-    if (_vignette > 0.0) {
+    if (_vignette > 0.005) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           double dx = (x / w - 0.5) * 2.0;
           double dy = (y / h - 0.5) * 2.0;
           double dist = math.sqrt(dx * dx + dy * dy);
           double amount = 1.0 - (dist * _vignette * 1.5).clamp(0.0, 1.0);
-          final (r, g, b) = getPixel(x, y);
-          setPixel(x, y, r * amount, g * amount, b * amount);
+          int idx = (y * w + x) * 4;
+          int r = (data[idx] * amount).toInt().clamp(0, 255);
+          int g = (data[idx + 1] * amount).toInt().clamp(0, 255);
+          int b = (data[idx + 2] * amount).toInt().clamp(0, 255);
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
         }
       }
     }
 
     // 11. SPLIT TONING
-    if (_splitToning > 0.0) {
+    if (_splitToning > 0.005) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-          final (r, g, b) = getPixel(x, y);
+          int idx = (y * w + x) * 4;
+          double r = data[idx] / 255.0;
+          double g = data[idx + 1] / 255.0;
+          double b = data[idx + 2] / 255.0;
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
           double shadowR = 0.1, shadowG = 0.2, shadowB = 0.6;
           double highlightR = 1.0, highlightG = 0.5, highlightB = 0.1;
           double tintR = shadowR + (highlightR - shadowR) * luma;
           double tintG = shadowG + (highlightG - shadowG) * luma;
           double tintB = shadowB + (highlightB - shadowB) * luma;
-          setPixel(x, y,
-              r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4,
-              g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4,
-              b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4);
+          r = r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4;
+          g = g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4;
+          b = b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4;
+          data[idx] = (r * 255).toInt().clamp(0, 255);
+          data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+          data[idx + 2] = (b * 255).toInt().clamp(0, 255);
         }
       }
     }
@@ -966,21 +1031,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     // 12. FILMIC TONE MAPPING
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        final (r, g, b) = getPixel(x, y);
+        int idx = (y * w + x) * 4;
+        double r = data[idx] / 255.0;
+        double g = data[idx + 1] / 255.0;
+        double b = data[idx + 2] / 255.0;
         double xr = math.max(0.0, r - 0.004);
         double xg = math.max(0.0, g - 0.004);
         double xb = math.max(0.0, b - 0.004);
         double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
         double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
         double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-        setPixel(x, y,
-            math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0),
-            math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0),
-            math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0));
+        r = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
+        g = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
+        b = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
+        data[idx] = (r * 255).toInt().clamp(0, 255);
+        data[idx + 1] = (g * 255).toInt().clamp(0, 255);
+        data[idx + 2] = (b * 255).toInt().clamp(0, 255);
       }
     }
 
-    return result;
+    // Rebuild the image with RGBA format
+    return img.Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: data.buffer,
+      format: img.Format.rgba,
+    );
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
