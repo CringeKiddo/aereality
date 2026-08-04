@@ -723,20 +723,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (HIGH-LEVEL API – FIXED CONSTRUCTOR) ----------
+    // ---------- FULL CPU GRADING (USING INT COLORS – COMPATIBLE) ----------
   img.Image _applyGradingToImage(img.Image image) {
     var result = image.clone();
     int w = result.width, h = result.height;
 
+    // Get normalized (0..1) R,G,B from a pixel
     (double r, double g, double b) getPixel(int x, int y) {
       final c = result.getPixel(x, y);
       return (c.r / 255.0, c.g / 255.0, c.b / 255.0);
     }
+
+    // Set pixel from normalized R,G,B using ARGB int
     void setPixel(int x, int y, double r, double g, double b) {
       int rr = (r.clamp(0.0, 1.0) * 255).toInt();
       int gg = (g.clamp(0.0, 1.0) * 255).toInt();
       int bb = (b.clamp(0.0, 1.0) * 255).toInt();
-      result.setPixel(x, y, img.Color.rgb(rr, gg, bb));  // ✅ fixed
+      int argb = (0xFF << 24) | (rr << 16) | (gg << 8) | bb;
+      result.setPixel(x, y, argb);
     }
 
     // 1. SHARPENING
@@ -758,7 +762,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int rr = (rNew * 255).toInt();
           int gg = (gNew * 255).toInt();
           int bb = (bNew * 255).toInt();
-          sharp.setPixel(x, y, img.Color.rgb(rr, gg, bb));
+          int argb = (0xFF << 24) | (rr << 16) | (gg << 8) | bb;
+          sharp.setPixel(x, y, argb);
         }
       }
       result = sharp;
@@ -786,7 +791,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           int rr = (rNew * 255).toInt();
           int gg = (gNew * 255).toInt();
           int bb = (bNew * 255).toInt();
-          glow.setPixel(x, y, img.Color.rgb(rr, gg, bb));
+          int argb = (0xFF << 24) | (rr << 16) | (gg << 8) | bb;
+          glow.setPixel(x, y, argb);
         }
       }
       result = glow;
@@ -801,7 +807,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          setPixel(x, y, (r * rGain).clamp(0.0, 1.0), (g * gGain).clamp(0.0, 1.0), (b * bGain).clamp(0.0, 1.0));
+          setPixel(x, y,
+              (r * rGain).clamp(0.0, 1.0),
+              (g * gGain).clamp(0.0, 1.0),
+              (b * bGain).clamp(0.0, 1.0));
         }
       }
     }
@@ -1438,7 +1447,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1468,4 +1477,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _controller?.dispose();
     super.dispose();
   }
-}
+          }
