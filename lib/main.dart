@@ -723,26 +723,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (HIGH-LEVEL API – NO RAW BYTES) ----------
+    // ---------- FULL CPU GRADING (HIGH-LEVEL API – FIXED CONSTRUCTOR) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Work on a clone
     var result = image.clone();
     int w = result.width, h = result.height;
 
-    // Helper: get pixel as normalized (0..1) R,G,B
     (double r, double g, double b) getPixel(int x, int y) {
       final c = result.getPixel(x, y);
       return (c.r / 255.0, c.g / 255.0, c.b / 255.0);
     }
-    // Helper: set pixel from normalized R,G,B
     void setPixel(int x, int y, double r, double g, double b) {
       int rr = (r.clamp(0.0, 1.0) * 255).toInt();
       int gg = (g.clamp(0.0, 1.0) * 255).toInt();
       int bb = (b.clamp(0.0, 1.0) * 255).toInt();
-      result.setPixel(x, y, img.Color(rr, gg, bb));
+      result.setPixel(x, y, img.Color.rgb(rr, gg, bb));  // ✅ fixed
     }
 
-    // 1. SHARPENING (Unsharp Mask)
+    // 1. SHARPENING
     if (_sharpness > 0) {
       var sharp = result.clone();
       for (int y = 1; y < h - 1; y++) {
@@ -758,13 +755,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double rNew = (r + _sharpness * rSharp * 0.15).clamp(0.0, 1.0);
           double gNew = (g + _sharpness * gSharp * 0.15).clamp(0.0, 1.0);
           double bNew = (b + _sharpness * bSharp * 0.15).clamp(0.0, 1.0);
-          sharp.setPixel(x, y, img.Color((rNew*255).toInt(), (gNew*255).toInt(), (bNew*255).toInt()));
+          int rr = (rNew * 255).toInt();
+          int gg = (gNew * 255).toInt();
+          int bb = (bNew * 255).toInt();
+          sharp.setPixel(x, y, img.Color.rgb(rr, gg, bb));
         }
       }
       result = sharp;
     }
 
-    // 2. GLOW / BLOOM
+    // 2. GLOW
     if (_glowIntensity > 0) {
       var glow = result.clone();
       for (int y = 1; y < h - 1; y++) {
@@ -783,7 +783,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double rNew = (r + glowAmount * avgLuma).clamp(0.0, 1.0);
           double gNew = (g + glowAmount * avgLuma).clamp(0.0, 1.0);
           double bNew = (b + glowAmount * avgLuma).clamp(0.0, 1.0);
-          glow.setPixel(x, y, img.Color((rNew*255).toInt(), (gNew*255).toInt(), (bNew*255).toInt()));
+          int rr = (rNew * 255).toInt();
+          int gg = (gNew * 255).toInt();
+          int bb = (bNew * 255).toInt();
+          glow.setPixel(x, y, img.Color.rgb(rr, gg, bb));
         }
       }
       result = glow;
@@ -798,21 +801,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          double rNew = (r * rGain).clamp(0.0, 1.0);
-          double gNew = (g * gGain).clamp(0.0, 1.0);
-          double bNew = (b * bGain).clamp(0.0, 1.0);
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y, (r * rGain).clamp(0.0, 1.0), (g * gGain).clamp(0.0, 1.0), (b * bGain).clamp(0.0, 1.0));
         }
       }
     }
 
-    // 4. HUE ROTATION
+    // 4. HUE
     if (_hue != 0.0) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          // Convert to HSV
           double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
           double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
           double h = 0, s = 0, v = max;
@@ -827,7 +826,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           h = (h + hueShift) % 1.0;
           if (h < 0) h += 1.0;
           if (s == 0) {
-            // achromatic: set all to v
             setPixel(x, y, v, v, v);
           } else {
             double h6 = h * 6;
@@ -858,10 +856,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
           double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          double rNew = luma + (r - luma) * _saturation;
-          double gNew = luma + (g - luma) * _saturation;
-          double bNew = luma + (b - luma) * _saturation;
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              luma + (r - luma) * _saturation,
+              luma + (g - luma) * _saturation,
+              luma + (b - luma) * _saturation);
         }
       }
     }
@@ -871,10 +869,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          double rNew = ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          double gNew = ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          double bNew = ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0);
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              ((r - 0.5) * _contrast + 0.5).clamp(0.0, 1.0),
+              ((g - 0.5) * _contrast + 0.5).clamp(0.0, 1.0),
+              ((b - 0.5) * _contrast + 0.5).clamp(0.0, 1.0));
         }
       }
     }
@@ -884,10 +882,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          double rNew = (r + _brightness).clamp(0.0, 1.0);
-          double gNew = (g + _brightness).clamp(0.0, 1.0);
-          double bNew = (b + _brightness).clamp(0.0, 1.0);
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              (r + _brightness).clamp(0.0, 1.0),
+              (g + _brightness).clamp(0.0, 1.0),
+              (b + _brightness).clamp(0.0, 1.0));
         }
       }
     }
@@ -898,10 +896,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final (r, g, b) = getPixel(x, y);
-          double rNew = math.pow(r, invGamma).toDouble().clamp(0.0, 1.0);
-          double gNew = math.pow(g, invGamma).toDouble().clamp(0.0, 1.0);
-          double bNew = math.pow(b, invGamma).toDouble().clamp(0.0, 1.0);
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              math.pow(r, invGamma).toDouble().clamp(0.0, 1.0),
+              math.pow(g, invGamma).toDouble().clamp(0.0, 1.0),
+              math.pow(b, invGamma).toDouble().clamp(0.0, 1.0));
         }
       }
     }
@@ -920,10 +918,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double mixedR = r * (1.0 - 0.7) + r * gradedR * 0.7;
           double mixedG = g * (1.0 - 0.7) + g * gradedG * 0.7;
           double mixedB = b * (1.0 - 0.7) + b * gradedB * 0.7;
-          double rNew = r * (1.0 - _lookMix) + mixedR * _lookMix;
-          double gNew = g * (1.0 - _lookMix) + mixedG * _lookMix;
-          double bNew = b * (1.0 - _lookMix) + mixedB * _lookMix;
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              r * (1.0 - _lookMix) + mixedR * _lookMix,
+              g * (1.0 - _lookMix) + mixedG * _lookMix,
+              b * (1.0 - _lookMix) + mixedB * _lookMix);
         }
       }
     }
@@ -953,10 +951,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           double tintR = shadowR + (highlightR - shadowR) * luma;
           double tintG = shadowG + (highlightG - shadowG) * luma;
           double tintB = shadowB + (highlightB - shadowB) * luma;
-          double rNew = r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4;
-          double gNew = g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4;
-          double bNew = b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4;
-          setPixel(x, y, rNew, gNew, bNew);
+          setPixel(x, y,
+              r * (1.0 - _splitToning * 0.4) + r * tintR * _splitToning * 0.4,
+              g * (1.0 - _splitToning * 0.4) + g * tintG * _splitToning * 0.4,
+              b * (1.0 - _splitToning * 0.4) + b * tintB * _splitToning * 0.4);
         }
       }
     }
@@ -971,10 +969,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         double rr = (xr * (6.2 * xr + 0.5)) / (xr * (6.2 * xr + 1.7) + 0.06);
         double rg = (xg * (6.2 * xg + 0.5)) / (xg * (6.2 * xg + 1.7) + 0.06);
         double rb = (xb * (6.2 * xb + 0.5)) / (xb * (6.2 * xb + 1.7) + 0.06);
-        double rNew = math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        double gNew = math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        double bNew = math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0);
-        setPixel(x, y, rNew, gNew, bNew);
+        setPixel(x, y,
+            math.pow(rr, 1.0 / 2.2).toDouble().clamp(0.0, 1.0),
+            math.pow(rg, 1.0 / 2.2).toDouble().clamp(0.0, 1.0),
+            math.pow(rb, 1.0 / 2.2).toDouble().clamp(0.0, 1.0));
       }
     }
 
