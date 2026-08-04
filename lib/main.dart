@@ -723,14 +723,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return picture.toImage(image.width, image.height);
     }
   }
-    // ---------- FULL CPU GRADING (RAW RGBA BYTES – FINAL) ----------
+    // ---------- FULL CPU GRADING (MANUAL RGB→RGBA – NO Format) ----------
   img.Image _applyGradingToImage(img.Image image) {
-    // Force the image to RGBA format (4 bytes per pixel: R,G,B,A)
-    Uint8List data = image.getBytes(format: img.Format.rgba);
+    Uint8List data = image.getBytes();
     int w = image.width, h = image.height;
+    int bytesPerPixel = data.length ~/ (w * h);
+
+    // If RGB (3 bytes), convert to RGBA (4 bytes)
+    if (bytesPerPixel == 3) {
+      Uint8List newData = Uint8List(w * h * 4);
+      for (int i = 0; i < w * h; i++) {
+        int src = i * 3;
+        int dst = i * 4;
+        newData[dst] = data[src];
+        newData[dst + 1] = data[src + 1];
+        newData[dst + 2] = data[src + 2];
+        newData[dst + 3] = 255;
+      }
+      data = newData;
+    }
     int len = data.length;
 
-    // Safe pixel accessors – read/write from the byte array
     int getR(int x, int y) {
       int idx = (y * w + x) * 4;
       if (idx >= len) return 0;
@@ -754,7 +767,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data[idx + 2] = b.clamp(0, 255);
     }
 
-    // 1. SHARPENING (Unsharp Mask)
+    // 1. SHARPENING
     if (_sharpness > 0.01) {
       Uint8List sharpData = Uint8List.fromList(data);
       for (int y = 1; y < h - 1; y++) {
@@ -787,7 +800,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data = sharpData;
     }
 
-    // 2. GLOW (9-tap box blur on bright areas)
+    // 2. GLOW
     if (_glowIntensity > 0.01) {
       Uint8List glowData = Uint8List.fromList(data);
       int radius = 1;
@@ -819,7 +832,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data = glowData;
     }
 
-    // 3. TEMPERATURE (White Balance)
+    // 3. TEMPERATURE
     if ((_temperature - 6500).abs() > 10) {
       double t = ((_temperature - 2000.0) / 10000.0).clamp(0.0, 1.0);
       double rGain = 1.0 + (t * 0.3);
@@ -838,7 +851,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // 4. HUE ROTATION
+    // 4. HUE
     if (_hue.abs() > 0.5) {
       double hueShift = _hue / 360.0;
       for (int y = 0; y < h; y++) {
@@ -1050,13 +1063,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // Rebuild the image with RGBA format
-    return img.Image.fromBytes(
-      width: w,
-      height: h,
-      bytes: data.buffer,
-      format: img.Format.rgba,
-    );
+    return img.Image.fromBytes(width: w, height: h, bytes: data.buffer);
   }
     // ---------- FULL EXPORT (CPU GRADING) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
