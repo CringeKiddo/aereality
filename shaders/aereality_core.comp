@@ -149,8 +149,8 @@ void main() {
         vec3 blur = vec3(0.0);
         for (int ky = -1; ky <= 1; ky++) {
             for (int kx = -1; kx <= 1; kx++) {
-                vec3 sample = srgb_to_linear_vec3(imageLoad(inputImage, pos + ivec2(kx, ky)).rgb);
-                blur += sample;
+                vec3 col = srgb_to_linear_vec3(imageLoad(inputImage, pos + ivec2(kx, ky)).rgb);
+                blur += col;
             }
         }
         blur /= 9.0;
