@@ -1,5 +1,5 @@
 name: aereality
-description: "AEReality 32-Bit HDR Node Grading Engine"
+description: "AEReality 32-Bit HDR Node Grading Engine (Vulkan FFI)"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,14 +9,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  # ✅ Required for Flutter GPU
-  flutter_gpu:
-    sdk: flutter
-  
+
   video_player: ^2.9.5
   file_picker: ^8.1.7
   path_provider: ^2.1.5
+  ffmpeg_kit_flutter_new_min_gpl: ^2.6.2
+  image: ^4.5.4
 
 dev_dependencies:
   flutter_test:
@@ -25,7 +23,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  
-  # ✅ Shaders are now in WGSL format – placed in assets
   assets:
-    - shaders/aereality_core.wgsl
+    - shaders/aereality_core.frag
+    - assets/shaders/aereality_core.spv
