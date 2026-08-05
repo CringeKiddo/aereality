@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';  // ✅ added for rootBundle
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -865,7 +866,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      // ✅ 10‑bit SDR export using libx264 High 10 profile
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-c:v libx264 -profile:v high10 -preset ultrafast -crf 18 -pix_fmt yuv420p10le "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
