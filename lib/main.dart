@@ -11,7 +11,7 @@ import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
-import 'vulkan_bridge.dart'; // ✅ FFI bridge to native Vulkan
+import 'vulkan_bridge.dart';
 
 void main() {
   runApp(const AERealityApp());
@@ -496,7 +496,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   late String _projectFps;
   late String _projectBitrate;
 
-  // SPIR-V shader binary (loaded once)
   Uint8List? _spirvShader;
 
   @override
@@ -507,7 +506,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _projectFps = widget.initialFps ?? '60fps';
     _projectBitrate = widget.initialBitrate ?? '35 Mbps';
 
-    // Load SPIR-V shader from assets
     _loadShader();
 
     if (widget.initialProject != null) {
@@ -532,12 +530,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Future<void> _loadShader() async {
     try {
-      final byteData = await rootBundle.load('shaders/aereality_core.spv');
+      final byteData = await rootBundle.load('assets/shaders/aereality_core.spv');
       _spirvShader = byteData.buffer.asUint8List();
-      // Initialize Vulkan with the shader
       initVulkan(_spirvShader!);
+      print('✅ Vulkan initialized with SPIR-V shader');
     } catch (e) {
-      print('Failed to load SPIR-V shader: $e');
+      print('❌ Failed to load SPIR-V shader: $e');
     }
   }
 
@@ -656,14 +654,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- PROCESS FRAME WITH VULKAN ----------
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
-    // Convert ui.Image to raw RGBA bytes
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
     
-    // Process with Vulkan
     final outputBytes = processImage(inputBytes, input.width, input.height);
     
-    // Convert back to ui.Image
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       outputBytes,
@@ -716,8 +711,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (image == null) throw Exception('Failed to decode image');
       
       final uiFrame = await _convertImageToUiImage(image);
-      
-      // Process with Vulkan
       final gradedUi = await _processFrameWithVulkan(uiFrame);
       
       showDialog(
@@ -753,7 +746,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       setState(() => _isPreviewing = false);
     }
   }
-    // ---------- FULL EXPORT (VULKAN FFI 32-BIT) ----------
+    // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 10-BIT SDR) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -777,7 +770,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Exporting... (Vulkan 32-bit Grading)', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const Text('Exporting... (Vulkan 32-bit → 10-bit SDR)', style: TextStyle(color: Colors.white, fontSize: 16)),
             const SizedBox(height: 16),
             ValueListenableBuilder<double>(
               valueListenable: progressNotifier,
@@ -838,8 +831,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             }
 
             final uiFrame = await _convertImageToUiImage(decoded);
-            
-            // Process with Vulkan
             final gradedUi = await _processFrameWithVulkan(uiFrame);
             final gradedImg = await _uiImageToImage(gradedUi);
             
@@ -870,12 +861,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       stopwatch.stop();
 
-      statusNotifier.value = 'Encoding video...';
+      statusNotifier.value = 'Encoding 10-bit SDR video...';
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
+      // ✅ 10‑bit SDR export using libx264 High 10 profile
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
+                      '-c:v libx264 -profile:v high10 -preset ultrafast -crf 18 -pix_fmt yuv420p10le "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       var encodeReturnCode = await encodeSession.getReturnCode();
 
@@ -940,7 +932,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path}'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path} (10-bit SDR)'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
         );
       }
     } catch (e) {
@@ -1023,7 +1015,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Full 32-bit Vulkan export may take several minutes.', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  const Text('Full 32-bit Vulkan → 10-bit SDR export', style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             );
@@ -1249,7 +1241,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _controller?.removeListener(_listener);
     _controller?.dispose();
-    cleanupVulkan(); // Clean up Vulkan resources
+    cleanupVulkan();
     super.dispose();
   }
 }
