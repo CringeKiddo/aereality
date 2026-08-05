@@ -24,6 +24,14 @@ jobs:
         with:
           channel: 'main'
 
+      # ✅ NEW: Compile GLSL to SPIR-V
+      - name: Install glslang and compile shader
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools
+          mkdir -p assets/shaders
+          glslangValidator -V shaders/aereality_core.frag -o assets/shaders/aereality_core.spv
+
       - name: Generate Android resources
         run: |
           flutter create --platforms=android --org com.example .
