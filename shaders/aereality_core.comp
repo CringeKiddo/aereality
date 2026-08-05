@@ -88,6 +88,9 @@ void main() {
     vec4 srgb = imageLoad(inputImage, pos);
     vec3 color = srgb.rgb;
 
+    // ✅ FIX: Swap R and B (input is BGRA, not RGBA)
+    color = color.bgr;
+
     // 2. sRGB → Linear
     color = srgb_to_linear_vec3(color);
 
