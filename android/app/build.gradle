@@ -51,10 +51,9 @@ android {
         }
     }
 
-    // ✅ CORRECT: externalNativeBuild goes HERE – at the same level as defaultConfig
     externalNativeBuild {
         cmake {
-            path "native/CMakeLists.txt"
+            path "../../native/CMakeLists.txt"   // ✅ CORRECTED – goes up two levels
         }
     }
 
