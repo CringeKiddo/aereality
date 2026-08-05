@@ -50,7 +50,7 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096
+        run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096 --android-skip-build-dependency-validation
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
