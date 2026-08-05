@@ -29,7 +29,7 @@ jobs:
           flutter create --platforms=android --org com.example .
           git checkout -- android/build.gradle android/settings.gradle android/app/build.gradle android/gradle.properties lib/ shaders/ pubspec.yaml
 
-      - name: Clean Gradle cache and force re-sync
+      - name: Clean Gradle cache
         run: |
           rm -rf android/.gradle
           rm -rf android/app/build
@@ -50,7 +50,7 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096 --android-skip-build-dependency-validation
+        run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
