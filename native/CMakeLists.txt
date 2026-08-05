@@ -7,12 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find Vulkan
 find_package(Vulkan REQUIRED)
 
-# The main source file
+# Create the shared library
 add_library(vulkan_processor SHARED vulkan_processor.cpp)
 
+# Link libraries
 target_link_libraries(vulkan_processor
     ${Vulkan_LIBRARIES}
     ${CMAKE_DL_LIBS}
 )
 
+# Include Vulkan headers
 target_include_directories(vulkan_processor PRIVATE ${Vulkan_INCLUDE_DIRS})
