@@ -1,6 +1,7 @@
 // native/vulkan_processor.cpp – Part 1 of 2
 // Complete Vulkan compute pipeline – 32-bit float grading.
 // Compiles to libvulkan_processor.so
+// With full logging to stderr (visible in logcat)
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -10,7 +11,7 @@
 #include <fstream>
 #include <iostream>
 
-#define CHECK_VK(call) if ((call) != VK_SUCCESS) { fprintf(stderr, "Vulkan error at %s:%d\n", __FILE__, __LINE__); return; }
+#define CHECK_VK(call) if ((call) != VK_SUCCESS) { fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); return; }
 
 // Global Vulkan objects
 static VkInstance instance;
@@ -45,7 +46,7 @@ static int width = 0, height = 0;
 static bool initialized = false;
 static bool imagesCreated = false;
 
-// ------------------------- Helper functions -------------------------
+// Helper: create shader module
 VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     VkShaderModuleCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -53,11 +54,14 @@ VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     createInfo.pCode = code;
     VkShaderModule module;
     if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) {
+        fprintf(stderr, "❌ Failed to create shader module\n");
         return VK_NULL_HANDLE;
     }
+    fprintf(stderr, "✅ Shader module created\n");
     return module;
 }
 
+// Helper: find memory type
 uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
@@ -66,12 +70,14 @@ uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
             return i;
         }
     }
+    fprintf(stderr, "❌ No suitable memory type found\n");
     return UINT32_MAX;
 }
 
-// ------------------------- Initialization -------------------------
+// ------------------- Vulkan initialization -------------------
 void initVulkan() {
-    // Instance
+    fprintf(stderr, "🔄 initVulkan started\n");
+
     VkApplicationInfo appInfo = {};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "AEReality";
@@ -81,21 +87,20 @@ void initVulkan() {
     VkInstanceCreateInfo instInfo = {};
     instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instInfo.pApplicationInfo = &appInfo;
-    const char* layers[] = { "VK_LAYER_KHRONOS_validation" };
-    instInfo.enabledLayerCount = 0; // Disable validation for performance
+    instInfo.enabledLayerCount = 0;
     instInfo.ppEnabledLayerNames = nullptr;
     instInfo.enabledExtensionCount = 0;
 
     if (vkCreateInstance(&instInfo, nullptr, &instance) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to create Vulkan instance\n");
+        fprintf(stderr, "❌ Failed to create Vulkan instance\n");
         return;
     }
+    fprintf(stderr, "✅ Vulkan instance created\n");
 
-    // Physical device
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
     if (deviceCount == 0) {
-        fprintf(stderr, "No Vulkan devices found\n");
+        fprintf(stderr, "❌ No Vulkan devices found\n");
         return;
     }
     std::vector<VkPhysicalDevice> devices(deviceCount);
@@ -103,6 +108,7 @@ void initVulkan() {
     for (auto dev : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(dev, &props);
+        fprintf(stderr, "📱 Found device: %s (type: %d)\n", props.deviceName, props.deviceType);
         if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
             physicalDevice = dev;
@@ -112,8 +118,8 @@ void initVulkan() {
     if (physicalDevice == VK_NULL_HANDLE) {
         physicalDevice = devices[0];
     }
+    fprintf(stderr, "✅ Physical device selected\n");
 
-    // Queue family
     uint32_t familyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
     std::vector<VkQueueFamilyProperties> families(familyCount);
@@ -127,11 +133,11 @@ void initVulkan() {
         }
     }
     if (!found) {
-        fprintf(stderr, "No compute queue found\n");
+        fprintf(stderr, "❌ No compute queue found\n");
         return;
     }
+    fprintf(stderr, "✅ Compute queue family found: %d\n", queueFamilyIndex);
 
-    // Device
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueInfo = {};
     queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -144,33 +150,32 @@ void initVulkan() {
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &queueInfo;
     devInfo.enabledExtensionCount = 0;
-    const char* deviceExtensions[] = { VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME };
-    devInfo.enabledExtensionCount = 0;
 
     if (vkCreateDevice(physicalDevice, &devInfo, nullptr, &device) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to create device\n");
+        fprintf(stderr, "❌ Failed to create device\n");
         return;
     }
+    fprintf(stderr, "✅ Device created\n");
 
     vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
+    fprintf(stderr, "✅ Queue obtained\n");
 
-    // Command pool
     VkCommandPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = queueFamilyIndex;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &cmdPool) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to create command pool\n");
+        fprintf(stderr, "❌ Failed to create command pool\n");
         return;
     }
+    fprintf(stderr, "✅ Command pool created\n");
 
-    // Fence
     VkFenceCreateInfo fenceInfo = {};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     vkCreateFence(device, &fenceInfo, nullptr, &fence);
+    fprintf(stderr, "✅ Fence created\n");
 
-    // Sampler (linear filtering)
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -180,31 +185,29 @@ void initVulkan() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.maxLod = 1.0f;
     vkCreateSampler(device, &samplerInfo, nullptr, &sampler);
+    fprintf(stderr, "✅ Sampler created\n");
 }
 
+// ------------------- Shader and pipeline creation -------------------
 void initShader(const uint32_t* spirv, size_t size) {
+    fprintf(stderr, "🔄 initShader called with size: %zu\n", size);
     shaderModule = createShaderModule(spirv, size);
     if (!shaderModule) {
-        fprintf(stderr, "Failed to create shader module\n");
+        fprintf(stderr, "❌ Shader module is null\n");
         return;
     }
 
-    // Descriptor set layout (input + output + uniforms)
     VkDescriptorSetLayoutBinding bindings[3] = {};
-    // binding 0: input texture (combined image sampler)
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    bindings[0].pImmutableSamplers = nullptr;
 
-    // binding 1: output texture (storage image)
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // binding 2: uniforms (buffer)
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[2].descriptorCount = 1;
@@ -215,15 +218,15 @@ void initShader(const uint32_t* spirv, size_t size) {
     layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descSetLayout);
+    fprintf(stderr, "✅ Descriptor set layout created\n");
 
-    // Pipeline layout
     VkPipelineLayoutCreateInfo pipeLayoutInfo = {};
     pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeLayoutInfo.setLayoutCount = 1;
     pipeLayoutInfo.pSetLayouts = &descSetLayout;
     vkCreatePipelineLayout(device, &pipeLayoutInfo, nullptr, &pipelineLayout);
+    fprintf(stderr, "✅ Pipeline layout created\n");
 
-    // Compute pipeline
     VkComputePipelineCreateInfo pipeInfo = {};
     pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -231,9 +234,12 @@ void initShader(const uint32_t* spirv, size_t size) {
     pipeInfo.stage.module = shaderModule;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = pipelineLayout;
-    vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
+    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline) != VK_SUCCESS) {
+        fprintf(stderr, "❌ Failed to create compute pipeline\n");
+        return;
+    }
+    fprintf(stderr, "✅ Compute pipeline created\n");
 
-    // Descriptor pool
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 1;
@@ -248,27 +254,30 @@ void initShader(const uint32_t* spirv, size_t size) {
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
     vkCreateDescriptorPool(device, &poolInfo, nullptr, &descPool);
+    fprintf(stderr, "✅ Descriptor pool created\n");
 
-    // Allocate descriptor set
     VkDescriptorSetAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descPool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &descSetLayout;
     vkAllocateDescriptorSets(device, &allocInfo, &descSet);
+    fprintf(stderr, "✅ Descriptor set allocated\n");
 
-    // Command buffer
     VkCommandBufferAllocateInfo cmdAlloc = {};
     cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdAlloc.commandPool = cmdPool;
     cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAlloc.commandBufferCount = 1;
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
+    fprintf(stderr, "✅ Command buffer allocated\n");
 }
 // native/vulkan_processor.cpp – Part 2 of 2
 // Paste this after Part 1 in the same file.
 
+// ------------------- Image creation -------------------
 void createImages(int w, int h) {
+    fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
     if (imagesCreated) {
         // Clean old images (simplified)
     }
@@ -291,6 +300,7 @@ void createImages(int w, int h) {
     imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateImage(device, &imgInfo, nullptr, &inputImage);
+    fprintf(stderr, "✅ Input image created\n");
 
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(device, inputImage, &memReq);
@@ -300,8 +310,8 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &inputMemory);
     vkBindImageMemory(device, inputImage, inputMemory, 0);
+    fprintf(stderr, "✅ Input image memory allocated\n");
 
-    // Input view
     VkImageViewCreateInfo viewInfo = {};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = inputImage;
@@ -311,6 +321,7 @@ void createImages(int w, int h) {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
     vkCreateImageView(device, &viewInfo, nullptr, &inputView);
+    fprintf(stderr, "✅ Input image view created\n");
 
     // Output image (32-bit float)
     imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -321,12 +332,14 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &outputMemory);
     vkBindImageMemory(device, outputImage, outputMemory, 0);
+    fprintf(stderr, "✅ Output image created\n");
 
     viewInfo.image = outputImage;
     viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     vkCreateImageView(device, &viewInfo, nullptr, &outputView);
+    fprintf(stderr, "✅ Output image view created\n");
 
-    // Staging buffer for input
+    // Staging buffers
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufInfo.size = w * h * 4;
@@ -338,8 +351,8 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+    fprintf(stderr, "✅ Input staging buffer created\n");
 
-    // Staging buffer for output (read back)
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     vkCreateBuffer(device, &bufInfo, nullptr, &outputStagingBuffer);
     vkGetBufferMemoryRequirements(device, outputStagingBuffer, &memReq);
@@ -347,6 +360,7 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
+    fprintf(stderr, "✅ Output staging buffer created\n");
 
     imagesCreated = true;
 
@@ -375,24 +389,23 @@ void createImages(int w, int h) {
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outputInfo;
 
-    // Uniform buffer will be set separately per frame
     vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+    fprintf(stderr, "✅ Descriptor set updated\n");
 }
 
+// ------------------- Upload, process, readback -------------------
 void uploadInput(const uint8_t* rgba, int w, int h) {
-    // Copy to staging buffer
+    fprintf(stderr, "📤 Uploading input frame...\n");
     void* data;
     vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, &data);
     memcpy(data, rgba, w * h * 4);
     vkUnmapMemory(device, stagingMemory);
 
-    // Transition image layouts and copy
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    // Transition input image to transfer dst
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -418,14 +431,13 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     region.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // Transition input to shader read
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Transition output image to storage
+    // Transition output image
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -433,14 +445,13 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Bind pipeline and descriptor set
     vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSet, 0, nullptr);
 
-    // Dispatch (workgroup size 16x16)
     uint32_t groupX = (w + 15) / 16;
     uint32_t groupY = (h + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
+    fprintf(stderr, "🔄 Shader dispatched\n");
 
     // Transition output to transfer read
     barrier.image = outputImage;
@@ -450,7 +461,6 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Copy output to staging buffer
     VkBufferImageCopy copyRegion = {};
     copyRegion.bufferOffset = 0;
     copyRegion.bufferRowLength = 0;
@@ -464,7 +474,6 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
 
     vkEndCommandBuffer(cmdBuffer);
 
-    // Submit and wait
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -472,25 +481,27 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     vkQueueSubmit(queue, 1, &submitInfo, fence);
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
+    fprintf(stderr, "📤 Upload and dispatch complete\n");
 }
 
 void readOutput(uint8_t* rgba, int w, int h) {
+    fprintf(stderr, "📥 Reading output...\n");
     void* data;
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, &data);
     memcpy(rgba, data, w * h * 4);
     vkUnmapMemory(device, outputStagingMemory);
+    fprintf(stderr, "📥 Output read complete\n");
 }
 
 void cleanupImages() {
     if (!imagesCreated) return;
-    // Cleanup images, views, buffers, memory
-    // (simplified for brevity)
+    // Cleanup simplified
     imagesCreated = false;
 }
 
 void cleanupVulkan() {
+    fprintf(stderr, "🔄 Cleaning up Vulkan resources\n");
     vkDeviceWaitIdle(device);
-    // Destroy all objects (simplified)
     vkDestroyFence(device, fence, nullptr);
     vkDestroyCommandPool(device, cmdPool, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
@@ -502,31 +513,42 @@ void cleanupVulkan() {
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
     initialized = false;
+    fprintf(stderr, "✅ Cleanup complete\n");
 }
 
-// ------------------------- Exported C functions -------------------------
+// ------------------- Exported C functions -------------------
 extern "C" {
 
 void init_processor(const uint32_t* spirv, size_t size) {
+    fprintf(stderr, "🔄 init_processor called with size: %zu\n", size);
     if (initialized) return;
     initVulkan();
     initShader(spirv, size);
     initialized = true;
+    fprintf(stderr, "✅ init_processor complete\n");
 }
 
 void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
-    if (!initialized) return;
+    fprintf(stderr, "🔄 process_frame called: %dx%d\n", w, h);
+    if (!initialized) {
+        fprintf(stderr, "❌ Vulkan not initialized\n");
+        return;
+    }
     if (!imagesCreated || w != width || h != height) {
         if (imagesCreated) cleanupImages();
         createImages(w, h);
     }
     uploadInput(input, w, h);
     readOutput(output, w, h);
+    fprintf(stderr, "✅ process_frame complete\n");
 }
 
 void cleanup_processor() {
+    fprintf(stderr, "🔄 cleanup_processor called\n");
     if (!initialized) return;
     cleanupVulkan();
+    initialized = false;
+    fprintf(stderr, "✅ cleanup_processor complete\n");
 }
 
 } // extern "C"
