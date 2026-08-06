@@ -1,6 +1,6 @@
 // native/vulkan_processor.cpp – Part 1 of 2
 // Full Vulkan compute pipeline – 32-bit float grading.
-// With pipeline barriers, cache invalidation, and hard sync.
+// With debug logging in readOutput to show the first pixel values.
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -455,7 +455,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     uint32_t groupY = (h + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
 
-    // ✅ Memory barrier: ensure shader writes are visible to transfer
+    // Memory barrier: ensure shader writes are visible to transfer
     VkMemoryBarrier memBarrier = {};
     memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -497,7 +497,6 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     submitInfo.pCommandBuffers = &cmdBuffer;
     vkQueueSubmit(queue, 1, &submitInfo, fence);
 
-    // ✅ HARD SYNC: Wait for the GPU to finish everything
     vkQueueWaitIdle(queue);
 
     fprintf(stderr, "📤 Upload and dispatch complete\n");
@@ -506,7 +505,6 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
 void readOutput(uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📥 Reading output...\n");
 
-    // ✅ Invalidate cache to ensure CPU sees GPU writes
     VkMappedMemoryRange range = {};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
     range.memory = outputStagingMemory;
@@ -516,7 +514,11 @@ void readOutput(uint8_t* rgba, int w, int h) {
 
     float* data;
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-    // Convert float (0.0-1.0) to uint8 (0-255) for FFmpeg
+
+    // ✅ DEBUG: Print first pixel float values
+    fprintf(stderr, "🔍 First pixel floats: R=%f G=%f B=%f A=%f\n",
+        data[0], data[1], data[2], data[3]);
+
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
