@@ -3,7 +3,7 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba8) uniform readonly image2D inputImage;
-layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outputImage;
 
 layout(set = 0, binding = 2, std140) uniform Uniforms {
     vec2 resolution;
@@ -20,7 +20,7 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float splitToning;
 } u;
 
-// ------------------- HELPER FUNCTIONS -------------------
+// ------------------- HELPER FUNCTIONS (all in float) -------------------
 float srgb_to_linear(float v) {
     if (v <= 0.04045) return v / 12.92;
     return pow((v + 0.055) / 1.055, 2.4);
@@ -78,7 +78,6 @@ float dither(vec2 coord) {
     return fract(n);
 }
 
-// ------------------- MAIN COMPUTE SHADER -------------------
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
@@ -88,13 +87,13 @@ void main() {
     vec4 srgb = imageLoad(inputImage, pos);
     vec3 color = srgb.rgb;
 
-    // ✅ BGR fix if needed – keep this line
+    // 2. BGR fix (if needed)
     color = color.bgr;
 
-    // 2. sRGB → Linear
+    // 3. Convert to Linear (float)
     color = srgb_to_linear_vec3(color);
 
-    // 3. Sharpening (Unsharp Mask)
+    // 4. Sharpening (float)
     if (u.sharpness > 0.005) {
         ivec2 texel = pos;
         vec3 left   = srgb_to_linear_vec3(imageLoad(inputImage, texel + ivec2(-1, 0)).rgb);
@@ -105,49 +104,49 @@ void main() {
         color += laplacian * u.sharpness * 0.15;
     }
 
-    // 4. Temperature
+    // 5. Temperature (float)
     vec3 tempGain = temperature_shift(u.temperature);
     color *= tempGain;
 
-    // 5. Hue
+    // 6. Hue (float)
     if (abs(u.hue) > 0.5) {
         vec3 hsv = rgb2hsv(color);
         hsv.x = fract(hsv.x + (u.hue / 360.0));
         color = hsv2rgb(hsv);
     }
 
-    // 6. Saturation
+    // 7. Saturation (float)
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(luma), color, u.saturation);
 
-    // 7. Contrast
+    // 8. Contrast (float)
     color = (color - 0.5) * u.contrast + 0.5;
 
-    // 8. Brightness
+    // 9. Brightness (float)
     color += u.brightness;
 
-    // 9. Gamma
+    // 10. Gamma (float)
     float invGamma = 1.0 / max(u.gamma, 0.1);
     color = pow(max(vec3(0.0), color), vec3(invGamma));
 
-    // 10. Teal & Orange (LookMix)
+    // 11. Teal & Orange (float)
     color = teal_orange(color, u.lookMix);
 
-    // 11. Vignette
+    // 12. Vignette (float)
     vec2 uv = vec2(pos) / vec2(size);
     vec2 vigUV = uv - 0.5;
     float vigDist = length(vigUV);
     float vignetteAmount = 1.0 - (vigDist * u.vignette * 1.5);
     color *= vignetteAmount;
 
-    // 12. Split Toning
+    // 13. Split Toning (float)
     float lumaSplit = dot(color, vec3(0.2126, 0.7152, 0.0722));
     vec3 shadowTint = vec3(0.1, 0.2, 0.6);
     vec3 highlightTint = vec3(1.0, 0.5, 0.1);
     vec3 tonedColor = mix(shadowTint, highlightTint, lumaSplit);
     color = mix(color, color * tonedColor, u.splitToning * 0.4);
 
-    // 13. Glow (bloom) – sampled from the original linear image
+    // 14. Glow (float)
     if (u.glowIntensity > 0.005) {
         vec3 blur = vec3(0.0);
         for (int ky = -1; ky <= 1; ky++) {
@@ -163,23 +162,23 @@ void main() {
         color += glow;
     }
 
-    // 14. Filmic Tonemap (linear)
+    // 15. Filmic Tonemap (float)
     color = filmic_tonemap(color);
 
-    // 15. Linear → sRGB
+    // 16. Linear → sRGB (float → 8-bit)
     color = vec3(
         linear_to_srgb(color.r),
         linear_to_srgb(color.g),
         linear_to_srgb(color.b)
     );
 
-    // 16. Dither
+    // 17. Dither (float)
     float noise = (dither(vec2(pos)) - 0.5) / 255.0;
     color += noise;
 
-    // 17. Final clamp
+    // 18. Final clamp (float → 0-1)
     color = clamp(color, 0.0, 1.0);
 
-    // 18. Write output (RGBA32F)
+    // 19. Write output to RGBA8 texture (conversion happens automatically)
     imageStore(outputImage, pos, vec4(color, 1.0));
 }
