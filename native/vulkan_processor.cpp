@@ -1,13 +1,11 @@
 // native/vulkan_processor.cpp – Part 1 of 2
-// Full Vulkan compute pipeline – 32-bit float grading.
-// With debug logging in readOutput to show the first pixel values.
-
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <algorithm>   // ✅ added for std::clamp
 
 #define CHECK_VK(call) if ((call) != VK_SUCCESS) { fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); return; }
 
@@ -265,7 +263,6 @@ void initShader(const uint32_t* spirv, size_t size) {
     fprintf(stderr, "✅ Command buffer allocated\n");
 }
 // native/vulkan_processor.cpp – Part 2 of 2
-// Paste this after Part 1 in the same file.
 
 void createImages(int w, int h) {
     fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
@@ -522,10 +519,11 @@ void readOutput(uint8_t* rgba, int w, int h) {
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
-        rgba[dst]   = (uint8_t)(data[src] * 255.0f);
-        rgba[dst+1] = (uint8_t)(data[src+1] * 255.0f);
-        rgba[dst+2] = (uint8_t)(data[src+2] * 255.0f);
-        rgba[dst+3] = (uint8_t)(data[src+3] * 255.0f);
+        // ✅ Clamp floats to [0,1] before converting to byte
+        rgba[dst]   = (uint8_t)(std::clamp(data[src],   0.0f, 1.0f) * 255.0f);
+        rgba[dst+1] = (uint8_t)(std::clamp(data[src+1], 0.0f, 1.0f) * 255.0f);
+        rgba[dst+2] = (uint8_t)(std::clamp(data[src+2], 0.0f, 1.0f) * 255.0f);
+        rgba[dst+3] = (uint8_t)(std::clamp(data[src+3], 0.0f, 1.0f) * 255.0f);
     }
     vkUnmapMemory(device, outputStagingMemory);
     fprintf(stderr, "📥 Output read complete\n");
