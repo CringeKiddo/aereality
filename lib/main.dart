@@ -13,6 +13,7 @@ import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 import 'vulkan_bridge.dart';
+import 'package:share_plus/share_plus.dart';   // ✅ for sharing exports
 
 void main() {
   runApp(const AERealityApp());
@@ -813,52 +814,63 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       const batchSize = 5;
 
-    for (int i = 0; i < totalFrames; i += batchSize) {
-  final batch = frameFiles.skip(i).take(batchSize).toList();
-  await Future.wait(batch.map((file) async {
-    if (file is! File) return;
-    try {
-      final bytes = await file.readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) {
-        throw Exception('Failed to decode frame: ${file.path}');
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          try {
+            final bytes = await file.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded == null) {
+              throw Exception('Failed to decode frame: ${file.path}');
+            }
+
+            // ✅ RAW-BYTE FIX – correct API usage
+            final rawInput = decoded.data!.buffer.asUint8List();   // Uint8List
+            final outputRaw = processImage(rawInput, decoded.width, decoded.height);  // 3 args
+
+            final gradedImg = img.Image.fromBytes(
+              width: decoded.width,
+              height: decoded.height,
+              bytes: outputRaw.buffer,   // ByteBuffer (named params)
+            );
+            final pngBytes = img.encodePng(gradedImg);
+            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+            await outputFile.writeAsBytes(pngBytes);
+
+            if (!await outputFile.exists()) {
+              throw Exception('Failed to write processed frame to: ${outputFile.path}');
+            }
+
+            // ✅ DEBUG: Save first processed frame to temporary directory
+            if (processedFrames == 1) {
+              try {
+                final testDir = await getTemporaryDirectory();
+                final testFile = File('${testDir.path}/test_frame.png');
+                await outputFile.copy(testFile.path);
+                print('✅ Test frame saved to: ${testFile.path}');
+              } catch (e) {
+                print('❌ Failed to save test frame: $e');
+              }
+            }
+
+            processedFrames++;
+            final p = processedFrames / totalFrames;
+            progressNotifier.value = p;
+            final percent = (processedFrames / totalFrames * 100).toInt();
+            statusNotifier.value = 'Processing... $percent%';
+            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+              final remaining = totalSec - stopwatch.elapsed.inSeconds;
+              final mins = remaining ~/ 60;
+              final secs = remaining % 60;
+              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+            }
+          } catch (e) {
+            throw Exception('Frame processing failed at $processedFrames: $e');
+          }
+        }));
       }
-
-      // ✅ RAW-BYTE FIX – correct API usage
-      final rawInput = decoded.data!.buffer.asUint8List();   // Uint8List
-      final outputRaw = processImage(rawInput, decoded.width, decoded.height);  // 3 args
-
-      final gradedImg = img.Image.fromBytes(
-        width: decoded.width,
-        height: decoded.height,
-        bytes: outputRaw.buffer,   // ByteBuffer
-      );
-      final pngBytes = img.encodePng(gradedImg);
-      final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-      await outputFile.writeAsBytes(pngBytes);
-
-      if (!await outputFile.exists()) {
-        throw Exception('Failed to write processed frame to: ${outputFile.path}');
-      }
-
-      // ✅ DEBUG: Save first processed frame to Downloads
-      if (processedFrames == 1) {
-        try {
-          final testFile = File('/storage/emulated/0/Download/test_frame.png');
-          await outputFile.copy(testFile.path);
-          print('✅ Test frame saved to Downloads');
-        } catch (e) {
-          print('❌ Failed to save test frame: $e');
-        }
-      }
-
-      processedFrames++;
-      // ... (your progress update code goes here) ...
-    } catch (e) {
-      throw Exception('Frame processing failed: $e');
-    }
-  }));
-    }
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding 8-bit SDR video...';
@@ -902,36 +914,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      final downloadsDir = Directory('/storage/emulated/0/Download/');
-      if (!await downloadsDir.exists()) {
-        final docsDir = await getApplicationDocumentsDirectory();
-        final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-        await File(finalOutputPath).copy(finalFile.path);
-        await framesDir.delete(recursive: true);
-        await processedDir.delete(recursive: true);
-        try { await File(audioPath).delete(); } catch (_) {}
-        try { await File(silentOutputPath).delete(); } catch (_) {}
-        if (mounted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('⚠️ Saved to app folder: ${finalFile.path}'), backgroundColor: Colors.orange, duration: const Duration(seconds: 5)),
-          );
-        }
-        return;
-      }
-
-      final finalFile = File('${downloadsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      // ✅ Save final MP4 to app's Documents folder (no permissions needed)
+      final docsDir = await getApplicationDocumentsDirectory();
+      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
 
+      // Clean up temporary folders and files
       await framesDir.delete(recursive: true);
       await processedDir.delete(recursive: true);
       try { await File(audioPath).delete(); } catch (_) {}
       try { await File(silentOutputPath).delete(); } catch (_) {}
 
       if (mounted) {
+        // Close the progress dialog
         Navigator.pop(context);
+
+        // Show snackbar with SHARE button
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path} (8-bit test)'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+          SnackBar(
+            content: Text('✅ Export complete: ${finalFile.path.split('/').last}'),
+            action: SnackBarAction(
+              label: 'SHARE',
+              onPressed: () {
+                Share.shareFiles(
+                  [finalFile.path],
+                  text: 'AEReality export – enjoy!',
+                );
+              },
+            ),
+            duration: const Duration(seconds: 10),
+          ),
         );
       }
     } catch (e) {
