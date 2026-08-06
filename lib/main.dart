@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';  // ✅ added for rootBundle
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -532,11 +532,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _loadShader() async {
     try {
       final byteData = await rootBundle.load('assets/shaders/aereality_core.spv');
+      print('✅ SPIR-V loaded: ${byteData.lengthInBytes} bytes');
       _spirvShader = byteData.buffer.asUint8List();
       initVulkan(_spirvShader!);
-      print('✅ Vulkan initialized with SPIR-V shader');
+      print('✅ Vulkan initialized successfully');
     } catch (e) {
-      print('❌ Failed to load SPIR-V shader: $e');
+      print('❌ SPIR-V load failed: $e');
     }
   }
 
@@ -841,6 +842,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
             if (!await outputFile.exists()) {
               throw Exception('Failed to write processed frame to: ${outputFile.path}');
+            }
+
+            // ✅ DEBUG: Save first processed frame to Downloads
+            if (processedFrames == 1) {
+              try {
+                final testFile = File('/storage/emulated/0/Download/test_frame.png');
+                await outputFile.copy(testFile.path);
+                print('✅ Test frame saved to Downloads: ${testFile.path}');
+              } catch (e) {
+                print('❌ Failed to save test frame: $e');
+              }
             }
 
             processedFrames++;
