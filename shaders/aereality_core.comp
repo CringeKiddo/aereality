@@ -1,3 +1,13 @@
+// Read input as raw bytes and manually convert to RGBA
+vec4 srgb = imageLoad(inputImage, pos);
+
+// If the input is BGRA, swap R and B
+float temp = srgb.r;
+srgb.r = srgb.b;
+srgb.b = temp;
+
+// If the input is RGB (no alpha), set alpha to 1.0
+// We can't detect this in the shader, but we can assume the C++ code provides RGBA.
 #version 460
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
