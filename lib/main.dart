@@ -834,7 +834,7 @@ final gradedImg = img.Image.fromBytes(
   bytes: outputRaw,
   format: img.Format.rgba,                    // ✅ named parameters to avoid ambiguity
 );
-            );
+            
             final pngBytes = img.encodePng(gradedImg);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes);
