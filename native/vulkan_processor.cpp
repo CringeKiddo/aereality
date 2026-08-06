@@ -1,19 +1,16 @@
 // native/vulkan_processor.cpp – Part 1 of 2
-// Complete Vulkan compute pipeline – 32-bit float grading.
-// Compiles to libvulkan_processor.so
-// Output format: RGBA8 for display/export (grading still in float)
+// Full Vulkan compute pipeline – 32-bit float grading.
+// With pipeline barriers, cache invalidation, and float-to-byte conversion.
 
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 
 #define CHECK_VK(call) if ((call) != VK_SUCCESS) { fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); return; }
 
-// Global Vulkan objects
 static VkInstance instance;
 static VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 static VkDevice device;
@@ -30,7 +27,6 @@ static VkSampler sampler;
 static VkCommandBuffer cmdBuffer;
 static VkFence fence;
 
-// Image resources
 static VkImage inputImage;
 static VkDeviceMemory inputMemory;
 static VkImageView inputView;
@@ -46,7 +42,6 @@ static int width = 0, height = 0;
 static bool initialized = false;
 static bool imagesCreated = false;
 
-// Helper: create shader module
 VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     VkShaderModuleCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -61,7 +56,6 @@ VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     return module;
 }
 
-// Helper: find memory type
 uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
@@ -74,7 +68,6 @@ uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     return UINT32_MAX;
 }
 
-// ------------------- Vulkan initialization -------------------
 void initVulkan() {
     fprintf(stderr, "🔄 initVulkan started\n");
 
@@ -188,7 +181,6 @@ void initVulkan() {
     fprintf(stderr, "✅ Sampler created\n");
 }
 
-// ------------------- Shader and pipeline creation -------------------
 void initShader(const uint32_t* spirv, size_t size) {
     fprintf(stderr, "🔄 initShader called with size: %zu\n", size);
     shaderModule = createShaderModule(spirv, size);
@@ -275,16 +267,15 @@ void initShader(const uint32_t* spirv, size_t size) {
 // native/vulkan_processor.cpp – Part 2 of 2
 // Paste this after Part 1 in the same file.
 
-// ------------------- Image creation -------------------
 void createImages(int w, int h) {
     fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
     if (imagesCreated) {
-        // Clean old images (simplified)
+        // Simplified cleanup
     }
     width = w;
     height = h;
 
-    // Input image (RGBA8)
+    // Input image (32‑bit float) – read only
     VkImageCreateInfo imgInfo = {};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -293,14 +284,14 @@ void createImages(int w, int h) {
     imgInfo.extent.depth = 1;
     imgInfo.mipLevels = 1;
     imgInfo.arrayLayers = 1;
-    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateImage(device, &imgInfo, nullptr, &inputImage);
-    fprintf(stderr, "✅ Input image created\n");
+    fprintf(stderr, "✅ Input image created (rgba32f)\n");
 
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(device, inputImage, &memReq);
@@ -316,15 +307,14 @@ void createImages(int w, int h) {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = inputImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
     vkCreateImageView(device, &viewInfo, nullptr, &inputView);
     fprintf(stderr, "✅ Input image view created\n");
 
-    // ✅ Output image (RGBA8 – for display/export)
-    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    // Output image (32‑bit float) – storage + transfer
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     vkCreateImage(device, &imgInfo, nullptr, &outputImage);
     vkGetImageMemoryRequirements(device, outputImage, &memReq);
@@ -332,32 +322,39 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &outputMemory);
     vkBindImageMemory(device, outputImage, outputMemory, 0);
-    fprintf(stderr, "✅ Output image created (RGBA8)\n");
+    fprintf(stderr, "✅ Output image created (rgba32f)\n");
 
     viewInfo.image = outputImage;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     vkCreateImageView(device, &viewInfo, nullptr, &outputView);
-    fprintf(stderr, "✅ Output image view created (RGBA8)\n");
+    fprintf(stderr, "✅ Output image view created\n");
 
-    // Staging buffers
+    // Staging buffer for input (CPU → GPU)
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = w * h * 4;
+    bufInfo.size = w * h * 4 * 4; // 4 channels * 4 bytes (float)
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
     vkGetBufferMemoryRequirements(device, stagingBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
-    memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    memAlloc.memoryTypeIndex = findMemoryType(
+        memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
     vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
     fprintf(stderr, "✅ Input staging buffer created\n");
 
+    // Staging buffer for output (GPU → CPU)
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     vkCreateBuffer(device, &bufInfo, nullptr, &outputStagingBuffer);
     vkGetBufferMemoryRequirements(device, outputStagingBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
-    memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    memAlloc.memoryTypeIndex = findMemoryType(
+        memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
     fprintf(stderr, "✅ Output staging buffer created\n");
@@ -393,12 +390,20 @@ void createImages(int w, int h) {
     fprintf(stderr, "✅ Descriptor set updated\n");
 }
 
-// ------------------- Upload, process, readback -------------------
 void uploadInput(const uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📤 Uploading input frame...\n");
-    void* data;
-    vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, &data);
-    memcpy(data, rgba, w * h * 4);
+    // Copy input to staging buffer (converts uint8 to float)
+    float* data;
+    vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+    for (int i = 0; i < w * h; i++) {
+        int src = i * 4;
+        int dst = i * 4;
+        // Convert 0-255 to 0.0-1.0 float
+        data[dst]   = rgba[src] / 255.0f;
+        data[dst+1] = rgba[src+1] / 255.0f;
+        data[dst+2] = rgba[src+2] / 255.0f;
+        data[dst+3] = rgba[src+3] / 255.0f;
+    }
     vkUnmapMemory(device, stagingMemory);
 
     VkCommandBufferBeginInfo beginInfo = {};
@@ -406,6 +411,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
+    // Transition input image to transfer dst
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -431,13 +437,14 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     region.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
+    // Transition input to shader read
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Transition output image
+    // Transition output image to general (storage)
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -453,7 +460,22 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
     fprintf(stderr, "🔄 Shader dispatched\n");
 
-    // Transition output to transfer read
+    // Pipeline barrier: ensure shader writes are visible to transfer
+    VkMemoryBarrier memBarrier = {};
+    memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    memBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(
+        cmdBuffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1, &memBarrier,
+        0, nullptr,
+        0, nullptr
+    );
+
+    // Transition output to transfer source
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -479,23 +501,42 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmdBuffer;
     vkQueueSubmit(queue, 1, &submitInfo, fence);
+
+    // Wait for GPU to finish
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
+
     fprintf(stderr, "📤 Upload and dispatch complete\n");
 }
 
 void readOutput(uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📥 Reading output...\n");
-    void* data;
-    vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, &data);
-    memcpy(rgba, data, w * h * 4);
+
+    // Invalidate cache to ensure CPU sees GPU writes
+    VkMappedMemoryRange range = {};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = outputStagingMemory;
+    range.offset = 0;
+    range.size = VK_WHOLE_SIZE;
+    vkInvalidateMappedMemoryRanges(device, 1, &range);
+
+    float* data;
+    vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+    // Convert float (0.0-1.0) to uint8 (0-255) for FFmpeg
+    for (int i = 0; i < w * h; i++) {
+        int src = i * 4;
+        int dst = i * 4;
+        rgba[dst]   = (uint8_t)(data[src] * 255.0f);
+        rgba[dst+1] = (uint8_t)(data[src+1] * 255.0f);
+        rgba[dst+2] = (uint8_t)(data[src+2] * 255.0f);
+        rgba[dst+3] = (uint8_t)(data[src+3] * 255.0f);
+    }
     vkUnmapMemory(device, outputStagingMemory);
     fprintf(stderr, "📥 Output read complete\n");
 }
 
 void cleanupImages() {
     if (!imagesCreated) return;
-    // Cleanup simplified
     imagesCreated = false;
 }
 
@@ -516,7 +557,6 @@ void cleanupVulkan() {
     fprintf(stderr, "✅ Cleanup complete\n");
 }
 
-// ------------------- Exported C functions -------------------
 extern "C" {
 
 void init_processor(const uint32_t* spirv, size_t size) {
