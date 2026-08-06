@@ -25,6 +25,7 @@ void main() {
     ivec2 size = imageSize(inputImage);
     if (pos.x >= size.x || pos.y >= size.y) return;
 
-    // 🔥 FORCE PURE RED – ignore input and uniforms
-    imageStore(outputImage, pos, vec4(1.0, 0.0, 0.0, 1.0));
+    // ✅ Passthrough: read input, write directly to output
+    vec4 color = imageLoad(inputImage, pos);
+    imageStore(outputImage, pos, color);
 }
