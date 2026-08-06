@@ -825,13 +825,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             }
 
             // ✅ RAW-BYTE FIX: skip ui.Image conversion, go direct
-            final rawInput = decoded.data!.asUint8List();
-            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+            final rawInput = decoded.data!.bytes;          // ✅ correct way to get raw bytes
+final outputRaw = processImage(rawInput, decoded.width, decoded.height);
 
-            final gradedImg = img.Image.fromBytes(
-              decoded.width,
-              decoded.height,
-              outputRaw,
+final gradedImg = img.Image.fromBytes(
+  width: decoded.width,
+  height: decoded.height,
+  bytes: outputRaw,
+  format: img.Format.rgba,                    // ✅ named parameters to avoid ambiguity
+);
             );
             final pngBytes = img.encodePng(gradedImg);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
