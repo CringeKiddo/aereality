@@ -824,17 +824,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               throw Exception('Failed to decode frame: ${file.path}');
             }
 
-            // ✅ RAW-BYTE FIX: skip ui.Image conversion, go direct
-            final rawInput = decoded.data!.bytes;          // ✅ correct way to get raw bytes
-final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+            // ✅ RAW-BYTE FIX – correct API usage
+            final rawInput = decoded.data!.buffer.asUint8List();
+            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
 
-final gradedImg = img.Image.fromBytes(
-  width: decoded.width,
-  height: decoded.height,
-  bytes: outputRaw,
-  format: img.Format.rgba,                    // ✅ named parameters to avoid ambiguity
-);
-            
+            final gradedImg = img.Image.fromBytes(
+              decoded.width,
+              decoded.height,
+              outputRaw.buffer,   // Image.fromBytes expects ByteBuffer
+            );
             final pngBytes = img.encodePng(gradedImg);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes);
@@ -878,7 +876,6 @@ final gradedImg = img.Image.fromBytes(
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      // ✅ Simplified 8-bit H.264 command
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
