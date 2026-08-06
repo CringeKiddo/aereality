@@ -189,7 +189,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 }
-
 // ---------- SETTINGS ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -300,8 +299,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
       ),
     );
   }
-
-  Widget _buildSlantedBox(String title, List<String> options, String selectedValue,
+    Widget _buildSlantedBox(String title, List<String> options, String selectedValue,
       ValueChanged<String> onSelected, bool isExpanded, VoidCallback onToggle) {
     return AnimatedBuilder(
       animation: _tiltAnimation,
@@ -633,8 +631,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-}
-  // ---------- CONVERT img.Image → ui.Image ----------
+
   Future<ui.Image> _convertImageToUiImage(img.Image image) async {
     final pngBytes = img.encodePng(image);
     final completer = Completer<ui.Image>();
@@ -644,7 +641,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- CONVERT ui.Image → img.Image ----------
   Future<img.Image> _uiImageToImage(ui.Image uiImage) async {
     final byteData = await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
     final image = img.Image.fromBytes(
@@ -655,13 +651,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return image;
   }
 
-  // ---------- PROCESS FRAME WITH VULKAN ----------
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
-    
     final outputBytes = processImage(inputBytes, input.width, input.height);
-    
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       outputBytes,
@@ -672,9 +665,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-
-  // ---------- PREVIEW FRAME (VULKAN FFI) ----------
-  Future<void> _previewFrame() async {
+    Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
       return;
@@ -688,11 +679,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final timestamp = _controller!.value.position.inSeconds;
       final dir = await getTemporaryDirectory();
       final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
-      
+
       final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
       final session = await FFmpegKit.execute(cmd);
       final returnCode = await session.getReturnCode();
-      
+
       if (!ReturnCode.isSuccess(returnCode)) {
         final output = await session.getOutput() ?? "No stdout";
         final allLogs = await session.getAllLogs();
@@ -712,10 +703,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final bytes = await file.readAsBytes();
       final image = img.decodeImage(bytes);
       if (image == null) throw Exception('Failed to decode image');
-      
+
       final uiFrame = await _convertImageToUiImage(image);
       final gradedUi = await _processFrameWithVulkan(uiFrame);
-      
+
       showDialog(
         context: context,
         barrierDismissible: true,
@@ -749,7 +740,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       setState(() => _isPreviewing = false);
     }
   }
-  // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 8-BIT SDR TEST) ----------
+
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -833,10 +824,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               throw Exception('Failed to decode frame: ${file.path}');
             }
 
-            final uiFrame = await _convertImageToUiImage(decoded);
-            final gradedUi = await _processFrameWithVulkan(uiFrame);
-            final gradedImg = await _uiImageToImage(gradedUi);
-            
+            // ✅ RAW-BYTE FIX: skip ui.Image conversion, go direct
+            final rawInput = Uint8List.fromList(decoded.data.buffer.asUint8List());
+            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+
+            final gradedImg = img.Image.fromBytes(
+              decoded.width,
+              decoded.height,
+              outputRaw,
+              format: img.Format.rgba,
+            );
             final pngBytes = img.encodePng(gradedImg);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
             await outputFile.writeAsBytes(pngBytes);
@@ -896,8 +893,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (!ReturnCode.isSuccess(encodeReturnCode)) {
         final combined = await encodeSession.getOutput() ?? "No output";
-        final errorSnippet = combined.length > 500 
-            ? "...${combined.substring(combined.length - 500)}" 
+        final errorSnippet = combined.length > 500
+            ? "...${combined.substring(combined.length - 500)}"
             : combined;
         throw Exception('Encode failed:\n$errorSnippet');
       }
@@ -959,8 +956,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
-  // ---------- EXPORT DIALOG ----------
-  void _showExportSheet() {
+    void _showExportSheet() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
@@ -1040,7 +1036,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- BUILD METHOD ----------
+  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
+    return Row(
+      children: [
+        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+        Expanded(
+          child: Slider(
+            value: val.clamp(min, max),
+            min: min,
+            max: max,
+            activeColor: Colors.white,
+            inactiveColor: Colors.grey[800],
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1236,25 +1250,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
-        Expanded(
-          child: Slider(
-            value: val.clamp(min, max),
-            min: min,
-            max: max,
-            activeColor: Colors.white,
-            inactiveColor: Colors.grey[800],
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
-      ],
-    );
-  }
-
   @override
   void dispose() {
     _controller?.removeListener(_listener);
@@ -1262,3 +1257,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
+}
