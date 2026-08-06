@@ -1,6 +1,6 @@
 // native/vulkan_processor.cpp – Part 1 of 2
 // Full Vulkan compute pipeline – 32-bit float grading.
-// With pipeline barriers, cache invalidation, and float-to-byte conversion.
+// With pipeline barriers, cache invalidation, and hard sync.
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -392,13 +392,11 @@ void createImages(int w, int h) {
 
 void uploadInput(const uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📤 Uploading input frame...\n");
-    // Copy input to staging buffer (converts uint8 to float)
     float* data;
     vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
-        // Convert 0-255 to 0.0-1.0 float
         data[dst]   = rgba[src] / 255.0f;
         data[dst+1] = rgba[src+1] / 255.0f;
         data[dst+2] = rgba[src+2] / 255.0f;
@@ -411,7 +409,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    // Transition input image to transfer dst
+    // Transition input to transfer dst
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -437,14 +435,12 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     region.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // Transition input to shader read
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Transition output image to general (storage)
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -458,9 +454,8 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     uint32_t groupX = (w + 15) / 16;
     uint32_t groupY = (h + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
-    fprintf(stderr, "🔄 Shader dispatched\n");
 
-    // Pipeline barrier: ensure shader writes are visible to transfer
+    // ✅ Memory barrier: ensure shader writes are visible to transfer
     VkMemoryBarrier memBarrier = {};
     memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -502,9 +497,8 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     submitInfo.pCommandBuffers = &cmdBuffer;
     vkQueueSubmit(queue, 1, &submitInfo, fence);
 
-    // Wait for GPU to finish
-    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-    vkResetFences(device, 1, &fence);
+    // ✅ HARD SYNC: Wait for the GPU to finish everything
+    vkQueueWaitIdle(queue);
 
     fprintf(stderr, "📤 Upload and dispatch complete\n");
 }
@@ -512,7 +506,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
 void readOutput(uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📥 Reading output...\n");
 
-    // Invalidate cache to ensure CPU sees GPU writes
+    // ✅ Invalidate cache to ensure CPU sees GPU writes
     VkMappedMemoryRange range = {};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
     range.memory = outputStagingMemory;
