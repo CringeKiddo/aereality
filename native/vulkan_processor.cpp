@@ -1,7 +1,7 @@
 // native/vulkan_processor.cpp – Part 1 of 2
 // Complete Vulkan compute pipeline – 32-bit float grading.
 // Compiles to libvulkan_processor.so
-// With full logging to stderr (visible in logcat)
+// Output format: RGBA8 for display/export (grading still in float)
 
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -323,8 +323,8 @@ void createImages(int w, int h) {
     vkCreateImageView(device, &viewInfo, nullptr, &inputView);
     fprintf(stderr, "✅ Input image view created\n");
 
-    // Output image (32-bit float)
-    imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    // ✅ Output image (RGBA8 – for display/export)
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     vkCreateImage(device, &imgInfo, nullptr, &outputImage);
     vkGetImageMemoryRequirements(device, outputImage, &memReq);
@@ -332,12 +332,12 @@ void createImages(int w, int h) {
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &outputMemory);
     vkBindImageMemory(device, outputImage, outputMemory, 0);
-    fprintf(stderr, "✅ Output image created\n");
+    fprintf(stderr, "✅ Output image created (RGBA8)\n");
 
     viewInfo.image = outputImage;
-    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     vkCreateImageView(device, &viewInfo, nullptr, &outputView);
-    fprintf(stderr, "✅ Output image view created\n");
+    fprintf(stderr, "✅ Output image view created (RGBA8)\n");
 
     // Staging buffers
     VkBufferCreateInfo bufInfo = {};
