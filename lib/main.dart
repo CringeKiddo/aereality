@@ -813,63 +813,52 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       const batchSize = 5;
 
-      for (int i = 0; i < totalFrames; i += batchSize) {
-        final batch = frameFiles.skip(i).take(batchSize).toList();
-        await Future.wait(batch.map((file) async {
-          if (file is! File) return;
-          try {
-            final bytes = await file.readAsBytes();
-            final decoded = img.decodeImage(bytes);
-            if (decoded == null) {
-              throw Exception('Failed to decode frame: ${file.path}');
-            }
-
-            // ✅ RAW-BYTE FIX – correct API usage
-            final rawInput = decoded.data!.buffer.asUint8List();
-            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
-
-            final gradedImg = img.Image.fromBytes(
-              decoded.width,
-              decoded.height,
-              outputRaw.buffer,   // Image.fromBytes expects ByteBuffer
-            );
-            final pngBytes = img.encodePng(gradedImg);
-            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-            await outputFile.writeAsBytes(pngBytes);
-
-            if (!await outputFile.exists()) {
-              throw Exception('Failed to write processed frame to: ${outputFile.path}');
-            }
-
-            // ✅ DEBUG: Save first processed frame to Downloads
-            if (processedFrames == 1) {
-              try {
-                final testFile = File('/storage/emulated/0/Download/test_frame.png');
-                await outputFile.copy(testFile.path);
-                print('✅ Test frame saved to Downloads: ${testFile.path}');
-                print('📊 Test frame size: ${await testFile.length()} bytes');
-              } catch (e) {
-                print('❌ Failed to save test frame: $e');
-              }
-            }
-
-            processedFrames++;
-            final p = processedFrames / totalFrames;
-            progressNotifier.value = p;
-            final percent = (processedFrames / totalFrames * 100).toInt();
-            statusNotifier.value = 'Processing... $percent%';
-            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
-              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
-              final remaining = totalSec - stopwatch.elapsed.inSeconds;
-              final mins = remaining ~/ 60;
-              final secs = remaining % 60;
-              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-            }
-          } catch (e) {
-            throw Exception('Frame processing failed at $processedFrames: $e');
-          }
-        }));
+    for (int i = 0; i < totalFrames; i += batchSize) {
+  final batch = frameFiles.skip(i).take(batchSize).toList();
+  await Future.wait(batch.map((file) async {
+    if (file is! File) return;
+    try {
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) {
+        throw Exception('Failed to decode frame: ${file.path}');
       }
+
+      // ✅ RAW-BYTE FIX – correct API usage
+      final rawInput = decoded.data!.buffer.asUint8List();   // Uint8List
+      final outputRaw = processImage(rawInput, decoded.width, decoded.height);  // 3 args
+
+      final gradedImg = img.Image.fromBytes(
+        width: decoded.width,
+        height: decoded.height,
+        bytes: outputRaw.buffer,   // ByteBuffer
+      );
+      final pngBytes = img.encodePng(gradedImg);
+      final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+      await outputFile.writeAsBytes(pngBytes);
+
+      if (!await outputFile.exists()) {
+        throw Exception('Failed to write processed frame to: ${outputFile.path}');
+      }
+
+      // ✅ DEBUG: Save first processed frame to Downloads
+      if (processedFrames == 1) {
+        try {
+          final testFile = File('/storage/emulated/0/Download/test_frame.png');
+          await outputFile.copy(testFile.path);
+          print('✅ Test frame saved to Downloads');
+        } catch (e) {
+          print('❌ Failed to save test frame: $e');
+        }
+      }
+
+      processedFrames++;
+      // ... (your progress update code goes here) ...
+    } catch (e) {
+      throw Exception('Frame processing failed: $e');
+    }
+  }));
+    }
       stopwatch.stop();
 
       statusNotifier.value = 'Encoding 8-bit SDR video...';
