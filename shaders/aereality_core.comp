@@ -2,8 +2,8 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba8) uniform readonly image2D inputImage;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D inputImage;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D outputImage;
 
 layout(set = 0, binding = 2, std140) uniform Uniforms {
     vec2 resolution;
@@ -78,25 +78,22 @@ float dither(vec2 coord) {
     return fract(n);
 }
 
-// ------------------- MAIN COMPUTE SHADER -------------------
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
     if (pos.x >= size.x || pos.y >= size.y) return;
 
-    // 1. Read input
+    // 1. Read input (sRGB)
     vec4 srgb = imageLoad(inputImage, pos);
     vec3 color = srgb.rgb;
 
-    // 2. ✅ MANUAL RGB→RGBA fix (CPU fix ported to Vulkan)
-    // Swap R and B if the input is BGRA
-    // We can't detect this in the shader, but we can try both
-    // For now, we assume the input is RGBA and proceed.
+    // BGR fix (if input is BGRA)
+    color = color.bgr;
 
-    // 3. sRGB → Linear
+    // 2. sRGB → Linear (float)
     color = srgb_to_linear_vec3(color);
 
-    // 4. Sharpening
+    // 3. Sharpening
     if (u.sharpness > 0.005) {
         ivec2 texel = pos;
         vec3 left   = srgb_to_linear_vec3(imageLoad(inputImage, texel + ivec2(-1, 0)).rgb);
@@ -107,49 +104,49 @@ void main() {
         color += laplacian * u.sharpness * 0.15;
     }
 
-    // 5. Temperature
+    // 4. Temperature
     vec3 tempGain = temperature_shift(u.temperature);
     color *= tempGain;
 
-    // 6. Hue
+    // 5. Hue
     if (abs(u.hue) > 0.5) {
         vec3 hsv = rgb2hsv(color);
         hsv.x = fract(hsv.x + (u.hue / 360.0));
         color = hsv2rgb(hsv);
     }
 
-    // 7. Saturation
+    // 6. Saturation
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(luma), color, u.saturation);
 
-    // 8. Contrast
+    // 7. Contrast
     color = (color - 0.5) * u.contrast + 0.5;
 
-    // 9. Brightness
+    // 8. Brightness
     color += u.brightness;
 
-    // 10. Gamma
+    // 9. Gamma
     float invGamma = 1.0 / max(u.gamma, 0.1);
     color = pow(max(vec3(0.0), color), vec3(invGamma));
 
-    // 11. Teal & Orange
+    // 10. Teal & Orange
     color = teal_orange(color, u.lookMix);
 
-    // 12. Vignette
+    // 11. Vignette
     vec2 uv = vec2(pos) / vec2(size);
     vec2 vigUV = uv - 0.5;
     float vigDist = length(vigUV);
     float vignetteAmount = 1.0 - (vigDist * u.vignette * 1.5);
     color *= vignetteAmount;
 
-    // 13. Split Toning
+    // 12. Split Toning
     float lumaSplit = dot(color, vec3(0.2126, 0.7152, 0.0722));
     vec3 shadowTint = vec3(0.1, 0.2, 0.6);
     vec3 highlightTint = vec3(1.0, 0.5, 0.1);
     vec3 tonedColor = mix(shadowTint, highlightTint, lumaSplit);
     color = mix(color, color * tonedColor, u.splitToning * 0.4);
 
-    // 14. Glow
+    // 13. Glow (bloom)
     if (u.glowIntensity > 0.005) {
         vec3 blur = vec3(0.0);
         for (int ky = -1; ky <= 1; ky++) {
@@ -165,23 +162,23 @@ void main() {
         color += glow;
     }
 
-    // 15. Filmic Tonemap
+    // 14. Filmic Tonemap
     color = filmic_tonemap(color);
 
-    // 16. Linear → sRGB
+    // 15. Linear → sRGB (conversion to display space, still float)
     color = vec3(
         linear_to_srgb(color.r),
         linear_to_srgb(color.g),
         linear_to_srgb(color.b)
     );
 
-    // 17. Dither
+    // 16. Dither
     float noise = (dither(vec2(pos)) - 0.5) / 255.0;
     color += noise;
 
-    // 18. Final clamp
+    // 17. Final clamp
     color = clamp(color, 0.0, 1.0);
 
-    // 19. Write output
+    // 18. Write output as 32‑bit float
     imageStore(outputImage, pos, vec4(color, 1.0));
 }
