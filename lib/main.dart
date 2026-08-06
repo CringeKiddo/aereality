@@ -633,7 +633,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
     );
   }
-    // ---------- CONVERT img.Image → ui.Image ----------
+}
+  // ---------- CONVERT img.Image → ui.Image ----------
   Future<ui.Image> _convertImageToUiImage(img.Image image) async {
     final pngBytes = img.encodePng(image);
     final completer = Completer<ui.Image>();
@@ -748,7 +749,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       setState(() => _isPreviewing = false);
     }
   }
-    // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 8-BIT SDR TEST) ----------
+  // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 8-BIT SDR TEST) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -958,7 +959,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
-    // ---------- EXPORT DIALOG ----------
+  // ---------- EXPORT DIALOG ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
