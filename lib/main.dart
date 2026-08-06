@@ -1150,6 +1150,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: TabBarView(
                     controller: _tabController,
                     children: [
+                      // Adjust tab
                       ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         children: [
@@ -1165,6 +1166,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
                         ],
                       ),
+                      // Presets tab
                       GridView.count(
                         crossAxisCount: 3,
                         padding: const EdgeInsets.all(8),
@@ -1190,6 +1192,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           );
                         }).toList(),
                       ),
+                      // Export tab
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -1227,7 +1230,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1258,4 +1261,3 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-          }
