@@ -748,7 +748,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       setState(() => _isPreviewing = false);
     }
   }
-    // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 10-BIT SDR) ----------
+    // ---------- FULL EXPORT (VULKAN FFI 32-BIT → 8-BIT SDR TEST) ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -772,7 +772,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Exporting... (Vulkan 32-bit → 10-bit SDR)', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)', style: TextStyle(color: Colors.white, fontSize: 16)),
             const SizedBox(height: 16),
             ValueListenableBuilder<double>(
               valueListenable: progressNotifier,
@@ -850,6 +850,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 final testFile = File('/storage/emulated/0/Download/test_frame.png');
                 await outputFile.copy(testFile.path);
                 print('✅ Test frame saved to Downloads: ${testFile.path}');
+                print('📊 Test frame size: ${await testFile.length()} bytes');
               } catch (e) {
                 print('❌ Failed to save test frame: $e');
               }
@@ -874,12 +875,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       stopwatch.stop();
 
-      statusNotifier.value = 'Encoding 10-bit SDR video...';
+      statusNotifier.value = 'Encoding 8-bit SDR video...';
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
+      // ✅ Simplified 8-bit H.264 command
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -profile:v high10 -preset ultrafast -crf 18 -pix_fmt yuv420p10le "$silentOutputPath"';
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       var encodeReturnCode = await encodeSession.getReturnCode();
 
@@ -944,7 +946,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path} (10-bit SDR)'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
+          SnackBar(content: Text('✅ Saved to Downloads: ${finalFile.path} (8-bit test)'), backgroundColor: Colors.green, duration: const Duration(seconds: 5)),
         );
       }
     } catch (e) {
@@ -1027,7 +1029,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Full 32-bit Vulkan → 10-bit SDR export', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  const Text('Exporting to 8-bit SDR (test)', style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             );
@@ -1225,7 +1227,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1256,4 +1258,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-}
+          }
