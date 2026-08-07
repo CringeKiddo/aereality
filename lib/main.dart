@@ -665,7 +665,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    Future<void> _previewFrame() async {
+
+  Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
       return;
@@ -825,13 +826,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             }
 
             // ✅ RAW-BYTE FIX – correct API usage
-            final rawInput = decoded.data!.buffer.asUint8List();   // Uint8List
-            final outputRaw = processImage(rawInput, decoded.width, decoded.height);  // 3 args
+            final rawInput = decoded.data!.buffer.asUint8List();
+            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
 
             final gradedImg = img.Image.fromBytes(
               width: decoded.width,
               height: decoded.height,
-              bytes: outputRaw.buffer,   // ByteBuffer (named params)
+              bytes: outputRaw.buffer,
             );
             final pngBytes = img.encodePng(gradedImg);
             final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
@@ -913,7 +914,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      // ✅ Save final MP4 to app's Documents folder (no permissions needed)
+      // Save final MP4 to app's Documents folder
       final docsDir = await getApplicationDocumentsDirectory();
       final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
@@ -928,19 +929,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         // Close the progress dialog
         Navigator.pop(context);
 
-        // Show snackbar with SHARE button
-                // Show snackbar with file path
+        // Show snackbar with file path (no share)
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('✅ Export saved to:\n${finalFile.path}'),
             duration: const Duration(seconds: 8),
           ),
         );
+      }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export Error: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 10)),
+          SnackBar(
+            content: Text('Export Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 10),
+          ),
         );
       }
     }
