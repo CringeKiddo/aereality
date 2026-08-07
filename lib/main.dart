@@ -13,7 +13,6 @@ import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 import 'vulkan_bridge.dart';
-import 'package:share_plus/share_plus.dart';   // ✅ for sharing exports
 
 void main() {
   runApp(const AERealityApp());
