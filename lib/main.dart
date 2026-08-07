@@ -235,6 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+
 // ---------- PROJECT SETUP SCREEN ----------
 class ProjectSetupScreen extends StatefulWidget {
   const ProjectSetupScreen({super.key});
@@ -665,8 +666,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-
-  Future<void> _previewFrame() async {
+    Future<void> _previewFrame() async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
       return;
@@ -742,215 +742,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
-    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
-      return;
-    }
-    if (_spirvShader == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
-      return;
-    }
-
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>('Initializing...');
-    final etaNotifier = ValueNotifier<String>('--:--');
-    final stopwatch = Stopwatch();
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1A),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)', style: TextStyle(color: Colors.white, fontSize: 16)),
-            const SizedBox(height: 16),
-            ValueListenableBuilder<double>(
-              valueListenable: progressNotifier,
-              builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: Colors.white),
-            ),
-            const SizedBox(height: 12),
-            ValueListenableBuilder<String>(
-              valueListenable: statusNotifier,
-              builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70)),
-            ),
-            ValueListenableBuilder<String>(
-              valueListenable: etaNotifier,
-              builder: (_, eta, __) => Text('Estimated time remaining: $eta', style: const TextStyle(color: Colors.white54)),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      final dir = await getTemporaryDirectory();
-      final framesDir = Directory('${dir.path}/export_frames');
-      final processedDir = Directory('${dir.path}/export_processed');
-      if (await framesDir.exists()) await framesDir.delete(recursive: true);
-      if (await processedDir.exists()) await processedDir.delete(recursive: true);
-      await framesDir.create();
-      await processedDir.create();
-
-      statusNotifier.value = 'Extracting frames...';
-      final extractCmd = '-i "${_currentVideoPath!}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
-      final extractSession = await FFmpegKit.execute(extractCmd);
-      final extractReturnCode = await extractSession.getReturnCode();
-      if (!ReturnCode.isSuccess(extractReturnCode)) {
-        final err = await extractSession.getOutput();
-        throw Exception('Extract failed: ${err ?? "Unknown error"}');
-      }
-
-      final frameFiles = await framesDir.list().toList();
-      if (frameFiles.isEmpty) {
-        throw Exception('No frames extracted.');
-      }
-
-      final totalFrames = frameFiles.length;
-      int processedFrames = 0;
-      stopwatch.start();
-
-      const batchSize = 5;
-
-      for (int i = 0; i < totalFrames; i += batchSize) {
-        final batch = frameFiles.skip(i).take(batchSize).toList();
-        await Future.wait(batch.map((file) async {
-          if (file is! File) return;
-          try {
-            final bytes = await file.readAsBytes();
-            final decoded = img.decodeImage(bytes);
-            if (decoded == null) {
-              throw Exception('Failed to decode frame: ${file.path}');
-            }
-
-            // ✅ RAW-BYTE FIX – correct API usage
-            final rawInput = decoded.data!.buffer.asUint8List();
-            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
-
-            final gradedImg = img.Image.fromBytes(
-              width: decoded.width,
-              height: decoded.height,
-              bytes: outputRaw.buffer,
-            );
-            final pngBytes = img.encodePng(gradedImg);
-            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-            await outputFile.writeAsBytes(pngBytes);
-
-            if (!await outputFile.exists()) {
-              throw Exception('Failed to write processed frame to: ${outputFile.path}');
-            }
-
-            // ✅ DEBUG: Save first processed frame to temporary directory
-            if (processedFrames == 1) {
-              try {
-                final testDir = await getTemporaryDirectory();
-                final testFile = File('${testDir.path}/test_frame.png');
-                await outputFile.copy(testFile.path);
-                print('✅ Test frame saved to: ${testFile.path}');
-              } catch (e) {
-                print('❌ Failed to save test frame: $e');
-              }
-            }
-
-            processedFrames++;
-            final p = processedFrames / totalFrames;
-            progressNotifier.value = p;
-            final percent = (processedFrames / totalFrames * 100).toInt();
-            statusNotifier.value = 'Processing... $percent%';
-            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
-              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
-              final remaining = totalSec - stopwatch.elapsed.inSeconds;
-              final mins = remaining ~/ 60;
-              final secs = remaining % 60;
-              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-            }
-          } catch (e) {
-            throw Exception('Frame processing failed at $processedFrames: $e');
-          }
-        }));
-      }
-      stopwatch.stop();
-
-      statusNotifier.value = 'Encoding 8-bit SDR video...';
-      final targetFps = int.parse(fps.replaceAll('fps', ''));
-      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
-      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
-      var encodeSession = await FFmpegKit.execute(encodeCmd);
-      var encodeReturnCode = await encodeSession.getReturnCode();
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        statusNotifier.value = 'Retrying with mpeg4...';
-        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
-        encodeSession = await FFmpegKit.execute(fallbackCmd);
-        encodeReturnCode = await encodeSession.getReturnCode();
-      }
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        final combined = await encodeSession.getOutput() ?? "No output";
-        final errorSnippet = combined.length > 500
-            ? "...${combined.substring(combined.length - 500)}"
-            : combined;
-        throw Exception('Encode failed:\n$errorSnippet');
-      }
-
-      statusNotifier.value = 'Extracting audio...';
-      final audioPath = '${dir.path}/extracted_audio.aac';
-      final audioCmd = '-i "${_currentVideoPath!}" -vn -acodec copy "$audioPath"';
-      final audioSession = await FFmpegKit.execute(audioCmd);
-      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
-        print('Audio extraction skipped');
-      }
-
-      statusNotifier.value = 'Muxing audio and video...';
-      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
-      final muxSession = await FFmpegKit.execute(muxCmd);
-      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
-        await File(silentOutputPath).copy(File(finalOutputPath).path);
-      }
-
-      // Save final MP4 to app's Documents folder
-      final docsDir = await getApplicationDocumentsDirectory();
-      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-      await File(finalOutputPath).copy(finalFile.path);
-
-      // Clean up temporary folders and files
-      await framesDir.delete(recursive: true);
-      await processedDir.delete(recursive: true);
-      try { await File(audioPath).delete(); } catch (_) {}
-      try { await File(silentOutputPath).delete(); } catch (_) {}
-
-      if (mounted) {
-        // Close the progress dialog
-        Navigator.pop(context);
-
-        // Show snackbar with file path (no share)
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Export saved to:\n${finalFile.path}'),
-            duration: const Duration(seconds: 8),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export Error: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 10),
-          ),
-        );
-      }
-    }
-  }
-    void _showExportSheet() {
+  void _showExportSheet() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
@@ -1047,6 +839,229 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
       ],
     );
+  }
+    Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+    if (_spirvShader == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
+      return;
+    }
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)', style: TextStyle(color: Colors.white, fontSize: 16)),
+            const SizedBox(height: 16),
+            ValueListenableBuilder<double>(
+              valueListenable: progressNotifier,
+              builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: Colors.white),
+            ),
+            const SizedBox(height: 12),
+            ValueListenableBuilder<String>(
+              valueListenable: statusNotifier,
+              builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70)),
+            ),
+            ValueListenableBuilder<String>(
+              valueListenable: etaNotifier,
+              builder: (_, eta, __) => Text('Estimated time remaining: $eta', style: const TextStyle(color: Colors.white54)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+
+      // ✅ Copy input video to cache if it's outside (fix for Android 11+)
+      String videoPathForFFmpeg = _currentVideoPath!;
+      bool isCachedVideo = false;
+      if (!videoPathForFFmpeg.startsWith(dir.path)) {
+        statusNotifier.value = 'Copying video to cache...';
+        final inputFile = File(videoPathForFFmpeg);
+        if (!await inputFile.exists()) {
+          throw Exception('Input video file does not exist: $videoPathForFFmpeg');
+        }
+        final cachedVideoPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        await inputFile.copy(cachedVideoPath);
+        videoPathForFFmpeg = cachedVideoPath;
+        isCachedVideo = true;
+        print('📹 Video copied to cache: $videoPathForFFmpeg');
+      }
+
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create();
+      await processedDir.create();
+
+      statusNotifier.value = 'Extracting frames...';
+      final extractCmd = '-i "${videoPathForFFmpeg}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractSession = await FFmpegKit.execute(extractCmd);
+      final extractReturnCode = await extractSession.getReturnCode();
+      if (!ReturnCode.isSuccess(extractReturnCode)) {
+        final err = await extractSession.getOutput();
+        throw Exception('Extract failed: ${err ?? "Unknown error"}');
+      }
+
+      final frameFiles = await framesDir.list().toList();
+      if (frameFiles.isEmpty) {
+        throw Exception('No frames extracted.');
+      }
+
+      final totalFrames = frameFiles.length;
+      int processedFrames = 0;
+      stopwatch.start();
+
+      const batchSize = 5;
+
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          try {
+            final bytes = await file.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded == null) {
+              throw Exception('Failed to decode frame: ${file.path}');
+            }
+
+            final rawInput = decoded.data!.buffer.asUint8List();
+            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+
+            final gradedImg = img.Image.fromBytes(
+              width: decoded.width,
+              height: decoded.height,
+              bytes: outputRaw.buffer,
+            );
+            final pngBytes = img.encodePng(gradedImg);
+            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+            await outputFile.writeAsBytes(pngBytes);
+
+            if (!await outputFile.exists()) {
+              throw Exception('Failed to write processed frame to: ${outputFile.path}');
+            }
+
+            if (processedFrames == 1) {
+              try {
+                final testDir = await getTemporaryDirectory();
+                final testFile = File('${testDir.path}/test_frame.png');
+                await outputFile.copy(testFile.path);
+                print('✅ Test frame saved to: ${testFile.path}');
+              } catch (e) {
+                print('❌ Failed to save test frame: $e');
+              }
+            }
+
+            processedFrames++;
+            final p = processedFrames / totalFrames;
+            progressNotifier.value = p;
+            final percent = (processedFrames / totalFrames * 100).toInt();
+            statusNotifier.value = 'Processing... $percent%';
+            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+              final remaining = totalSec - stopwatch.elapsed.inSeconds;
+              final mins = remaining ~/ 60;
+              final secs = remaining % 60;
+              etaNotifier.value = '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+            }
+          } catch (e) {
+            throw Exception('Frame processing failed at $processedFrames: $e');
+          }
+        }));
+      }
+      stopwatch.stop();
+
+      statusNotifier.value = 'Encoding 8-bit SDR video...';
+      final targetFps = int.parse(fps.replaceAll('fps', ''));
+      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
+      var encodeSession = await FFmpegKit.execute(encodeCmd);
+      var encodeReturnCode = await encodeSession.getReturnCode();
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        statusNotifier.value = 'Retrying with mpeg4...';
+        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeSession = await FFmpegKit.execute(fallbackCmd);
+        encodeReturnCode = await encodeSession.getReturnCode();
+      }
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        final combined = await encodeSession.getOutput() ?? "No output";
+        final errorSnippet = combined.length > 500
+            ? "...${combined.substring(combined.length - 500)}"
+            : combined;
+        throw Exception('Encode failed:\n$errorSnippet');
+      }
+
+      statusNotifier.value = 'Extracting audio...';
+      final audioPath = '${dir.path}/extracted_audio.aac';
+      final audioCmd = '-i "${videoPathForFFmpeg}" -vn -acodec copy "$audioPath"';
+      final audioSession = await FFmpegKit.execute(audioCmd);
+      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
+        print('Audio extraction skipped');
+      }
+
+      statusNotifier.value = 'Muxing audio and video...';
+      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
+      final muxSession = await FFmpegKit.execute(muxCmd);
+      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
+        await File(silentOutputPath).copy(File(finalOutputPath).path);
+      }
+
+      // Save final MP4 to app's Documents folder
+      final docsDir = await getApplicationDocumentsDirectory();
+      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await File(finalOutputPath).copy(finalFile.path);
+
+      // Clean up temporary folders and files
+      await framesDir.delete(recursive: true);
+      await processedDir.delete(recursive: true);
+      try { await File(audioPath).delete(); } catch (_) {}
+      try { await File(silentOutputPath).delete(); } catch (_) {}
+      if (isCachedVideo) {
+        try { await File(videoPathForFFmpeg).delete(); } catch (_) {}
+      }
+
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Export saved to:\n${finalFile.path}'),
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+    }
   }
 
   @override
