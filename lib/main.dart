@@ -1,4 +1,3 @@
-import 'package:share_plus/share_plus.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -931,22 +930,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         Navigator.pop(context);
 
         // Show snackbar with SHARE button
+                // Show snackbar with file path
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ Export complete: ${finalFile.path.split('/').last}'),
-            action: SnackBarAction(
-              label: 'SHARE',
-              onPressed: () {
-                Share.shareFiles(
-                  [finalFile.path],
-                  text: 'AEReality export – enjoy!',
-                );
-              },
-            ),
-            duration: const Duration(seconds: 10),
+            content: Text('✅ Export saved to:\n${finalFile.path}'),
+            duration: const Duration(seconds: 8),
           ),
         );
-      }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
