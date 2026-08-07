@@ -1,3 +1,4 @@
+import 'package:share_plus/share_plus.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
