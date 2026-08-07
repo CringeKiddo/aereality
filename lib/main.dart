@@ -556,10 +556,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
+  // ✅ NEW: _pickVideo copies to cache immediately to avoid content URI crashes
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
-      await _loadVideo(result.files.single.path!);
+      final file = result.files.single;
+      try {
+        final dir = await getTemporaryDirectory();
+        final cachedPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        await file.saveTo(cachedPath);
+        await _loadVideo(cachedPath);
+        print('✅ Video cached at: $cachedPath');
+      } catch (e) {
+        print('❌ Failed to copy video to cache: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to copy video: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -885,22 +898,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     try {
       final dir = await getTemporaryDirectory();
-
-      // ✅ Copy input video to cache if it's outside (fix for Android 11+)
-      String videoPathForFFmpeg = _currentVideoPath!;
-      bool isCachedVideo = false;
-      if (!videoPathForFFmpeg.startsWith(dir.path)) {
-        statusNotifier.value = 'Copying video to cache...';
-        final inputFile = File(videoPathForFFmpeg);
-        if (!await inputFile.exists()) {
-          throw Exception('Input video file does not exist: $videoPathForFFmpeg');
-        }
-        final cachedVideoPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-        await inputFile.copy(cachedVideoPath);
-        videoPathForFFmpeg = cachedVideoPath;
-        isCachedVideo = true;
-        print('📹 Video copied to cache: $videoPathForFFmpeg');
-      }
+      final videoPath = _currentVideoPath!; // already cached
 
       final framesDir = Directory('${dir.path}/export_frames');
       final processedDir = Directory('${dir.path}/export_processed');
@@ -910,7 +908,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       await processedDir.create();
 
       statusNotifier.value = 'Extracting frames...';
-      final extractCmd = '-i "${videoPathForFFmpeg}" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
       final extractSession = await FFmpegKit.execute(extractCmd);
       final extractReturnCode = await extractSession.getReturnCode();
       if (!ReturnCode.isSuccess(extractReturnCode)) {
@@ -1013,7 +1011,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       statusNotifier.value = 'Extracting audio...';
       final audioPath = '${dir.path}/extracted_audio.aac';
-      final audioCmd = '-i "${videoPathForFFmpeg}" -vn -acodec copy "$audioPath"';
+      final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
       final audioSession = await FFmpegKit.execute(audioCmd);
       if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
         print('Audio extraction skipped');
@@ -1037,9 +1035,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       await processedDir.delete(recursive: true);
       try { await File(audioPath).delete(); } catch (_) {}
       try { await File(silentOutputPath).delete(); } catch (_) {}
-      if (isCachedVideo) {
-        try { await File(videoPathForFFmpeg).delete(); } catch (_) {}
-      }
 
       if (mounted) {
         Navigator.pop(context);
