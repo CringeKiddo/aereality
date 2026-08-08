@@ -556,15 +556,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ✅ NEW: _pickVideo copies to cache immediately to avoid content URI crashes
+  // ✅ FIXED _pickVideo – copies to cache using File.copy
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
       final file = result.files.single;
+      if (file.path == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No file path returned'), backgroundColor: Colors.red),
+        );
+        return;
+      }
       try {
         final dir = await getTemporaryDirectory();
         final cachedPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-        await file.saveTo(cachedPath);
+        final inputFile = File(file.path!);
+        await inputFile.copy(cachedPath);
         await _loadVideo(cachedPath);
         print('✅ Video cached at: $cachedPath');
       } catch (e) {
