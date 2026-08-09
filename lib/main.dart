@@ -1098,49 +1098,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
     await logFile.writeAsString('🟢 Export started at ${DateTime.now()}\n', mode: FileMode.append);
 
-    try {
-      await logFile.writeAsString('✅ Step 1: Log file created\n', mode: FileMode.append);
+    // ---- Create notifiers ----
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
 
-      // ---- Checks ----
-      if (_controller == null) {
-        await logFile.writeAsString('❌ _controller is null\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller is null')));
-        return;
-      }
-      if (!_controller!.value.isInitialized) {
-        await logFile.writeAsString('❌ Controller not initialized\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller not initialized')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 2: Controller OK\n', mode: FileMode.append);
-
-      if (_currentVideoPath == null) {
-        await logFile.writeAsString('❌ _currentVideoPath is null\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video path')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 3: Video path: $_currentVideoPath\n', mode: FileMode.append);
-
-      if (_spirvShader == null) {
-        await logFile.writeAsString('❌ Shader not loaded\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 4: Shader loaded\n', mode: FileMode.append);
-
-      // ---- Progress setup ----
-      final progressNotifier = ValueNotifier<double>(0.0);
-      final statusNotifier = ValueNotifier<String>('Initializing...');
-      final etaNotifier = ValueNotifier<String>('--:--');
-      final stopwatch = Stopwatch();
-
-      await logFile.writeAsString('✅ Step 5: Notifiers created\n', mode: FileMode.append);
-
-      // ---- Show dialog ----
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
+    // ---- Show the dialog (non-blocking) ----
+    BuildContext? dialogContext;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogContext = ctx;
+        return AlertDialog(
           backgroundColor: const Color(0xFF1A1A1A),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1167,15 +1138,49 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
             ],
           ),
-        ),
-      );
+        );
+      },
+    );
 
-      await logFile.writeAsString('✅ Step 6: Dialog shown\n', mode: FileMode.append);
+    // ---- Now run the actual export ----
+    try {
+      await logFile.writeAsString('✅ Step 1: Dialog shown\n', mode: FileMode.append);
+
+      // ---- Checks ----
+      if (_controller == null) {
+        await logFile.writeAsString('❌ _controller is null\n', mode: FileMode.append);
+        if (dialogContext != null) Navigator.pop(dialogContext!);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller is null')));
+        return;
+      }
+      if (!_controller!.value.isInitialized) {
+        await logFile.writeAsString('❌ Controller not initialized\n', mode: FileMode.append);
+        if (dialogContext != null) Navigator.pop(dialogContext!);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller not initialized')));
+        return;
+      }
+      await logFile.writeAsString('✅ Step 2: Controller OK\n', mode: FileMode.append);
+
+      if (_currentVideoPath == null) {
+        await logFile.writeAsString('❌ _currentVideoPath is null\n', mode: FileMode.append);
+        if (dialogContext != null) Navigator.pop(dialogContext!);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video path')));
+        return;
+      }
+      await logFile.writeAsString('✅ Step 3: Video path: $_currentVideoPath\n', mode: FileMode.append);
+
+      if (_spirvShader == null) {
+        await logFile.writeAsString('❌ Shader not loaded\n', mode: FileMode.append);
+        if (dialogContext != null) Navigator.pop(dialogContext!);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded')));
+        return;
+      }
+      await logFile.writeAsString('✅ Step 4: Shader loaded\n', mode: FileMode.append);
 
       // ---- Actual export ----
       final dir = await getTemporaryDirectory();
       final videoPath = _currentVideoPath!;
-      await logFile.writeAsString('✅ Step 7: Using video path: $videoPath\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 5: Using video path: $videoPath\n', mode: FileMode.append);
 
       final framesDir = Directory('${dir.path}/export_frames');
       final processedDir = Directory('${dir.path}/export_processed');
@@ -1183,7 +1188,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (await processedDir.exists()) await processedDir.delete(recursive: true);
       await framesDir.create();
       await processedDir.create();
-      await logFile.writeAsString('✅ Step 8: Directories created\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 6: Directories created\n', mode: FileMode.append);
 
       statusNotifier.value = 'Extracting frames...';
       final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
@@ -1193,11 +1198,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final err = await extractSession.getOutput();
         throw Exception('Extract failed: ${err ?? "Unknown error"}');
       }
-      await logFile.writeAsString('✅ Step 9: Frames extracted\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 7: Frames extracted\n', mode: FileMode.append);
 
       final frameFiles = await framesDir.list().toList();
       if (frameFiles.isEmpty) throw Exception('No frames extracted.');
-      await logFile.writeAsString('✅ Step 10: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 8: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
 
       // ---- Process frames ----
       final totalFrames = frameFiles.length;
@@ -1262,7 +1267,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         }));
       }
       stopwatch.stop();
-      await logFile.writeAsString('✅ Step 11: Frames processed\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 9: Frames processed\n', mode: FileMode.append);
 
       // ---- Encode ----
       statusNotifier.value = 'Encoding 8-bit SDR video...';
@@ -1289,7 +1294,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             : combined;
         throw Exception('Encode failed:\n$errorSnippet');
       }
-      await logFile.writeAsString('✅ Step 12: Encoding done\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 10: Encoding done\n', mode: FileMode.append);
 
       // ---- Audio ----
       statusNotifier.value = 'Extracting audio...';
@@ -1299,7 +1304,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
         print('Audio extraction skipped');
       }
-      await logFile.writeAsString('✅ Step 13: Audio extracted\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 11: Audio extracted\n', mode: FileMode.append);
 
       // ---- Mux ----
       statusNotifier.value = 'Muxing audio and video...';
@@ -1309,13 +1314,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
-      await logFile.writeAsString('✅ Step 14: Muxing done\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 12: Muxing done\n', mode: FileMode.append);
 
       // ---- Save final ----
       final docsDir = await getApplicationDocumentsDirectory();
       final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
-      await logFile.writeAsString('✅ Step 15: Final file saved: ${finalFile.path}\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 13: Final file saved: ${finalFile.path}\n', mode: FileMode.append);
 
       // ---- Cleanup ----
       await framesDir.delete(recursive: true);
@@ -1323,8 +1328,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       try { await File(audioPath).delete(); } catch (_) {}
       try { await File(silentOutputPath).delete(); } catch (_) {}
 
+      // ---- Close dialog and show success ----
+      if (dialogContext != null) Navigator.pop(dialogContext!);
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('✅ Export saved to:\n${finalFile.path}'),
@@ -1332,11 +1338,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ),
         );
       }
-      await logFile.writeAsString('✅ Step 16: Export completed successfully\n', mode: FileMode.append);
+      await logFile.writeAsString('✅ Step 14: Export completed successfully\n', mode: FileMode.append);
     } catch (e, stack) {
       await logFile.writeAsString('❌ Export error: $e\n$stack\n', mode: FileMode.append);
+      if (dialogContext != null) Navigator.pop(dialogContext!);
       if (mounted) {
-        try { Navigator.pop(context); } catch (_) {}
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Export Error: $e'),
@@ -1355,4 +1361,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-}   // ✅ This is the closing brace for the class – ensure it's present
+}   // ← This closes the class – make sure it's there
