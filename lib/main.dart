@@ -1210,62 +1210,85 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       stopwatch.start();
       const batchSize = 5;
 
+      await logFile.writeAsString('🔄 Entering frame processing loop\n', mode: FileMode.append);
+
       for (int i = 0; i < totalFrames; i += batchSize) {
+        await logFile.writeAsString('🔄 Batch $i starting\n', mode: FileMode.append);
+
         final batch = frameFiles.skip(i).take(batchSize).toList();
-        await Future.wait(batch.map((file) async {
-          if (file is! File) return;
-          try {
-            final bytes = await file.readAsBytes();
-            final decoded = img.decodeImage(bytes);
-            if (decoded == null) {
-              throw Exception('Failed to decode frame: ${file.path}');
+        await logFile.writeAsString('🔄 Batch size: ${batch.length}\n', mode: FileMode.append);
+
+        try {
+          await Future.wait(batch.map((file) async {
+            if (file is! File) {
+              await logFile.writeAsString('⚠️ Skipping non-file: ${file.path}\n', mode: FileMode.append);
+              return;
             }
+            await logFile.writeAsString('📄 Processing file: ${file.path}\n', mode: FileMode.append);
 
-            final rawInput = decoded.data!.buffer.asUint8List();
-            final outputRaw = processImage(rawInput, decoded.width, decoded.height);
-
-            final gradedImg = img.Image.fromBytes(
-              width: decoded.width,
-              height: decoded.height,
-              bytes: outputRaw.buffer,
-            );
-            final pngBytes = img.encodePng(gradedImg);
-            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-            await outputFile.writeAsBytes(pngBytes);
-
-            if (!await outputFile.exists()) {
-              throw Exception('Failed to write processed frame to: ${outputFile.path}');
-            }
-
-            if (processedFrames == 1) {
-              try {
-                final testDir = await getTemporaryDirectory();
-                final testFile = File('${testDir.path}/test_frame.png');
-                await outputFile.copy(testFile.path);
-                print('✅ Test frame saved to: ${testFile.path}');
-              } catch (e) {
-                print('❌ Failed to save test frame: $e');
+            try {
+              final bytes = await file.readAsBytes();
+              final decoded = img.decodeImage(bytes);
+              if (decoded == null) {
+                throw Exception('Failed to decode frame: ${file.path}');
               }
-            }
 
-            processedFrames++;
-            final p = processedFrames / totalFrames;
-            progressNotifier.value = p;
-            final percent = (processedFrames / totalFrames * 100).toInt();
-            statusNotifier.value = 'Processing... $percent%';
-            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
-              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
-              final remaining = totalSec - stopwatch.elapsed.inSeconds;
-              final mins = remaining ~/ 60;
-              final secs = remaining % 60;
-              etaNotifier.value =
-                  '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+              final rawInput = decoded.data!.buffer.asUint8List();
+              await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
+              final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+              await logFile.writeAsString('✅ processImage returned\n', mode: FileMode.append);
+
+              final gradedImg = img.Image.fromBytes(
+                width: decoded.width,
+                height: decoded.height,
+                bytes: outputRaw.buffer,
+              );
+              final pngBytes = img.encodePng(gradedImg);
+              final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+              await outputFile.writeAsBytes(pngBytes);
+
+              if (!await outputFile.exists()) {
+                throw Exception('Failed to write processed frame to: ${outputFile.path}');
+              }
+
+              if (processedFrames == 1) {
+                try {
+                  final testDir = await getTemporaryDirectory();
+                  final testFile = File('${testDir.path}/test_frame.png');
+                  await outputFile.copy(testFile.path);
+                  print('✅ Test frame saved to: ${testFile.path}');
+                } catch (e) {
+                  print('❌ Failed to save test frame: $e');
+                }
+              }
+
+              processedFrames++;
+              final p = processedFrames / totalFrames;
+              progressNotifier.value = p;
+              final percent = (processedFrames / totalFrames * 100).toInt();
+              statusNotifier.value = 'Processing... $percent%';
+              if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+                final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+                final remaining = totalSec - stopwatch.elapsed.inSeconds;
+                final mins = remaining ~/ 60;
+                final secs = remaining % 60;
+                etaNotifier.value =
+                    '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+              }
+              await logFile.writeAsString('✅ Frame $processedFrames processed\n', mode: FileMode.append);
+            } catch (e) {
+              await logFile.writeAsString('❌ Error processing frame: $e\n', mode: FileMode.append);
+              throw Exception('Frame processing failed: $e');
             }
-          } catch (e) {
-            throw Exception('Frame processing failed at $processedFrames: $e');
-          }
-        }));
+          }));
+        } catch (e) {
+          await logFile.writeAsString('❌ Batch failed: $e\n', mode: FileMode.append);
+          throw Exception('Batch processing failed: $e');
+        }
+
+        await logFile.writeAsString('🔄 Batch $i completed\n', mode: FileMode.append);
       }
+
       stopwatch.stop();
       await logFile.writeAsString('✅ Step 9: Frames processed\n', mode: FileMode.append);
 
@@ -1361,4 +1384,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-}   // ← This closes the class – make sure it's there
+}
