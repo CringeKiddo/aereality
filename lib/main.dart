@@ -1355,3 +1355,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
+}   // ✅ This is the closing brace for the class – ensure it's present
