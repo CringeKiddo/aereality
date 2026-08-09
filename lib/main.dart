@@ -1235,7 +1235,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
               final rawInput = decoded.data!.buffer.asUint8List();
               await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
-              final outputRaw = processImage(rawInput, decoded.width, decoded.height);
+
+              // ✅ TIMEOUT: processImage must return within 30 seconds
+              final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height))
+                  .timeout(const Duration(seconds: 30),
+                      onTimeout: () => throw Exception('processImage timed out after 30s'));
+
               await logFile.writeAsString('✅ processImage returned\n', mode: FileMode.append);
 
               final gradedImg = img.Image.fromBytes(
@@ -1384,4 +1389,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-}
+}   // ✅ class closing brace
