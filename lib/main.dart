@@ -583,7 +583,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ✅ UPDATED _showLog – reads both export_log.txt AND vulkan_log.txt
+  // ✅ UPDATED _showLog – reads export_log, vulkan_log, AND raw process_frame file
   Future<void> _showLog() async {
     try {
       final docsDir = await getApplicationDocumentsDirectory();
@@ -591,9 +591,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       
       final exportLogFile = File('${docsDir.path}/export_log.txt');
       final vulkanLogFile = File('${tempDir.path}/vulkan_log.txt');
+      final rawFile = File('${tempDir.path}/process_frame_enter.txt');
 
       String exportContent = '';
       String vulkanContent = '';
+      String rawContent = '';
 
       if (await exportLogFile.exists()) {
         exportContent = await exportLogFile.readAsString();
@@ -607,7 +609,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         vulkanContent = 'No Vulkan log found. Try exporting first.';
       }
 
-      final fullLog = '📦 EXPORT LOG:\n$exportContent\n\n📦 VULKAN LOG:\n$vulkanContent';
+      if (await rawFile.exists()) {
+        rawContent = await rawFile.readAsString();
+      } else {
+        rawContent = 'No raw process_frame entry file found.';
+      }
+
+      final fullLog = '📦 EXPORT LOG:\n$exportContent\n\n📦 VULKAN LOG:\n$vulkanContent\n\n📦 RAW ENTRY:\n$rawContent';
 
       showDialog(
         context: context,
@@ -1113,13 +1121,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
     await logFile.writeAsString('🟢 Export started at ${DateTime.now()}\n', mode: FileMode.append);
 
-    // ---- Create notifiers ----
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('Initializing...');
     final etaNotifier = ValueNotifier<String>('--:--');
     final stopwatch = Stopwatch();
 
-    // ---- Show the dialog (non-blocking) ----
     BuildContext? dialogContext;
     showDialog(
       context: context,
@@ -1157,11 +1163,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       },
     );
 
-    // ---- Now run the actual export ----
     try {
       await logFile.writeAsString('✅ Step 1: Dialog shown\n', mode: FileMode.append);
 
-      // ---- Checks ----
       if (_controller == null) {
         await logFile.writeAsString('❌ _controller is null\n', mode: FileMode.append);
         if (dialogContext != null) Navigator.pop(dialogContext!);
@@ -1192,7 +1196,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       await logFile.writeAsString('✅ Step 4: Shader loaded\n', mode: FileMode.append);
 
-      // ---- Actual export ----
       final dir = await getTemporaryDirectory();
       final videoPath = _currentVideoPath!;
       await logFile.writeAsString('✅ Step 5: Using video path: $videoPath\n', mode: FileMode.append);
@@ -1219,7 +1222,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (frameFiles.isEmpty) throw Exception('No frames extracted.');
       await logFile.writeAsString('✅ Step 8: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
 
-      // ---- Process frames ----
       final totalFrames = frameFiles.length;
       int processedFrames = 0;
       stopwatch.start();
@@ -1251,7 +1253,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               final rawInput = decoded.data!.buffer.asUint8List();
               await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
 
-              // ✅ TIMEOUT: processImage must return within 30 seconds
               final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height))
                   .timeout(const Duration(seconds: 30),
                       onTimeout: () => throw Exception('processImage timed out after 30s'));
@@ -1312,7 +1313,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       stopwatch.stop();
       await logFile.writeAsString('✅ Step 9: Frames processed\n', mode: FileMode.append);
 
-      // ---- Encode ----
       statusNotifier.value = 'Encoding 8-bit SDR video...';
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
@@ -1339,7 +1339,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       await logFile.writeAsString('✅ Step 10: Encoding done\n', mode: FileMode.append);
 
-      // ---- Audio ----
       statusNotifier.value = 'Extracting audio...';
       final audioPath = '${dir.path}/extracted_audio.aac';
       final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
@@ -1349,7 +1348,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       await logFile.writeAsString('✅ Step 11: Audio extracted\n', mode: FileMode.append);
 
-      // ---- Mux ----
       statusNotifier.value = 'Muxing audio and video...';
       final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
       final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
@@ -1359,19 +1357,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       await logFile.writeAsString('✅ Step 12: Muxing done\n', mode: FileMode.append);
 
-      // ---- Save final ----
       final docsDir = await getApplicationDocumentsDirectory();
       final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
       await logFile.writeAsString('✅ Step 13: Final file saved: ${finalFile.path}\n', mode: FileMode.append);
 
-      // ---- Cleanup ----
       await framesDir.delete(recursive: true);
       await processedDir.delete(recursive: true);
       try { await File(audioPath).delete(); } catch (_) {}
       try { await File(silentOutputPath).delete(); } catch (_) {}
 
-      // ---- Close dialog and show success ----
       if (dialogContext != null) Navigator.pop(dialogContext!);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1404,4 +1399,4 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     cleanupVulkan();
     super.dispose();
   }
-}   // ✅ class closing brace
+}
