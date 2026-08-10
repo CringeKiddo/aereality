@@ -14,6 +14,7 @@ add_library(vulkan_processor SHARED vulkan_processor.cpp)
 target_link_libraries(vulkan_processor
     ${Vulkan_LIBRARIES}
     ${CMAKE_DL_LIBS}
+    log   # ✅ Required for __android_log_print
 )
 
 # Include Vulkan headers
