@@ -36,7 +36,7 @@ void initVulkan(Uint8List spirv) {
   if (_initialized) return;
   final ptr = calloc<Uint32>(spirv.length ~/ 4);
   ptr.asTypedList(spirv.length ~/ 4).setAll(0, spirv.buffer.asUint32List());
-  initProcessor(ptr, spirv.length); // int is automatically converted to size_t
+  initProcessor(ptr, spirv.length);
   calloc.free(ptr);
   _initialized = true;
 }
@@ -47,7 +47,12 @@ Uint8List processImage(Uint8List input, int width, int height) {
   inputPtr.asTypedList(input.length).setAll(0, input);
   final output = Uint8List(width * height * 4);
   final outputPtr = calloc<Uint8>(output.length);
-  processFrame(inputPtr, width, height, outputPtr); // ints are automatically converted to int32_t
+  
+  // ✅ DEBUG: print pointer addresses
+  print('🔵 Calling processFrame with inputPtr: $inputPtr, outputPtr: $outputPtr, w: $width, h: $height');
+  processFrame(inputPtr, width, height, outputPtr);
+  print('🔵 processFrame returned');
+  
   output.setAll(0, outputPtr.asTypedList(output.length));
   calloc.free(inputPtr);
   calloc.free(outputPtr);
