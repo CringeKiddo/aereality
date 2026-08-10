@@ -596,22 +596,15 @@ void init_processor(const uint32_t* spirv, size_t size) {
     writeLog("✅ init_processor complete");
 }
 
+// ✅ TRIVIAL process_frame – just copies input to output, for testing FFI
 void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
-    // ✅ Log at the VERY start – this should appear in logcat and file
     initLog();
-    writeLog("🔄 process_frame ENTERED: " + std::to_string(w) + "x" + std::to_string(h));
-    
-    if (!initialized) {
-        writeLog("❌ Vulkan not initialized");
-        return;
+    writeLog("🔄 process_frame ENTERED (trivial test)");
+    // Just copy input to output (passthrough)
+    for (int i = 0; i < w * h * 4; i++) {
+        output[i] = input[i];
     }
-    if (!imagesCreated || w != width || h != height) {
-        if (imagesCreated) cleanupImages();
-        createImages(w, h);
-    }
-    uploadInput(input, w, h);
-    readOutput(output, w, h);
-    writeLog("✅ process_frame complete");
+    writeLog("✅ process_frame complete (trivial)");
 }
 
 void cleanup_processor() {
