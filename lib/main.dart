@@ -583,24 +583,39 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ✅ NEW: Show the export log file
+  // ✅ UPDATED _showLog – reads both export_log.txt AND vulkan_log.txt
   Future<void> _showLog() async {
     try {
-      final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
-      if (!await logFile.exists()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No log file found. Try exporting first.')),
-        );
-        return;
+      final docsDir = await getApplicationDocumentsDirectory();
+      final tempDir = await getTemporaryDirectory();
+      
+      final exportLogFile = File('${docsDir.path}/export_log.txt');
+      final vulkanLogFile = File('${tempDir.path}/vulkan_log.txt');
+
+      String exportContent = '';
+      String vulkanContent = '';
+
+      if (await exportLogFile.exists()) {
+        exportContent = await exportLogFile.readAsString();
+      } else {
+        exportContent = 'No export log found.';
       }
-      final content = await logFile.readAsString();
+
+      if (await vulkanLogFile.exists()) {
+        vulkanContent = await vulkanLogFile.readAsString();
+      } else {
+        vulkanContent = 'No Vulkan log found. Try exporting first.';
+      }
+
+      final fullLog = '📦 EXPORT LOG:\n$exportContent\n\n📦 VULKAN LOG:\n$vulkanContent';
+
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
           backgroundColor: const Color(0xFF1A1A1A),
-          title: const Text('Export Log', style: TextStyle(color: Colors.white)),
+          title: const Text('Logs', style: TextStyle(color: Colors.white)),
           content: SingleChildScrollView(
-            child: Text(content, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            child: Text(fullLog, style: const TextStyle(color: Colors.white70, fontSize: 12)),
           ),
           actions: [
             TextButton(
@@ -612,7 +627,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error reading log: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text('Error reading logs: $e'), backgroundColor: Colors.red),
       );
     }
   }
