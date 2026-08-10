@@ -48,10 +48,8 @@ Uint8List processImage(Uint8List input, int width, int height) {
   final output = Uint8List(width * height * 4);
   final outputPtr = calloc<Uint8>(output.length);
   
-  // ✅ DEBUG: print pointer addresses
-  print('🔵 Calling processFrame with inputPtr: $inputPtr, outputPtr: $outputPtr, w: $width, h: $height');
+  // ✅ width and height are now correctly passed as Int32 (C's int)
   processFrame(inputPtr, width, height, outputPtr);
-  print('🔵 processFrame returned');
   
   output.setAll(0, outputPtr.asTypedList(output.length));
   calloc.free(inputPtr);
