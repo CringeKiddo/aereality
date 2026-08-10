@@ -6,25 +6,27 @@
 #include <cstdlib>
 #include <iostream>
 #include <algorithm>
-#include <fstream>          // ✅ for file logging
-#include <chrono>           // ✅ for timestamps
+#include <fstream>
+#include <chrono>
+#include <android/log.h>   // ✅ Android logging
 
-#define CHECK_VK(call) if ((call) != VK_SUCCESS) { \
-    fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); \
-    logFile << "❌ VK error at " << __LINE__ << "\n"; logFile.flush(); \
-    return; }
+#define LOG_TAG "AERealityVulkan"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 static std::ofstream logFile;
 static bool logInitialized = false;
 
 void initLog() {
     if (logInitialized) return;
+    // Use temporary directory path from getTemporaryDirectory() – we can't get it here, so we hardcode cache.
     logFile.open("/data/user/0/com.example.aereality/cache/vulkan_log.txt", std::ios::trunc);
     if (logFile.is_open()) {
         logFile << "🟢 Vulkan log started\n";
         logFile.flush();
         logInitialized = true;
     }
+    LOGD("Vulkan log initialized");
 }
 
 void writeLog(const std::string& msg) {
@@ -32,6 +34,7 @@ void writeLog(const std::string& msg) {
         logFile << msg << "\n";
         logFile.flush();
     }
+    LOGD("%s", msg.c_str());
 }
 
 static VkInstance instance;
@@ -541,7 +544,6 @@ void readOutput(uint8_t* rgba, int w, int h) {
     float* data;
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
 
-    // ✅ DEBUG: Print first pixel float values to file
     std::string msg = "🔍 First pixel floats: R=" + std::to_string(data[0]) +
                       " G=" + std::to_string(data[1]) +
                       " B=" + std::to_string(data[2]) +
@@ -551,7 +553,6 @@ void readOutput(uint8_t* rgba, int w, int h) {
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
-        // ✅ Clamp floats to [0,1] before converting to byte
         rgba[dst]   = (uint8_t)(std::clamp(data[src],   0.0f, 1.0f) * 255.0f);
         rgba[dst+1] = (uint8_t)(std::clamp(data[src+1], 0.0f, 1.0f) * 255.0f);
         rgba[dst+2] = (uint8_t)(std::clamp(data[src+2], 0.0f, 1.0f) * 255.0f);
@@ -596,8 +597,10 @@ void init_processor(const uint32_t* spirv, size_t size) {
 }
 
 void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
+    // ✅ Log at the VERY start – this should appear in logcat and file
     initLog();
-    writeLog("🔄 process_frame called: " + std::to_string(w) + "x" + std::to_string(h));
+    writeLog("🔄 process_frame ENTERED: " + std::to_string(w) + "x" + std::to_string(h));
+    
     if (!initialized) {
         writeLog("❌ Vulkan not initialized");
         return;
