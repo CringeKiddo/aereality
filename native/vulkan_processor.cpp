@@ -6,27 +6,25 @@
 #include <cstdlib>
 #include <iostream>
 #include <algorithm>
-#include <fstream>
-#include <chrono>
-#include <android/log.h>   // ✅ Android logging
+#include <fstream>          // ✅ for file logging
+#include <chrono>           // ✅ for timestamps
 
-#define LOG_TAG "AERealityVulkan"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define CHECK_VK(call) if ((call) != VK_SUCCESS) { \
+    fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); \
+    logFile << "❌ VK error at " << __LINE__ << "\n"; logFile.flush(); \
+    return; }
 
 static std::ofstream logFile;
 static bool logInitialized = false;
 
 void initLog() {
     if (logInitialized) return;
-    // Use temporary directory path from getTemporaryDirectory() – we can't get it here, so we hardcode cache.
     logFile.open("/data/user/0/com.example.aereality/cache/vulkan_log.txt", std::ios::trunc);
     if (logFile.is_open()) {
         logFile << "🟢 Vulkan log started\n";
         logFile.flush();
         logInitialized = true;
     }
-    LOGD("Vulkan log initialized");
 }
 
 void writeLog(const std::string& msg) {
@@ -34,7 +32,6 @@ void writeLog(const std::string& msg) {
         logFile << msg << "\n";
         logFile.flush();
     }
-    LOGD("%s", msg.c_str());
 }
 
 static VkInstance instance;
@@ -294,7 +291,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     writeLog("✅ Command buffer allocated");
 }
-// native/vulkan_processor.cpp – Part 2 of 2
+// native/vulkan_processor.cpp – Part 2 of 2 (real logic with logging)
 
 void createImages(int w, int h) {
     writeLog("🔄 createImages called: " + std::to_string(w) + "x" + std::to_string(h));
@@ -423,6 +420,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     writeLog("📤 Uploading input frame...");
     float* data;
     vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+    writeLog("📤 Mapped staging memory");
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
@@ -432,11 +430,13 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
         data[dst+3] = rgba[src+3] / 255.0f;
     }
     vkUnmapMemory(device, stagingMemory);
+    writeLog("📤 Unmapped staging memory");
 
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
+    writeLog("📤 Command buffer begun");
 
     // Transition input to transfer dst
     VkImageMemoryBarrier barrier = {};
@@ -463,6 +463,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     region.imageExtent.height = h;
     region.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    writeLog("📤 Buffer copied to image");
 
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -479,10 +480,12 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
 
     vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSet, 0, nullptr);
+    writeLog("📤 Pipeline bound, descriptor set bound");
 
     uint32_t groupX = (w + 15) / 16;
     uint32_t groupY = (h + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
+    writeLog("📤 Dispatch called");
 
     // Memory barrier: ensure shader writes are visible to transfer
     VkMemoryBarrier memBarrier = {};
@@ -517,6 +520,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     copyRegion.imageExtent.height = h;
     copyRegion.imageExtent.depth = 1;
     vkCmdCopyImageToBuffer(cmdBuffer, outputImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, outputStagingBuffer, 1, &copyRegion);
+    writeLog("📤 Image copied to output staging buffer");
 
     vkEndCommandBuffer(cmdBuffer);
 
@@ -525,8 +529,10 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmdBuffer;
     vkQueueSubmit(queue, 1, &submitInfo, fence);
+    writeLog("📤 Submit done");
 
     vkQueueWaitIdle(queue);
+    writeLog("📤 Queue wait idle done");
 
     writeLog("📤 Upload and dispatch complete");
 }
@@ -540,9 +546,11 @@ void readOutput(uint8_t* rgba, int w, int h) {
     range.offset = 0;
     range.size = VK_WHOLE_SIZE;
     vkInvalidateMappedMemoryRanges(device, 1, &range);
+    writeLog("📥 Invalidate done");
 
     float* data;
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+    writeLog("📥 Mapped output staging memory");
 
     std::string msg = "🔍 First pixel floats: R=" + std::to_string(data[0]) +
                       " G=" + std::to_string(data[1]) +
@@ -596,12 +604,25 @@ void init_processor(const uint32_t* spirv, size_t size) {
     writeLog("✅ init_processor complete");
 }
 
-// ✅ TRIVIAL process_frame – just logs, no work (for FFI testing)
+// ✅ REAL process_frame with logging
 void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
     initLog();
-    writeLog("🔄 process_frame ENTERED (trivial test)");
-    // Return immediately – do nothing
-    writeLog("✅ process_frame complete (trivial)");
+    writeLog("🔄 process_frame ENTERED (real)");
+    if (!initialized) {
+        writeLog("❌ Vulkan not initialized");
+        return;
+    }
+    writeLog("🔄 process_frame: initialized OK");
+    if (!imagesCreated || w != width || h != height) {
+        writeLog("🔄 Creating/recreating images");
+        if (imagesCreated) cleanupImages();
+        createImages(w, h);
+    }
+    writeLog("🔄 Calling uploadInput");
+    uploadInput(input, w, h);
+    writeLog("🔄 Calling readOutput");
+    readOutput(output, w, h);
+    writeLog("✅ process_frame complete");
 }
 
 void cleanup_processor() {
