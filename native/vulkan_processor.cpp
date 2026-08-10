@@ -596,14 +596,11 @@ void init_processor(const uint32_t* spirv, size_t size) {
     writeLog("✅ init_processor complete");
 }
 
-// ✅ TRIVIAL process_frame – just copies input to output, for testing FFI
+// ✅ TRIVIAL process_frame – just logs, no work (for FFI testing)
 void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
     initLog();
     writeLog("🔄 process_frame ENTERED (trivial test)");
-    // Just copy input to output (passthrough)
-    for (int i = 0; i < w * h * 4; i++) {
-        output[i] = input[i];
-    }
+    // Return immediately – do nothing
     writeLog("✅ process_frame complete (trivial)");
 }
 
