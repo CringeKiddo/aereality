@@ -20,12 +20,37 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float splitToning;
 } u;
 
+// Helper: sRGB → Linear
+vec3 srgbToLinear(vec3 srgb) {
+    vec3 less = step(vec3(0.04045), srgb);
+    return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), less);
+}
+
+// Helper: Linear → sRGB
+vec3 linearToSrgb(vec3 lin) {
+    vec3 less = step(vec3(0.0031308), lin);
+    return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
+}
+
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
     if (pos.x >= size.x || pos.y >= size.y) return;
 
-    // ✅ Passthrough: read input, write directly to output
     vec4 color = imageLoad(inputImage, pos);
+
+    // ============================================================
+    // STEP 1 – Passthrough (currently active – preview works)
+    // ============================================================
     imageStore(outputImage, pos, color);
+
+    // ============================================================
+    // STEP 2 – BRIGHTNESS (uncomment this block to test)
+    // ============================================================
+    /*
+    vec3 linear = srgbToLinear(color.rgb);
+    linear += u.brightness;
+    vec3 srgb = linearToSrgb(linear);
+    imageStore(outputImage, pos, vec4(srgb, color.a));
+    */
 }
