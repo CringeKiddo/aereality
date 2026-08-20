@@ -8,14 +8,12 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     ? DynamicLibrary.open('libvulkan_processor.so')
     : DynamicLibrary.process();
 
-// --- Native function signatures (using FFI types) ---
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
-typedef NativeProcess = Void Function(Pointer<Uint8> input, Int32 w, Int32 h, Pointer<Uint8> output);
+typedef NativeProcess = Void Function(Pointer<Uint8> input, Int32 w, Int32 h, Pointer<Uint8> output, Float brightness);
 typedef NativeCleanup = Void Function();
 
-// --- Dart function signatures (using Dart types) ---
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
-typedef DartProcess = void Function(Pointer<Uint8> input, int w, int h, Pointer<Uint8> output);
+typedef DartProcess = void Function(Pointer<Uint8> input, int w, int h, Pointer<Uint8> output, double brightness);
 typedef DartCleanup = void Function();
 
 final initProcessor = nativeLib
@@ -41,15 +39,15 @@ void initVulkan(Uint8List spirv) {
   _initialized = true;
 }
 
-Uint8List processImage(Uint8List input, int width, int height) {
-  if (!_initialized) throw Exception('Vulkan not initialized. Call initVulkan() first.');
+Uint8List processImage(Uint8List input, int width, int height, double brightness) {
+  if (!_initialized) throw Exception('Vulkan not initialized.');
   final inputPtr = calloc<Uint8>(input.length);
   inputPtr.asTypedList(input.length).setAll(0, input);
   final output = Uint8List(width * height * 4);
   final outputPtr = calloc<Uint8>(output.length);
   
-  // ✅ width and height are now correctly passed as Int32 (C's int)
-  processFrame(inputPtr, width, height, outputPtr);
+  // ✅ Pass brightness to C++
+  processFrame(inputPtr, width, height, outputPtr, brightness);
   
   output.setAll(0, outputPtr.asTypedList(output.length));
   calloc.free(inputPtr);
