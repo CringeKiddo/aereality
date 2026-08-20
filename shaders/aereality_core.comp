@@ -49,7 +49,7 @@ void main() {
     // ============================================================
     /*
     vec3 linear = srgbToLinear(color.rgb);
-    linear += u.brightness;
+    linear += 0.5;
     vec3 srgb = linearToSrgb(linear);
     imageStore(outputImage, pos, vec4(srgb, color.a));
     */
