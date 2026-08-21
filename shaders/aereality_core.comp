@@ -20,6 +20,28 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float splitToning;
 } u;
 
+// ---------- SIMPLE GAUSSIAN BLUR (5x5) ----------
+vec3 blur5x5(ivec2 pos, ivec2 size) {
+    vec3 result = vec3(0.0);
+    float total = 0.0;
+
+    // 5x5 kernel (approximate gaussian)
+    float kernel[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            ivec2 samplePos = pos + ivec2(dx, dy);
+            // Clamp to image edges
+            samplePos = clamp(samplePos, ivec2(0), size - 1);
+            vec4 sampleColor = imageLoad(inputImage, samplePos);
+            float weight = kernel[dx + 2] * kernel[dy + 2];
+            result += sampleColor.rgb * weight;
+            total += weight;
+        }
+    }
+    return result / total;
+}
+
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
@@ -27,14 +49,26 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // Calculate vignette factor (strong effect)
-    vec2 uv = vec2(pos) / vec2(size);
-    float dist = distance(uv, vec2(0.5));
-    float vig = 1.0 - 0.9 * (dist * dist);  // 0.9 = very strong dark corners
+    // 1. Get the original color
+    vec3 original = color.rgb;
 
-    // Multiply only RGB, keep alpha unchanged
-    vec3 vignetted = color.rgb * vig;
+    // 2. Blur the image (glow source)
+    vec3 blurred = blur5x5(pos, size);
+
+    // 3. Create a "brightness mask" – only glow bright areas
+    float luminance = dot(original, vec3(0.299, 0.587, 0.114));
+    float threshold = 0.4; // lowered so more areas glow
+    float mask = smoothstep(threshold, 1.0, luminance);
+
+    // 4. Combine: original + (blurred * mask * intensity)
+    float glowIntensity = 1.5; // increased from 0.6 to 1.5
+    vec3 glow = blurred * mask * glowIntensity;
+
+    vec3 finalColor = original + glow;
+
+    // 5. Clamp to avoid oversaturation
+    finalColor = clamp(finalColor, 0.0, 1.0);
 
     // Write output
-    imageStore(outputImage, pos, vec4(vignetted, color.a));
+    imageStore(outputImage, pos, vec4(finalColor, color.a));
 }
