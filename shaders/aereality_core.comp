@@ -40,17 +40,19 @@ void main() {
     vec4 color = imageLoad(inputImage, pos);
 
     // ============================================================
-    // STEP 1 – Passthrough (currently active – preview works)
+    // BRIGHTNESS TEST – HARDCODED +0.5
+    // (Passthrough is turned OFF – commented out below)
     // ============================================================
-    imageStore(outputImage, pos, color);
 
-    // ============================================================
-    // STEP 2 – BRIGHTNESS (uncomment this block to test)
-    // ============================================================
-    /*
+    // Convert sRGB → Linear
     vec3 linear = srgbToLinear(color.rgb);
+
+    // Add brightness
     linear += 0.5;
+
+    // Convert Linear → sRGB
     vec3 srgb = linearToSrgb(linear);
+
+    // Write output
     imageStore(outputImage, pos, vec4(srgb, color.a));
-    */
 }
