@@ -39,16 +39,14 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // ============================================================
-    // BRIGHTNESS TEST – HARDCODED +0.5
-    // (Passthrough is turned OFF – commented out below)
-    // ============================================================
-
     // Convert sRGB → Linear
     vec3 linear = srgbToLinear(color.rgb);
 
-    // Add brightness
+    // BRIGHTNESS (hardcoded)
     linear += 0.5;
+
+    // CONTRAST (hardcoded – 1.5 = more contrast)
+    linear = (linear - 0.5) * 1.5 + 0.5;
 
     // Convert Linear → sRGB
     vec3 srgb = linearToSrgb(linear);
