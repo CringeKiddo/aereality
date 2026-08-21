@@ -76,6 +76,13 @@ vec3 filmicTonemap(vec3 color) {
     return ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F)) - E / F;
 }
 
+// ---------- DITHER (simplified, safe version) ----------
+float dither(vec2 pos) {
+    // Avoid potential NaN by using a simple, stable formula
+    float d = dot(pos, vec2(12.9898, 78.233));
+    return fract(sin(d) * 43758.5453);
+}
+
 // ---------- MAIN ----------
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
@@ -115,12 +122,21 @@ void main() {
     // 10. Filmic Tonemap
     linear = filmicTonemap(linear);
 
-    // 11. Linear → sRGB
+    // 11. VIGNETTE (hardcoded amount = 0.4)
+    vec2 uv = vec2(pos) / vec2(size);
+    float vig = 1.0 - 0.4 * (distance(uv, vec2(0.5)) * distance(uv, vec2(0.5)));
+    linear *= vig;
+
+    // 12. Linear → sRGB
     vec3 srgb = linearToSrgb(linear);
 
-    // 12. Clamp (safe guard)
+    // 13. DITHER (add tiny noise to prevent banding)
+    float d = dither(vec2(pos)) * 0.015; // very small noise
+    srgb += d;
+
+    // 14. Final clamp
     srgb = clamp(srgb, 0.0, 1.0);
 
-    // Write output
+    // 15. Write output
     imageStore(outputImage, pos, vec4(srgb, color.a));
 }
