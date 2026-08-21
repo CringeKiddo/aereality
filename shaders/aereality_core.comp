@@ -20,28 +20,6 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float splitToning;
 } u;
 
-// ---------- SIMPLE GAUSSIAN BLUR (5x5) ----------
-vec3 blur5x5(ivec2 pos, ivec2 size) {
-    vec3 result = vec3(0.0);
-    float total = 0.0;
-
-    // 5x5 kernel (approximate gaussian)
-    float kernel[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
-
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
-            ivec2 samplePos = pos + ivec2(dx, dy);
-            // Clamp to image edges
-            samplePos = clamp(samplePos, ivec2(0), size - 1);
-            vec4 sampleColor = imageLoad(inputImage, samplePos);
-            float weight = kernel[dx + 2] * kernel[dy + 2];
-            result += sampleColor.rgb * weight;
-            total += weight;
-        }
-    }
-    return result / total;
-}
-
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
@@ -49,26 +27,15 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // 1. Get the original color
-    vec3 original = color.rgb;
+    // Just passthrough + split toning test
+    vec3 linear = color.rgb;
 
-    // 2. Blur the image (glow source)
-    vec3 blurred = blur5x5(pos, size);
+    // Strong split tone: shadows -> blue, highlights -> orange
+    float lum = dot(linear, vec3(0.299, 0.587, 0.114));
+    vec3 shadows = vec3(0.1, 0.2, 0.8);   // blue
+    vec3 highlights = vec3(0.9, 0.5, 0.1); // orange
+    vec3 tone = mix(shadows, highlights, lum);
+    vec3 result = mix(linear, tone * linear, 0.8); // 0.8 = very strong effect
 
-    // 3. Create a "brightness mask" – only glow bright areas
-    float luminance = dot(original, vec3(0.299, 0.587, 0.114));
-    float threshold = 0.4; // lowered so more areas glow
-    float mask = smoothstep(threshold, 1.0, luminance);
-
-    // 4. Combine: original + (blurred * mask * intensity)
-    float glowIntensity = 1.5; // increased from 0.6 to 1.5
-    vec3 glow = blurred * mask * glowIntensity;
-
-    vec3 finalColor = original + glow;
-
-    // 5. Clamp to avoid oversaturation
-    finalColor = clamp(finalColor, 0.0, 1.0);
-
-    // Write output
-    imageStore(outputImage, pos, vec4(finalColor, color.a));
+    imageStore(outputImage, pos, vec4(result, color.a));
 }
