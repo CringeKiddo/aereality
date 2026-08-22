@@ -8,18 +8,16 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     ? DynamicLibrary.open('libvulkan_processor.so')
     : DynamicLibrary.process();
 
-// --- Native function signatures ---
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
 typedef NativeProcess = Void Function(
     Pointer<Uint8> input,
     Int32 w,
     Int32 h,
     Pointer<Uint8> output,
-    Pointer<Float> uniforms,     // ← 12 floats
+    Pointer<Float> uniforms,
 );
 typedef NativeCleanup = Void Function();
 
-// --- Dart function signatures ---
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
 typedef DartProcess = void Function(
     Pointer<Uint8> input,
@@ -54,10 +52,10 @@ void initVulkan(Uint8List spirv) {
 }
 
 /// Process a single frame.
-/// [uniforms] must be a Float32List of exactly 12 floats in the order:
-///   resolution.x, resolution.y,
-///   brightness, saturation, contrast, sharpness, gamma, hue,
-///   temperature, glowIntensity, lookMix, vignette, splitToning
+/// [uniforms] must be a Float32List of exactly 13 floats:
+///   index 0,1 = resolution (width, height)
+///   index 2..12 = brightness, saturation, contrast, sharpness, gamma,
+///                  hue, temperature, glowIntensity, lookMix, vignette, splitToning
 Uint8List processImage(
     Uint8List input,
     int width,
@@ -65,8 +63,8 @@ Uint8List processImage(
     Float32List uniforms,
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
-  if (uniforms.length != 12) {
-    throw Exception('uniforms must contain exactly 12 floats.');
+  if (uniforms.length != 13) {
+    throw Exception('uniforms must contain exactly 13 floats.');
   }
 
   final inputPtr = calloc<Uint8>(input.length);
@@ -75,17 +73,13 @@ Uint8List processImage(
   final output = Uint8List(width * height * 4);
   final outputPtr = calloc<Uint8>(output.length);
 
-  // Copy uniforms to native memory
   final uniformPtr = calloc<Float>(uniforms.length);
   uniformPtr.asTypedList(uniforms.length).setAll(0, uniforms);
 
-  // Call the C++ function
   processFrame(inputPtr, width, height, outputPtr, uniformPtr);
 
-  // Copy result back
   output.setAll(0, outputPtr.asTypedList(output.length));
 
-  // Free native memory
   calloc.free(inputPtr);
   calloc.free(outputPtr);
   calloc.free(uniformPtr);
