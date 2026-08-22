@@ -984,11 +984,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return image;
   }
 
+  // ✅ UPDATED _processFrameWithVulkan – passes uniforms
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
-    // For now we pass zero uniforms – we'll update later
-    final outputBytes = processImage(inputBytes, input.width, input.height);
+
+    // Build 13‑float uniform list
+    final uniforms = Float32List(13);
+    uniforms[0] = input.width.toDouble();
+    uniforms[1] = input.height.toDouble();
+    uniforms[2] = _brightness;
+    uniforms[3] = _saturation;
+    uniforms[4] = _contrast;
+    uniforms[5] = _sharpness;
+    uniforms[6] = _gamma;
+    uniforms[7] = _hue;
+    uniforms[8] = _temperature;
+    uniforms[9] = _glowIntensity;
+    uniforms[10] = _lookMix;
+    uniforms[11] = _vignette;
+    uniforms[12] = _splitToning;
+
+    final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       outputBytes,
@@ -1174,6 +1191,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // ✅ UPDATED _exportVideo – captures slider values and passes uniforms
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -1183,6 +1201,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
       return;
     }
+
+    // ✅ CAPTURE CURRENT SLIDER VALUES
+    final double brightness = _brightness;
+    final double saturation = _saturation;
+    final double contrast = _contrast;
+    final double sharpness = _sharpness;
+    final double gamma = _gamma;
+    final double hue = _hue;
+    final double temperature = _temperature;
+    final double glowIntensity = _glowIntensity;
+    final double lookMix = _lookMix;
+    final double vignette = _vignette;
+    final double splitToning = _splitToning;
 
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('Initializing...');
@@ -1269,7 +1300,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             }
 
             final rawInput = decoded.data!.buffer.asUint8List();
-            final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height))
+
+            // ✅ BUILD UNIFORM LIST
+            final uniforms = Float32List(13);
+            uniforms[0] = decoded.width.toDouble();
+            uniforms[1] = decoded.height.toDouble();
+            uniforms[2] = brightness;
+            uniforms[3] = saturation;
+            uniforms[4] = contrast;
+            uniforms[5] = sharpness;
+            uniforms[6] = gamma;
+            uniforms[7] = hue;
+            uniforms[8] = temperature;
+            uniforms[9] = glowIntensity;
+            uniforms[10] = lookMix;
+            uniforms[11] = vignette;
+            uniforms[12] = splitToning;
+
+            final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
                 .timeout(const Duration(seconds: 30),
                     onTimeout: () => throw Exception('processImage timed out after 30s'));
 
