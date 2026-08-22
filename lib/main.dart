@@ -45,7 +45,7 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// ---------- PROJECT DATA MODEL ----------
+// ---------- PROJECT DATA MODEL (used by ProjectScreen) ----------
 class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
@@ -61,7 +61,7 @@ class ProjectData {
     this.gamma = 1.0,
     this.hue = 0.0,
     this.temperature = 6500.0,
-    this.glowIntensity = 0.3,
+    this.glowIntensity = 0.0,
     this.lookMix = 0.0,
     this.vignette = 0.0,
     this.splitToning = 0.0,
@@ -93,12 +93,139 @@ class ProjectData {
     gamma: json['gamma'] ?? 1.0,
     hue: json['hue'] ?? 0.0,
     temperature: json['temperature'] ?? 6500.0,
-    glowIntensity: json['glowIntensity'] ?? 0.3,
+    glowIntensity: json['glowIntensity'] ?? 0.0,
     lookMix: json['lookMix'] ?? 0.0,
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
   );
+}
+
+// ---------- STORED PROJECT (for Projects list) ----------
+class StoredProject {
+  String id;
+  String name;
+  String videoPath;
+  double brightness, saturation, contrast, sharpness, gamma, hue;
+  double temperature, glowIntensity, lookMix, vignette, splitToning;
+  String aspectRatio;
+  DateTime lastOpened;
+
+  StoredProject({
+    required this.id,
+    required this.name,
+    required this.videoPath,
+    this.brightness = 0.0,
+    this.saturation = 1.0,
+    this.contrast = 1.0,
+    this.sharpness = 0.0,
+    this.gamma = 1.0,
+    this.hue = 0.0,
+    this.temperature = 6500.0,
+    this.glowIntensity = 0.0,
+    this.lookMix = 0.0,
+    this.vignette = 0.0,
+    this.splitToning = 0.0,
+    this.aspectRatio = "16:9",
+    required this.lastOpened,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'videoPath': videoPath,
+    'brightness': brightness,
+    'saturation': saturation,
+    'contrast': contrast,
+    'sharpness': sharpness,
+    'gamma': gamma,
+    'hue': hue,
+    'temperature': temperature,
+    'glowIntensity': glowIntensity,
+    'lookMix': lookMix,
+    'vignette': vignette,
+    'splitToning': splitToning,
+    'aspectRatio': aspectRatio,
+    'lastOpened': lastOpened.toIso8601String(),
+  };
+
+  factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
+    id: json['id'],
+    name: json['name'],
+    videoPath: json['videoPath'],
+    brightness: json['brightness'] ?? 0.0,
+    saturation: json['saturation'] ?? 1.0,
+    contrast: json['contrast'] ?? 1.0,
+    sharpness: json['sharpness'] ?? 0.0,
+    gamma: json['gamma'] ?? 1.0,
+    hue: json['hue'] ?? 0.0,
+    temperature: json['temperature'] ?? 6500.0,
+    glowIntensity: json['glowIntensity'] ?? 0.0,
+    lookMix: json['lookMix'] ?? 0.0,
+    vignette: json['vignette'] ?? 0.0,
+    splitToning: json['splitToning'] ?? 0.0,
+    aspectRatio: json['aspectRatio'] ?? "16:9",
+    lastOpened: DateTime.parse(json['lastOpened']),
+  );
+
+  // Convert to ProjectData (for ProjectScreen)
+  ProjectData toProjectData() => ProjectData(
+    videoPath: videoPath,
+    brightness: brightness,
+    saturation: saturation,
+    contrast: contrast,
+    sharpness: sharpness,
+    gamma: gamma,
+    hue: hue,
+    temperature: temperature,
+    glowIntensity: glowIntensity,
+    lookMix: lookMix,
+    vignette: vignette,
+    splitToning: splitToning,
+    aspectRatio: aspectRatio,
+  );
+}
+
+// ---------- PROJECT MANAGER ----------
+class ProjectManager {
+  static const String _storageKey = 'projects.json';
+
+  static Future<List<StoredProject>> loadProjects() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$_storageKey');
+      if (!await file.exists()) return [];
+      final data = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(data);
+      return jsonList.map((j) => StoredProject.fromJson(j)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static Future<void> saveProjects(List<StoredProject> projects) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/$_storageKey');
+    final jsonList = projects.map((p) => p.toJson()).toList();
+    await file.writeAsString(jsonEncode(jsonList));
+  }
+
+  static Future<void> saveProject(StoredProject project) async {
+    final projects = await loadProjects();
+    projects.removeWhere((p) => p.id == project.id);
+    projects.add(project);
+    projects.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+    if (projects.length > 5) {
+      projects.removeRange(5, projects.length);
+    }
+    await saveProjects(projects);
+  }
+
+  static Future<void> deleteProject(String id) async {
+    final projects = await loadProjects();
+    projects.removeWhere((p) => p.id == id);
+    await saveProjects(projects);
+  }
 }
 // ---------- HOME SCREEN ----------
 class HomeScreen extends StatefulWidget {
@@ -116,9 +243,12 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('AEReality'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _loadProject,
-            tooltip: 'Load Project',
+            icon: const Icon(Icons.folder),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ProjectsScreen()),
+            ),
+            tooltip: 'Projects',
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -148,9 +278,14 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
-              onPressed: _loadProject,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProjectsScreen()),
+                );
+              },
               icon: const Icon(Icons.folder_open, color: Colors.white),
-              label: const Text('Load Project', style: TextStyle(color: Colors.white)),
+              label: const Text('Open Projects', style: TextStyle(color: Colors.white)),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: Colors.white),
                 padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
@@ -160,33 +295,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _loadProject() async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/aereality_project.json');
-      if (!await file.exists()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No saved project found'), backgroundColor: Colors.orange),
-        );
-        return;
-      }
-      final data = await file.readAsString();
-      final json = jsonDecode(data);
-      final project = ProjectData.fromJson(json);
-      
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ProjectScreen(initialProject: project),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading: $e'), backgroundColor: Colors.red),
-      );
-    }
   }
 }
 // ---------- SETTINGS ----------
@@ -447,6 +555,124 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
     );
   }
 }
+// ---------- PROJECTS SCREEN ----------
+class ProjectsScreen extends StatefulWidget {
+  const ProjectsScreen({super.key});
+
+  @override
+  State<ProjectsScreen> createState() => _ProjectsScreenState();
+}
+
+class _ProjectsScreenState extends State<ProjectsScreen> {
+  List<StoredProject> _projects = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProjects();
+  }
+
+  Future<void> _loadProjects() async {
+    final projs = await ProjectManager.loadProjects();
+    setState(() => _projects = projs);
+  }
+
+  Future<void> _openProject(StoredProject project) async {
+    // Update lastOpened
+    final updated = StoredProject(
+      id: project.id,
+      name: project.name,
+      videoPath: project.videoPath,
+      brightness: project.brightness,
+      saturation: project.saturation,
+      contrast: project.contrast,
+      sharpness: project.sharpness,
+      gamma: project.gamma,
+      hue: project.hue,
+      temperature: project.temperature,
+      glowIntensity: project.glowIntensity,
+      lookMix: project.lookMix,
+      vignette: project.vignette,
+      splitToning: project.splitToning,
+      aspectRatio: project.aspectRatio,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(updated);
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProjectScreen(
+          initialProject: project.toProjectData(),
+          projectName: project.name,
+          initialResolution: '1080p', // default, but we can store later
+          initialFps: '60fps',
+          initialBitrate: '35 Mbps',
+        ),
+      ),
+    ).then((_) => _loadProjects());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Projects'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadProjects,
+          ),
+        ],
+      ),
+      body: _projects.isEmpty
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open, size: 64, color: Colors.white24),
+                  SizedBox(height: 16),
+                  Text('No projects yet', style: TextStyle(color: Colors.white38)),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: _projects.length,
+              itemBuilder: (context, index) {
+                final proj = _projects[index];
+                return ListTile(
+                  leading: const Icon(Icons.video_file, color: Colors.white54),
+                  title: Text(proj.name, style: const TextStyle(color: Colors.white)),
+                  subtitle: Text(
+                    '${proj.videoPath.split('/').last} • ${proj.lastOpened.toLocal().toString().split(' ')[0]}',
+                    style: const TextStyle(color: Colors.white54),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.white38),
+                    onPressed: () async {
+                      await ProjectManager.deleteProject(proj.id);
+                      _loadProjects();
+                    },
+                  ),
+                  onTap: () => _openProject(proj),
+                );
+              },
+            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ProjectSetupScreen()),
+          ).then((_) => _loadProjects());
+        },
+        child: const Icon(Icons.add),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+      ),
+    );
+  }
+}
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -482,7 +708,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _gamma = 1.0;
   double _hue = 0.0;
   double _temperature = 6500.0;
-  double _glowIntensity = 0.3;
+  double _glowIntensity = 0.0;
   double _lookMix = 0.0;
   double _vignette = 0.0;
   double _splitToning = 0.0;
@@ -556,7 +782,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ✅ FIXED _pickVideo – copies to cache using File.copy
   Future<void> _pickVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
@@ -583,7 +808,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ✅ UPDATED _showLog – reads export_log, vulkan_log, AND raw process_frame file
   Future<void> _showLog() async {
     try {
       final docsDir = await getApplicationDocumentsDirectory();
@@ -644,19 +868,43 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     setState(() {
       switch (name) {
         case 'Gojo Edit':
-          _brightness = 0.02; _saturation = 1.2; _contrast = 1.2; _sharpness = 0.15;
-          _gamma = 0.95; _hue = -4.0; _temperature = 6200; _glowIntensity = 0.05;
-          _vignette = 0.0; _splitToning = 0.05; _lookMix = 0.2;
+          _brightness = 0.15;
+          _saturation = 1.3;
+          _contrast = 1.25;
+          _sharpness = 0.0;
+          _gamma = 0.95;
+          _hue = 0.0;
+          _temperature = 6200.0;
+          _glowIntensity = 0.0;
+          _lookMix = 0.3;
+          _vignette = 0.0;
+          _splitToning = 0.15;
           break;
         case 'Magic Bullet':
-          _brightness = 0.05; _saturation = 1.25; _contrast = 1.15; _sharpness = 0.15;
-          _gamma = 1.0; _hue = 2.0; _temperature = 6500; _glowIntensity = 0.15;
-          _vignette = 0.0; _splitToning = 0.0; _lookMix = 0.0;
+          _brightness = 0.0;
+          _saturation = 1.2;
+          _contrast = 1.5;
+          _sharpness = 0.0;
+          _gamma = 0.95;
+          _hue = 0.0;
+          _temperature = 5600.0;
+          _glowIntensity = 0.0;
+          _lookMix = 0.0;
+          _vignette = 0.0;
+          _splitToning = 0.4;
           break;
         case 'Teal & Orange':
-          _brightness = 0.0; _saturation = 1.15; _contrast = 1.2; _sharpness = 0.1;
-          _gamma = 0.95; _hue = -6.0; _temperature = 5800; _glowIntensity = 0.02;
-          _vignette = 0.0; _splitToning = 0.1; _lookMix = 0.5;
+          _brightness = 0.0;
+          _saturation = 1.4;
+          _contrast = 1.3;
+          _sharpness = 0.0;
+          _gamma = 0.95;
+          _hue = 0.0;
+          _temperature = 5500.0;
+          _glowIntensity = 0.0;
+          _lookMix = 0.7;
+          _vignette = 0.0;
+          _splitToning = 0.0;
           break;
         default: break;
       }
@@ -668,21 +916,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
       return;
     }
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/aereality_project.json');
-      final project = ProjectData(
-        videoPath: _currentVideoPath!,
-        brightness: _brightness, saturation: _saturation, contrast: _contrast,
-        sharpness: _sharpness, gamma: _gamma, hue: _hue, temperature: _temperature,
-        glowIntensity: _glowIntensity, lookMix: _lookMix, vignette: _vignette,
-        splitToning: _splitToning, aspectRatio: _selectedRatio,
-      );
-      await file.writeAsString(jsonEncode(project.toJson()));
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project Saved!'), backgroundColor: Colors.green));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving: $e'), backgroundColor: Colors.red));
-    }
+    final project = StoredProject(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: widget.projectName ?? 'Untitled',
+      videoPath: _currentVideoPath!,
+      brightness: _brightness,
+      saturation: _saturation,
+      contrast: _contrast,
+      sharpness: _sharpness,
+      gamma: _gamma,
+      hue: _hue,
+      temperature: _temperature,
+      glowIntensity: _glowIntensity,
+      lookMix: _lookMix,
+      vignette: _vignette,
+      splitToning: _splitToning,
+      aspectRatio: _selectedRatio,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(project);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Project Saved!'), backgroundColor: Colors.green),
+    );
   }
 
   double _getAspectRatioValue(String ratio) {
@@ -732,6 +987,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
+    // For now we pass zero uniforms – we'll update later
     final outputBytes = processImage(inputBytes, input.width, input.height);
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
@@ -918,7 +1174,223 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  @override
+  Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+    if (_spirvShader == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
+      return;
+    }
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
+
+    BuildContext? dialogContext;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogContext = ctx;
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)',
+                  style: TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(height: 16),
+              ValueListenableBuilder<double>(
+                valueListenable: progressNotifier,
+                builder: (_, progress, __) =>
+                    LinearProgressIndicator(value: progress, color: Colors.white),
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(status,
+                    style: const TextStyle(color: Colors.white70)),
+              ),
+              ValueListenableBuilder<String>(
+                valueListenable: etaNotifier,
+                builder: (_, eta, __) =>
+                    Text('Estimated time remaining: $eta',
+                        style: const TextStyle(color: Colors.white54)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final videoPath = _currentVideoPath!;
+
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create();
+      await processedDir.create();
+
+      statusNotifier.value = 'Extracting frames...';
+      final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractSession = await FFmpegKit.execute(extractCmd);
+      final extractReturnCode = await extractSession.getReturnCode();
+      if (!ReturnCode.isSuccess(extractReturnCode)) {
+        final err = await extractSession.getOutput();
+        throw Exception('Extract failed: ${err ?? "Unknown error"}');
+      }
+
+      final frameFiles = await framesDir.list().toList();
+      if (frameFiles.isEmpty) {
+        throw Exception('No frames extracted.');
+      }
+
+      final totalFrames = frameFiles.length;
+      int processedFrames = 0;
+      stopwatch.start();
+
+      const batchSize = 5;
+
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          try {
+            final bytes = await file.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded == null) {
+              throw Exception('Failed to decode frame: ${file.path}');
+            }
+
+            final rawInput = decoded.data!.buffer.asUint8List();
+            final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height))
+                .timeout(const Duration(seconds: 30),
+                    onTimeout: () => throw Exception('processImage timed out after 30s'));
+
+            final gradedImg = img.Image.fromBytes(
+              width: decoded.width,
+              height: decoded.height,
+              bytes: outputRaw.buffer,
+            );
+            final pngBytes = img.encodePng(gradedImg);
+            final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
+            await outputFile.writeAsBytes(pngBytes);
+
+            if (!await outputFile.exists()) {
+              throw Exception('Failed to write processed frame to: ${outputFile.path}');
+            }
+
+            if (processedFrames == 1) {
+              try {
+                final testDir = await getTemporaryDirectory();
+                final testFile = File('${testDir.path}/test_frame.png');
+                await outputFile.copy(testFile.path);
+                print('✅ Test frame saved to: ${testFile.path}');
+              } catch (e) {
+                print('❌ Failed to save test frame: $e');
+              }
+            }
+
+            processedFrames++;
+            final p = processedFrames / totalFrames;
+            progressNotifier.value = p;
+            final percent = (processedFrames / totalFrames * 100).toInt();
+            statusNotifier.value = 'Processing... $percent%';
+            if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
+              final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
+              final remaining = totalSec - stopwatch.elapsed.inSeconds;
+              final mins = remaining ~/ 60;
+              final secs = remaining % 60;
+              etaNotifier.value =
+                  '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+            }
+          } catch (e) {
+            throw Exception('Frame processing failed at $processedFrames: $e');
+          }
+        }));
+      }
+      stopwatch.stop();
+
+      statusNotifier.value = 'Encoding 8-bit SDR video...';
+      final targetFps = int.parse(fps.replaceAll('fps', ''));
+      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
+      var encodeSession = await FFmpegKit.execute(encodeCmd);
+      var encodeReturnCode = await encodeSession.getReturnCode();
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        statusNotifier.value = 'Retrying with mpeg4...';
+        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeSession = await FFmpegKit.execute(fallbackCmd);
+        encodeReturnCode = await encodeSession.getReturnCode();
+      }
+
+      if (!ReturnCode.isSuccess(encodeReturnCode)) {
+        final combined = await encodeSession.getOutput() ?? "No output";
+        final errorSnippet = combined.length > 500
+            ? "...${combined.substring(combined.length - 500)}"
+            : combined;
+        throw Exception('Encode failed:\n$errorSnippet');
+      }
+
+      statusNotifier.value = 'Extracting audio...';
+      final audioPath = '${dir.path}/extracted_audio.aac';
+      final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
+      final audioSession = await FFmpegKit.execute(audioCmd);
+      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
+        print('Audio extraction skipped');
+      }
+
+      statusNotifier.value = 'Muxing audio and video...';
+      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
+      final muxSession = await FFmpegKit.execute(muxCmd);
+      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
+        await File(silentOutputPath).copy(File(finalOutputPath).path);
+      }
+
+      final docsDir = await getApplicationDocumentsDirectory();
+      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await File(finalOutputPath).copy(finalFile.path);
+
+      await framesDir.delete(recursive: true);
+      await processedDir.delete(recursive: true);
+      try { await File(audioPath).delete(); } catch (_) {}
+      try { await File(silentOutputPath).delete(); } catch (_) {}
+
+      if (dialogContext != null) Navigator.pop(dialogContext!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Export saved to:\n${finalFile.path}'),
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
+    } catch (e, stack) {
+      print('Export error: $e\n$stack');
+      if (dialogContext != null) Navigator.pop(dialogContext!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+    }
+  }
+    @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -1116,280 +1588,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         backgroundColor: Colors.cyanAccent,
       ),
     );
-  }
-    Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
-    final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
-    await logFile.writeAsString('🟢 Export started at ${DateTime.now()}\n', mode: FileMode.append);
-
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>('Initializing...');
-    final etaNotifier = ValueNotifier<String>('--:--');
-    final stopwatch = Stopwatch();
-
-    BuildContext? dialogContext;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        dialogContext = ctx;
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)',
-                  style: TextStyle(color: Colors.white, fontSize: 16)),
-              const SizedBox(height: 16),
-              ValueListenableBuilder<double>(
-                valueListenable: progressNotifier,
-                builder: (_, progress, __) =>
-                    LinearProgressIndicator(value: progress, color: Colors.white),
-              ),
-              const SizedBox(height: 12),
-              ValueListenableBuilder<String>(
-                valueListenable: statusNotifier,
-                builder: (_, status, __) => Text(status,
-                    style: const TextStyle(color: Colors.white70)),
-              ),
-              ValueListenableBuilder<String>(
-                valueListenable: etaNotifier,
-                builder: (_, eta, __) =>
-                    Text('Estimated time remaining: $eta',
-                        style: const TextStyle(color: Colors.white54)),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    try {
-      await logFile.writeAsString('✅ Step 1: Dialog shown\n', mode: FileMode.append);
-
-      if (_controller == null) {
-        await logFile.writeAsString('❌ _controller is null\n', mode: FileMode.append);
-        if (dialogContext != null) Navigator.pop(dialogContext!);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller is null')));
-        return;
-      }
-      if (!_controller!.value.isInitialized) {
-        await logFile.writeAsString('❌ Controller not initialized\n', mode: FileMode.append);
-        if (dialogContext != null) Navigator.pop(dialogContext!);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller not initialized')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 2: Controller OK\n', mode: FileMode.append);
-
-      if (_currentVideoPath == null) {
-        await logFile.writeAsString('❌ _currentVideoPath is null\n', mode: FileMode.append);
-        if (dialogContext != null) Navigator.pop(dialogContext!);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video path')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 3: Video path: $_currentVideoPath\n', mode: FileMode.append);
-
-      if (_spirvShader == null) {
-        await logFile.writeAsString('❌ Shader not loaded\n', mode: FileMode.append);
-        if (dialogContext != null) Navigator.pop(dialogContext!);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 4: Shader loaded\n', mode: FileMode.append);
-
-      final dir = await getTemporaryDirectory();
-      final videoPath = _currentVideoPath!;
-      await logFile.writeAsString('✅ Step 5: Using video path: $videoPath\n', mode: FileMode.append);
-
-      final framesDir = Directory('${dir.path}/export_frames');
-      final processedDir = Directory('${dir.path}/export_processed');
-      if (await framesDir.exists()) await framesDir.delete(recursive: true);
-      if (await processedDir.exists()) await processedDir.delete(recursive: true);
-      await framesDir.create();
-      await processedDir.create();
-      await logFile.writeAsString('✅ Step 6: Directories created\n', mode: FileMode.append);
-
-      statusNotifier.value = 'Extracting frames...';
-      final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
-      final extractSession = await FFmpegKit.execute(extractCmd);
-      final extractReturnCode = await extractSession.getReturnCode();
-      if (!ReturnCode.isSuccess(extractReturnCode)) {
-        final err = await extractSession.getOutput();
-        throw Exception('Extract failed: ${err ?? "Unknown error"}');
-      }
-      await logFile.writeAsString('✅ Step 7: Frames extracted\n', mode: FileMode.append);
-
-      final frameFiles = await framesDir.list().toList();
-      if (frameFiles.isEmpty) throw Exception('No frames extracted.');
-      await logFile.writeAsString('✅ Step 8: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
-
-      final totalFrames = frameFiles.length;
-      int processedFrames = 0;
-      stopwatch.start();
-      const batchSize = 5;
-
-      await logFile.writeAsString('🔄 Entering frame processing loop\n', mode: FileMode.append);
-
-      for (int i = 0; i < totalFrames; i += batchSize) {
-        await logFile.writeAsString('🔄 Batch $i starting\n', mode: FileMode.append);
-
-        final batch = frameFiles.skip(i).take(batchSize).toList();
-        await logFile.writeAsString('🔄 Batch size: ${batch.length}\n', mode: FileMode.append);
-
-        try {
-          await Future.wait(batch.map((file) async {
-            if (file is! File) {
-              await logFile.writeAsString('⚠️ Skipping non-file: ${file.path}\n', mode: FileMode.append);
-              return;
-            }
-            await logFile.writeAsString('📄 Processing file: ${file.path}\n', mode: FileMode.append);
-
-            try {
-              final bytes = await file.readAsBytes();
-              final decoded = img.decodeImage(bytes);
-              if (decoded == null) {
-                throw Exception('Failed to decode frame: ${file.path}');
-              }
-
-              final rawInput = decoded.data!.buffer.asUint8List();
-              await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
-
-              final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height))
-                  .timeout(const Duration(seconds: 30),
-                      onTimeout: () => throw Exception('processImage timed out after 30s'));
-
-              await logFile.writeAsString('✅ processImage returned\n', mode: FileMode.append);
-
-              final gradedImg = img.Image.fromBytes(
-                width: decoded.width,
-                height: decoded.height,
-                bytes: outputRaw.buffer,
-              );
-              final pngBytes = img.encodePng(gradedImg);
-              final outputFile = File('${processedDir.path}/${file.path.split('/').last}');
-              await outputFile.writeAsBytes(pngBytes);
-
-              if (!await outputFile.exists()) {
-                throw Exception('Failed to write processed frame to: ${outputFile.path}');
-              }
-
-              if (processedFrames == 1) {
-                try {
-                  final testDir = await getTemporaryDirectory();
-                  final testFile = File('${testDir.path}/test_frame.png');
-                  await outputFile.copy(testFile.path);
-                  print('✅ Test frame saved to: ${testFile.path}');
-                } catch (e) {
-                  print('❌ Failed to save test frame: $e');
-                }
-              }
-
-              processedFrames++;
-              final p = processedFrames / totalFrames;
-              progressNotifier.value = p;
-              final percent = (processedFrames / totalFrames * 100).toInt();
-              statusNotifier.value = 'Processing... $percent%';
-              if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
-                final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
-                final remaining = totalSec - stopwatch.elapsed.inSeconds;
-                final mins = remaining ~/ 60;
-                final secs = remaining % 60;
-                etaNotifier.value =
-                    '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-              }
-              await logFile.writeAsString('✅ Frame $processedFrames processed\n', mode: FileMode.append);
-            } catch (e) {
-              await logFile.writeAsString('❌ Error processing frame: $e\n', mode: FileMode.append);
-              throw Exception('Frame processing failed: $e');
-            }
-          }));
-        } catch (e) {
-          await logFile.writeAsString('❌ Batch failed: $e\n', mode: FileMode.append);
-          throw Exception('Batch processing failed: $e');
-        }
-
-        await logFile.writeAsString('🔄 Batch $i completed\n', mode: FileMode.append);
-      }
-
-      stopwatch.stop();
-      await logFile.writeAsString('✅ Step 9: Frames processed\n', mode: FileMode.append);
-
-      statusNotifier.value = 'Encoding 8-bit SDR video...';
-      final targetFps = int.parse(fps.replaceAll('fps', ''));
-      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
-      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
-      var encodeSession = await FFmpegKit.execute(encodeCmd);
-      var encodeReturnCode = await encodeSession.getReturnCode();
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        statusNotifier.value = 'Retrying with mpeg4...';
-        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
-        encodeSession = await FFmpegKit.execute(fallbackCmd);
-        encodeReturnCode = await encodeSession.getReturnCode();
-      }
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        final combined = await encodeSession.getOutput() ?? "No output";
-        final errorSnippet = combined.length > 500
-            ? "...${combined.substring(combined.length - 500)}"
-            : combined;
-        throw Exception('Encode failed:\n$errorSnippet');
-      }
-      await logFile.writeAsString('✅ Step 10: Encoding done\n', mode: FileMode.append);
-
-      statusNotifier.value = 'Extracting audio...';
-      final audioPath = '${dir.path}/extracted_audio.aac';
-      final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
-      final audioSession = await FFmpegKit.execute(audioCmd);
-      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
-        print('Audio extraction skipped');
-      }
-      await logFile.writeAsString('✅ Step 11: Audio extracted\n', mode: FileMode.append);
-
-      statusNotifier.value = 'Muxing audio and video...';
-      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
-      final muxSession = await FFmpegKit.execute(muxCmd);
-      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
-        await File(silentOutputPath).copy(File(finalOutputPath).path);
-      }
-      await logFile.writeAsString('✅ Step 12: Muxing done\n', mode: FileMode.append);
-
-      final docsDir = await getApplicationDocumentsDirectory();
-      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-      await File(finalOutputPath).copy(finalFile.path);
-      await logFile.writeAsString('✅ Step 13: Final file saved: ${finalFile.path}\n', mode: FileMode.append);
-
-      await framesDir.delete(recursive: true);
-      await processedDir.delete(recursive: true);
-      try { await File(audioPath).delete(); } catch (_) {}
-      try { await File(silentOutputPath).delete(); } catch (_) {}
-
-      if (dialogContext != null) Navigator.pop(dialogContext!);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Export saved to:\n${finalFile.path}'),
-            duration: const Duration(seconds: 8),
-          ),
-        );
-      }
-      await logFile.writeAsString('✅ Step 14: Export completed successfully\n', mode: FileMode.append);
-    } catch (e, stack) {
-      await logFile.writeAsString('❌ Export error: $e\n$stack\n', mode: FileMode.append);
-      if (dialogContext != null) Navigator.pop(dialogContext!);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export Error: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 10),
-          ),
-        );
-      }
-    }
   }
 
   @override
