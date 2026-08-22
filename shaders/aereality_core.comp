@@ -14,7 +14,7 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;
     float hue;
     float temperature;
-    float glowIntensity;      // bloom intensity
+    float glowIntensity;
     float lookMix;
     float vignette;
     float splitToning;
@@ -31,92 +31,19 @@ vec3 linearToSrgb(vec3 lin) {
     return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
 }
 
-vec3 adjustTemperature(vec3 color, float temp) {
-    float r = color.r * (temp / 6500.0);
-    float b = color.b * (6500.0 / temp);
-    return vec3(r, color.g, b);
-}
-
-vec3 rotateHue(vec3 color, float angle) {
-    float cosA = cos(angle * 3.14159 / 180.0);
-    float sinA = sin(angle * 3.14159 / 180.0);
-    mat3 rotMat = mat3(
-        0.299 + 0.701 * cosA + 0.168 * sinA,
-        0.587 - 0.587 * cosA + 0.330 * sinA,
-        0.114 - 0.114 * cosA - 0.497 * sinA,
-        0.299 - 0.299 * cosA - 0.328 * sinA,
-        0.587 + 0.413 * cosA + 0.035 * sinA,
-        0.114 - 0.114 * cosA + 0.293 * sinA,
-        0.299 - 0.300 * cosA + 1.250 * sinA,
-        0.587 - 0.588 * cosA - 1.050 * sinA,
-        0.114 + 0.886 * cosA - 0.200 * sinA
-    );
-    return rotMat * color;
-}
-
-vec3 tealOrange(vec3 color, float mixAmount) {
-    vec3 teal = vec3(0.0, 0.6, 0.6);
-    vec3 orange = vec3(0.8, 0.5, 0.2);
-    vec3 target = mix(orange, teal, color.r);
-    return mix(color, target, mixAmount);
-}
-
-// ---------- WIDE BLOOM (large radius fake blur) ----------
-vec3 wideBloom(ivec2 pos, ivec2 size, float intensity, float threshold) {
-    vec3 color = imageLoad(inputImage, pos).rgb;
-    float lum = dot(color, vec3(0.299, 0.587, 0.114));
-    float mask = smoothstep(threshold, 1.0, lum);
-    
-    // Sample far away pixels to create a wide glow
-    vec3 bloom = vec3(0.0);
+// ---------- 13x13 BOX BLUR (169 samples) ----------
+vec3 boxBlur13x13(ivec2 pos, ivec2 size) {
+    vec3 result = vec3(0.0);
     float total = 0.0;
-    
-    // 16 samples in a circular pattern, radius = 20 pixels
-    // (this gives a wide, soft glow without needing multi-pass)
-    for (int i = 0; i < 16; i++) {
-        float angle = float(i) * 6.2832 / 16.0;
-        float radius = 20.0 + 10.0 * sin(float(i) * 1.3); // varied radius
-        ivec2 samplePos = pos + ivec2(int(radius * cos(angle)), int(radius * sin(angle)));
-        samplePos = clamp(samplePos, ivec2(0), size - 1);
-        vec3 sampleColor = imageLoad(inputImage, samplePos).rgb;
-        float sampleLum = dot(sampleColor, vec3(0.299, 0.587, 0.114));
-        float sampleMask = smoothstep(threshold, 1.0, sampleLum);
-        bloom += sampleColor * sampleMask;
-        total += sampleMask;
+    for (int dy = -6; dy <= 6; dy++) {
+        for (int dx = -6; dx <= 6; dx++) {
+            ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
+            vec4 sampleColor = imageLoad(inputImage, samplePos);
+            result += sampleColor.rgb;
+            total += 1.0;
+        }
     }
-    
-    if (total > 0.0) {
-        bloom /= total;
-    }
-    
-    // Warm golden tint for the bloom (makes it highly visible)
-    vec3 tint = vec3(1.0, 0.7, 0.2);
-    bloom *= tint;
-    
-    return bloom * intensity * mask;
-}
-
-vec3 filmicTonemap(vec3 color) {
-    const float A = 0.15;
-    const float B = 0.50;
-    const float C = 0.10;
-    const float D = 0.20;
-    const float E = 0.02;
-    const float F = 0.30;
-    return ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F)) - E / F;
-}
-
-float vignetteEffect(vec2 uv, float amount) {
-    float dist = distance(uv, vec2(0.5));
-    return 1.0 - amount * (dist * dist);
-}
-
-vec3 splitTone(vec3 color, float amount) {
-    vec3 shadows = vec3(0.1, 0.2, 0.6);
-    vec3 highlights = vec3(0.9, 0.5, 0.1);
-    float lum = dot(color, vec3(0.299, 0.587, 0.114));
-    vec3 tone = mix(shadows, highlights, lum);
-    return mix(color, tone * color, amount);
+    return result / total;
 }
 
 void main() {
@@ -126,50 +53,24 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // ---------- Use slider values (hardcoded for this test) ----------
-    // We'll use extreme bloom values so you can't miss it
-    float brightness = 0.0;
-    float contrast = 1.0;
-    float gamma = 1.0;
-    float saturation = 1.0;
-    float temperature = 6500.0;
-    float hue = 0.0;
-    float bloomIntensity = 3.0;   // ← EXTREME
-    float bloomThreshold = 0.1;   // ← VERY LOW (almost everything blooms)
-    float lookMix = 0.0;
-    float vignette = 0.0;
-    float splitToning = 0.0;
+    // ---------- FORCE BRIGHTNESS BOOST ----------
+    vec3 boosted = color.rgb * 2.0;
 
-    // ---------- Grading pipeline ----------
-    vec3 linear = srgbToLinear(color.rgb);
+    // ---------- BLOOM (PURE WHITE, NO TINT) ----------
+    vec3 blurred = boxBlur13x13(pos, size);
+    vec3 bloom = blurred * 2.5; // higher intensity
 
-    linear += brightness;
-    linear = (linear - 0.5) * contrast + 0.5;
-    linear = pow(max(linear, vec3(0.0)), vec3(1.0 / gamma));
+    // ⬇️ NO TINT – pure white bloom
+    // bloom *= vec3(1.0, 1.0, 1.0); // (optional, but default is white)
 
-    float lum = dot(linear, vec3(0.299, 0.587, 0.114));
-    linear = mix(vec3(lum), linear, saturation);
+    // Combine original with bloom
+    vec3 finalColor = boosted + bloom;
 
-    linear = adjustTemperature(linear, temperature);
-    linear = rotateHue(linear, hue);
-    linear = tealOrange(linear, lookMix);
+    // Tone down to avoid clipping
+    finalColor = finalColor / (1.0 + finalColor); // Reinhard tone mapping
 
-    // ---------- WIDE BLOOM (added before tonemap) ----------
-    vec3 bloom = wideBloom(pos, size, bloomIntensity, bloomThreshold);
-    linear += bloom;
+    // Clamp
+    finalColor = clamp(finalColor, 0.0, 1.0);
 
-    linear = filmicTonemap(linear);
-
-    // Vignette
-    vec2 uv = vec2(pos) / vec2(size);
-    float vig = vignetteEffect(uv, vignette);
-    linear *= vig;
-
-    // Split Toning
-    linear = splitTone(linear, splitToning);
-
-    vec3 srgb = linearToSrgb(linear);
-    srgb = clamp(srgb, 0.0, 1.0);
-
-    imageStore(outputImage, pos, vec4(srgb, color.a));
+    imageStore(outputImage, pos, vec4(finalColor, color.a));
 }
