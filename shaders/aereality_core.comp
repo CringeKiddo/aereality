@@ -31,10 +31,8 @@ vec3 linearToSrgb(vec3 lin) {
     return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
 }
 
-// ---------- 13x13 BOX BLUR (for bloom) ----------
-vec3 boxBlur13x13(ivec2 pos, ivec2 size, sampler2D) {
-    // We can't sample the input image inside a blur easily without binding it as a sampler,
-    // so we'll just use imageLoad directly.
+// ---------- 13x13 BOX BLUR (correct signature) ----------
+vec3 boxBlur13x13(ivec2 pos, ivec2 size) {
     vec3 result = vec3(0.0);
     float total = 0.0;
     for (int dy = -6; dy <= 6; dy++) {
@@ -48,7 +46,7 @@ vec3 boxBlur13x13(ivec2 pos, ivec2 size, sampler2D) {
     return result / total;
 }
 
-// ---------- GRADING PIPELINE (no bloom yet) ----------
+// ---------- GRADING PIPELINE (no bloom) ----------
 vec3 gradeImage(vec3 linear, float brightness, float contrast, float gamma, float saturation, float temperature, float hue, float lookMix, float vignette, float splitToning, vec2 uv) {
     // Brightness
     linear += brightness;
@@ -119,18 +117,24 @@ void main() {
 
     // ---------- 4. BLOOM (applied in sRGB space, AFTER tonemap) ----------
     // This ensures the bloom adds actual bright highlights that "shine"
-    vec3 blurred = boxBlur13x13(pos, size);
-    // Convert blurred to sRGB as well
-    vec3 blurredLinear = srgbToLinear(blurred);
+    vec3 blurredLinear = srgbToLinear(imageLoad(inputImage, pos).rgb);
+    // We need to tonemap and convert the blurred image too
     vec3 blurredTonemapped = ((blurredLinear * (A * blurredLinear + C * B) + D * E) / (blurredLinear * (A * blurredLinear + B) + D * F)) - E / F;
     vec3 blurredSrgb = linearToSrgb(blurredTonemapped);
+    // Now blur the sRGB image by sampling neighboring pixels' blurredSrgb? That would require multiple passes.
+    // Instead, we blur the original linear image, then tonemap and convert.
+    // Let's do the blur on the original linear image, then tonemap and convert it.
+    // Correct approach:
+    vec3 blurredLinearOriginal = boxBlur13x13(pos, size); // blurred linear input
+    vec3 blurredTonemappedOriginal = ((blurredLinearOriginal * (A * blurredLinearOriginal + C * B) + D * E) / (blurredLinearOriginal * (A * blurredLinearOriginal + B) + D * F)) - E / F;
+    vec3 blurredSrgbOriginal = linearToSrgb(blurredTonemappedOriginal);
 
     // Create bloom: only take bright parts of the blurred image
     float bloomIntensity = 1.5; // Hardcoded for test – you can adjust
     float threshold = 0.3; // Only blur pixels brighter than this
-    float lumBlur = dot(blurredSrgb, vec3(0.299, 0.587, 0.114));
+    float lumBlur = dot(blurredSrgbOriginal, vec3(0.299, 0.587, 0.114));
     float mask = smoothstep(threshold, 1.0, lumBlur);
-    vec3 bloom = blurredSrgb * mask * bloomIntensity;
+    vec3 bloom = blurredSrgbOriginal * mask * bloomIntensity;
 
     // Add bloom to the graded image
     vec3 finalSrgb = srgb + bloom;
