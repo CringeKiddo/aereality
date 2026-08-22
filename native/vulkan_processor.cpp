@@ -298,7 +298,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     writeLog("✅ Command buffer allocated");
 }
-// native/vulkan_processor.cpp – Part 2 of 3
+// native/vulkan_processor.cpp – Part 2 of 3 (fixed)
 
 void createImages(int w, int h) {
     writeLog("🔄 createImages called: " + std::to_string(w) + "x" + std::to_string(h));
@@ -391,13 +391,13 @@ void createImages(int w, int h) {
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
     writeLog("✅ Output staging buffer created");
 
-    // ✅ NEW: Uniform buffer
-    VkBufferCreateInfo uniformBufInfo = {};
-    uniformBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    uniformBufInfo.size = 13 * sizeof(float); // 2 + 11
-    uniformBufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    uniformBufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    vkCreateBuffer(device, &uniformBufInfo, nullptr, &uniformBuffer);
+    // ✅ Uniform buffer (create)
+    VkBufferCreateInfo uniformBufferCreateInfo = {};
+    uniformBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    uniformBufferCreateInfo.size = 13 * sizeof(float);
+    uniformBufferCreateInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    uniformBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(device, &uniformBufferCreateInfo, nullptr, &uniformBuffer);
     vkGetBufferMemoryRequirements(device, uniformBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
     memAlloc.memoryTypeIndex = findMemoryType(
@@ -411,7 +411,7 @@ void createImages(int w, int h) {
 
     imagesCreated = true;
 
-    // Update descriptor set
+    // ---------- Update descriptor set ----------
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView = inputView;
     imageInfo.sampler = sampler;
@@ -421,10 +421,11 @@ void createImages(int w, int h) {
     outputInfo.imageView = outputView;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkDescriptorBufferInfo uniformBufInfo = {};
-    uniformBufInfo.buffer = uniformBuffer;
-    uniformBufInfo.range = VK_WHOLE_SIZE;
-    uniformBufInfo.offset = 0;
+    // ✅ Descriptor buffer info (using a different name)
+    VkDescriptorBufferInfo uniformDescriptorBufferInfo = {};
+    uniformDescriptorBufferInfo.buffer = uniformBuffer;
+    uniformDescriptorBufferInfo.range = VK_WHOLE_SIZE;
+    uniformDescriptorBufferInfo.offset = 0;
 
     VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -446,7 +447,7 @@ void createImages(int w, int h) {
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[2].pBufferInfo = &uniformBufInfo;
+    writes[2].pBufferInfo = &uniformDescriptorBufferInfo;
 
     vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
     writeLog("✅ Descriptor set updated (including uniform buffer)");
