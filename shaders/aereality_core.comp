@@ -14,16 +14,19 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;
     float hue;
     float temperature;
-    float glowIntensity;
+    float glowIntensity;      // will be used as bloom intensity
     float lookMix;
     float vignette;
     float splitToning;
 } u;
 
 // ============================================================
-// PRESET SELECTOR – Cinematic is active
+// PRESET SELECTOR – set to NONE for slider control
 // ============================================================
-#define PRESET_CINEMATIC
+// #define PRESET_GOJO
+// #define PRESET_CINEMATIC
+// #define PRESET_TEALORANGE
+#define PRESET_NONE   // <-- use slider values
 // ============================================================
 
 // ---------- HELPERS ----------
@@ -67,9 +70,37 @@ vec3 tealOrange(vec3 color, float mixAmount) {
     return mix(color, target, mixAmount);
 }
 
-vec3 glowEffect(vec3 color, float intensity) {
-    vec3 glow = color * 0.6 + vec3(0.2, 0.1, 0.0);
-    return mix(color, glow, intensity);
+// ---------- BLOOM (real bloom with blur) ----------
+vec3 blur5x5(ivec2 pos, ivec2 size) {
+    vec3 result = vec3(0.0);
+    float total = 0.0;
+    float kernel[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
+            vec4 sampleColor = imageLoad(inputImage, samplePos);
+            float weight = kernel[dx + 2] * kernel[dy + 2];
+            result += sampleColor.rgb * weight;
+            total += weight;
+        }
+    }
+    return result / total;
+}
+
+vec3 bloomEffect(vec3 color, ivec2 pos, ivec2 size, float intensity, float threshold) {
+    // 1. Blur the image
+    vec3 blurred = blur5x5(pos, size);
+
+    // 2. Extract bright areas (above threshold)
+    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+    float mask = smoothstep(threshold, 1.0, lum);
+
+    // 3. Bloom = blurred * mask * intensity
+    vec3 bloom = blurred * mask * intensity;
+
+    // 4. Add back to original
+    return color + bloom;
 }
 
 vec3 filmicTonemap(vec3 color) {
@@ -88,8 +119,8 @@ float vignetteEffect(vec2 uv, float amount) {
 }
 
 vec3 splitTone(vec3 color, float amount) {
-    vec3 shadows = vec3(0.1, 0.2, 0.6);   // cool shadows
-    vec3 highlights = vec3(0.9, 0.5, 0.1); // warm highlights
+    vec3 shadows = vec3(0.1, 0.2, 0.6);
+    vec3 highlights = vec3(0.9, 0.5, 0.1);
     float lum = dot(color, vec3(0.299, 0.587, 0.114));
     vec3 tone = mix(shadows, highlights, lum);
     return mix(color, tone * color, amount);
@@ -102,29 +133,55 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // ---------- Cinematic preset values ----------
-    #if defined(PRESET_CINEMATIC)
-        float brightness = 0.0;
-        float contrast = 1.4;
-        float gamma = 0.9;
-        float saturation = 1.2;
-        float temperature = 5800.0;
-        float hue = 0.0;
-        float glowIntensity = 0.1;
-        float lookMix = 0.0;
-        float vignette = 0.4;
-        float splitToning = 0.3;   // cool shadows, warm highlights
-    #else
-        // Neutral fallback
+    // ---------- Get values (preset or sliders) ----------
+    #if defined(PRESET_NONE)
+        // Use slider values (these will be passed from Dart later)
         float brightness = 0.0;
         float contrast = 1.0;
         float gamma = 1.0;
         float saturation = 1.0;
         float temperature = 6500.0;
         float hue = 0.0;
-        float glowIntensity = 0.0;
+        float bloomIntensity = 0.0;
+        float bloomThreshold = 0.5;
         float lookMix = 0.0;
         float vignette = 0.0;
+        float splitToning = 0.0;
+    #elif defined(PRESET_GOJO)
+        float brightness = 0.15;
+        float contrast = 1.25;
+        float gamma = 0.95;
+        float saturation = 1.3;
+        float temperature = 6200.0;
+        float hue = 0.0;
+        float bloomIntensity = 0.4;
+        float bloomThreshold = 0.4;
+        float lookMix = 0.3;
+        float vignette = 0.3;
+        float splitToning = 0.15;
+    #elif defined(PRESET_CINEMATIC)
+        float brightness = 0.0;
+        float contrast = 1.5;
+        float gamma = 0.95;
+        float saturation = 1.3;
+        float temperature = 5600.0;
+        float hue = 0.0;
+        float bloomIntensity = 0.5;
+        float bloomThreshold = 0.3;
+        float lookMix = 0.0;
+        float vignette = 0.3;
+        float splitToning = 0.4;
+    #elif defined(PRESET_TEALORANGE)
+        float brightness = 0.0;
+        float contrast = 1.3;
+        float gamma = 0.95;
+        float saturation = 1.4;
+        float temperature = 5500.0;
+        float hue = 0.0;
+        float bloomIntensity = 0.2;
+        float bloomThreshold = 0.5;
+        float lookMix = 0.7;
+        float vignette = 0.2;
         float splitToning = 0.0;
     #endif
 
@@ -141,7 +198,10 @@ void main() {
     linear = adjustTemperature(linear, temperature);
     linear = rotateHue(linear, hue);
     linear = tealOrange(linear, lookMix);
-    linear = glowEffect(linear, glowIntensity);
+
+    // ---------- BLOOM (added before tonemap) ----------
+    linear = bloomEffect(linear, pos, size, bloomIntensity, bloomThreshold);
+
     linear = filmicTonemap(linear);
 
     // Vignette
@@ -149,7 +209,7 @@ void main() {
     float vig = vignetteEffect(uv, vignette);
     linear *= vig;
 
-    // Split Toning (cool shadows, warm highlights)
+    // Split Toning
     linear = splitTone(linear, splitToning);
 
     vec3 srgb = linearToSrgb(linear);
