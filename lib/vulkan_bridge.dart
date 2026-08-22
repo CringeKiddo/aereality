@@ -8,14 +8,26 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     ? DynamicLibrary.open('libvulkan_processor.so')
     : DynamicLibrary.process();
 
-// --- Native function signatures (using FFI types) ---
+// --- Native function signatures ---
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
-typedef NativeProcess = Void Function(Pointer<Uint8> input, Int32 w, Int32 h, Pointer<Uint8> output);
+typedef NativeProcess = Void Function(
+    Pointer<Uint8> input,
+    Int32 w,
+    Int32 h,
+    Pointer<Uint8> output,
+    Pointer<Float> uniforms,     // ← 12 floats
+);
 typedef NativeCleanup = Void Function();
 
-// --- Dart function signatures (using Dart types) ---
+// --- Dart function signatures ---
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
-typedef DartProcess = void Function(Pointer<Uint8> input, int w, int h, Pointer<Uint8> output);
+typedef DartProcess = void Function(
+    Pointer<Uint8> input,
+    int w,
+    int h,
+    Pointer<Uint8> output,
+    Pointer<Float> uniforms,
+);
 typedef DartCleanup = void Function();
 
 final initProcessor = nativeLib
@@ -41,18 +53,43 @@ void initVulkan(Uint8List spirv) {
   _initialized = true;
 }
 
-Uint8List processImage(Uint8List input, int width, int height) {
+/// Process a single frame.
+/// [uniforms] must be a Float32List of exactly 12 floats in the order:
+///   resolution.x, resolution.y,
+///   brightness, saturation, contrast, sharpness, gamma, hue,
+///   temperature, glowIntensity, lookMix, vignette, splitToning
+Uint8List processImage(
+    Uint8List input,
+    int width,
+    int height,
+    Float32List uniforms,
+) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
+  if (uniforms.length != 12) {
+    throw Exception('uniforms must contain exactly 12 floats.');
+  }
+
   final inputPtr = calloc<Uint8>(input.length);
   inputPtr.asTypedList(input.length).setAll(0, input);
+
   final output = Uint8List(width * height * 4);
   final outputPtr = calloc<Uint8>(output.length);
-  
-  processFrame(inputPtr, width, height, outputPtr);
-  
+
+  // Copy uniforms to native memory
+  final uniformPtr = calloc<Float>(uniforms.length);
+  uniformPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+
+  // Call the C++ function
+  processFrame(inputPtr, width, height, outputPtr, uniformPtr);
+
+  // Copy result back
   output.setAll(0, outputPtr.asTypedList(output.length));
+
+  // Free native memory
   calloc.free(inputPtr);
   calloc.free(outputPtr);
+  calloc.free(uniformPtr);
+
   return output;
 }
 
