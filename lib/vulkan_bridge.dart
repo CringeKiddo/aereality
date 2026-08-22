@@ -1,94 +1,21 @@
-// lib/vulkan_bridge.dart
-import 'dart:ffi';
-import 'dart:typed_data';
-import 'dart:io';
-import 'package:ffi/ffi.dart';
+void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const float* uniforms) {
+    if (!initialized) {
+        return;
+    }
+    if (!imagesCreated || w != width || h != height) {
+        if (imagesCreated) cleanupImages();
+        createImages(w, h);
+    }
 
-final DynamicLibrary nativeLib = Platform.isAndroid
-    ? DynamicLibrary.open('libvulkan_processor.so')
-    : DynamicLibrary.process();
+    // Copy uniforms into mapped memory using memcpy (fast and safe)
+    if (uniformMapped != nullptr) {
+        float* ubo = (float*)uniformMapped;
+        ubo[0] = (float)w;
+        ubo[1] = (float)h;
+        // Copy the 11 grading parameters
+        memcpy(ubo + 2, uniforms, 11 * sizeof(float));
+    }
 
-typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
-typedef NativeProcess = Void Function(
-    Pointer<Uint8> input,
-    Int32 w,
-    Int32 h,
-    Pointer<Uint8> output,
-    Pointer<Float> uniforms,
-);
-typedef NativeCleanup = Void Function();
-
-typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
-typedef DartProcess = void Function(
-    Pointer<Uint8> input,
-    int w,
-    int h,
-    Pointer<Uint8> output,
-    Pointer<Float> uniforms,
-);
-typedef DartCleanup = void Function();
-
-final initProcessor = nativeLib
-    .lookup<NativeFunction<NativeInit>>('init_processor')
-    .asFunction<DartInit>();
-
-final processFrame = nativeLib
-    .lookup<NativeFunction<NativeProcess>>('process_frame')
-    .asFunction<DartProcess>();
-
-final cleanupProcessor = nativeLib
-    .lookup<NativeFunction<NativeCleanup>>('cleanup_processor')
-    .asFunction<DartCleanup>();
-
-bool _initialized = false;
-
-void initVulkan(Uint8List spirv) {
-  if (_initialized) return;
-  final ptr = calloc<Uint32>(spirv.length ~/ 4);
-  ptr.asTypedList(spirv.length ~/ 4).setAll(0, spirv.buffer.asUint32List());
-  initProcessor(ptr, spirv.length);
-  calloc.free(ptr);
-  _initialized = true;
-}
-
-/// Process a single frame.
-/// [uniforms] must be a Float32List of exactly 13 floats:
-///   index 0,1 = resolution (width, height)
-///   index 2..12 = brightness, saturation, contrast, sharpness, gamma,
-///                  hue, temperature, glowIntensity, lookMix, vignette, splitToning
-Uint8List processImage(
-    Uint8List input,
-    int width,
-    int height,
-    Float32List uniforms,
-) {
-  if (!_initialized) throw Exception('Vulkan not initialized.');
-  if (uniforms.length != 13) {
-    throw Exception('uniforms must contain exactly 13 floats.');
-  }
-
-  final inputPtr = calloc<Uint8>(input.length);
-  inputPtr.asTypedList(input.length).setAll(0, input);
-
-  final output = Uint8List(width * height * 4);
-  final outputPtr = calloc<Uint8>(output.length);
-
-  final uniformPtr = calloc<Float>(uniforms.length);
-  uniformPtr.asTypedList(uniforms.length).setAll(0, uniforms);
-
-  processFrame(inputPtr, width, height, outputPtr, uniformPtr);
-
-  output.setAll(0, outputPtr.asTypedList(output.length));
-
-  calloc.free(inputPtr);
-  calloc.free(outputPtr);
-  calloc.free(uniformPtr);
-
-  return output;
-}
-
-void cleanupVulkan() {
-  if (!_initialized) return;
-  cleanupProcessor();
-  _initialized = false;
+    uploadInput(input, w, h);
+    readOutput(output, w, h);
 }
