@@ -1,4 +1,4 @@
-// native/vulkan_processor.cpp – Part 1 of 2
+// native/vulkan_processor.cpp – Part 1 of 3
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <fstream>
 #include <chrono>
-#include <android/log.h>   // ✅ Android logging
+#include <android/log.h>
 
 #define LOG_TAG "AERealityVulkan"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -19,7 +19,6 @@ static bool logInitialized = false;
 
 void initLog() {
     if (logInitialized) return;
-    // Use temporary directory path from getTemporaryDirectory() – we can't get it here, so we hardcode cache.
     logFile.open("/data/user/0/com.example.aereality/cache/vulkan_log.txt", std::ios::trunc);
     if (logFile.is_open()) {
         logFile << "🟢 Vulkan log started\n";
@@ -63,6 +62,11 @@ static VkBuffer stagingBuffer;
 static VkDeviceMemory stagingMemory;
 static VkBuffer outputStagingBuffer;
 static VkDeviceMemory outputStagingMemory;
+
+// ✅ NEW: Uniform buffer
+static VkBuffer uniformBuffer;
+static VkDeviceMemory uniformMemory;
+static void* uniformMapped = nullptr;
 
 static int width = 0, height = 0;
 static bool initialized = false;
@@ -294,7 +298,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     writeLog("✅ Command buffer allocated");
 }
-// native/vulkan_processor.cpp – Part 2 of 2
+// native/vulkan_processor.cpp – Part 2 of 3
 
 void createImages(int w, int h) {
     writeLog("🔄 createImages called: " + std::to_string(w) + "x" + std::to_string(h));
@@ -387,6 +391,24 @@ void createImages(int w, int h) {
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
     writeLog("✅ Output staging buffer created");
 
+    // ✅ NEW: Uniform buffer
+    VkBufferCreateInfo uniformBufInfo = {};
+    uniformBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    uniformBufInfo.size = 13 * sizeof(float); // 2 + 11
+    uniformBufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    uniformBufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(device, &uniformBufInfo, nullptr, &uniformBuffer);
+    vkGetBufferMemoryRequirements(device, uniformBuffer, &memReq);
+    memAlloc.allocationSize = memReq.size;
+    memAlloc.memoryTypeIndex = findMemoryType(
+        memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    vkAllocateMemory(device, &memAlloc, nullptr, &uniformMemory);
+    vkBindBufferMemory(device, uniformBuffer, uniformMemory, 0);
+    vkMapMemory(device, uniformMemory, 0, VK_WHOLE_SIZE, 0, &uniformMapped);
+    writeLog("✅ Uniform buffer created and mapped");
+
     imagesCreated = true;
 
     // Update descriptor set
@@ -398,6 +420,11 @@ void createImages(int w, int h) {
     VkDescriptorImageInfo outputInfo = {};
     outputInfo.imageView = outputView;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorBufferInfo uniformBufInfo = {};
+    uniformBufInfo.buffer = uniformBuffer;
+    uniformBufInfo.range = VK_WHOLE_SIZE;
+    uniformBufInfo.offset = 0;
 
     VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -414,9 +441,17 @@ void createImages(int w, int h) {
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outputInfo;
 
-    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
-    writeLog("✅ Descriptor set updated");
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = descSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].pBufferInfo = &uniformBufInfo;
+
+    vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+    writeLog("✅ Descriptor set updated (including uniform buffer)");
 }
+// native/vulkan_processor.cpp – Part 3 of 3
 
 void uploadInput(const uint8_t* rgba, int w, int h) {
     writeLog("📤 Uploading input frame...");
@@ -482,6 +517,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
     uint32_t groupY = (h + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
 
+    // Memory barrier: ensure shader writes are visible to transfer
     VkMemoryBarrier memBarrier = {};
     memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -496,6 +532,7 @@ void uploadInput(const uint8_t* rgba, int w, int h) {
         0, nullptr
     );
 
+    // Transition output to transfer source
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -574,6 +611,8 @@ void cleanupVulkan() {
     vkDestroyDescriptorPool(device, descPool, nullptr);
     vkDestroySampler(device, sampler, nullptr);
     vkDestroyShaderModule(device, shaderModule, nullptr);
+    vkDestroyBuffer(device, uniformBuffer, nullptr);
+    vkFreeMemory(device, uniformMemory, nullptr);
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
     initialized = false;
@@ -592,16 +631,8 @@ void init_processor(const uint32_t* spirv, size_t size) {
     writeLog("✅ init_processor complete");
 }
 
-// ✅ FULL REAL process_frame with raw file logging at the start
-void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
-    // ---------- RAW FILE LOG (guaranteed to survive crash) ----------
-    FILE* fp = fopen("/data/user/0/com.example.aereality/cache/process_frame_enter.txt", "w");
-    if (fp) {
-        fprintf(fp, "process_frame entered: %dx%d\n", w, h);
-        fclose(fp);
-    }
-    // ----------------------------------------------------------------
-
+// ✅ UPDATED process_frame – accepts uniforms pointer
+void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const float* uniforms) {
     initLog();
     writeLog("🔄 process_frame called: " + std::to_string(w) + "x" + std::to_string(h));
 
@@ -609,19 +640,26 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output) {
         writeLog("❌ Vulkan not initialized");
         return;
     }
-    writeLog("✅ Vulkan initialized");
-
     if (!imagesCreated || w != width || h != height) {
-        writeLog("🔄 Creating images (or recreating)");
         if (imagesCreated) cleanupImages();
         createImages(w, h);
-    } else {
-        writeLog("✅ Images already exist");
     }
 
-    writeLog("⏳ Calling uploadInput...");
+    // ✅ Copy uniforms into mapped memory
+    if (uniformMapped != nullptr) {
+        float* ubo = (float*)uniformMapped;
+        ubo[0] = (float)w;
+        ubo[1] = (float)h;
+        // Copy the 11 grading parameters: brightness, saturation, contrast, sharpness,
+        // gamma, hue, temperature, glowIntensity, lookMix, vignette, splitToning
+        for (int i = 0; i < 11; ++i) {
+            ubo[2 + i] = uniforms[i];
+        }
+    } else {
+        writeLog("❌ uniformMapped is null – uniforms not copied");
+    }
+
     uploadInput(input, w, h);
-    writeLog("⏳ Calling readOutput...");
     readOutput(output, w, h);
     writeLog("✅ process_frame complete");
 }
