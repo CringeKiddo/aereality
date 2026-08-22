@@ -14,20 +14,11 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;
     float hue;
     float temperature;
-    float glowIntensity;      // will be used as bloom intensity
+    float glowIntensity;      // bloom intensity
     float lookMix;
     float vignette;
     float splitToning;
 } u;
-
-// ============================================================
-// PRESET SELECTOR – set to NONE for slider control
-// ============================================================
-// #define PRESET_GOJO
-// #define PRESET_CINEMATIC
-// #define PRESET_TEALORANGE
-#define PRESET_NONE   // <-- use slider values
-// ============================================================
 
 // ---------- HELPERS ----------
 vec3 srgbToLinear(vec3 srgb) {
@@ -70,37 +61,39 @@ vec3 tealOrange(vec3 color, float mixAmount) {
     return mix(color, target, mixAmount);
 }
 
-// ---------- BLOOM (real bloom with blur) ----------
-vec3 blur5x5(ivec2 pos, ivec2 size) {
-    vec3 result = vec3(0.0);
-    float total = 0.0;
-    float kernel[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
-
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
-            ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
-            vec4 sampleColor = imageLoad(inputImage, samplePos);
-            float weight = kernel[dx + 2] * kernel[dy + 2];
-            result += sampleColor.rgb * weight;
-            total += weight;
-        }
-    }
-    return result / total;
-}
-
-vec3 bloomEffect(vec3 color, ivec2 pos, ivec2 size, float intensity, float threshold) {
-    // 1. Blur the image
-    vec3 blurred = blur5x5(pos, size);
-
-    // 2. Extract bright areas (above threshold)
+// ---------- WIDE BLOOM (large radius fake blur) ----------
+vec3 wideBloom(ivec2 pos, ivec2 size, float intensity, float threshold) {
+    vec3 color = imageLoad(inputImage, pos).rgb;
     float lum = dot(color, vec3(0.299, 0.587, 0.114));
     float mask = smoothstep(threshold, 1.0, lum);
-
-    // 3. Bloom = blurred * mask * intensity
-    vec3 bloom = blurred * mask * intensity;
-
-    // 4. Add back to original
-    return color + bloom;
+    
+    // Sample far away pixels to create a wide glow
+    vec3 bloom = vec3(0.0);
+    float total = 0.0;
+    
+    // 16 samples in a circular pattern, radius = 20 pixels
+    // (this gives a wide, soft glow without needing multi-pass)
+    for (int i = 0; i < 16; i++) {
+        float angle = float(i) * 6.2832 / 16.0;
+        float radius = 20.0 + 10.0 * sin(float(i) * 1.3); // varied radius
+        ivec2 samplePos = pos + ivec2(int(radius * cos(angle)), int(radius * sin(angle)));
+        samplePos = clamp(samplePos, ivec2(0), size - 1);
+        vec3 sampleColor = imageLoad(inputImage, samplePos).rgb;
+        float sampleLum = dot(sampleColor, vec3(0.299, 0.587, 0.114));
+        float sampleMask = smoothstep(threshold, 1.0, sampleLum);
+        bloom += sampleColor * sampleMask;
+        total += sampleMask;
+    }
+    
+    if (total > 0.0) {
+        bloom /= total;
+    }
+    
+    // Warm golden tint for the bloom (makes it highly visible)
+    vec3 tint = vec3(1.0, 0.7, 0.2);
+    bloom *= tint;
+    
+    return bloom * intensity * mask;
 }
 
 vec3 filmicTonemap(vec3 color) {
@@ -133,57 +126,19 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // ---------- Get values (preset or sliders) ----------
-    #if defined(PRESET_NONE)
-        // Use slider values (these will be passed from Dart later)
-        float brightness = 0.0;
-        float contrast = 1.0;
-        float gamma = 1.0;
-        float saturation = 1.0;
-        float temperature = 6500.0;
-        float hue = 0.0;
-        float bloomIntensity = 0.0;
-        float bloomThreshold = 0.5;
-        float lookMix = 0.0;
-        float vignette = 0.0;
-        float splitToning = 0.0;
-    #elif defined(PRESET_GOJO)
-        float brightness = 0.15;
-        float contrast = 1.25;
-        float gamma = 0.95;
-        float saturation = 1.3;
-        float temperature = 6200.0;
-        float hue = 0.0;
-        float bloomIntensity = 0.4;
-        float bloomThreshold = 0.4;
-        float lookMix = 0.3;
-        float vignette = 0.3;
-        float splitToning = 0.15;
-    #elif defined(PRESET_CINEMATIC)
-        float brightness = 0.0;
-        float contrast = 1.5;
-        float gamma = 0.95;
-        float saturation = 1.3;
-        float temperature = 5600.0;
-        float hue = 0.0;
-        float bloomIntensity = 0.5;
-        float bloomThreshold = 0.3;
-        float lookMix = 0.0;
-        float vignette = 0.3;
-        float splitToning = 0.4;
-    #elif defined(PRESET_TEALORANGE)
-        float brightness = 0.0;
-        float contrast = 1.3;
-        float gamma = 0.95;
-        float saturation = 1.4;
-        float temperature = 5500.0;
-        float hue = 0.0;
-        float bloomIntensity = 0.2;
-        float bloomThreshold = 0.5;
-        float lookMix = 0.7;
-        float vignette = 0.2;
-        float splitToning = 0.0;
-    #endif
+    // ---------- Use slider values (hardcoded for this test) ----------
+    // We'll use extreme bloom values so you can't miss it
+    float brightness = 0.0;
+    float contrast = 1.0;
+    float gamma = 1.0;
+    float saturation = 1.0;
+    float temperature = 6500.0;
+    float hue = 0.0;
+    float bloomIntensity = 3.0;   // ← EXTREME
+    float bloomThreshold = 0.1;   // ← VERY LOW (almost everything blooms)
+    float lookMix = 0.0;
+    float vignette = 0.0;
+    float splitToning = 0.0;
 
     // ---------- Grading pipeline ----------
     vec3 linear = srgbToLinear(color.rgb);
@@ -199,8 +154,9 @@ void main() {
     linear = rotateHue(linear, hue);
     linear = tealOrange(linear, lookMix);
 
-    // ---------- BLOOM (added before tonemap) ----------
-    linear = bloomEffect(linear, pos, size, bloomIntensity, bloomThreshold);
+    // ---------- WIDE BLOOM (added before tonemap) ----------
+    vec3 bloom = wideBloom(pos, size, bloomIntensity, bloomThreshold);
+    linear += bloom;
 
     linear = filmicTonemap(linear);
 
