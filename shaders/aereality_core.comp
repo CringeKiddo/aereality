@@ -14,9 +14,9 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;
     float hue;
     float temperature;
-    float glowIntensity;
+    float glowIntensity;   // bloom intensity
     float lookMix;
-    float vignette;
+    float vignette;        // bloom threshold
     float splitToning;
 } u;
 
@@ -84,7 +84,7 @@ vec3 splitTone(vec3 color, float amount) {
     return mix(color, tone * color, amount);
 }
 
-// ---------- BLOOM ----------
+// ---------- BLOOM (large radius) ----------
 vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
     const int radius = 25;
     const int samples = 32;
@@ -135,7 +135,7 @@ void main() {
     linear = filmicTonemap(linear);
 
     vec2 uv = vec2(pos) / vec2(size);
-    float vig = vignetteEffect(uv, 0.0); // vignette slider is used for threshold – we can add a separate one later
+    float vig = vignetteEffect(uv, 0.0); // we use vignette slider for threshold, so separate vignette is off
     linear *= vig;
 
     linear = splitTone(linear, u.splitToning);
