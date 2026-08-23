@@ -84,7 +84,7 @@ vec3 splitTone(vec3 color, float amount) {
     return mix(color, tone * color, amount);
 }
 
-// ---------- BLOOM (hardcoded intensity 0, so it does nothing) ----------
+// ---------- BLOOM ----------
 vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
     const int radius = 25;
     const int samples = 32;
@@ -114,47 +114,34 @@ void main() {
 
     vec4 color = imageLoad(inputImage, pos);
 
-    // ---------- HARDCODED SAFE VALUES (ignores uniform buffer) ----------
-    float brightness = 0.0;
-    float contrast = 1.0;
-    float gamma = 1.0;
-    float saturation = 1.0;
-    float temperature = 6500.0;
-    float hue = 0.0;
-    float glowIntensity = 0.0;   // bloom off
-    float lookMix = 0.0;
-    float vignette = 0.0;
-    float splitToning = 0.0;
-
+    // ---------- Grading using uniform values ----------
     vec3 linear = srgbToLinear(color.rgb);
 
-    // Grading
-    linear += brightness;
-    linear = (linear - 0.5) * contrast + 0.5;
-    linear = pow(max(linear, vec3(0.0)), vec3(1.0 / gamma));
+    linear += u.brightness;
+    linear = (linear - 0.5) * u.contrast + 0.5;
+    linear = pow(max(linear, vec3(0.0)), vec3(1.0 / u.gamma));
 
     float lum = dot(linear, vec3(0.299, 0.587, 0.114));
-    linear = mix(vec3(lum), linear, saturation);
+    linear = mix(vec3(lum), linear, u.saturation);
 
-    linear = adjustTemperature(linear, temperature);
-    linear = rotateHue(linear, hue);
-    linear = tealOrange(linear, lookMix);
+    linear = adjustTemperature(linear, u.temperature);
+    linear = rotateHue(linear, u.hue);
+    linear = tealOrange(linear, u.lookMix);
 
-    // Bloom (intensity = 0, so nothing)
-    vec3 bloom = largeBloom(pos, size, 0.5, glowIntensity);
+    // Bloom
+    vec3 bloom = largeBloom(pos, size, u.vignette, u.glowIntensity);
     linear += bloom;
 
     linear = filmicTonemap(linear);
 
     vec2 uv = vec2(pos) / vec2(size);
-    float vig = vignetteEffect(uv, vignette);
+    float vig = vignetteEffect(uv, 0.0); // vignette slider is used for threshold – we can add a separate one later
     linear *= vig;
 
-    linear = splitTone(linear, splitToning);
+    linear = splitTone(linear, u.splitToning);
 
-    // ✅ CONVERT BACK TO sRGB
     vec3 srgb = linearToSrgb(linear);
-
     srgb = clamp(srgb, 0.0, 1.0);
+
     imageStore(outputImage, pos, vec4(srgb, color.a));
 }
