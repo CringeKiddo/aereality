@@ -1367,12 +1367,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
               await logFile.writeAsString('✅ processImage returned for frame $processedFrames (bytes: ${outputRaw.length})\n', mode: FileMode.append);
 
-              // ✅ FIX: Use outputRaw directly (Uint8List) – not buffer
+              // ✅ FIX: Use outputRaw.buffer (ByteBuffer) – and omit format (default is RGBA)
               final gradedImg = img.Image.fromBytes(
                 width: decoded.width,
                 height: decoded.height,
-                bytes: outputRaw,
-                format: img.Format.rgba,
+                bytes: outputRaw.buffer,   // <-- FIXED: use .buffer
+                // format is omitted – default is rgba
               );
               final pngBytes = img.encodePng(gradedImg);
 
