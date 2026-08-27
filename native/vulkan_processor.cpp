@@ -614,8 +614,16 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const fl
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)w;
         ubo[1] = (float)h;
-        // Copy the 11 grading parameters (brightness, saturation, contrast, sharpness, gamma, hue, temperature, glowIntensity, lookMix, vignette, splitToning)
+        // Copy the 11 grading parameters
         memcpy(ubo + 2, uniforms, 11 * sizeof(float));
+
+        // ✅ FORCE GPU TO SEE THE UPDATED DATA (fix for Mali GPUs)
+        VkMappedMemoryRange flushRange = {};
+        flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        flushRange.memory = uniformMemory;
+        flushRange.offset = 0;
+        flushRange.size = VK_WHOLE_SIZE;
+        vkFlushMappedMemoryRanges(device, 1, &flushRange);
     }
 
     uploadInput(input, w, h);
