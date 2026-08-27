@@ -7,7 +7,7 @@ layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D outputImage;
 
 layout(set = 0, binding = 2, std140) uniform Uniforms {
     vec2 resolution;
-    float brightness;
+    float brightness;    // interpreted as EV-style stops: 0 = neutral, +1 = +1 stop (x2), -1 = -1 stop (x0.5)
     float saturation;
     float contrast;
     float sharpness;
@@ -16,7 +16,7 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float temperature;
     float glowIntensity;   // bloom intensity
     float lookMix;
-    float vignette;        // bloom threshold
+    float vignette;        // vignette amount (0..1)
     float splitToning;
 } u;
 
@@ -75,7 +75,9 @@ vec3 filmicTonemap(vec3 color) {
 
 float vignetteEffect(vec2 uv, float amount) {
     float dist = distance(uv, vec2(0.5));
-    return 1.0 - amount * (dist * dist);
+    // soften curve and clamp
+    float v = 1.0 - amount * smoothstep(0.0, 0.8, dist);
+    return clamp(v, 0.0, 1.0);
 }
 
 vec3 splitTone(vec3 color, float amount) {
@@ -86,8 +88,9 @@ vec3 splitTone(vec3 color, float amount) {
     return mix(color, tone * color, amount);
 }
 
-// ---------- BLOOM (safe) ----------
+// ---------- BLOOM (safe + stronger scaling) ----------
 vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
+    if (intensity <= 0.0) return vec3(0.0);
     const int radius = 25;
     const int samples = 32;
     vec3 bloom = vec3(0.0);
@@ -106,7 +109,10 @@ vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
         total += 1.0;
     }
     bloom /= (total + 1e-6);
-    return bloom * mask * intensity;
+
+    // allow stronger bloom scaling so slider range [0..1] can produce visible bloom
+    float scale = intensity * 8.0; // multiplier can be tuned from Dart side if needed
+    return bloom * mask * scale;
 }
 
 void main() {
@@ -119,29 +125,45 @@ void main() {
     // ---------- Grading using uniform values ----------
     vec3 linear = srgbToLinear(color.rgb);
 
-    linear += u.brightness;
-    linear = (linear - 0.5) * u.contrast + 0.5;
-    linear = pow(max(linear, vec3(0.001)), vec3(1.0 / max(u.gamma, 0.1)));
+    // Use brightness as EV-stops (0 = neutral). This gives a perceptually better range.
+    // Host-side default 0.0 -> gain=1.0. Brightness slider should be small (e.g. -1..+1) for stops.
+    float gain = pow(2.0, u.brightness);
+    linear *= gain;
 
+    // Contrast - interpret 1.0 as neutral (no change). If input contains 1.0 as neutral already,
+    // ensure slider uses 1.0 as default in Dart.
+    linear = (linear - 0.5) * u.contrast + 0.5;
+
+    // Gamma (default 1.0 neutral). Protect against <= 0.
+    linear = pow(max(linear, vec3(0.0001)), vec3(1.0 / max(u.gamma, 0.01)));
+
+    // Saturation (default 1.0 neutral)
     float lum = dot(linear, vec3(0.299, 0.587, 0.114));
     linear = mix(vec3(lum), linear, u.saturation);
 
+    // Temperature and hue
     linear = adjustTemperature(linear, u.temperature);
     linear = rotateHue(linear, u.hue);
+
+    // Teal & Orange look mix
     linear = tealOrange(linear, u.lookMix);
 
-    // Bloom
-    vec3 bloom = largeBloom(pos, size, u.vignette, u.glowIntensity);
+    // Bloom (before tonemap)
+    vec3 bloom = largeBloom(pos, size, 0.8 - u.vignette * 0.6, u.glowIntensity);
     linear += bloom;
 
+    // Tonemap
     linear = filmicTonemap(linear);
 
-    vec2 uv = vec2(pos) / vec2(size);
-    float vig = vignetteEffect(uv, 0.0); // separate vignette off – we use slider for bloom threshold
+    // Vignette (use slider directly)
+    vec2 uv = (vec2(pos) + 0.5) / vec2(size);
+    float vig = vignetteEffect(uv, u.vignette);
     linear *= vig;
 
+    // Split Toning
     linear = splitTone(linear, u.splitToning);
 
+    // Clamp and convert to sRGB
     linear = clamp(linear, 0.0, 1.0);
     vec3 srgb = linearToSrgb(linear);
     srgb = clamp(srgb, 0.0, 1.0);
