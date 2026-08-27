@@ -615,7 +615,9 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const fl
         ubo[0] = (float)w;
         ubo[1] = (float)h;
         // Copy the 11 grading parameters
-        memcpy(ubo + 2, uniforms, 11 * sizeof(float));
+        // NOTE: Dart passes a 13-float array where index 0/1 are width/height, followed by 11 params.
+        // The previous code copied from uniforms (index 0), which caused a shift. Copy from uniforms+2 instead.
+        memcpy(ubo + 2, uniforms + 2, 11 * sizeof(float));
 
         // ✅ FORCE GPU TO SEE THE UPDATED DATA (fix for Mali GPUs)
         VkMappedMemoryRange flushRange = {};
