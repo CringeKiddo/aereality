@@ -14,20 +14,137 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;
     float hue;
     float temperature;
-    float glowIntensity;
+    float glowIntensity;   // bloom intensity
     float lookMix;
-    float vignette;
+    float vignette;        // bloom threshold
     float splitToning;
 } u;
+
+// ---------- HELPERS ----------
+vec3 srgbToLinear(vec3 srgb) {
+    vec3 less = step(vec3(0.04045), srgb);
+    return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), less);
+}
+
+vec3 linearToSrgb(vec3 lin) {
+    lin = max(lin, vec3(0.0)); // prevent negative values
+    vec3 less = step(vec3(0.0031308), lin);
+    return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
+}
+
+vec3 adjustTemperature(vec3 color, float temp) {
+    float r = color.r * (temp / 6500.0);
+    float b = color.b * (6500.0 / temp);
+    return vec3(r, color.g, b);
+}
+
+vec3 rotateHue(vec3 color, float angle) {
+    float cosA = cos(angle * 3.14159 / 180.0);
+    float sinA = sin(angle * 3.14159 / 180.0);
+    mat3 rotMat = mat3(
+        0.299 + 0.701 * cosA + 0.168 * sinA,
+        0.587 - 0.587 * cosA + 0.330 * sinA,
+        0.114 - 0.114 * cosA - 0.497 * sinA,
+        0.299 - 0.299 * cosA - 0.328 * sinA,
+        0.587 + 0.413 * cosA + 0.035 * sinA,
+        0.114 - 0.114 * cosA + 0.293 * sinA,
+        0.299 - 0.300 * cosA + 1.250 * sinA,
+        0.587 - 0.588 * cosA - 1.050 * sinA,
+        0.114 + 0.886 * cosA - 0.200 * sinA
+    );
+    return rotMat * color;
+}
+
+vec3 tealOrange(vec3 color, float mixAmount) {
+    vec3 teal = vec3(0.0, 0.6, 0.6);
+    vec3 orange = vec3(0.8, 0.5, 0.2);
+    vec3 target = mix(orange, teal, color.r);
+    return mix(color, target, mixAmount);
+}
+
+vec3 filmicTonemap(vec3 color) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    float eps = 1e-6; // prevent division by zero
+    return ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F + eps)) - E / F;
+}
+
+float vignetteEffect(vec2 uv, float amount) {
+    float dist = distance(uv, vec2(0.5));
+    return 1.0 - amount * (dist * dist);
+}
+
+vec3 splitTone(vec3 color, float amount) {
+    vec3 shadows = vec3(0.1, 0.2, 0.6);
+    vec3 highlights = vec3(0.9, 0.5, 0.1);
+    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+    vec3 tone = mix(shadows, highlights, lum);
+    return mix(color, tone * color, amount);
+}
+
+// ---------- BLOOM (safe) ----------
+vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
+    const int radius = 25;
+    const int samples = 32;
+    vec3 bloom = vec3(0.0);
+    float total = 0.0;
+
+    vec4 original = imageLoad(inputImage, pos);
+    float lum = dot(original.rgb, vec3(0.299, 0.587, 0.114));
+    float mask = smoothstep(threshold, 1.0, lum);
+
+    for (int i = 0; i < samples; i++) {
+        float angle = float(i) * 6.2832 / float(samples);
+        float r = radius * (0.5 + 0.5 * sin(float(i) * 1.3));
+        ivec2 samplePos = clamp(pos + ivec2(int(r * cos(angle)), int(r * sin(angle))), ivec2(0), size - 1);
+        vec3 sampleColor = imageLoad(inputImage, samplePos).rgb;
+        bloom += sampleColor;
+        total += 1.0;
+    }
+    bloom /= (total + 1e-6);
+    return bloom * mask * intensity;
+}
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
     if (pos.x >= size.x || pos.y >= size.y) return;
 
-    // Output red = brightness value, green = 0, blue = 0
-    float red = u.brightness;    // should be between -1 and 1, but we clamp to 0–1
-    red = clamp(red, 0.0, 1.0);
+    vec4 color = imageLoad(inputImage, pos);
 
-    imageStore(outputImage, pos, vec4(red, 0.0, 0.0, 1.0));
+    // ---------- Grading using uniform values ----------
+    vec3 linear = srgbToLinear(color.rgb);
+
+    linear += u.brightness;
+    linear = (linear - 0.5) * u.contrast + 0.5;
+    linear = pow(max(linear, vec3(0.001)), vec3(1.0 / max(u.gamma, 0.1)));
+
+    float lum = dot(linear, vec3(0.299, 0.587, 0.114));
+    linear = mix(vec3(lum), linear, u.saturation);
+
+    linear = adjustTemperature(linear, u.temperature);
+    linear = rotateHue(linear, u.hue);
+    linear = tealOrange(linear, u.lookMix);
+
+    // Bloom
+    vec3 bloom = largeBloom(pos, size, u.vignette, u.glowIntensity);
+    linear += bloom;
+
+    linear = filmicTonemap(linear);
+
+    vec2 uv = vec2(pos) / vec2(size);
+    float vig = vignetteEffect(uv, 0.0); // separate vignette off – we use slider for bloom threshold
+    linear *= vig;
+
+    linear = splitTone(linear, u.splitToning);
+
+    linear = clamp(linear, 0.0, 1.0);
+    vec3 srgb = linearToSrgb(linear);
+    srgb = clamp(srgb, 0.0, 1.0);
+
+    imageStore(outputImage, pos, vec4(srgb, color.a));
 }
