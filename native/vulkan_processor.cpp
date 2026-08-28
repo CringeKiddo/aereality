@@ -37,7 +37,7 @@ static VkDeviceMemory stagingMemory;
 static VkBuffer outputStagingBuffer;
 static VkDeviceMemory outputStagingMemory;
 
-// Uniform buffer (14 floats: resolution(2) + brightness..splitToning(11) + lutIntensity(1))
+// Uniform buffer (14 floats)
 static VkBuffer uniformBuffer;
 static VkDeviceMemory uniformMemory;
 static void* uniformMapped = nullptr;
@@ -47,6 +47,10 @@ static VkImage lutImage;
 static VkDeviceMemory lutMemory;
 static VkImageView lutView;
 static bool lutLoaded = false;
+
+// ✅ LUT staging buffer (persistent)
+static VkBuffer lutStagingBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory lutStagingMemory = VK_NULL_HANDLE;
 
 static int width = 0, height = 0;
 static bool initialized = false;
@@ -179,7 +183,7 @@ void initVulkan() {
     vkCreateFence(device, &fenceInfo, nullptr, &fence);
     fprintf(stderr, "✅ Fence created\n");
 
-    // Create sampler for input image
+    // Sampler for input image
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -200,7 +204,7 @@ void initShader(const uint32_t* spirv, size_t size) {
         return;
     }
 
-    // 4 bindings: 0=input image, 1=output image, 2=uniform, 3=LUT sampler
+    // 4 bindings: 0=input, 1=output, 2=uniform, 3=LUT
     VkDescriptorSetLayoutBinding bindings[4] = {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -249,7 +253,6 @@ void initShader(const uint32_t* spirv, size_t size) {
     }
     fprintf(stderr, "✅ Compute pipeline created\n");
 
-    // Descriptor pool with 4 types
     VkDescriptorPoolSize poolSizes[4] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 2; // input + LUT
@@ -461,7 +464,7 @@ void createImages(int w, int h) {
     vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
     fprintf(stderr, "✅ Descriptor set updated (4 bindings)\n");
 }
-// native/vulkan_processor.cpp – Part 3 of 3 (corrected)
+// native/vulkan_processor.cpp – Part 3 of 3
 
 void uploadInput(const uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📤 Uploading input frame...\n");
@@ -623,6 +626,8 @@ void cleanupVulkan() {
     if (lutView) vkDestroyImageView(device, lutView, nullptr);
     if (lutImage) vkDestroyImage(device, lutImage, nullptr);
     if (lutMemory) vkFreeMemory(device, lutMemory, nullptr);
+    if (lutStagingBuffer) vkDestroyBuffer(device, lutStagingBuffer, nullptr);
+    if (lutStagingMemory) vkFreeMemory(device, lutStagingMemory, nullptr);
     vkDestroyShaderModule(device, shaderModule, nullptr);
     vkDestroyBuffer(device, uniformBuffer, nullptr);
     vkFreeMemory(device, uniformMemory, nullptr);
@@ -633,7 +638,7 @@ void cleanupVulkan() {
     fprintf(stderr, "✅ Cleanup complete\n");
 }
 
-// ---------- LUT UPLOAD (inside extern "C" only) ----------
+// ---------- LUT UPLOAD (fixed) ----------
 extern "C" {
 
 void init_processor(const uint32_t* spirv, size_t size) {
@@ -674,7 +679,7 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const fl
     readOutput(output, w, h);
 }
 
-// ✅ LUT UPLOAD – defined once, inside extern "C"
+// ✅ Fixed LUT upload with persistent staging buffer and fence sync
 void upload_lut(const float* data, int size) {
     if (!initialized) {
         fprintf(stderr, "❌ Vulkan not initialized\n");
@@ -682,6 +687,28 @@ void upload_lut(const float* data, int size) {
     }
 
     fprintf(stderr, "🔄 Uploading LUT: %dx%dx%d\n", size, size, size);
+
+    // Clean up old LUT resources
+    if (lutView) {
+        vkDestroyImageView(device, lutView, nullptr);
+        lutView = VK_NULL_HANDLE;
+    }
+    if (lutImage) {
+        vkDestroyImage(device, lutImage, nullptr);
+        lutImage = VK_NULL_HANDLE;
+    }
+    if (lutMemory) {
+        vkFreeMemory(device, lutMemory, nullptr);
+        lutMemory = VK_NULL_HANDLE;
+    }
+    if (lutStagingBuffer) {
+        vkDestroyBuffer(device, lutStagingBuffer, nullptr);
+        lutStagingBuffer = VK_NULL_HANDLE;
+    }
+    if (lutStagingMemory) {
+        vkFreeMemory(device, lutStagingMemory, nullptr);
+        lutStagingMemory = VK_NULL_HANDLE;
+    }
 
     // Create 3D image
     VkImageCreateInfo imgInfo = {};
@@ -709,29 +736,28 @@ void upload_lut(const float* data, int size) {
     vkAllocateMemory(device, &memAlloc, nullptr, &lutMemory);
     vkBindImageMemory(device, lutImage, lutMemory, 0);
 
-    // Staging buffer
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
+    // Create persistent staging buffer
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufInfo.size = size * size * size * 4 * sizeof(float);
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
-    vkGetBufferMemoryRequirements(device, stagingBuffer, &memReq);
+    vkCreateBuffer(device, &bufInfo, nullptr, &lutStagingBuffer);
+    vkGetBufferMemoryRequirements(device, lutStagingBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
     memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
-    vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+    vkAllocateMemory(device, &memAlloc, nullptr, &lutStagingMemory);
+    vkBindBufferMemory(device, lutStagingBuffer, lutStagingMemory, 0);
 
+    // Map and copy data (RGB -> RGBA)
     float* mapped;
-    vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&mapped);
+    vkMapMemory(device, lutStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&mapped);
     for (int i = 0; i < size * size * size; i++) {
         mapped[i*4 + 0] = data[i*3 + 0];
         mapped[i*4 + 1] = data[i*3 + 1];
         mapped[i*4 + 2] = data[i*3 + 2];
         mapped[i*4 + 3] = 1.0f;
     }
-    vkUnmapMemory(device, stagingMemory);
+    vkUnmapMemory(device, lutStagingMemory);
 
     // One-time command buffer
     VkCommandBuffer cmdBuf;
@@ -775,9 +801,9 @@ void upload_lut(const float* data, int size) {
     region.imageExtent.width = size;
     region.imageExtent.height = size;
     region.imageExtent.depth = size;
-    vkCmdCopyBufferToImage(cmdBuf, stagingBuffer, lutImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkCmdCopyBufferToImage(cmdBuf, lutStagingBuffer, lutImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // Transition to SHADER_READ_ONLY_OPTIMAL – FIXED enum
+    // Transition to SHADER_READ_ONLY_OPTIMAL
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -786,15 +812,20 @@ void upload_lut(const float* data, int size) {
 
     vkEndCommandBuffer(cmdBuf);
 
+    // Submit with a fence and wait for completion
+    VkFence uploadFence;
+    VkFenceCreateInfo fenceInfo = {};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCreateFence(device, &fenceInfo, nullptr, &uploadFence);
+
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmdBuf;
-    vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue);
+    vkQueueSubmit(queue, 1, &submitInfo, uploadFence);
+    vkWaitForFences(device, 1, &uploadFence, VK_TRUE, UINT64_MAX);
+    vkDestroyFence(device, uploadFence, nullptr);
 
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingMemory, nullptr);
     vkFreeCommandBuffers(device, cmdPool, 1, &cmdBuf);
 
     // Create image view
@@ -810,7 +841,7 @@ void upload_lut(const float* data, int size) {
     viewInfo.subresourceRange.layerCount = 1;
     vkCreateImageView(device, &viewInfo, nullptr, &lutView);
 
-    // Update descriptor set with LUT view
+    // Update descriptor set
     VkDescriptorImageInfo lutImageInfo = {};
     lutImageInfo.imageView = lutView;
     lutImageInfo.sampler = lutSampler;
