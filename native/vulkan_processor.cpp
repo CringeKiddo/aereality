@@ -282,7 +282,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     fprintf(stderr, "✅ Command buffer allocated\n");
 }
-// native/vulkan_processor.cpp – Part 2 of 3 (corrected)
+// native/vulkan_processor.cpp – Part 2 of 3 (full, with identity LUT)
 
 void createImages(int w, int h) {
     fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
@@ -408,7 +408,7 @@ void createImages(int w, int h) {
 
     imagesCreated = true;
 
-    // Update descriptor set
+    // ---- Update descriptor set (4 bindings) ----
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView = inputView;
     imageInfo.sampler = sampler;
@@ -423,7 +423,7 @@ void createImages(int w, int h) {
     uniformDescriptorBufferInfo.range = VK_WHOLE_SIZE;
     uniformDescriptorBufferInfo.offset = 0;
 
-    // LUT image info (initially empty – will be updated when LUT is loaded)
+    // LUT image info (initially empty – will be updated by identity LUT)
     VkDescriptorImageInfo lutImageInfo = {};
     lutImageInfo.imageView = VK_NULL_HANDLE;
     lutImageInfo.sampler = lutSampler;
@@ -460,6 +460,26 @@ void createImages(int w, int h) {
 
     vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
     fprintf(stderr, "✅ Descriptor set updated (4 bindings)\n");
+
+    // ---- Upload a default identity LUT (2x2x2) so the sampler is never null ----
+    extern void upload_lut(const float* data, int size);
+
+    const int idSize = 2;
+    const int numPoints = idSize * idSize * idSize;
+    float* identityData = new float[numPoints * 3];
+    int idx = 0;
+    for (int r = 0; r < idSize; r++) {
+        for (int g = 0; g < idSize; g++) {
+            for (int b = 0; b < idSize; b++) {
+                identityData[idx++] = (float)r / (idSize - 1);
+                identityData[idx++] = (float)g / (idSize - 1);
+                identityData[idx++] = (float)b / (idSize - 1);
+            }
+        }
+    }
+    upload_lut(identityData, idSize);
+    delete[] identityData;
+    fprintf(stderr, "✅ Default identity LUT uploaded (size %d)\n", idSize);
 }
 // native/vulkan_processor.cpp – Part 3 of 3 (corrected)
 
