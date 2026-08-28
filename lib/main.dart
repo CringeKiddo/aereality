@@ -13,6 +13,7 @@ import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 import 'vulkan_bridge.dart';
+import 'lut_loader.dart';
 
 void main() {
   runApp(const AERealityApp());
@@ -45,7 +46,7 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// ---------- PROJECT DATA MODEL (used by ProjectScreen) ----------
+// ---------- PROJECT DATA ----------
 class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
@@ -101,7 +102,7 @@ class ProjectData {
   );
 }
 
-// ---------- STORED PROJECT (for Projects list) ----------
+// ---------- STORED PROJECT ----------
 class StoredProject {
   String id;
   String name;
@@ -711,6 +712,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _lookMix = 0.0;
   double _vignette = 0.0;
   double _splitToning = 0.0;
+  double _lutIntensity = 0.0; // ✅ LUT intensity
 
   String _selectedRatio = "16:9";
   late TabController _tabController;
@@ -863,6 +865,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ✅ LUT LOADER
+  Future<void> _loadLut() async {
+    try {
+      final result = await LutLoader.loadLutFromFile();
+      if (result == null) return;
+      final (lutData, size) = result;
+      uploadLutData(lutData, size);
+      setState(() => _lutIntensity = 1.0);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('LUT loaded successfully!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load LUT: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   void _applyPreset(String name) {
     setState(() {
       switch (name) {
@@ -983,11 +1003,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return image;
   }
 
+  // ✅ UPDATED: 14 floats (including lutIntensity)
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
 
-    final uniforms = Float32List(13);
+    final uniforms = Float32List(14);
     uniforms[0] = input.width.toDouble();
     uniforms[1] = input.height.toDouble();
     uniforms[2] = _brightness;
@@ -1001,6 +1022,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[10] = _lookMix;
     uniforms[11] = _vignette;
     uniforms[12] = _splitToning;
+    uniforms[13] = _lutIntensity; // ✅ LUT intensity
 
     final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
     final completer = Completer<ui.Image>();
@@ -1187,7 +1209,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ],
     );
   }
-    // ✅ FIXED EXPORT – batchSize=1, proper image conversion, padded filenames, logging
+    // ✅ FIXED EXPORT – 14 floats, batchSize=1, proper conversion, padded filenames
   Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
     final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
     await logFile.writeAsString('🟢 Export started at ${DateTime.now()}\n', mode: FileMode.append);
@@ -1234,6 +1256,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final double lookMix = _lookMix;
       final double vignette = _vignette;
       final double splitToning = _splitToning;
+      final double lutIntensity = _lutIntensity; // ✅ capture LUT intensity
 
       await logFile.writeAsString('✅ Step 4: Values captured\n', mode: FileMode.append);
 
@@ -1311,11 +1334,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (frameFiles.isEmpty) throw Exception('No frames extracted.');
       await logFile.writeAsString('✅ Step 8: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
 
-      // ---- Process frames (batchSize = 1 to avoid concurrency issues) ----
+      // ---- Process frames (batchSize = 1) ----
       final totalFrames = frameFiles.length;
       int processedFrames = 0;
       stopwatch.start();
-      const batchSize = 1; // ✅ CRITICAL FIX: process one frame at a time
+      const batchSize = 1;
 
       await logFile.writeAsString('🔄 Entering frame processing loop (batchSize=1)\n', mode: FileMode.append);
 
@@ -1344,7 +1367,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               final rawInput = decoded.data!.buffer.asUint8List();
               await logFile.writeAsString('🔧 Building uniforms for frame $processedFrames\n', mode: FileMode.append);
 
-              final uniforms = Float32List(13);
+              // ✅ 14 uniforms
+              final uniforms = Float32List(14);
               uniforms[0] = decoded.width.toDouble();
               uniforms[1] = decoded.height.toDouble();
               uniforms[2] = brightness;
@@ -1358,6 +1382,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               uniforms[10] = lookMix;
               uniforms[11] = vignette;
               uniforms[12] = splitToning;
+              uniforms[13] = lutIntensity;
 
               await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
 
@@ -1367,16 +1392,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
               await logFile.writeAsString('✅ processImage returned for frame $processedFrames (bytes: ${outputRaw.length})\n', mode: FileMode.append);
 
-              // ✅ FIX: Use outputRaw.buffer (ByteBuffer) – and omit format (default is RGBA)
               final gradedImg = img.Image.fromBytes(
                 width: decoded.width,
                 height: decoded.height,
-                bytes: outputRaw.buffer,   // <-- FIXED: use .buffer
-                // format is omitted – default is rgba
+                bytes: outputRaw.buffer,
               );
               final pngBytes = img.encodePng(gradedImg);
 
-              // ✅ Use padded filename to ensure ffmpeg reads frames in order
               final paddedIndex = (i + 1).toString().padLeft(5, '0');
               final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
               await outputFile.writeAsBytes(pngBytes);
@@ -1386,7 +1408,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               }
               await logFile.writeAsString('✅ Frame $processedFrames written to ${outputFile.path}\n', mode: FileMode.append);
 
-              // Save test frame (first processed)
               if (processedFrames == 0) {
                 try {
                   final testDir = await getTemporaryDirectory();
@@ -1525,6 +1546,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
           IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
           IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
+          // ✅ LUT BUTTON
+          IconButton(
+            icon: const Icon(Icons.color_lens),
+            onPressed: _loadLut,
+            tooltip: 'Load LUT',
+          ),
         ],
       ),
       body: Column(
