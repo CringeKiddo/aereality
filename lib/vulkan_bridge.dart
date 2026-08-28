@@ -15,6 +15,7 @@ typedef NativeProcess = Void Function(
     Pointer<Uint8> output,
     Pointer<Float> uniforms,
 );
+typedef NativeUploadLut = Void Function(Pointer<Float> data, Int32 size);
 typedef NativeCleanup = Void Function();
 
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
@@ -25,6 +26,7 @@ typedef DartProcess = void Function(
     Pointer<Uint8> output,
     Pointer<Float> uniforms,
 );
+typedef DartUploadLut = void Function(Pointer<Float> data, int size);
 typedef DartCleanup = void Function();
 
 final initProcessor = nativeLib
@@ -34,6 +36,10 @@ final initProcessor = nativeLib
 final processFrame = nativeLib
     .lookup<NativeFunction<NativeProcess>>('process_frame')
     .asFunction<DartProcess>();
+
+final uploadLut = nativeLib
+    .lookup<NativeFunction<NativeUploadLut>>('upload_lut')
+    .asFunction<DartUploadLut>();
 
 final cleanupProcessor = nativeLib
     .lookup<NativeFunction<NativeCleanup>>('cleanup_processor')
@@ -54,11 +60,11 @@ Uint8List processImage(
     Uint8List input,
     int width,
     int height,
-    Float32List uniforms,
+    Float32List uniforms, // must be length 14
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
-  if (uniforms.length != 13) {
-    throw Exception('uniforms must contain exactly 13 floats.');
+  if (uniforms.length != 14) {
+    throw Exception('uniforms must contain exactly 14 floats.');
   }
 
   final inputPtr = calloc<Uint8>(input.length);
@@ -81,6 +87,16 @@ Uint8List processImage(
   calloc.free(uniformPtr);
 
   return output;
+}
+
+void uploadLutData(Float32List lutData, int size) {
+  if (!_initialized) throw Exception('Vulkan not initialized.');
+  final ptr = calloc<Float>(lutData.length);
+  for (int i = 0; i < lutData.length; i++) {
+    ptr[i] = lutData[i];
+  }
+  uploadLut(ptr, size);
+  calloc.free(ptr);
 }
 
 void cleanupVulkan() {
