@@ -5,14 +5,19 @@ import 'package:flutter/material.dart';
 
 class LutLoader {
   static Future<(Float32List, int)?> loadLutFromFile() async {
+    // Use FileType.any to avoid extension filter bugs
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['cube'],
+      type: FileType.any,
     );
     if (result == null) return null;
 
-    final file = File(result.files.single.path!);
-    final bytes = await file.readAsBytes();
+    final file = result.files.single;
+    final path = file.path;
+    if (path == null || !path.toLowerCase().endsWith('.cube')) {
+      throw Exception('Selected file is not a .cube file.');
+    }
+
+    final bytes = await File(path).readAsBytes();
     final content = String.fromCharCodes(bytes);
     return parseCube(content);
   }
@@ -31,7 +36,6 @@ class LutLoader {
         continue;
       }
 
-      // Skip TITLE, DOMAIN_MIN, DOMAIN_MAX
       if (line.startsWith('TITLE') || line.startsWith('DOMAIN')) continue;
 
       final parts = line.split(RegExp(r'\s+'));
