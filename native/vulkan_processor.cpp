@@ -282,7 +282,10 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     fprintf(stderr, "✅ Command buffer allocated\n");
 }
-// native/vulkan_processor.cpp – Part 2 of 3 (full, with identity LUT)
+// native/vulkan_processor.cpp – Part 2 of 3 (corrected linkage)
+
+// Forward declaration so createImages can call upload_lut
+extern "C" void upload_lut(const float* data, int size);
 
 void createImages(int w, int h) {
     fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
@@ -462,8 +465,6 @@ void createImages(int w, int h) {
     fprintf(stderr, "✅ Descriptor set updated (4 bindings)\n");
 
     // ---- Upload a default identity LUT (2x2x2) so the sampler is never null ----
-    extern void upload_lut(const float* data, int size);
-
     const int idSize = 2;
     const int numPoints = idSize * idSize * idSize;
     float* identityData = new float[numPoints * 3];
