@@ -54,6 +54,7 @@ class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
   double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
+  double denoise, cellShading, colourCrush;
   String aspectRatio;
 
   ProjectData({
@@ -70,6 +71,9 @@ class ProjectData {
     this.vignette = 0.0,
     this.splitToning = 0.0,
     this.edgeDarken = 0.0,
+    this.denoise = 0.0,
+    this.cellShading = 0.0,
+    this.colourCrush = 0.0,
     this.aspectRatio = "16:9",
   });
 
@@ -87,6 +91,9 @@ class ProjectData {
     'vignette': vignette,
     'splitToning': splitToning,
     'edgeDarken': edgeDarken,
+    'denoise': denoise,
+    'cellShading': cellShading,
+    'colourCrush': colourCrush,
     'aspectRatio': aspectRatio,
   };
 
@@ -104,6 +111,9 @@ class ProjectData {
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
     edgeDarken: json['edgeDarken'] ?? 0.0,
+    denoise: json['denoise'] ?? 0.0,
+    cellShading: json['cellShading'] ?? 0.0,
+    colourCrush: json['colourCrush'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
   );
 }
@@ -115,6 +125,7 @@ class StoredProject {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
   double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
+  double denoise, cellShading, colourCrush;
   String aspectRatio;
   DateTime lastOpened;
 
@@ -134,6 +145,9 @@ class StoredProject {
     this.vignette = 0.0,
     this.splitToning = 0.0,
     this.edgeDarken = 0.0,
+    this.denoise = 0.0,
+    this.cellShading = 0.0,
+    this.colourCrush = 0.0,
     this.aspectRatio = "16:9",
     required this.lastOpened,
   });
@@ -154,6 +168,9 @@ class StoredProject {
     'vignette': vignette,
     'splitToning': splitToning,
     'edgeDarken': edgeDarken,
+    'denoise': denoise,
+    'cellShading': cellShading,
+    'colourCrush': colourCrush,
     'aspectRatio': aspectRatio,
     'lastOpened': lastOpened.toIso8601String(),
   };
@@ -174,6 +191,9 @@ class StoredProject {
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
     edgeDarken: json['edgeDarken'] ?? 0.0,
+    denoise: json['denoise'] ?? 0.0,
+    cellShading: json['cellShading'] ?? 0.0,
+    colourCrush: json['colourCrush'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
   );
@@ -192,6 +212,9 @@ class StoredProject {
     vignette: vignette,
     splitToning: splitToning,
     edgeDarken: edgeDarken,
+    denoise: denoise,
+    cellShading: cellShading,
+    colourCrush: colourCrush,
     aspectRatio: aspectRatio,
   );
 }
@@ -463,7 +486,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 20),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[700]!, style: BorderStyle.dashed),
+                  border: Border.all(color: Colors.grey[700]!, style: BorderStyle.solid),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
@@ -631,6 +654,9 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       vignette: project.vignette,
       splitToning: project.splitToning,
       edgeDarken: project.edgeDarken,
+      denoise: project.denoise,
+      cellShading: project.cellShading,
+      colourCrush: project.colourCrush,
       aspectRatio: project.aspectRatio,
       lastOpened: DateTime.now(),
     );
@@ -737,7 +763,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _lookMix = 0.0;
   double _vignette = 0.0;
   double _splitToning = 0.0;
-  double _edgeDarken = 0.0; // new
+  double _edgeDarken = 0.0;
+  double _denoise = 0.0;
+  double _cellShading = 0.0;
+  double _colourCrush = 0.0;
 
   String _selectedRatio = "16:9";
   late TabController _tabController;
@@ -746,7 +775,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Uint8List? _spirvShader;
 
-  // Timeline preview: cached processed image
+  // Timeline preview
   ui.Image? _processedImage;
   Timer? _previewTimer;
   bool _isUpdating = false;
@@ -772,6 +801,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _vignette = p.vignette;
       _splitToning = p.splitToning;
       _edgeDarken = p.edgeDarken;
+      _denoise = p.denoise;
+      _cellShading = p.cellShading;
+      _colourCrush = p.colourCrush;
       _selectedRatio = p.aspectRatio;
       _loadVideo(p.videoPath);
     }
@@ -811,9 +843,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        // Capture current frame
-        final frame = await _controller!.value.videoTexture?.toImage() ??
-            await _controller!.toImage();
+        final frame = await _controller!.toImage();
         if (frame == null) return;
         final processed = await _processFrameWithVulkan(frame);
         if (mounted) {
@@ -837,6 +867,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void dispose() {
     _stopTimelinePreview();
+    _controller?.removeListener(_listener);
     _controller?.dispose();
     cleanupVulkan();
     super.dispose();
@@ -855,7 +886,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ---------- SHOW LOG (bug icon) ----------
+  // ---------- SHOW LOG ----------
   Future<void> _showLog() async { /* keep existing */ }
 
   // ---------- PRESETS ----------
@@ -866,16 +897,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _brightness = 0.15; _saturation = 1.3; _contrast = 1.25; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 6200.0; _glowIntensity = 0.0; _lookMix = 0.3;
           _vignette = 0.0; _splitToning = 0.15; _edgeDarken = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
           break;
         case 'Magic Bullet':
           _brightness = 0.0; _saturation = 1.2; _contrast = 1.5; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 5600.0; _glowIntensity = 0.0; _lookMix = 0.0;
           _vignette = 0.0; _splitToning = 0.4; _edgeDarken = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
           break;
         case 'Teal & Orange':
           _brightness = 0.0; _saturation = 1.4; _contrast = 1.3; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 5500.0; _glowIntensity = 0.0; _lookMix = 0.7;
           _vignette = 0.0; _splitToning = 0.0; _edgeDarken = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
           break;
         default: break;
       }
@@ -901,6 +935,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       vignette: _vignette,
       splitToning: _splitToning,
       edgeDarken: _edgeDarken,
+      denoise: _denoise,
+      cellShading: _cellShading,
+      colourCrush: _colourCrush,
       aspectRatio: _selectedRatio,
       lastOpened: DateTime.now(),
     );
@@ -947,13 +984,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
 
-  // ---------- VULKAN PROCESSING (15 floats now) ----------
+  // ---------- VULKAN PROCESSING (18 floats) ----------
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
 
-    // 15 floats: resolution (2) + 13 grading params (brightness..edgeDarken)
-    final uniforms = Float32List(15);
+    // 18 floats: resolution (2) + 16 grading params
+    final uniforms = Float32List(18);
     uniforms[0] = input.width.toDouble();
     uniforms[1] = input.height.toDouble();
     uniforms[2] = _brightness;
@@ -967,8 +1004,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[10] = _lookMix;
     uniforms[11] = _vignette;
     uniforms[12] = _splitToning;
-    uniforms[13] = _edgeDarken; // new
-    uniforms[14] = 0.0; // placeholder for future
+    uniforms[13] = _edgeDarken;
+    uniforms[14] = _denoise;
+    uniforms[15] = _cellShading;
+    uniforms[16] = _colourCrush;
+    uniforms[17] = 0.0; // placeholder
 
     final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
     final completer = Completer<ui.Image>();
@@ -981,10 +1021,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    // ---------- SINGLE PREVIEW FRAME (optional) ----------
-  Future<void> _previewFrame() async { /* keep existing */ }
+    // ---------- SINGLE PREVIEW FRAME ----------
+  Future<void> _previewFrame() async {
+    // keep existing
+  }
 
-  // ---------- EXPORT SHEET (with bit depth toggle) ----------
+  // ---------- EXPORT SHEET (with 8-bit/10-bit toggle) ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -996,7 +1038,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             String selectedRes = widget.initialResolution ?? '1080p';
             String selectedFps = widget.initialFps ?? '60fps';
             String selectedBit = widget.initialBitrate ?? '35 Mbps';
-            String selectedColorDepth = '8-bit SDR'; // or '10-bit HDR'
+            String selectedColorDepth = '8-bit SDR';
             return Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -1013,7 +1055,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selected: selectedRes == res,
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedRes = res),
+                      onSelected: (sel) => setStateModal(() { if (sel) selectedRes = res; }),
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
@@ -1026,7 +1068,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selected: selectedFps == fps,
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedFps = sel),
+                      onSelected: (sel) => setStateModal(() { if (sel) selectedFps = fps; }),
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
@@ -1039,11 +1081,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selected: selectedBit == bit,
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedBit = sel),
+                      onSelected: (sel) => setStateModal(() { if (sel) selectedBit = bit; }),
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
-                  // Color Depth (NEW)
+                  // Color Depth
                   const Text('Color Depth & Profile', style: TextStyle(color: Colors.white70)),
                   Wrap(
                     spacing: 8,
@@ -1052,7 +1094,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selected: selectedColorDepth == depth,
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedColorDepth == depth ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedColorDepth = sel),
+                      onSelected: (sel) => setStateModal(() { if (sel) selectedColorDepth = depth; }),
                     )).toList(),
                   ),
                   const SizedBox(height: 24),
@@ -1100,7 +1142,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ],
     );
   }
-    // ---------- EXPORT VIDEO (with bit depth) ----------
+    // ---------- EXPORT VIDEO ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate, String colorDepth) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -1124,14 +1166,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final double vignette = _vignette;
     final double splitToning = _splitToning;
     final double edgeDarken = _edgeDarken;
+    final double denoise = _denoise;
+    final double cellShading = _cellShading;
+    final double colourCrush = _colourCrush;
 
-    // Determine FFmpeg pixel format based on color depth
-    String pixFmt;
-    if (colorDepth == '10-bit HDR') {
-      pixFmt = 'yuv420p10le'; // 10-bit, limited range
-    } else {
-      pixFmt = 'yuv420p'; // 8-bit
-    }
+    String pixFmt = (colorDepth == '10-bit HDR') ? 'yuv420p10le' : 'yuv420p';
 
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('Initializing...');
@@ -1203,7 +1242,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           if (decoded == null) return;
 
           final rawInput = decoded.data!.buffer.asUint8List();
-          final uniforms = Float32List(15);
+          final uniforms = Float32List(18);
           uniforms[0] = decoded.width.toDouble();
           uniforms[1] = decoded.height.toDouble();
           uniforms[2] = brightness;
@@ -1218,7 +1257,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           uniforms[11] = vignette;
           uniforms[12] = splitToning;
           uniforms[13] = edgeDarken;
-          uniforms[14] = 0.0;
+          uniforms[14] = denoise;
+          uniforms[15] = cellShading;
+          uniforms[16] = colourCrush;
+          uniforms[17] = 0.0;
 
           final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
               .timeout(const Duration(seconds: 30));
@@ -1243,12 +1285,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      // Use selected pixel format
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt $pixFmt "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
-        // fallback
         final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                             '-c:v mpeg4 -q:v 5 -pix_fmt $pixFmt "$silentOutputPath"';
         encodeSession = await FFmpegKit.execute(fallbackCmd);
@@ -1257,12 +1297,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         }
       }
 
-      // Audio
       final audioPath = '${dir.path}/audio.aac';
       final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
       await FFmpegKit.execute(audioCmd);
 
-      // Mux
       final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
       final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
       final muxSession = await FFmpegKit.execute(muxCmd);
@@ -1274,7 +1312,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
       await File(finalOutputPath).copy(finalFile.path);
 
-      // Cleanup
       await framesDir.delete(recursive: true);
       await processedDir.delete(recursive: true);
       try { await File(audioPath).delete(); } catch (_) {}
@@ -1409,7 +1446,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   ],
                 ),
                 SizedBox(
-                  height: 220,
+                  height: 240, // increased to fit more sliders
                   child: TabBarView(
                     controller: _tabController,
                     children: [
@@ -1427,7 +1464,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
                           _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
                           _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
-                          _slider('Edge Darken', 0.0, 1.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)), // NEW
+                          _slider('Edge Darken', 0.0, 1.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
+                          _slider('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
+                          _slider('Cell Shading', 0.0, 1.0, _cellShading, (v) => setState(() => _cellShading = v)),
+                          _slider('Colour Crush', 0.0, 1.0, _colourCrush, (v) => setState(() => _colourCrush = v)),
                         ],
                       ),
                       // ---------- Presets tab ----------
@@ -1508,6 +1548,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   @override
   void dispose() {
+    _stopTimelinePreview();
     _controller?.removeListener(_listener);
     _controller?.dispose();
     cleanupVulkan();
