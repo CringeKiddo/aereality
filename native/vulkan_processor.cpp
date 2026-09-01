@@ -1,4 +1,4 @@
-// native/vulkan_processor.cpp – Part 1 of 3 (No LUT, 16-bit float, 15 uniforms)
+// native/vulkan_processor.cpp – Part 1 of 3 (No LUT, 16-bit float, 18 uniforms)
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
@@ -36,7 +36,7 @@ static VkDeviceMemory stagingMemory;
 static VkBuffer outputStagingBuffer;
 static VkDeviceMemory outputStagingMemory;
 
-// Uniform buffer (15 floats: resolution(2) + 13 grading params)
+// Uniform buffer (18 floats: resolution(2) + 16 grading params)
 static VkBuffer uniformBuffer;
 static VkDeviceMemory uniformMemory;
 static void* uniformMapped = nullptr;
@@ -268,7 +268,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
     fprintf(stderr, "✅ Command buffer allocated\n");
 }
-// native/vulkan_processor.cpp – Part 2 of 3 (No LUT, 16-bit float, 15 uniforms)
+// native/vulkan_processor.cpp – Part 2 of 3
 
 void createImages(int w, int h) {
     fprintf(stderr, "🔄 createImages called: %dx%d\n", w, h);
@@ -361,10 +361,10 @@ void createImages(int w, int h) {
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
     fprintf(stderr, "✅ Output staging buffer created\n");
 
-    // Uniform buffer (15 floats)
+    // Uniform buffer (18 floats)
     VkBufferCreateInfo uniformBufferCreateInfo = {};
     uniformBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    uniformBufferCreateInfo.size = 15 * sizeof(float);
+    uniformBufferCreateInfo.size = 18 * sizeof(float);   // ✅ 18 floats
     uniformBufferCreateInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     uniformBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateBuffer(device, &uniformBufferCreateInfo, nullptr, &uniformBuffer);
@@ -377,7 +377,7 @@ void createImages(int w, int h) {
     vkAllocateMemory(device, &memAlloc, nullptr, &uniformMemory);
     vkBindBufferMemory(device, uniformBuffer, uniformMemory, 0);
     vkMapMemory(device, uniformMemory, 0, VK_WHOLE_SIZE, 0, &uniformMapped);
-    fprintf(stderr, "✅ Uniform buffer created (15 floats)\n");
+    fprintf(stderr, "✅ Uniform buffer created (18 floats)\n");
 
     imagesCreated = true;
 
@@ -421,7 +421,7 @@ void createImages(int w, int h) {
     vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
     fprintf(stderr, "✅ Descriptor set updated (3 bindings)\n");
 }
-// native/vulkan_processor.cpp – Part 3 of 3 (No LUT, 16-bit float, 15 uniforms)
+// native/vulkan_processor.cpp – Part 3 of 3
 
 void uploadInput(const uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📤 Uploading input frame...\n");
@@ -613,8 +613,8 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const fl
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)w;
         ubo[1] = (float)h;
-        // Copy 13 floats: brightness..edgeDarken (13 values)
-        memcpy(ubo + 2, uniforms, 13 * sizeof(float));
+        // Copy 16 floats: brightness..colourCrush (16 values)
+        memcpy(ubo + 2, uniforms, 16 * sizeof(float));   // ✅ 16 floats
 
         VkMappedMemoryRange flushRange = {};
         flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
