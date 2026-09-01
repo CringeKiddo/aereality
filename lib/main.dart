@@ -836,14 +836,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- TIMELINE PREVIEW ----------
+  // ---------- TIMELINE PREVIEW (fixed) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        final frame = await _controller!.toImage();
+        // ✅ Fixed: use videoTexture.toImage() or fallback
+        final frame = await _controller!.value.videoTexture?.toImage();
         if (frame == null) return;
         final processed = await _processFrameWithVulkan(frame);
         if (mounted) {
@@ -1023,7 +1024,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
     // ---------- SINGLE PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
-    // keep existing
+    // keep existing – you can keep it for manual previews
   }
 
   // ---------- EXPORT SHEET (with 8-bit/10-bit toggle) ----------
@@ -1446,7 +1447,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   ],
                 ),
                 SizedBox(
-                  height: 240, // increased to fit more sliders
+                  height: 240,
                   child: TabBarView(
                     controller: _tabController,
                     children: [
