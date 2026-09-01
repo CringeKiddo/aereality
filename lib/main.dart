@@ -13,7 +13,6 @@ import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
 import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 import 'vulkan_bridge.dart';
-import 'lut_loader.dart';
 
 void main() {
   runApp(const AERealityApp());
@@ -28,16 +27,20 @@ class AERealityApp extends StatelessWidget {
       title: 'AEReality',
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0A0A0A),
-        primaryColor: Colors.white,
+        primaryColor: const Color(0xFF00E5FF),
         colorScheme: const ColorScheme.dark(
-          primary: Colors.white,
-          secondary: Colors.white,
+          primary: Color(0xFF00E5FF),
+          secondary: Color(0xFF00E5FF),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF0A0A0A),
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-          iconThemeData: IconThemeData(color: Colors.white),
+          iconTheme: IconThemeData(color: Colors.white),
+        ),
+        textTheme: const TextTheme(
+          bodyMedium: TextStyle(color: Colors.white70),
+          titleMedium: TextStyle(color: Colors.white),
         ),
       ),
       home: const HomeScreen(),
@@ -50,12 +53,8 @@ class AERealityApp extends StatelessWidget {
 class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
-  double temperature, glowIntensity, lookMix, vignette, splitToning;
+  double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
   String aspectRatio;
-  String videoName;
-  String? lutName;
-  bool deepGlow;
-  double? deepGlowRadius;
 
   ProjectData({
     required this.videoPath,
@@ -70,11 +69,8 @@ class ProjectData {
     this.lookMix = 0.0,
     this.vignette = 0.0,
     this.splitToning = 0.0,
+    this.edgeDarken = 0.0,
     this.aspectRatio = "16:9",
-    this.videoName = "Untitled",
-    this.lutName,
-    this.deepGlow = false,
-    this.deepGlowRadius,
   });
 
   Map<String, dynamic> toJson() => {
@@ -90,11 +86,8 @@ class ProjectData {
     'lookMix': lookMix,
     'vignette': vignette,
     'splitToning': splitToning,
+    'edgeDarken': edgeDarken,
     'aspectRatio': aspectRatio,
-    'videoName': videoName,
-    'lutName': lutName,
-    'deepGlow': deepGlow,
-    'deepGlowRadius': deepGlowRadius,
   };
 
   factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
@@ -110,11 +103,8 @@ class ProjectData {
     lookMix: json['lookMix'] ?? 0.0,
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
+    edgeDarken: json['edgeDarken'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
-    videoName: json['videoName'] ?? "Untitled",
-    lutName: json['lutName'],
-    deepGlow: json['deepGlow'] ?? false,
-    deepGlowRadius: json['deepGlowRadius'],
   );
 }
 
@@ -124,13 +114,9 @@ class StoredProject {
   String name;
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
-  double temperature, glowIntensity, lookMix, vignette, splitToning;
+  double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
   String aspectRatio;
   DateTime lastOpened;
-  String videoName;
-  String? lutName;
-  bool deepGlow;
-  double? deepGlowRadius;
 
   StoredProject({
     required this.id,
@@ -147,12 +133,9 @@ class StoredProject {
     this.lookMix = 0.0,
     this.vignette = 0.0,
     this.splitToning = 0.0,
+    this.edgeDarken = 0.0,
     this.aspectRatio = "16:9",
     required this.lastOpened,
-    this.videoName = "Untitled",
-    this.lutName,
-    this.deepGlow = false,
-    this.deepGlowRadius,
   });
 
   Map<String, dynamic> toJson() => {
@@ -170,12 +153,9 @@ class StoredProject {
     'lookMix': lookMix,
     'vignette': vignette,
     'splitToning': splitToning,
+    'edgeDarken': edgeDarken,
     'aspectRatio': aspectRatio,
     'lastOpened': lastOpened.toIso8601String(),
-    'videoName': videoName,
-    'lutName': lutName,
-    'deepGlow': deepGlow,
-    'deepGlowRadius': deepGlowRadius,
   };
 
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
@@ -193,12 +173,9 @@ class StoredProject {
     lookMix: json['lookMix'] ?? 0.0,
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
+    edgeDarken: json['edgeDarken'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
-    videoName: json['videoName'] ?? "Untitled",
-    lutName: json['lutName'],
-    deepGlow: json['deepGlow'] ?? false,
-    deepGlowRadius: json['deepGlowRadius'],
   );
 
   ProjectData toProjectData() => ProjectData(
@@ -214,11 +191,8 @@ class StoredProject {
     lookMix: lookMix,
     vignette: vignette,
     splitToning: splitToning,
+    edgeDarken: edgeDarken,
     aspectRatio: aspectRatio,
-    videoName: videoName,
-    lutName: lutName,
-    deepGlow: deepGlow,
-    deepGlowRadius: deepGlowRadius,
   );
 }
 
@@ -240,42 +214,29 @@ class ProjectManager {
   }
 
   static Future<void> saveProjects(List<StoredProject> projects) async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$_storageKey');
-      final data = jsonEncode(projects.map((p) => p.toJson()).toList());
-      await file.writeAsString(data);
-    } catch (e) {
-      debugPrint('Error saving projects: $e');
-    }
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/$_storageKey');
+    final jsonList = projects.map((p) => p.toJson()).toList();
+    await file.writeAsString(jsonEncode(jsonList));
   }
 
   static Future<void> saveProject(StoredProject project) async {
-    try {
-      final projects = await loadProjects();
-      final index = projects.indexWhere((p) => p.id == project.id);
-      if (index >= 0) {
-        projects[index] = project;
-      } else {
-        projects.add(project);
-      }
-      await saveProjects(projects);
-    } catch (e) {
-      debugPrint('Error saving project: $e');
+    final projects = await loadProjects();
+    projects.removeWhere((p) => p.id == project.id);
+    projects.add(project);
+    projects.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+    if (projects.length > 20) {
+      projects.removeRange(20, projects.length);
     }
+    await saveProjects(projects);
   }
 
   static Future<void> deleteProject(String id) async {
-    try {
-      final projects = await loadProjects();
-      projects.removeWhere((p) => p.id == id);
-      await saveProjects(projects);
-    } catch (e) {
-      debugPrint('Error deleting project: $e');
-    }
+    final projects = await loadProjects();
+    projects.removeWhere((p) => p.id == id);
+    await saveProjects(projects);
   }
 }
-
 // ---------- HOME SCREEN ----------
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -285,934 +246,1271 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late Future<List<StoredProject>> _projectsFuture;
+  List<StoredProject> _recentProjects = [];
 
   @override
   void initState() {
     super.initState();
-    _projectsFuture = ProjectManager.loadProjects();
+    _loadRecent();
+  }
+
+  Future<void> _loadRecent() async {
+    final all = await ProjectManager.loadProjects();
+    setState(() {
+      _recentProjects = all.take(5).toList();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
-        title: const Text('AEReality - Color Grading Suite'),
-        backgroundColor: const Color(0xFF121212),
-        elevation: 0,
+        title: const Text('AEReality'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+        ],
       ),
-      body: FutureBuilder<List<StoredProject>>(
-        future: _projectsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final projects = snapshot.data ?? [];
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              ElevatedButton.icon(
-                onPressed: () async {
-                  final result = await FilePicker.platform.pickFiles(type: FileType.video);
-                  if (result != null && mounted) {
-                    final videoPath = result.files.single.path!;
-                    final fileName = result.files.single.name;
-                    if (mounted) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => ProjectScreen(
-                            project: StoredProject(
-                              id: DateTime.now().millisecondsSinceEpoch.toString(),
-                              name: 'New Project',
-                              videoPath: videoPath,
-                              videoName: fileName,
-                              lastOpened: DateTime.now(),
-                            ),
-                          ),
-                        ),
-                      );
-                    }
-                  }
-                },
-                icon: const Icon(Icons.add),
-                label: const Text('New Project'),
-              ),
-              const SizedBox(height: 16),
-              if (projects.isEmpty)
-                const Center(
-                  child: Text(
-                    'No projects yet. Create one to get started!',
-                    style: TextStyle(color: Colors.white70),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('No Project Open', style: TextStyle(color: Colors.white38, fontSize: 14)),
+            const SizedBox(height: 8),
+            const Text('Create a new 32-bit floating point color grading project or upscale footage with AI Super-Resolution.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen()));
+                    },
+                    icon: const Icon(Icons.add, color: Colors.black),
+                    label: const Text('New Project', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
-                )
-              else
-                ...projects.map((project) => ProjectTile(project: project)),
-            ],
-          );
-        },
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectsScreen()));
+                    },
+                    icon: const Icon(Icons.folder_open, color: Colors.white),
+                    label: const Text('Open Projects', style: TextStyle(color: Colors.white)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text('RECENT PROJECTS', style: TextStyle(color: Colors.white38, fontSize: 12, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            if (_recentProjects.isEmpty)
+              const Text('No recent projects', style: TextStyle(color: Colors.white38))
+            else
+              Column(
+                children: _recentProjects.map((p) => ListTile(
+                  leading: const Icon(Icons.video_file, color: Color(0xFF00E5FF)),
+                  title: Text(p.name, style: const TextStyle(color: Colors.white)),
+                  subtitle: Text('${p.videoPath.split('/').last} • ${p.lastOpened.toLocal().toString().split(' ')[0]}', style: const TextStyle(color: Colors.white54)),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ProjectScreen(initialProject: p.toProjectData(), projectName: p.name),
+                      ),
+                    ).then((_) => _loadRecent());
+                  },
+                )).toList(),
+              ),
+            const Spacer(),
+            const Divider(color: Colors.white10),
+            const Text('AI Super-Resolution Upscaler', style: TextStyle(color: Colors.white38, fontSize: 12)),
+            const SizedBox(height: 4),
+            const Text('REAL-CUGAN & REAL-ESRGAN', style: TextStyle(color: Colors.white54, fontSize: 10)),
+          ],
+        ),
       ),
     );
   }
 }
+// ---------- SETTINGS ----------
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
 
-class ProjectTile extends StatelessWidget {
-  final StoredProject project;
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
 
-  const ProjectTile({super.key, required this.project});
+class _SettingsScreenState extends State<SettingsScreen> {
+  double _previewScale = 1.0;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF1A1A1A),
-      child: ListTile(
-        title: Text(project.name),
-        subtitle: Text(project.videoName),
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => ProjectScreen(project: project)),
-          );
-        },
-        trailing: IconButton(
-          icon: const Icon(Icons.delete),
-          onPressed: () {
-            ProjectManager.deleteProject(project.id);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Project deleted')),
-            );
-          },
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings'), backgroundColor: const Color(0xFF0A0A0A)),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            const Text('Preview Resolution', style: TextStyle(color: Colors.white70, fontSize: 16)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Text('360p', style: TextStyle(color: Colors.white54)),
+                Expanded(
+                  child: Slider(
+                    value: _previewScale,
+                    min: 0.33,
+                    max: 1.0,
+                    divisions: 3,
+                    activeColor: const Color(0xFF00E5FF),
+                    inactiveColor: Colors.grey[800],
+                    onChanged: (val) => setState(() => _previewScale = val),
+                  ),
+                ),
+                const Text('1080p', style: TextStyle(color: Colors.white54)),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text('Current: ${(_previewScale * 1080).toInt()}p', style: const TextStyle(color: Colors.white)),
+          ],
         ),
       ),
     );
   }
 }
 
-// ---------- PROJECT SCREEN (MAIN GRADING UI - PORTED FROM REACT) ----------
-class ProjectScreen extends StatefulWidget {
-  final StoredProject project;
+// ---------- PROJECT SETUP SCREEN ----------
+class ProjectSetupScreen extends StatefulWidget {
+  const ProjectSetupScreen({super.key});
 
-  const ProjectScreen({super.key, required this.project});
+  @override
+  State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
+}
+
+class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTickerProviderStateMixin {
+  String _projectName = 'Untitled Project';
+  String _selectedAspect = '16:9';
+  String _selectedRes = '1080p';
+  String _selectedFps = '60fps';
+  String _selectedBitrate = '35 Mbps';
+  File? _selectedFile;
+
+  final List<String> _aspectRatios = ['4:5', '9:16', '16:9', '1:1', '3:4', '21:9'];
+  final List<String> _resolutions = ['720p', '1080p', '2K'];
+  final List<String> _fpsOptions = ['30fps', '60fps', '90fps'];
+  final List<String> _bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps'];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('New Project'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('PROJECT NAME', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 4),
+            TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+              decoration: InputDecoration(
+                hintText: 'Untitled Project',
+                hintStyle: const TextStyle(color: Colors.white38),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.grey[800]!),
+                ),
+                focusedBorder: const UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF00E5FF)),
+                ),
+              ),
+              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Untitled Project',
+              controller: TextEditingController(text: _projectName),
+            ),
+            const SizedBox(height: 20),
+            const Text('SOURCE FOOTAGE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () async {
+                final result = await FilePicker.platform.pickFiles(type: FileType.video);
+                if (result != null) {
+                  setState(() => _selectedFile = File(result.files.single.path!));
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[700]!, style: BorderStyle.dashed),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(_selectedFile == null ? Icons.cloud_upload : Icons.check_circle, color: const Color(0xFF00E5FF), size: 40),
+                    const SizedBox(height: 8),
+                    Text(_selectedFile == null ? 'Click to select footage or image from device' : _selectedFile!.path.split('/').last,
+                      style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('CANVAS ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _aspectRatios.map((ratio) => ChoiceChip(
+                label: Text(ratio, style: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70)),
+                selected: _selectedAspect == ratio,
+                selectedColor: const Color(0xFF00E5FF),
+                backgroundColor: Colors.grey[900],
+                onSelected: (sel) => setState(() => _selectedAspect = ratio),
+              )).toList(),
+            ),
+            const SizedBox(height: 20),
+            const Text('PROJECT PIPELINE SPECS', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Canvas Aspect Ratio', style: TextStyle(color: Colors.white54)),
+                      Text(_selectedAspect, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Quality / Resolution', style: TextStyle(color: Colors.white54)),
+                      DropdownButton<String>(
+                        value: _selectedRes,
+                        items: _resolutions.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+                        onChanged: (v) => setState(() => _selectedRes = v!),
+                        dropdownColor: Colors.grey[900],
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Framerate', style: TextStyle(color: Colors.white54)),
+                      DropdownButton<String>(
+                        value: _selectedFps,
+                        items: _fpsOptions.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                        onChanged: (v) => setState(() => _selectedFps = v!),
+                        dropdownColor: Colors.grey[900],
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Target Bitrate', style: TextStyle(color: Colors.white54)),
+                      DropdownButton<String>(
+                        value: _selectedBitrate,
+                        items: _bitrateOptions.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
+                        onChanged: (v) => setState(() => _selectedBitrate = v!),
+                        dropdownColor: Colors.grey[900],
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (_selectedFile == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a video')));
+                    return;
+                  }
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ProjectScreen(
+                        initialProject: ProjectData(videoPath: _selectedFile!.path),
+                        projectName: _projectName,
+                        initialResolution: _selectedRes,
+                        initialFps: _selectedFps,
+                        initialBitrate: _selectedBitrate,
+                      ),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00E5FF),
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('CREATE PROJECT', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+// ---------- PROJECTS SCREEN ----------
+class ProjectsScreen extends StatefulWidget {
+  const ProjectsScreen({super.key});
+
+  @override
+  State<ProjectsScreen> createState() => _ProjectsScreenState();
+}
+
+class _ProjectsScreenState extends State<ProjectsScreen> {
+  List<StoredProject> _projects = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProjects();
+  }
+
+  Future<void> _loadProjects() async {
+    final projs = await ProjectManager.loadProjects();
+    setState(() => _projects = projs);
+  }
+
+  Future<void> _openProject(StoredProject project) async {
+    final updated = StoredProject(
+      id: project.id,
+      name: project.name,
+      videoPath: project.videoPath,
+      brightness: project.brightness,
+      saturation: project.saturation,
+      contrast: project.contrast,
+      sharpness: project.sharpness,
+      gamma: project.gamma,
+      hue: project.hue,
+      temperature: project.temperature,
+      glowIntensity: project.glowIntensity,
+      lookMix: project.lookMix,
+      vignette: project.vignette,
+      splitToning: project.splitToning,
+      edgeDarken: project.edgeDarken,
+      aspectRatio: project.aspectRatio,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(updated);
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProjectScreen(
+          initialProject: project.toProjectData(),
+          projectName: project.name,
+        ),
+      ),
+    ).then((_) => _loadProjects());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Projects'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadProjects),
+        ],
+      ),
+      body: _projects.isEmpty
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open, size: 64, color: Colors.white24),
+                  SizedBox(height: 16),
+                  Text('No projects yet', style: TextStyle(color: Colors.white38)),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: _projects.length,
+              itemBuilder: (context, index) {
+                final p = _projects[index];
+                return ListTile(
+                  leading: const Icon(Icons.video_file, color: Color(0xFF00E5FF)),
+                  title: Text(p.name, style: const TextStyle(color: Colors.white)),
+                  subtitle: Text('${p.videoPath.split('/').last} • ${p.lastOpened.toLocal().toString().split(' ')[0]}', style: const TextStyle(color: Colors.white54)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.white38),
+                    onPressed: () async {
+                      await ProjectManager.deleteProject(p.id);
+                      _loadProjects();
+                    },
+                  ),
+                  onTap: () => _openProject(p),
+                );
+              },
+            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen()))
+            .then((_) => _loadProjects());
+        },
+        child: const Icon(Icons.add),
+        backgroundColor: const Color(0xFF00E5FF),
+        foregroundColor: Colors.black,
+      ),
+    );
+  }
+}
+// ---------- PROJECT SCREEN ----------
+class ProjectScreen extends StatefulWidget {
+  final ProjectData? initialProject;
+  final String? initialResolution;
+  final String? initialFps;
+  final String? initialBitrate;
+  final String? projectName;
+
+  const ProjectScreen({
+    super.key,
+    this.initialProject,
+    this.initialResolution,
+    this.initialFps,
+    this.initialBitrate,
+    this.projectName,
+  });
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
 }
 
-class _ProjectScreenState extends State<ProjectScreen> {
-  // ✅ ALL ORIGINAL VULKAN/FFI STATE
-  late VideoPlayerController _videoController;
-  late ProjectData _projectData;
+class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
+  VideoPlayerController? _controller;
+  bool _isPlaying = false;
+  String? _currentVideoPath;
 
-  // ✅ NEW PORTED UI STATE (from React ProjectScreen.tsx)
-  late String _activeTab; // 'adjust' | 'presets' | 'export'
-  late String _adjustCategory; // 'color' | 'curves' | 'sharpness' | 'bloom' | 'grade'
-  
-  bool _isPlaying = true;
-  bool _isMuted = false;
-  double _volume = 1.0;
-  double _currentTime = 0.0;
-  double _duration = 0.0;
-  
-  bool _splitMode = false;
-  double _splitPosition = 0.5;
-  bool _bypassGrading = false;
-  bool _showScopes = false;
-  String _scopeType = 'waveform';
-  bool _isFullscreenPreview = false;
-  
-  String? _toastMessage;
-  bool _isExporting = false;
-  
-  // Aspect ratio & fit
-  String _selectedAspectRatio = '16:9';
-  String _selectedVideoFit = 'cover';
+  // Grading params
+  double _brightness = 0.0;
+  double _saturation = 1.0;
+  double _contrast = 1.0;
+  double _sharpness = 0.0;
+  double _gamma = 1.0;
+  double _hue = 0.0;
+  double _temperature = 6500.0;
+  double _glowIntensity = 0.0;
+  double _lookMix = 0.0;
+  double _vignette = 0.0;
+  double _splitToning = 0.0;
+  double _edgeDarken = 0.0; // new
+
+  String _selectedRatio = "16:9";
+  late TabController _tabController;
+  VoidCallback _listener = () {};
+  bool _isPreviewing = false;
+
+  Uint8List? _spirvShader;
+
+  // Timeline preview: cached processed image
+  ui.Image? _processedImage;
+  Timer? _previewTimer;
+  bool _isUpdating = false;
 
   @override
   void initState() {
     super.initState();
-    _projectData = widget.project.toProjectData();
-    _activeTab = 'adjust';
-    _adjustCategory = 'color';
-    
-    _initializeVideo();
-  }
+    _tabController = TabController(length: 3, vsync: this);
 
-  void _initializeVideo() {
-    _videoController = VideoPlayerController.file(File(_projectData.videoPath))
-      ..initialize().then((_) {
-        setState(() {
-          _duration = _videoController.value.duration.inSeconds.toDouble();
-        });
-        _videoController.play();
-      });
+    _loadShader();
 
-    _videoController.addListener(_onVideoUpdate);
-  }
-
-  void _onVideoUpdate() {
-    setState(() {
-      _currentTime = _videoController.value.position.inSeconds.toDouble();
-    });
-  }
-
-  void _showToast(String message) {
-    setState(() => _toastMessage = message);
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _toastMessage = null);
-    });
-  }
-
-  void _togglePlay() {
-    setState(() {
-      _isPlaying ? _videoController.pause() : _videoController.play();
-      _isPlaying = !_isPlaying;
-    });
-  }
-
-  void _toggleMute() {
-    setState(() {
-      _isMuted = !_isMuted;
-      _videoController.setVolume(_isMuted ? 0 : _volume);
-    });
-  }
-
-  void _handleVolumeChange(double value) {
-    setState(() {
-      _volume = value;
-      if (value > 0 && _isMuted) {
-        _isMuted = false;
-      }
-      _videoController.setVolume(value);
-    });
-  }
-
-  void _handleSeek(double value) {
-    setState(() => _currentTime = value);
-    _videoController.seekTo(Duration(seconds: value.toInt()));
-  }
-
-  void _handleSaveProject() {
-    final updated = StoredProject(
-      id: widget.project.id,
-      name: widget.project.name,
-      videoPath: widget.project.videoPath,
-      brightness: _projectData.brightness,
-      saturation: _projectData.saturation,
-      contrast: _projectData.contrast,
-      sharpness: _projectData.sharpness,
-      gamma: _projectData.gamma,
-      hue: _projectData.hue,
-      temperature: _projectData.temperature,
-      glowIntensity: _projectData.glowIntensity,
-      lookMix: _projectData.lookMix,
-      vignette: _projectData.vignette,
-      splitToning: _projectData.splitToning,
-      aspectRatio: _selectedAspectRatio,
-      lastOpened: DateTime.now(),
-      videoName: _projectData.videoName,
-      lutName: _projectData.lutName,
-      deepGlow: _projectData.deepGlow,
-      deepGlowRadius: _projectData.deepGlowRadius,
-    );
-    ProjectManager.saveProject(updated);
-    _showToast('Project saved successfully!');
-  }
-
-  void _resetParameters() {
-    setState(() {
-      _projectData = ProjectData(
-        videoPath: _projectData.videoPath,
-        aspectRatio: _selectedAspectRatio,
-        videoName: _projectData.videoName,
-      );
-    });
-    _showToast('Grading reset to neutral');
-  }
-
-  void _importVideo() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.video);
-    if (result != null) {
-      setState(() {
-        _projectData.videoPath = result.files.single.path!;
-        _projectData.videoName = result.files.single.name;
-      });
-      _videoController.dispose();
-      _initializeVideo();
-      _showToast('Video imported: ${result.files.single.name}');
+    if (widget.initialProject != null) {
+      final p = widget.initialProject!;
+      _brightness = p.brightness;
+      _saturation = p.saturation;
+      _contrast = p.contrast;
+      _sharpness = p.sharpness;
+      _gamma = p.gamma;
+      _hue = p.hue;
+      _temperature = p.temperature;
+      _glowIntensity = p.glowIntensity;
+      _lookMix = p.lookMix;
+      _vignette = p.vignette;
+      _splitToning = p.splitToning;
+      _edgeDarken = p.edgeDarken;
+      _selectedRatio = p.aspectRatio;
+      _loadVideo(p.videoPath);
     }
   }
 
-  void _loadCustomLut() async {
+  Future<void> _loadShader() async {
     try {
-      final result = await LutLoader.loadLutFromFile();
-      if (result != null) {
-        final (lutData, size) = result;
-        uploadLutData(lutData, size);
-        setState(() => _projectData.lutName = 'Custom LUT');
-        _showToast('LUT loaded successfully!');
-      }
+      final byteData = await rootBundle.load('assets/shaders/aereality_core.spv');
+      _spirvShader = byteData.buffer.asUint8List();
+      initVulkan(_spirvShader!);
     } catch (e) {
-      _showToast('Failed to load LUT: $e');
+      print('❌ SPIR-V load failed: $e');
     }
+  }
+
+  Future<void> _loadVideo(String path) async {
+    setState(() {
+      _controller?.removeListener(_listener);
+      _controller?.dispose();
+      _currentVideoPath = path;
+      _controller = VideoPlayerController.file(File(path))
+        ..initialize().then((_) {
+          setState(() {});
+          _listener = () { if (mounted) setState(() {}); };
+          _controller!.addListener(_listener);
+          _controller!.play();
+          _isPlaying = true;
+          _startTimelinePreview();
+        });
+    });
+  }
+
+  // ---------- TIMELINE PREVIEW ----------
+  void _startTimelinePreview() {
+    _previewTimer?.cancel();
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
+      if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
+      _isUpdating = true;
+      try {
+        // Capture current frame
+        final frame = await _controller!.value.videoTexture?.toImage() ??
+            await _controller!.toImage();
+        if (frame == null) return;
+        final processed = await _processFrameWithVulkan(frame);
+        if (mounted) {
+          setState(() {
+            _processedImage = processed;
+          });
+        }
+        frame.dispose();
+      } catch (e) {
+        // ignore
+      }
+      _isUpdating = false;
+    });
+  }
+
+  void _stopTimelinePreview() {
+    _previewTimer?.cancel();
+    _previewTimer = null;
   }
 
   @override
   void dispose() {
-    _videoController.dispose();
+    _stopTimelinePreview();
+    _controller?.dispose();
+    cleanupVulkan();
     super.dispose();
   }
 
-  // ✅ SLIDER WIDGET
-  Widget _buildSlider({
-    required String label,
-    required double min,
-    required double max,
-    required double value,
-    required Function(double) onChanged,
-    double step = 0.01,
-    String unit = '',
-    String? description,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Flexible(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-            Text(
-              '${value.toStringAsFixed(2)}$unit',
-              style: const TextStyle(
-                fontSize: 12,
-                fontFamily: 'monospace',
-                color: Color(0xFF06B6D4),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        if (description != null)
-          Text(
-            description,
-            style: const TextStyle(fontSize: 9, color: Colors.white54),
-          ),
-        Slider(
-          min: min,
-          max: max,
-          value: value,
-          onChanged: onChanged,
-          activeColor: const Color(0xFF06B6D4),
-          inactiveColor: Colors.white12,
-        ),
-      ],
+  // ---------- PICK VIDEO ----------
+  Future<void> _pickVideo() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.video);
+    if (result != null) {
+      final file = result.files.single;
+      if (file.path == null) return;
+      final dir = await getTemporaryDirectory();
+      final cachedPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      await File(file.path!).copy(cachedPath);
+      _loadVideo(cachedPath);
+    }
+  }
+
+  // ---------- SHOW LOG (bug icon) ----------
+  Future<void> _showLog() async { /* keep existing */ }
+
+  // ---------- PRESETS ----------
+  void _applyPreset(String name) {
+    setState(() {
+      switch (name) {
+        case 'Gojo Edit':
+          _brightness = 0.15; _saturation = 1.3; _contrast = 1.25; _sharpness = 0.0; _gamma = 0.95;
+          _hue = 0.0; _temperature = 6200.0; _glowIntensity = 0.0; _lookMix = 0.3;
+          _vignette = 0.0; _splitToning = 0.15; _edgeDarken = 0.0;
+          break;
+        case 'Magic Bullet':
+          _brightness = 0.0; _saturation = 1.2; _contrast = 1.5; _sharpness = 0.0; _gamma = 0.95;
+          _hue = 0.0; _temperature = 5600.0; _glowIntensity = 0.0; _lookMix = 0.0;
+          _vignette = 0.0; _splitToning = 0.4; _edgeDarken = 0.0;
+          break;
+        case 'Teal & Orange':
+          _brightness = 0.0; _saturation = 1.4; _contrast = 1.3; _sharpness = 0.0; _gamma = 0.95;
+          _hue = 0.0; _temperature = 5500.0; _glowIntensity = 0.0; _lookMix = 0.7;
+          _vignette = 0.0; _splitToning = 0.0; _edgeDarken = 0.0;
+          break;
+        default: break;
+      }
+    });
+  }
+
+  // ---------- SAVE PROJECT ----------
+  Future<void> _saveCurrentProject() async {
+    if (_currentVideoPath == null) return;
+    final project = StoredProject(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: widget.projectName ?? 'Untitled',
+      videoPath: _currentVideoPath!,
+      brightness: _brightness,
+      saturation: _saturation,
+      contrast: _contrast,
+      sharpness: _sharpness,
+      gamma: _gamma,
+      hue: _hue,
+      temperature: _temperature,
+      glowIntensity: _glowIntensity,
+      lookMix: _lookMix,
+      vignette: _vignette,
+      splitToning: _splitToning,
+      edgeDarken: _edgeDarken,
+      aspectRatio: _selectedRatio,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(project);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Project Saved!'), backgroundColor: Colors.green),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 1024;
+  double _getAspectRatioValue(String ratio) {
+    switch (ratio) {
+      case "4:5": return 4 / 5;
+      case "16:9": return 16 / 9;
+      case "9:16": return 9 / 16;
+      case "1:1": return 1 / 1;
+      case "3:4": return 3 / 4;
+      case "21:9": return 21 / 9;
+      default: return 16 / 9;
+    }
+  }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF121212),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
+  void _showRatioSelector() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: ["4:5", "9:16", "16:9", "1:1", "3:4", "21:9"].map((ratio) => ListTile(
+            title: Text(ratio, style: const TextStyle(color: Colors.white)),
+            trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Color(0xFF00E5FF)) : null,
+            onTap: () { setState(() => _selectedRatio = ratio); Navigator.pop(context); },
+          )).toList(),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.project.name),
-            Text(
-              _projectData.videoName,
-              style: const TextStyle(fontSize: 10, color: Colors.white54),
-            ),
-          ],
-        ),
-        actions: [
-          Tooltip(
-            message: 'Save Project',
-            child: IconButton(
-              icon: const Icon(Icons.save),
-              onPressed: _handleSaveProject,
-            ),
-          ),
-        ],
       ),
-      body: isMobile
-          ? _buildMobileLayout()
-          : _buildDesktopLayout(),
     );
   }
 
-  // ✅ DESKTOP LAYOUT (Main UI Port from React)
-  Widget _buildDesktopLayout() {
-    return Row(
-      children: [
-        // ✅ MAIN VIDEO VIEWPORT (8/12 cols)
-        Expanded(
-          flex: 8,
-          child: Column(
-            children: [
-              // ✅ HEADER BAR
-              Container(
-                height: 48,
-                color: const Color(0xFF121212),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Left: Aspect Ratio, LUT, Import
-                    Row(
-                      children: [
-                        Tooltip(
-                          message: 'Change Aspect Ratio',
-                          child: ElevatedButton.icon(
-                            onPressed: () => _showAspectRatioDialog(),
-                            icon: const Icon(Icons.aspect_ratio, size: 16),
-                            label: Text(_selectedAspectRatio),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white12,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Tooltip(
-                          message: 'Load 3D LUT',
-                          child: ElevatedButton.icon(
-                            onPressed: _loadCustomLut,
-                            icon: const Icon(Icons.palette, size: 16),
-                            label: Text(_projectData.lutName ?? '3D LUT'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _projectData.lutName != null
-                                  ? const Color(0xFF06B6D4).withOpacity(0.2)
-                                  : Colors.white12,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Tooltip(
-                          message: 'Import Video',
-                          child: ElevatedButton.icon(
-                            onPressed: _importVideo,
-                            icon: const Icon(Icons.folder_open, size: 16),
-                            label: const Text('Import'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white12,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    // Right: Save Project
-                    Tooltip(
-                      message: 'Save Project',
-                      child: ElevatedButton.icon(
-                        onPressed: _handleSaveProject,
-                        icon: const Icon(Icons.save, size: 16),
-                        label: const Text('Save'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white12,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ✅ VIDEO CANVAS VIEWPORT
-              Expanded(
-                child: Container(
-                  color: const Color(0xFF050505),
-                  padding: const EdgeInsets.all(12),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      // Video
-                      if (_videoController.value.isInitialized)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: AspectRatio(
-                            aspectRatio: _videoController.value.aspectRatio,
-                            child: VideoPlayer(_videoController),
-                          ),
-                        ),
-                      // Toast
-                      if (_toastMessage != null)
-                        Positioned(
-                          top: 16,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF06B6D4),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              _toastMessage!,
-                              style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                      // Play/Pause + Split + Bypass buttons
-                      Positioned(
-                        bottom: 16,
-                        left: 16,
-                        child: Wrap(
-                          spacing: 8,
-                          children: [
-                            ElevatedButton(
-                              onPressed: _togglePlay,
-                              style: ElevatedButton.styleFrom(
-                                shape: const CircleBorder(),
-                                backgroundColor: Colors.white,
-                                padding: const EdgeInsets.all(8),
-                              ),
-                              child: Icon(
-                                _isPlaying ? Icons.pause : Icons.play_arrow,
-                                color: Colors.black,
-                              ),
-                            ),
-                            ElevatedButton(
-                              onPressed: () => setState(() => _splitMode = !_splitMode),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _splitMode
-                                    ? const Color(0xFF06B6D4)
-                                    : Colors.black54,
-                              ),
-                              child: const Text('A/B Split'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () => setState(() => _bypassGrading = !_bypassGrading),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _bypassGrading
-                                    ? Colors.orange
-                                    : Colors.black54,
-                              ),
-                              child: const Text('Bypass'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () => setState(() => _showScopes = !_showScopes),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _showScopes
-                                    ? const Color(0xFF06B6D4)
-                                    : Colors.black54,
-                              ),
-                              child: const Text('Scopes'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Fullscreen Button
-                      if (!_isFullscreenPreview)
-                        Positioned(
-                          bottom: 16,
-                          right: 16,
-                          child: ElevatedButton(
-                            onPressed: () {
-                              setState(() => _isFullscreenPreview = true);
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white12,
-                            ),
-                            child: const Icon(Icons.fullscreen),
-                          ),
-                        ),
-                    ],
+  Future<ui.Image> _convertImageToUiImage(img.Image image) async {
+    final pngBytes = img.encodePng(image);
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromList(pngBytes, (ui.Image result) {
+      completer.complete(result);
+    });
+    return completer.future;
+  }
+
+  // ---------- VULKAN PROCESSING (15 floats now) ----------
+  Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
+    final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final inputBytes = byteData!.buffer.asUint8List();
+
+    // 15 floats: resolution (2) + 13 grading params (brightness..edgeDarken)
+    final uniforms = Float32List(15);
+    uniforms[0] = input.width.toDouble();
+    uniforms[1] = input.height.toDouble();
+    uniforms[2] = _brightness;
+    uniforms[3] = _saturation;
+    uniforms[4] = _contrast;
+    uniforms[5] = _sharpness;
+    uniforms[6] = _gamma;
+    uniforms[7] = _hue;
+    uniforms[8] = _temperature;
+    uniforms[9] = _glowIntensity;
+    uniforms[10] = _lookMix;
+    uniforms[11] = _vignette;
+    uniforms[12] = _splitToning;
+    uniforms[13] = _edgeDarken; // new
+    uniforms[14] = 0.0; // placeholder for future
+
+    final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      outputBytes,
+      input.width,
+      input.height,
+      ui.PixelFormat.rgba8888,
+      (img) => completer.complete(img),
+    );
+    return completer.future;
+  }
+    // ---------- SINGLE PREVIEW FRAME (optional) ----------
+  Future<void> _previewFrame() async { /* keep existing */ }
+
+  // ---------- EXPORT SHEET (with bit depth toggle) ----------
+  void _showExportSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateModal) {
+            String selectedRes = widget.initialResolution ?? '1080p';
+            String selectedFps = widget.initialFps ?? '60fps';
+            String selectedBit = widget.initialBitrate ?? '35 Mbps';
+            String selectedColorDepth = '8-bit SDR'; // or '10-bit HDR'
+            return Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Export Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  // Resolution
+                  const Text('Resolution', style: TextStyle(color: Colors.white70)),
+                  Wrap(
+                    spacing: 8,
+                    children: ['720p', '1080p', '2K'].map((res) => ChoiceChip(
+                      label: Text(res),
+                      selected: selectedRes == res,
+                      selectedColor: const Color(0xFF00E5FF),
+                      labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedRes = res),
+                    )).toList(),
                   ),
-                ),
-              ),
-              // ✅ SCRUBBER & TIME
-              Container(
-                color: const Color(0xFF111111),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Slider(
-                        min: 0,
-                        max: _duration,
-                        value: _currentTime,
-                        onChanged: _handleSeek,
-                        activeColor: const Color(0xFF06B6D4),
-                        inactiveColor: Colors.white12,
+                  const SizedBox(height: 12),
+                  // Frame Rate
+                  const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
+                  Wrap(
+                    spacing: 8,
+                    children: ['30fps', '60fps', '90fps'].map((fps) => ChoiceChip(
+                      label: Text(fps),
+                      selected: selectedFps == fps,
+                      selectedColor: const Color(0xFF00E5FF),
+                      labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedFps = sel),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  // Bitrate
+                  const Text('Video Bitrate', style: TextStyle(color: Colors.white70)),
+                  Wrap(
+                    spacing: 8,
+                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) => ChoiceChip(
+                      label: Text(bit),
+                      selected: selectedBit == bit,
+                      selectedColor: const Color(0xFF00E5FF),
+                      labelStyle: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedBit = sel),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  // Color Depth (NEW)
+                  const Text('Color Depth & Profile', style: TextStyle(color: Colors.white70)),
+                  Wrap(
+                    spacing: 8,
+                    children: ['8-bit SDR', '10-bit HDR'].map((depth) => ChoiceChip(
+                      label: Text(depth),
+                      selected: selectedColorDepth == depth,
+                      selectedColor: const Color(0xFF00E5FF),
+                      labelStyle: TextStyle(color: selectedColorDepth == depth ? Colors.black : Colors.white),
+                      onSelected: (sel) => setStateModal(() => selectedColorDepth = sel),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _exportVideo(selectedRes, selectedFps, selectedBit, selectedColorDepth);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E5FF),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
+                      child: const Text('RENDER VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${_currentTime.toInt()}:${((_currentTime % 60).toInt()).toString().padLeft(2, '0')} / ${_duration.toInt()}:${((_duration % 60).toInt()).toString().padLeft(2, '0')}',
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11,
-                        color: Colors.white54,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-        // ✅ RIGHT SIDEBAR - ADJUSTMENT CONTROLS (4/12 cols)
-        Container(
-          width: 400,
-          color: const Color(0xFF0A0A0A),
-          child: Column(
-            children: [
-              // Tab Headers
-              Container(
-                color: const Color(0xFF0E0E0E),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _buildTabButton('Adjust', 'adjust'),
-                    ),
-                    Expanded(
-                      child: _buildTabButton('Presets', 'presets'),
-                    ),
-                    Expanded(
-                      child: _buildTabButton('Export', 'export'),
-                    ),
-                  ],
-                ),
-              ),
-              // Tab Content
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: _activeTab == 'adjust'
-                      ? _buildAdjustPanel()
-                      : _activeTab == 'presets'
-                          ? _buildPresetsPanel()
-                          : _buildExportPanel(),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ✅ TAB BUTTON
-  Widget _buildTabButton(String label, String tabId) {
-    final isActive = _activeTab == tabId;
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-            color: isActive ? const Color(0xFF06B6D4) : Colors.transparent,
-            width: 2,
-          ),
-        ),
-      ),
-      child: TextButton(
-        onPressed: () => setState(() => _activeTab = tabId),
-        style: TextButton.styleFrom(
-          backgroundColor: isActive ? const Color(0xFF06B6D4).withOpacity(0.1) : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isActive ? const Color(0xFF06B6D4) : Colors.white54,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ✅ ADJUST PANEL (Color, Curves, Sharpness, Bloom, etc.)
-  Widget _buildAdjustPanel() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      spacing: 16,
-      children: [
-        // Sub-category Pills
-        Wrap(
-          spacing: 8,
-          children: [
-            _buildCategoryPill('Color', 'color'),
-            _buildCategoryPill('Sharpness', 'sharpness'),
-            _buildCategoryPill('Bloom', 'bloom'),
-            _buildCategoryPill('Grade', 'grade'),
-          ],
-        ),
-        const Divider(color: Colors.white12),
-        // Reset Button
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: _resetParameters,
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Reset all'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white54,
-            ),
-          ),
-        ),
-        // Dynamic Controls Based on Category
-        if (_adjustCategory == 'color') ...[
-          _buildSlider(
-            label: 'Brightness',
-            min: -3.0,
-            max: 3.0,
-            value: _projectData.brightness,
-            onChanged: (v) => setState(() => _projectData.brightness = v),
-            description: 'Exposure compensation in full EV stops',
-          ),
-          _buildSlider(
-            label: 'Contrast',
-            min: 0.0,
-            max: 3.0,
-            value: _projectData.contrast,
-            onChanged: (v) => setState(() => _projectData.contrast = v),
-            description: 'Punchy 32-bit S-curve contrast',
-          ),
-          _buildSlider(
-            label: 'Saturation',
-            min: 0.0,
-            max: 3.0,
-            value: _projectData.saturation,
-            onChanged: (v) => setState(() => _projectData.saturation = v),
-            description: 'Rec.709 color vibrancy',
-          ),
-          _buildSlider(
-            label: 'Gamma',
-            min: 0.1,
-            max: 2.5,
-            value: _projectData.gamma,
-            onChanged: (v) => setState(() => _projectData.gamma = v),
-            description: 'Non-linear power curve balance',
-          ),
-          _buildSlider(
-            label: 'Hue Rotate',
-            min: -180,
-            max: 180,
-            value: _projectData.hue,
-            onChanged: (v) => setState(() => _projectData.hue = v),
-            unit: '°',
-            description: '3x3 RGB color rotation matrix',
-          ),
-          _buildSlider(
-            label: 'Color Temp',
-            min: 2000,
-            max: 12000,
-            value: _projectData.temperature,
-            onChanged: (v) => setState(() => _projectData.temperature = v),
-            unit: 'K',
-            description: 'Kelvin white balance (6500K neutral)',
-          ),
-        ],
-        if (_adjustCategory == 'sharpness') ...[
-          _buildSlider(
-            label: 'Sharpness',
-            min: 0.0,
-            max: 6.0,
-            value: _projectData.sharpness,
-            onChanged: (v) => setState(() => _projectData.sharpness = v),
-            step: 0.05,
-            description: 'Laplacian high-pass unsharp mask convolution',
-          ),
-        ],
-        if (_adjustCategory == 'bloom') ...[
-          _buildSlider(
-            label: 'Bloom Intensity',
-            min: 0.0,
-            max: 1.0,
-            value: _projectData.glowIntensity,
-            onChanged: (v) => setState(() => _projectData.glowIntensity = v),
-            step: 0.01,
-            description: 'Smooth continuous 32-bit Gaussian radiance',
-          ),
-        ],
-        if (_adjustCategory == 'grade') ...[
-          _buildSlider(
-            label: 'Look Mix (Teal/Orange)',
-            min: 0.0,
-            max: 1.0,
-            value: _projectData.lookMix,
-            onChanged: (v) => setState(() => _projectData.lookMix = v),
-            description: 'Cinematic Hollywood blockbuster matrix',
-          ),
-          _buildSlider(
-            label: 'Split Toning',
-            min: 0.0,
-            max: 1.0,
-            value: _projectData.splitToning,
-            onChanged: (v) => setState(() => _projectData.splitToning = v),
-            description: 'Deep navy shadow tone vs warm golden highlight split',
-          ),
-          _buildSlider(
-            label: 'Vignette Darkness',
-            min: 0.0,
-            max: 1.0,
-            value: _projectData.vignette,
-            onChanged: (v) => setState(() => _projectData.vignette = v),
-            step: 0.01,
-            description: 'Intense radial corner falloff darkening',
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildCategoryPill(String label, String categoryId) {
-    final isActive = _adjustCategory == categoryId;
-    return FilterChip(
-      label: Text(label),
-      backgroundColor: isActive ? const Color(0xFF06B6D4) : Colors.white12,
-      labelStyle: TextStyle(
-        color: isActive ? Colors.black : Colors.white,
-        fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-      ),
-      onSelected: (selected) {
-        if (selected) {
-          setState(() => _adjustCategory = categoryId);
-        }
+            );
+          },
+        );
       },
     );
   }
 
-  // ✅ PRESETS PANEL
-  Widget _buildPresetsPanel() {
-    return const Column(
-      spacing: 8,
+  // ---------- SLIDER WIDGET ----------
+  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
+    return Row(
       children: [
-        Text('Coming soon: Built-in color presets'),
+        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+        Expanded(
+          child: Slider(
+            value: val.clamp(min, max),
+            min: min,
+            max: max,
+            activeColor: const Color(0xFF00E5FF),
+            inactiveColor: Colors.grey[800],
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
       ],
     );
   }
+    // ---------- EXPORT VIDEO (with bit depth) ----------
+  Future<void> _exportVideo(String resolution, String fps, String bitrate, String colorDepth) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
+      return;
+    }
+    if (_spirvShader == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
+      return;
+    }
 
-  // ✅ EXPORT PANEL
-  Widget _buildExportPanel() {
-    return Column(
-      spacing: 12,
-      children: [
-        ElevatedButton.icon(
-          onPressed: () => _showToast('Preview feature coming soon'),
-          icon: const Icon(Icons.preview),
-          label: const Text('Preview Graded Frame'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF06B6D4),
-            foregroundColor: Colors.black,
-            minimumSize: const Size.fromHeight(40),
+    // Capture current values
+    final double brightness = _brightness;
+    final double saturation = _saturation;
+    final double contrast = _contrast;
+    final double sharpness = _sharpness;
+    final double gamma = _gamma;
+    final double hue = _hue;
+    final double temperature = _temperature;
+    final double glowIntensity = _glowIntensity;
+    final double lookMix = _lookMix;
+    final double vignette = _vignette;
+    final double splitToning = _splitToning;
+    final double edgeDarken = _edgeDarken;
+
+    // Determine FFmpeg pixel format based on color depth
+    String pixFmt;
+    if (colorDepth == '10-bit HDR') {
+      pixFmt = 'yuv420p10le'; // 10-bit, limited range
+    } else {
+      pixFmt = 'yuv420p'; // 8-bit
+    }
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Initializing...');
+    final etaNotifier = ValueNotifier<String>('--:--');
+    final stopwatch = Stopwatch();
+
+    BuildContext? dialogContext;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogContext = ctx;
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Exporting... (${colorDepth})', style: const TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(height: 16),
+              ValueListenableBuilder<double>(
+                valueListenable: progressNotifier,
+                builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: const Color(0xFF00E5FF)),
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70)),
+              ),
+              ValueListenableBuilder<String>(
+                valueListenable: etaNotifier,
+                builder: (_, eta, __) => Text('Estimated time remaining: $eta', style: const TextStyle(color: Colors.white54)),
+              ),
+            ],
           ),
-        ),
-        ElevatedButton.icon(
-          onPressed: () => _showToast('Export feature coming soon'),
-          icon: const Icon(Icons.download),
-          label: const Text('EXPORT MASTER VIDEO'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black,
-            minimumSize: const Size.fromHeight(40),
-          ),
-        ),
-        const Text(
-          'MP4 / WebM / MOV Encodings • 168k-384k Audio • Vulkan 32-Bit Floating Point Pipeline',
-          style: TextStyle(
-            fontSize: 10,
-            color: Colors.white54,
-            fontFamily: 'monospace',
-          ),
-        ),
-      ],
+        );
+      },
     );
-  }
 
-  // ✅ MOBILE LAYOUT
-  Widget _buildMobileLayout() {
-    return SingleChildScrollView(
-      child: Column(
+    try {
+      final dir = await getTemporaryDirectory();
+      final videoPath = _currentVideoPath!;
+
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create();
+      await processedDir.create();
+
+      statusNotifier.value = 'Extracting frames...';
+      final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
+      final extractSession = await FFmpegKit.execute(extractCmd);
+      if (!ReturnCode.isSuccess(await extractSession.getReturnCode())) {
+        throw Exception('Extract failed');
+      }
+
+      final frameFiles = await framesDir.list().toList();
+      final totalFrames = frameFiles.length;
+      int processedFrames = 0;
+      stopwatch.start();
+      const batchSize = 1;
+
+      for (int i = 0; i < totalFrames; i += batchSize) {
+        final batch = frameFiles.skip(i).take(batchSize).toList();
+        await Future.wait(batch.map((file) async {
+          if (file is! File) return;
+          final bytes = await file.readAsBytes();
+          final decoded = img.decodeImage(bytes);
+          if (decoded == null) return;
+
+          final rawInput = decoded.data!.buffer.asUint8List();
+          final uniforms = Float32List(15);
+          uniforms[0] = decoded.width.toDouble();
+          uniforms[1] = decoded.height.toDouble();
+          uniforms[2] = brightness;
+          uniforms[3] = saturation;
+          uniforms[4] = contrast;
+          uniforms[5] = sharpness;
+          uniforms[6] = gamma;
+          uniforms[7] = hue;
+          uniforms[8] = temperature;
+          uniforms[9] = glowIntensity;
+          uniforms[10] = lookMix;
+          uniforms[11] = vignette;
+          uniforms[12] = splitToning;
+          uniforms[13] = edgeDarken;
+          uniforms[14] = 0.0;
+
+          final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
+              .timeout(const Duration(seconds: 30));
+
+          final gradedImg = img.Image.fromBytes(
+            width: decoded.width,
+            height: decoded.height,
+            bytes: outputRaw.buffer,
+          );
+          final pngBytes = img.encodePng(gradedImg);
+          final paddedIndex = (i + 1).toString().padLeft(5, '0');
+          final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
+          await outputFile.writeAsBytes(pngBytes);
+
+          processedFrames++;
+          progressNotifier.value = processedFrames / totalFrames;
+          statusNotifier.value = 'Processing... ${(processedFrames / totalFrames * 100).toInt()}%';
+        }));
+      }
+
+      statusNotifier.value = 'Encoding video...';
+      final targetFps = int.parse(fps.replaceAll('fps', ''));
+      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      // Use selected pixel format
+      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt $pixFmt "$silentOutputPath"';
+      var encodeSession = await FFmpegKit.execute(encodeCmd);
+      if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
+        // fallback
+        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-c:v mpeg4 -q:v 5 -pix_fmt $pixFmt "$silentOutputPath"';
+        encodeSession = await FFmpegKit.execute(fallbackCmd);
+        if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
+          throw Exception('Encoding failed');
+        }
+      }
+
+      // Audio
+      final audioPath = '${dir.path}/audio.aac';
+      final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
+      await FFmpegKit.execute(audioCmd);
+
+      // Mux
+      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
+      final muxSession = await FFmpegKit.execute(muxCmd);
+      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
+        await File(silentOutputPath).copy(File(finalOutputPath).path);
+      }
+
+      final docsDir = await getApplicationDocumentsDirectory();
+      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await File(finalOutputPath).copy(finalFile.path);
+
+      // Cleanup
+      await framesDir.delete(recursive: true);
+      await processedDir.delete(recursive: true);
+      try { await File(audioPath).delete(); } catch (_) {}
+      try { await File(silentOutputPath).delete(); } catch (_) {}
+
+      if (dialogContext != null) Navigator.pop(dialogContext!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Export saved to:\n${finalFile.path}'), duration: const Duration(seconds: 8)),
+        );
+      }
+    } catch (e) {
+      if (dialogContext != null) Navigator.pop(dialogContext!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export Error: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 10)),
+        );
+      }
+    }
+  }
+    @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.projectName ?? 'Project'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
+          IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
+          IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
+        ],
+      ),
+      body: Column(
         children: [
-          // Video
-          _videoController.value.isInitialized
-              ? AspectRatio(
-                  aspectRatio: _videoController.value.aspectRatio,
-                  child: VideoPlayer(_videoController),
-                )
-              : const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
-          // Controls
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              spacing: 16,
+          // ---------- TIMELINE PREVIEW ----------
+          Expanded(
+            flex: 4,
+            child: Container(
+              color: Colors.black,
+              child: Center(
+                child: _processedImage != null
+                    ? AspectRatio(
+                        aspectRatio: _getAspectRatioValue(_selectedRatio),
+                        child: RawImage(
+                          image: _processedImage,
+                          fit: BoxFit.contain,
+                        ),
+                      )
+                    : Container(
+                        color: const Color(0xFF1A1A1A),
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                              SizedBox(height: 8),
+                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                            ],
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          // ---------- PLAYBACK CONTROLS ----------
+          Container(
+            color: const Color(0xFF111111),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: _togglePlay,
-                      child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => setState(() => _splitMode = !_splitMode),
-                      child: const Text('Split'),
-                    ),
-                    ElevatedButton(
-                      onPressed: _toggleMute,
-                      child: Icon(_isMuted ? Icons.volume_off : Icons.volume_up),
-                    ),
+                IconButton(
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
+                  onPressed: _controller != null && _controller!.value.isInitialized
+                      ? () => setState(() {
+                          if (_controller!.value.isPlaying) {
+                            _controller!.pause();
+                            _isPlaying = false;
+                            _stopTimelinePreview();
+                          } else {
+                            _controller!.play();
+                            _isPlaying = true;
+                            _startTimelinePreview();
+                          }
+                        })
+                      : null,
+                ),
+                Expanded(
+                  child: Slider(
+                    value: _controller != null && _controller!.value.isInitialized
+                        ? _controller!.value.position.inSeconds.toDouble()
+                        : 0.0,
+                    min: 0,
+                    max: _controller != null && _controller!.value.isInitialized
+                        ? _controller!.value.duration.inSeconds.toDouble()
+                        : 1.0,
+                    activeColor: const Color(0xFF00E5FF),
+                    inactiveColor: Colors.grey[800],
+                    onChanged: (val) {
+                      if (_controller != null && _controller!.value.isInitialized) {
+                        _controller!.seekTo(Duration(milliseconds: (val * 1000).round()));
+                      }
+                    },
+                  ),
+                ),
+                Text(
+                  _controller != null && _controller!.value.isInitialized
+                      ? '${_controller!.value.position.inSeconds ~/ 60}:${(_controller!.value.position.inSeconds % 60).toString().padLeft(2, '0')}'
+                      : '--:--',
+                  style: const TextStyle(color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+          // ---------- TABS ----------
+          Container(
+            color: const Color(0xFF141414),
+            child: Column(
+              children: [
+                TabBar(
+                  controller: _tabController,
+                  indicatorColor: const Color(0xFF00E5FF),
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.grey,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.tune), text: 'Adjust'),
+                    Tab(icon: Icon(Icons.auto_awesome), text: 'Presets'),
+                    Tab(icon: Icon(Icons.save_alt), text: 'Export'),
                   ],
                 ),
-                Slider(
-                  min: 0,
-                  max: _duration,
-                  value: _currentTime,
-                  onChanged: _handleSeek,
+                SizedBox(
+                  height: 220,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      // ---------- Adjust tab ----------
+                      ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        children: [
+                          _slider('Bright', -1.0, 1.0, _brightness, (v) => setState(() => _brightness = v)),
+                          _slider('Sat', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
+                          _slider('Contrast', 0.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
+                          _slider('Sharp', 0.0, 5.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                          _slider('Gamma', 0.1, 2.5, _gamma, (v) => setState(() => _gamma = v)),
+                          _slider('Hue', -180, 180, _hue, (v) => setState(() => _hue = v)),
+                          _slider('Temp', 2000, 12000, _temperature, (v) => setState(() => _temperature = v)),
+                          _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
+                          _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
+                          _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
+                          _slider('Edge Darken', 0.0, 1.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)), // NEW
+                        ],
+                      ),
+                      // ---------- Presets tab ----------
+                      GridView.count(
+                        crossAxisCount: 3,
+                        padding: const EdgeInsets.all(8),
+                        children: ['Gojo Edit', 'Magic Bullet', 'Teal & Orange'].map((name) {
+                          return GestureDetector(
+                            onTap: () => _applyPreset(name),
+                            child: Container(
+                              margin: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[900],
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey[800]!),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.image, color: Colors.white24, size: 30),
+                                  const SizedBox(height: 4),
+                                  Text(name, style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      // ---------- Export tab ----------
+                      Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _isPreviewing ? null : _previewFrame,
+                                icon: const Icon(Icons.image, color: Colors.black),
+                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF00E5FF),
+                                  foregroundColor: Colors.black,
+                                ),
+                              ),
+                              ElevatedButton(
+                                onPressed: _showExportSheet,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          const Text('Preview applies Vulkan 32-bit grading to the frame',
+                            style: TextStyle(color: Colors.white38, fontSize: 10)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                _buildAdjustPanel(),
               ],
             ),
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showLog,
+        child: const Icon(Icons.bug_report),
+        backgroundColor: const Color(0xFF00E5FF),
+        foregroundColor: Colors.black,
+      ),
     );
   }
 
-  void _showAspectRatioDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1A),
-        title: const Text('Select Aspect Ratio'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: ['4:5', '9:16', '1:1', '16:9', '21:9'].map((ratio) {
-              return ListTile(
-                title: Text(ratio),
-                selected: _selectedAspectRatio == ratio,
-                onTap: () {
-                  setState(() => _selectedAspectRatio = ratio);
-                  Navigator.pop(context);
-                },
-              );
-            }).toList(),
-          ),
-        ),
-      ),
-    );
+  @override
+  void dispose() {
+    _controller?.removeListener(_listener);
+    _controller?.dispose();
+    cleanupVulkan();
+    super.dispose();
   }
 }
