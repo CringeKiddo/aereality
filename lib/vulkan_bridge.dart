@@ -47,6 +47,12 @@ final cleanupProcessor = nativeLib
 
 bool _initialized = false;
 
+// Must match the shader's Uniforms struct exactly, in this order:
+// brightness, saturation, contrast, sharpness, gamma, hue, temperature,
+// glowIntensity, lookMix, vignette, splitToning, edgeDarken, denoise,
+// cellShading, colourCrush, cellThickness  (16 floats total)
+const int kUniformCount = 16;
+
 void initVulkan(Uint8List spirv) {
   if (_initialized) return;
   final ptr = calloc<Uint32>(spirv.length ~/ 4);
@@ -60,11 +66,12 @@ Uint8List processImage(
     Uint8List input,
     int width,
     int height,
-    Float32List uniforms, // must be length 14
+    Float32List uniforms, // must be length kUniformCount (16)
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
-  if (uniforms.length != 14) {
-    throw Exception('uniforms must contain exactly 14 floats.');
+  if (uniforms.length != kUniformCount) {
+    throw Exception(
+        'uniforms must contain exactly $kUniformCount floats, got ${uniforms.length}.');
   }
 
   final inputPtr = calloc<Uint8>(input.length);
