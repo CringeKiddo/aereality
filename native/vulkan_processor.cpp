@@ -1,4 +1,4 @@
-// native/vulkan_processor.cpp – Part 1 of 3 (No LUT, 16-bit float, 18 uniforms)
+// native/vulkan_processor.cpp – Part 1 of 3 (16-bit half-float, correctly packed, 18 uniforms)
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
@@ -44,6 +44,38 @@ static void* uniformMapped = nullptr;
 static int width = 0, height = 0;
 static bool initialized = false;
 static bool imagesCreated = false;
+
+// ---------- IEEE-754 HALF FLOAT PACK/UNPACK ----------
+// The Vulkan images are VK_FORMAT_R16G16B16A16_SFLOAT (to match the shader's
+// `rgba16f` image bindings), so the CPU-side staging buffers must contain
+// actual 16-bit half floats — not 32-bit floats — or the raw byte copy
+// vkCmdCopyBufferToImage/vkCmdCopyImageToBuffer performs will misalign and
+// produce garbage (this was the root cause of the black-screen bug).
+uint16_t floatToHalf(float f) {
+    uint32_t x; memcpy(&x, &f, 4);
+    uint32_t sign = (x >> 16) & 0x8000;
+    int32_t exponent = ((x >> 23) & 0xFF) - 127 + 15;
+    uint32_t mantissa = x & 0x7FFFFF;
+    if (exponent <= 0) return (uint16_t)sign;              // flush small values to 0
+    if (exponent >= 31) return (uint16_t)(sign | 0x7C00);  // overflow -> inf
+    return (uint16_t)(sign | (exponent << 10) | (mantissa >> 13));
+}
+
+float halfToFloat(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t exponent = (h >> 10) & 0x1F;
+    uint32_t mantissa = h & 0x3FF;
+    uint32_t bits;
+    if (exponent == 0) {
+        bits = sign; // treat subnormals as 0 (fine for color data)
+    } else if (exponent == 31) {
+        bits = sign | 0x7F800000 | (mantissa << 13);
+    } else {
+        bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
+    }
+    float f; memcpy(&f, &bits, 4);
+    return f;
+}
 
 VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     VkShaderModuleCreateInfo createInfo = {};
@@ -286,7 +318,7 @@ void createImages(int w, int h) {
     imgInfo.extent.depth = 1;
     imgInfo.mipLevels = 1;
     imgInfo.arrayLayers = 1;
-    imgInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ 16-bit
+    imgInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ matches shader's rgba16f bindings
     imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -309,7 +341,7 @@ void createImages(int w, int h) {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = inputImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ 16-bit
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ matches shader's rgba16f bindings
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -327,14 +359,17 @@ void createImages(int w, int h) {
     fprintf(stderr, "✅ Output image created (rgba16f)\n");
 
     viewInfo.image = outputImage;
-    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ 16-bit
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // ✅ matches shader's rgba16f bindings
     vkCreateImageView(device, &viewInfo, nullptr, &outputView);
     fprintf(stderr, "✅ Output image view created\n");
 
     // Staging buffer input
+    // ⚠️ FIXED: was `w * h * 4 * 4` (32-bit float sizing) which didn't match
+    // the 16-bit half-float image format below — that mismatch was the
+    // black-screen bug. Half float = 2 bytes/channel, 4 channels.
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = w * h * 4 * 4; // 4 channels * 4 bytes (float)
+    bufInfo.size = w * h * 4 * 2; // ✅ 4 channels * 2 bytes (half float)
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
@@ -346,9 +381,11 @@ void createImages(int w, int h) {
     );
     vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
-    fprintf(stderr, "✅ Input staging buffer created\n");
+    fprintf(stderr, "✅ Input staging buffer created (half-float sized)\n");
 
     // Staging buffer output
+    // ⚠️ FIXED: same half-float sizing correction as above.
+    bufInfo.size = w * h * 4 * 2; // ✅ 4 channels * 2 bytes (half float)
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     vkCreateBuffer(device, &bufInfo, nullptr, &outputStagingBuffer);
     vkGetBufferMemoryRequirements(device, outputStagingBuffer, &memReq);
@@ -359,7 +396,7 @@ void createImages(int w, int h) {
     );
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
-    fprintf(stderr, "✅ Output staging buffer created\n");
+    fprintf(stderr, "✅ Output staging buffer created (half-float sized)\n");
 
     // Uniform buffer (18 floats)
     VkBufferCreateInfo uniformBufferCreateInfo = {};
@@ -425,15 +462,17 @@ void createImages(int w, int h) {
 
 void uploadInput(const uint8_t* rgba, int w, int h) {
     fprintf(stderr, "📤 Uploading input frame...\n");
-    float* data;
+    // ⚠️ FIXED: was `float* data` writing 32-bit floats into a buffer that
+    // backs a 16-bit half-float image. Now writes real IEEE-754 half floats.
+    uint16_t* data;
     vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
-        data[dst]   = rgba[src] / 255.0f;
-        data[dst+1] = rgba[src+1] / 255.0f;
-        data[dst+2] = rgba[src+2] / 255.0f;
-        data[dst+3] = rgba[src+3] / 255.0f;
+        data[dst]   = floatToHalf(rgba[src]   / 255.0f);
+        data[dst+1] = floatToHalf(rgba[src+1] / 255.0f);
+        data[dst+2] = floatToHalf(rgba[src+2] / 255.0f);
+        data[dst+3] = floatToHalf(rgba[src+3] / 255.0f);
     }
     vkUnmapMemory(device, stagingMemory);
 
@@ -542,23 +581,25 @@ void readOutput(uint8_t* rgba, int w, int h) {
     range.size = VK_WHOLE_SIZE;
     vkInvalidateMappedMemoryRanges(device, 1, &range);
 
-    float* data;
+    // ⚠️ FIXED: was `float* data` reading 32-bit floats out of a buffer that
+    // actually contains 16-bit half floats copied from the output image.
+    uint16_t* data;
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
 
     static bool printed = false;
     if (!printed) {
-        fprintf(stderr, "🔍 First pixel floats: R=%f G=%f B=%f A=%f\n",
-            data[0], data[1], data[2], data[3]);
+        fprintf(stderr, "🔍 First pixel halfs: R=%f G=%f B=%f A=%f\n",
+            halfToFloat(data[0]), halfToFloat(data[1]), halfToFloat(data[2]), halfToFloat(data[3]));
         printed = true;
     }
 
     for (int i = 0; i < w * h; i++) {
         int src = i * 4;
         int dst = i * 4;
-        rgba[dst]   = (uint8_t)(std::clamp(data[src],   0.0f, 1.0f) * 255.0f);
-        rgba[dst+1] = (uint8_t)(std::clamp(data[src+1], 0.0f, 1.0f) * 255.0f);
-        rgba[dst+2] = (uint8_t)(std::clamp(data[src+2], 0.0f, 1.0f) * 255.0f);
-        rgba[dst+3] = (uint8_t)(std::clamp(data[src+3], 0.0f, 1.0f) * 255.0f);
+        rgba[dst]   = (uint8_t)(std::clamp(halfToFloat(data[src]),   0.0f, 1.0f) * 255.0f);
+        rgba[dst+1] = (uint8_t)(std::clamp(halfToFloat(data[src+1]), 0.0f, 1.0f) * 255.0f);
+        rgba[dst+2] = (uint8_t)(std::clamp(halfToFloat(data[src+2]), 0.0f, 1.0f) * 255.0f);
+        rgba[dst+3] = (uint8_t)(std::clamp(halfToFloat(data[src+3]), 0.0f, 1.0f) * 255.0f);
     }
     vkUnmapMemory(device, outputStagingMemory);
     fprintf(stderr, "📥 Output read complete\n");
@@ -613,7 +654,7 @@ void process_frame(const uint8_t* input, int w, int h, uint8_t* output, const fl
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)w;
         ubo[1] = (float)h;
-        // Copy 16 floats: brightness..colourCrush (16 values)
+        // Copy 16 floats: brightness..cellThickness (16 values)
         memcpy(ubo + 2, uniforms, 16 * sizeof(float));   // ✅ 16 floats
 
         VkMappedMemoryRange flushRange = {};
