@@ -838,26 +838,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- TIMELINE PREVIEW (FIXED) ----------
   void _startTimelinePreview() {
-    _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
-      if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
-      _isUpdating = true;
-      try {
-        // ✅ FIXED: use videoTexture.toImage()
-        final frame = await _controller!.value.videoTexture?.toImage();
-        if (frame == null) return;
-        final processed = await _processFrameWithVulkan(frame);
-        if (mounted) {
-          setState(() {
-            _processedImage = processed;
-          });
-        }
-        frame.dispose();
-      } catch (e) {
-        // ignore
+  _previewTimer?.cancel();
+  _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
+    if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
+    _isUpdating = true;   // ✅ set to true before processing
+    try {
+      final frame = await _controller!.toImage();
+      if (frame == null) return;
+      final processed = await _processFrameWithVulkan(frame);
+      if (mounted) {
+        setState(() {
+          _processedImage = processed;
+        });
       }
-      _isUpdating = false;
-    });
+      frame.dispose();
+    } catch (e) {
+      // ignore
+    }
+    _isUpdating = false;  // ✅ set back to false after processing
+  });
   }
 
   void _stopTimelinePreview() {
@@ -866,14 +865,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ---------- ONLY ONE dispose ----------
-  @override
-  void dispose() {
-    _stopTimelinePreview();
-    _controller?.removeListener(_listener);
-    _controller?.dispose();
-    cleanupVulkan();
-    super.dispose();
-  }
+  
 
   // ---------- PICK VIDEO ----------
   Future<void> _pickVideo() async {
@@ -886,7 +878,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       await File(file.path!).copy(cachedPath);
       _loadVideo(cachedPath);
     }
-  }
+  
 
   // ---------- SHOW LOG ----------
   Future<void> _showLog() async { /* implement if needed */ }
