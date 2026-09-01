@@ -843,8 +843,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        // ✅ FIXED: use toImage() directly
-        final frame = await _controller!.toImage();
+        // ✅ FIXED: use videoTexture.toImage()
+        final frame = await _controller!.value.videoTexture?.toImage();
         if (frame == null) return;
         final processed = await _processFrameWithVulkan(frame);
         if (mounted) {
@@ -889,7 +889,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ---------- SHOW LOG ----------
-  Future<void> _showLog() async { /* keep existing */ }
+  Future<void> _showLog() async { /* implement if needed */ }
 
   // ---------- PRESETS ----------
   void _applyPreset(String name) {
@@ -1025,10 +1025,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
     // ---------- SINGLE PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
-    // keep existing – you can keep it for manual previews
+    // you can keep this empty or implement it if needed
   }
 
-  // ---------- EXPORT SHEET (with 8-bit/10-bit toggle) ----------
+  // ---------- EXPORT SHEET ----------
   void _showExportSheet() {
     showModalBottomSheet(
       context: context,
@@ -1548,6 +1548,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // ✅ ONLY ONE dispose – with _stopTimelinePreview()
   @override
   void dispose() {
     _stopTimelinePreview();
