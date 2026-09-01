@@ -197,7 +197,7 @@ class StoredProject {
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
   );
-
+  
   ProjectData toProjectData() => ProjectData(
     videoPath: videoPath,
     brightness: brightness,
@@ -381,7 +381,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   double _previewScale = 1.0;
-
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -589,7 +589,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                   }
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(
+                                        MaterialPageRoute(
                       builder: (_) => ProjectScreen(
                         initialProject: ProjectData(videoPath: _selectedFile!.path),
                         projectName: _projectName,
@@ -779,6 +779,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   ui.Image? _processedImage;
   Timer? _previewTimer;
   bool _isUpdating = false;
+  final GlobalKey _videoCaptureKey = GlobalKey();
 
   @override
   void initState() {
@@ -786,7 +787,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _tabController = TabController(length: 3, vsync: this);
 
     _loadShader();
-
+    
     if (widget.initialProject != null) {
       final p = widget.initialProject!;
       _brightness = p.brightness;
@@ -836,16 +837,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- TIMELINE PREVIEW (FIXED – uses toImage()) ----------
+  // ---------- TIMELINE PREVIEW (captures the hidden RepaintBoundary) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        // ✅ Use toImage() – works in this version
-        final frame = await _controller!.toImage();
-        if (frame == null) return;
+        // VideoPlayerController has no toImage(). Instead we grab whatever is
+        // currently painted inside the hidden RepaintBoundary (see build()),
+        // which mirrors the live video frame.
+        final renderObject = _videoCaptureKey.currentContext?.findRenderObject();
+        if (renderObject is! RenderRepaintBoundary) {
+          _isUpdating = false;
+          return;
+        }
+        final frame = await renderObject.toImage();
         final processed = await _processFrameWithVulkan(frame);
         if (mounted) {
           setState(() {
@@ -863,16 +870,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void _stopTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = null;
-  }
-
-  // ---------- ONLY ONE dispose ----------
-  @override
-  void dispose() {
-    _stopTimelinePreview();
-    _controller?.removeListener(_listener);
-    _controller?.dispose();
-    cleanupVulkan();
-    super.dispose();
   }
 
   // ---------- PICK VIDEO ----------
@@ -987,7 +984,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
     return completer.future;
   }
-
+  
   // ---------- VULKAN PROCESSING (18 floats) ----------
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
@@ -1180,7 +1177,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final statusNotifier = ValueNotifier<String>('Initializing...');
     final etaNotifier = ValueNotifier<String>('--:--');
     final stopwatch = Stopwatch();
-
+    
     BuildContext? dialogContext;
     showDialog(
       context: context,
@@ -1359,28 +1356,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             flex: 4,
             child: Container(
               color: Colors.black,
-              child: Center(
-                child: _processedImage != null
-                    ? AspectRatio(
-                        aspectRatio: _getAspectRatioValue(_selectedRatio),
-                        child: RawImage(
-                          image: _processedImage,
-                          fit: BoxFit.contain,
-                        ),
-                      )
-                    : Container(
-                        color: const Color(0xFF1A1A1A),
-                        child: const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                              SizedBox(height: 8),
-                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                            ],
-                          ),
+              child: Stack(
+                children: [
+                  // Hidden raw-video render surface. It must actually be painted
+                  // (not Offstage/opacity 0, which skip painting entirely) for the
+                  // RepaintBoundary capture in _startTimelinePreview to work, so
+                  // we use a near-zero but non-zero opacity instead.
+                  if (_controller != null && _controller!.value.isInitialized)
+                    Positioned.fill(
+                      child: Opacity(
+                        opacity: 0.01,
+                        child: RepaintBoundary(
+                          key: _videoCaptureKey,
+                          child: VideoPlayer(_controller!),
                         ),
                       ),
+                    ),
+                  Center(
+                    child: _processedImage != null
+                        ? AspectRatio(
+                            aspectRatio: _getAspectRatioValue(_selectedRatio),
+                            child: RawImage(
+                              image: _processedImage,
+                                                            fit: BoxFit.contain,
+                            ),
+                          )
+                        : Container(
+                            color: const Color(0xFF1A1A1A),
+                            child: const Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
+                                  SizedBox(height: 8),
+                                  Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
+                                ],
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1550,7 +1565,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ✅ ONLY ONE dispose – with _stopTimelinePreview()
   @override
   void dispose() {
     _stopTimelinePreview();
