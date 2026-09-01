@@ -836,15 +836,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- TIMELINE PREVIEW (fixed) ----------
+  // ---------- TIMELINE PREVIEW (FIXED) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        // ✅ Fixed: use videoTexture.toImage() or fallback
-        final frame = await _controller!.value.videoTexture?.toImage();
+        // ✅ FIXED: use toImage() directly
+        final frame = await _controller!.toImage();
         if (frame == null) return;
         final processed = await _processFrameWithVulkan(frame);
         if (mounted) {
@@ -865,6 +865,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _previewTimer = null;
   }
 
+  // ---------- ONLY ONE dispose ----------
   @override
   void dispose() {
     _stopTimelinePreview();
