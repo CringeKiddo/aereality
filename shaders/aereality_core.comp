@@ -19,9 +19,10 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float vignette;
     float splitToning;
     float edgeDarken;
-    float denoise;       // 0.0 = off, 1.0 = strong
-    float cellShading;   // 0.0 = off, 1.0 = strong black lines
-    float colourCrush;   // 0.0 = off, 1.0 = heavy posterization
+    float denoise;
+    float cellShading;     // edge strength threshold
+    float colourCrush;
+    float cellThickness;   // 0.0 = thin, 1.0 = thick (dilation radius)
 } u;
 
 // ---------- HELPERS ----------
@@ -92,47 +93,36 @@ vec3 splitTone(vec3 color, float amount) {
     return mix(color, tone, amount * 0.7);
 }
 
-// ---------- BLOOM ----------
-vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
+// ---------- GLOW / BLOOM (inverse-square falloff, high quality) ----------
+vec3 bloomGlow(ivec2 pos, ivec2 size, float threshold, float intensity) {
     if (intensity <= 0.0) return vec3(0.0);
-    float knee = 0.05;
-    vec4 center = imageLoad(inputImage, pos);
-    float lumCenter = dot(center.rgb, vec3(0.299, 0.587, 0.114));
-    float brightCenter = max((lumCenter - threshold + knee) / (1.0 - threshold + knee), 0.0);
-    const int samples = 36;
-    const float radiusMax = 40.0;
+    const int samples = 64;
+    const float radius = 60.0; // larger spread
     vec3 accum = vec3(0.0);
     float wsum = 0.0;
     for (int i = 0; i < samples; ++i) {
-        float t = float(i) / float(samples);
-        float angle = t * 6.28318530718;
-        for (int rstep = 1; rstep <= 3; ++rstep) {
-            float r = radiusMax * (float(rstep) / 3.0) * (0.25 + 0.75 * fract(sin(float(i)*12.9898 + float(rstep))*43758.5453));
-            ivec2 samplePos = clamp(pos + ivec2(int(r * cos(angle)), int(r * sin(angle))), ivec2(0), size - 1);
-            vec3 s = imageLoad(inputImage, samplePos).rgb;
-            float lum = dot(s, vec3(0.299, 0.587, 0.114));
-            float dist = length(vec2(samplePos - pos));
-            float w = exp(- (dist * dist) / (2.0 * (radiusMax * 0.45) * (radiusMax * 0.45)));
-            float bright = max((lum - threshold) / (1.0 - threshold), 0.0);
-            float weight = w * (0.5 + 0.5 * bright);
-            accum += s * weight;
-            wsum += weight;
-        }
+        float angle = float(i) * 6.28318530718 / float(samples);
+        // use a gaussian distribution for radius, but with inverse-square falloff mix
+        float r = radius * (0.25 + 0.75 * fract(sin(float(i) * 12.9898 + 0.5) * 43758.5453));
+        ivec2 samplePos = clamp(pos + ivec2(int(r * cos(angle)), int(r * sin(angle))), ivec2(0), size - 1);
+        vec3 s = imageLoad(inputImage, samplePos).rgb;
+        float lum = dot(s, vec3(0.299, 0.587, 0.114));
+        // bright-pass threshold
+        float bright = max((lum - threshold) / (1.0 - threshold), 0.0);
+        // inverse-square falloff weight
+        float dist = length(vec2(samplePos - pos));
+        float weight = 1.0 / (1.0 + dist * dist / (radius * radius * 0.5));
+        weight *= (0.5 + 0.5 * bright);
+        accum += s * weight;
+        wsum += weight;
     }
     if (wsum <= 0.0) return vec3(0.0);
     vec3 bloom = accum / wsum;
-    float scale = intensity * 12.0;
-    return clamp(bloom * scale, vec3(0.0), vec3(8.0));
+    float scale = intensity * 20.0; // much brighter
+    return clamp(bloom * scale, vec3(0.0), vec3(12.0)); // allow strong highlights
 }
 
-// ---------- EDGE DARKEN ----------
-float edgeDarkenFactor(vec2 uv, float amount) {
-    float dist = distance(uv, vec2(0.5));
-    float darken = 1.0 - amount * smoothstep(0.3, 0.9, dist);
-    return clamp(darken, 0.0, 1.0);
-}
-
-// ---------- DENOISE (3x3 box blur) ----------
+// ---------- DENOISE (3x3) ----------
 vec3 denoise3x3(ivec2 pos, ivec2 size) {
     vec3 result = vec3(0.0);
     float total = 0.0;
@@ -146,24 +136,33 @@ vec3 denoise3x3(ivec2 pos, ivec2 size) {
     return result / total;
 }
 
-// ---------- CELL SHADING (Sobel edge detection) ----------
-float sobelEdge(ivec2 pos, ivec2 size) {
-    // Convert to grayscale
-    float gx = 0.0, gy = 0.0;
-    float kernelX[9] = float[9](-1,0,1, -2,0,2, -1,0,1);
-    float kernelY[9] = float[9](-1,-2,-1, 0,0,0, 1,2,1);
-    int idx = 0;
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
+// ---------- CELL SHADING (thick edge) ----------
+float thickEdge(ivec2 pos, ivec2 size, float thickness) {
+    int radius = int(ceil(thickness * 3.0)); // max radius 3 (for 0..1 slider)
+    float maxEdge = 0.0;
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
             ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
-            vec3 sample = imageLoad(inputImage, samplePos).rgb;
-            float lum = dot(sample, vec3(0.299, 0.587, 0.114));
-            gx += lum * kernelX[idx];
-            gy += lum * kernelY[idx];
-            idx++;
+            float lum = dot(imageLoad(inputImage, samplePos).rgb, vec3(0.299, 0.587, 0.114));
+            // simple sobel on this position
+            float gx = 0.0, gy = 0.0;
+            int idx = 0;
+            for (int sy = -1; sy <= 1; sy++) {
+                for (int sx = -1; sx <= 1; sx++) {
+                    ivec2 p = clamp(samplePos + ivec2(sx, sy), ivec2(0), size - 1);
+                    float l = dot(imageLoad(inputImage, p).rgb, vec3(0.299, 0.587, 0.114));
+                    float kx = (sx == -1 ? -1 : (sx == 1 ? 1 : 0)) * (sy == -1 ? 1 : (sy == 0 ? 2 : 1));
+                    float ky = (sy == -1 ? -1 : (sy == 1 ? 1 : 0)) * (sx == -1 ? 1 : (sx == 0 ? 2 : 1));
+                    gx += l * kx;
+                    gy += l * ky;
+                    idx++;
+                }
+            }
+            float edge = sqrt(gx*gx + gy*gy);
+            maxEdge = max(maxEdge, edge);
         }
     }
-    return sqrt(gx*gx + gy*gy);
+    return maxEdge;
 }
 
 // ---------- DITHER ----------
@@ -181,28 +180,26 @@ void main() {
     vec4 color = imageLoad(inputImage, pos);
     vec3 linear = srgbToLinear(color.rgb);
 
-    // ---------- 1. DENOISE (applied early) ----------
+    // Denoise
     if (u.denoise > 0.0) {
         vec3 blurred = denoise3x3(pos, size);
         linear = mix(linear, blurred, u.denoise);
     }
 
-    // ---------- 2. GRADING ----------
+    // Grading
     float gain = pow(2.0, u.brightness);
     linear *= gain;
-
     linear = (linear - 0.5) * u.contrast + 0.5;
     linear = pow(max(linear, vec3(1e-4)), vec3(1.0 / max(u.gamma, 0.01)));
-
     float lum = dot(linear, vec3(0.299, 0.587, 0.114));
     linear = mix(vec3(lum), linear, u.saturation);
-
     linear = adjustTemperature(linear, u.temperature);
     linear = rotateHue(linear, u.hue);
     linear = tealOrange(linear, u.lookMix);
 
+    // Bloom (glow)
     float bloomThreshold = mix(0.8, 0.2, clamp(u.vignette, 0.0, 1.0));
-    vec3 bloom = largeBloom(pos, size, bloomThreshold, u.glowIntensity);
+    vec3 bloom = bloomGlow(pos, size, bloomThreshold, u.glowIntensity);
     linear += bloom;
 
     vec3 tonemapped = filmicTonemap(linear);
@@ -214,37 +211,29 @@ void main() {
     float vig = vignetteEffect(uv, u.vignette);
     linear *= vig;
 
-    // ---------- 3. EDGE DARKEN ----------
-    float edge = edgeDarkenFactor(uv, u.edgeDarken);
+    // Edge Darken
+    float edge = 1.0 - u.edgeDarken * smoothstep(0.3, 0.9, distance(uv, vec2(0.5)));
     linear *= edge;
 
     linear = splitTone(linear, u.splitToning);
 
-    // ---------- 4. CELL SHADING (applied after grading to keep lines sharp) ----------
+    // Cell Shading (thick outlines)
     if (u.cellShading > 0.0) {
-        float edgeStrength = sobelEdge(pos, size);
-        float threshold = mix(0.8, 0.3, u.cellShading); // lower threshold = more lines
-        float line = 1.0 - smoothstep(threshold, 1.0, edgeStrength);
-        // Darken the line (multiply) and blend with original
-        vec3 lineColor = vec3(0.0); // pure black lines
-        linear = mix(linear, linear * line, u.cellShading);
-        // Optionally add pure black overlay
-        float lineFactor = smoothstep(threshold, threshold + 0.1, edgeStrength);
-        linear = mix(linear, vec3(0.0), lineFactor * u.cellShading);
+        float edgeStrength = thickEdge(pos, size, u.cellThickness);
+        float threshold = mix(0.8, 0.2, u.cellShading);
+        float line = 1.0 - smoothstep(threshold, threshold + 0.1, edgeStrength);
+        linear = mix(linear, vec3(0.0), line * u.cellShading * 0.8);
     }
 
-    // ---------- 5. COLOUR CRUSH (posterization) ----------
+    // Colour Crush
     if (u.colourCrush > 0.0) {
-        // Map 0.0-1.0 to 4-256 steps
         float steps = mix(256.0, 4.0, u.colourCrush);
         linear = floor(linear * steps) / steps;
     }
 
     linear = clamp(linear, vec3(0.0), vec3(1.0));
-
     vec3 srgb = linearToSrgb(linear);
 
-    // Dither
     float d = (dither(vec2(pos)) - 0.5) * 0.008;
     srgb += d;
     srgb = clamp(srgb, vec3(0.0), vec3(1.0));
