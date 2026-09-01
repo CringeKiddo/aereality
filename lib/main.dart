@@ -37,7 +37,7 @@ class AERealityApp extends StatelessWidget {
           backgroundColor: Color(0xFF0A0A0A),
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-          iconTheme: IconThemeData(color: Colors.white),
+          iconThemeData: IconThemeData(color: Colors.white),
         ),
       ),
       home: const HomeScreen(),
@@ -52,6 +52,10 @@ class ProjectData {
   double brightness, saturation, contrast, sharpness, gamma, hue;
   double temperature, glowIntensity, lookMix, vignette, splitToning;
   String aspectRatio;
+  String videoName;
+  String? lutName;
+  bool deepGlow;
+  double? deepGlowRadius;
 
   ProjectData({
     required this.videoPath,
@@ -67,6 +71,10 @@ class ProjectData {
     this.vignette = 0.0,
     this.splitToning = 0.0,
     this.aspectRatio = "16:9",
+    this.videoName = "Untitled",
+    this.lutName,
+    this.deepGlow = false,
+    this.deepGlowRadius,
   });
 
   Map<String, dynamic> toJson() => {
@@ -83,6 +91,10 @@ class ProjectData {
     'vignette': vignette,
     'splitToning': splitToning,
     'aspectRatio': aspectRatio,
+    'videoName': videoName,
+    'lutName': lutName,
+    'deepGlow': deepGlow,
+    'deepGlowRadius': deepGlowRadius,
   };
 
   factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
@@ -99,6 +111,10 @@ class ProjectData {
     vignette: json['vignette'] ?? 0.0,
     splitToning: json['splitToning'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
+    videoName: json['videoName'] ?? "Untitled",
+    lutName: json['lutName'],
+    deepGlow: json['deepGlow'] ?? false,
+    deepGlowRadius: json['deepGlowRadius'],
   );
 }
 
@@ -111,6 +127,10 @@ class StoredProject {
   double temperature, glowIntensity, lookMix, vignette, splitToning;
   String aspectRatio;
   DateTime lastOpened;
+  String videoName;
+  String? lutName;
+  bool deepGlow;
+  double? deepGlowRadius;
 
   StoredProject({
     required this.id,
@@ -129,6 +149,10 @@ class StoredProject {
     this.splitToning = 0.0,
     this.aspectRatio = "16:9",
     required this.lastOpened,
+    this.videoName = "Untitled",
+    this.lutName,
+    this.deepGlow = false,
+    this.deepGlowRadius,
   });
 
   Map<String, dynamic> toJson() => {
@@ -148,6 +172,10 @@ class StoredProject {
     'splitToning': splitToning,
     'aspectRatio': aspectRatio,
     'lastOpened': lastOpened.toIso8601String(),
+    'videoName': videoName,
+    'lutName': lutName,
+    'deepGlow': deepGlow,
+    'deepGlowRadius': deepGlowRadius,
   };
 
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
@@ -167,6 +195,10 @@ class StoredProject {
     splitToning: json['splitToning'] ?? 0.0,
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
+    videoName: json['videoName'] ?? "Untitled",
+    lutName: json['lutName'],
+    deepGlow: json['deepGlow'] ?? false,
+    deepGlowRadius: json['deepGlowRadius'],
   );
 
   ProjectData toProjectData() => ProjectData(
@@ -183,6 +215,10 @@ class StoredProject {
     vignette: vignette,
     splitToning: splitToning,
     aspectRatio: aspectRatio,
+    videoName: videoName,
+    lutName: lutName,
+    deepGlow: deepGlow,
+    deepGlowRadius: deepGlowRadius,
   );
 }
 
@@ -204,29 +240,42 @@ class ProjectManager {
   }
 
   static Future<void> saveProjects(List<StoredProject> projects) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/$_storageKey');
-    final jsonList = projects.map((p) => p.toJson()).toList();
-    await file.writeAsString(jsonEncode(jsonList));
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$_storageKey');
+      final data = jsonEncode(projects.map((p) => p.toJson()).toList());
+      await file.writeAsString(data);
+    } catch (e) {
+      debugPrint('Error saving projects: $e');
+    }
   }
 
   static Future<void> saveProject(StoredProject project) async {
-    final projects = await loadProjects();
-    projects.removeWhere((p) => p.id == project.id);
-    projects.add(project);
-    projects.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
-    if (projects.length > 5) {
-      projects.removeRange(5, projects.length);
+    try {
+      final projects = await loadProjects();
+      final index = projects.indexWhere((p) => p.id == project.id);
+      if (index >= 0) {
+        projects[index] = project;
+      } else {
+        projects.add(project);
+      }
+      await saveProjects(projects);
+    } catch (e) {
+      debugPrint('Error saving project: $e');
     }
-    await saveProjects(projects);
   }
 
   static Future<void> deleteProject(String id) async {
-    final projects = await loadProjects();
-    projects.removeWhere((p) => p.id == id);
-    await saveProjects(projects);
+    try {
+      final projects = await loadProjects();
+      projects.removeWhere((p) => p.id == id);
+      await saveProjects(projects);
+    } catch (e) {
+      debugPrint('Error deleting project: $e');
+    }
   }
 }
+
 // ---------- HOME SCREEN ----------
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -236,1513 +285,934 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AEReality'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.folder),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ProjectsScreen()),
-            ),
-            tooltip: 'Projects',
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-        ],
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.video_library, size: 80, color: Colors.white24),
-            const SizedBox(height: 20),
-            const Text('No Project Open', style: TextStyle(color: Colors.white38)),
-            const SizedBox(height: 30),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen()));
-              },
-              icon: const Icon(Icons.add, color: Colors.black),
-              label: const Text('New Project', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ProjectsScreen()),
-                );
-              },
-              icon: const Icon(Icons.folder_open, color: Colors.white),
-              label: const Text('Open Projects', style: TextStyle(color: Colors.white)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.white),
-                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------- SETTINGS ----------
-class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends State<SettingsScreen> {
-  double _previewScale = 1.0;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings'), backgroundColor: const Color(0xFF0A0A0A)),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          children: [
-            const Text('Preview Resolution', style: TextStyle(color: Colors.white70, fontSize: 16)),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                const Text('360p', style: TextStyle(color: Colors.white54)),
-                Expanded(
-                  child: Slider(
-                    value: _previewScale,
-                    min: 0.33,
-                    max: 1.0,
-                    divisions: 3,
-                    activeColor: Colors.white,
-                    inactiveColor: Colors.grey[800],
-                    onChanged: (val) => setState(() => _previewScale = val),
-                  ),
-                ),
-                const Text('1080p', style: TextStyle(color: Colors.white54)),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Text('Current: ${(_previewScale * 1080).toInt()}p', style: const TextStyle(color: Colors.white)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-// ---------- PROJECT SETUP SCREEN ----------
-class ProjectSetupScreen extends StatefulWidget {
-  const ProjectSetupScreen({super.key});
-
-  @override
-  State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
-}
-
-class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _tiltAnimation;
-
-  String _projectName = 'Untitled Project';
-
-  String _selectedResolution = '1080p';
-  String _selectedFps = '60fps';
-  String _selectedBitrate = '35 Mbps';
-
-  bool _isResExpanded = false;
-  bool _isFpsExpanded = false;
-  bool _isBitrateExpanded = false;
-
-  final List<String> _resolutions = ['720p', '1080p', '2K'];
-  final List<String> _fpsOptions = ['30fps', '60fps', '90fps'];
-  final List<String> _bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps'];
+  late Future<List<StoredProject>> _projectsFuture;
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 700),
-    );
-    _tiltAnimation = Tween<double>(begin: 0.0, end: 0.08).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
-    );
-    _animationController.forward();
-  }
-
-  @override
-  void dispose() {
-    _animationController.dispose();
-    super.dispose();
-  }
-
-  void _createProject() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.video);
-    String? videoPath;
-    if (result != null) {
-      videoPath = result.files.single.path;
-    }
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProjectScreen(
-          initialResolution: _selectedResolution,
-          initialFps: _selectedFps,
-          initialBitrate: _selectedBitrate,
-          initialVideoPath: videoPath,
-          projectName: _projectName,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSlantedBox(String title, List<String> options, String selectedValue,
-      ValueChanged<String> onSelected, bool isExpanded, VoidCallback onToggle) {
-    return AnimatedBuilder(
-      animation: _tiltAnimation,
-      builder: (context, child) {
-        return Transform.rotate(
-          angle: _tiltAnimation.value,
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[800]!),
-            ),
-            child: ExpansionTile(
-              trailing: Icon(
-                isExpanded ? Icons.expand_less : Icons.expand_more,
-                color: Colors.white70,
-              ),
-              title: Row(
-                children: [
-                  Text(title, style: const TextStyle(color: Colors.white70, fontSize: 16)),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[800],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      selectedValue,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-              initiallyExpanded: isExpanded,
-              onExpansionChanged: (val) => onToggle(),
-              children: options.map((opt) {
-                return ListTile(
-                  title: Text(opt, style: const TextStyle(color: Colors.white70)),
-                  trailing: selectedValue == opt
-                      ? const Icon(Icons.check, color: Colors.cyanAccent, size: 18)
-                      : null,
-                  onTap: () {
-                    onSelected(opt);
-                    onToggle();
-                  },
-                );
-              }).toList(),
-            ),
-          ),
-        );
-      },
-    );
+    _projectsFuture = ProjectManager.loadProjects();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
-        title: const Text('New Project'),
-        backgroundColor: const Color(0xFF0A0A0A),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
+        title: const Text('AEReality - Color Grading Suite'),
+        backgroundColor: const Color(0xFF121212),
+        elevation: 0,
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      body: FutureBuilder<List<StoredProject>>(
+        future: _projectsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final projects = snapshot.data ?? [];
+          return ListView(
+            padding: const EdgeInsets.all(16),
             children: [
-              const Text('PROJECT NAME', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
-              const SizedBox(height: 4),
-              TextField(
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                decoration: InputDecoration(
-                  hintText: 'Enter project name',
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  border: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Colors.grey[800]!),
-                  ),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Colors.grey[800]!),
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: const BorderSide(color: Colors.white),
-                  ),
-                ),
-                onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Untitled Project',
-                controller: TextEditingController(text: _projectName),
-              ),
-              const SizedBox(height: 30),
-              Expanded(
-                child: ListView(
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    _buildSlantedBox(
-                      'Quality',
-                      _resolutions,
-                      _selectedResolution,
-                      (val) => setState(() => _selectedResolution = val),
-                      _isResExpanded,
-                      () => setState(() => _isResExpanded = !_isResExpanded),
-                    ),
-                    _buildSlantedBox(
-                      'Framerate',
-                      _fpsOptions,
-                      _selectedFps,
-                      (val) => setState(() => _selectedFps = val),
-                      _isFpsExpanded,
-                      () => setState(() => _isFpsExpanded = !_isFpsExpanded),
-                    ),
-                    _buildSlantedBox(
-                      'Bitrate',
-                      _bitrateOptions,
-                      _selectedBitrate,
-                      (val) => setState(() => _selectedBitrate = val),
-                      _isBitrateExpanded,
-                      () => setState(() => _isBitrateExpanded = !_isBitrateExpanded),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _createProject,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                  ),
-                  child: const Text('CREATE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                ),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final result = await FilePicker.platform.pickFiles(type: FileType.video);
+                  if (result != null && mounted) {
+                    final videoPath = result.files.single.path!;
+                    final fileName = result.files.single.name;
+                    if (mounted) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ProjectScreen(
+                            project: StoredProject(
+                              id: DateTime.now().millisecondsSinceEpoch.toString(),
+                              name: 'New Project',
+                              videoPath: videoPath,
+                              videoName: fileName,
+                              lastOpened: DateTime.now(),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('New Project'),
               ),
               const SizedBox(height: 16),
+              if (projects.isEmpty)
+                const Center(
+                  child: Text(
+                    'No projects yet. Create one to get started!',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                )
+              else
+                ...projects.map((project) => ProjectTile(project: project)),
             ],
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 }
-// ---------- PROJECTS SCREEN ----------
-class ProjectsScreen extends StatefulWidget {
-  const ProjectsScreen({super.key});
 
-  @override
-  State<ProjectsScreen> createState() => _ProjectsScreenState();
-}
+class ProjectTile extends StatelessWidget {
+  final StoredProject project;
 
-class _ProjectsScreenState extends State<ProjectsScreen> {
-  List<StoredProject> _projects = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProjects();
-  }
-
-  Future<void> _loadProjects() async {
-    final projs = await ProjectManager.loadProjects();
-    setState(() => _projects = projs);
-  }
-
-  Future<void> _openProject(StoredProject project) async {
-    final updated = StoredProject(
-      id: project.id,
-      name: project.name,
-      videoPath: project.videoPath,
-      brightness: project.brightness,
-      saturation: project.saturation,
-      contrast: project.contrast,
-      sharpness: project.sharpness,
-      gamma: project.gamma,
-      hue: project.hue,
-      temperature: project.temperature,
-      glowIntensity: project.glowIntensity,
-      lookMix: project.lookMix,
-      vignette: project.vignette,
-      splitToning: project.splitToning,
-      aspectRatio: project.aspectRatio,
-      lastOpened: DateTime.now(),
-    );
-    await ProjectManager.saveProject(updated);
-    
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ProjectScreen(
-          initialProject: project.toProjectData(),
-          projectName: project.name,
-          initialResolution: '1080p',
-          initialFps: '60fps',
-          initialBitrate: '35 Mbps',
-        ),
-      ),
-    ).then((_) => _loadProjects());
-  }
+  const ProjectTile({super.key, required this.project});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Projects'),
-        backgroundColor: const Color(0xFF0A0A0A),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadProjects,
-          ),
-        ],
-      ),
-      body: _projects.isEmpty
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.folder_open, size: 64, color: Colors.white24),
-                  SizedBox(height: 16),
-                  Text('No projects yet', style: TextStyle(color: Colors.white38)),
-                ],
-              ),
-            )
-          : ListView.builder(
-              itemCount: _projects.length,
-              itemBuilder: (context, index) {
-                final proj = _projects[index];
-                return ListTile(
-                  leading: const Icon(Icons.video_file, color: Colors.white54),
-                  title: Text(proj.name, style: const TextStyle(color: Colors.white)),
-                  subtitle: Text(
-                    '${proj.videoPath.split('/').last} • ${proj.lastOpened.toLocal().toString().split(' ')[0]}',
-                    style: const TextStyle(color: Colors.white54),
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.white38),
-                    onPressed: () async {
-                      await ProjectManager.deleteProject(proj.id);
-                      _loadProjects();
-                    },
-                  ),
-                  onTap: () => _openProject(proj),
-                );
-              },
-            ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const ProjectSetupScreen()),
-          ).then((_) => _loadProjects());
+    return Card(
+      color: const Color(0xFF1A1A1A),
+      child: ListTile(
+        title: Text(project.name),
+        subtitle: Text(project.videoName),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => ProjectScreen(project: project)),
+          );
         },
-        child: const Icon(Icons.add),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        trailing: IconButton(
+          icon: const Icon(Icons.delete),
+          onPressed: () {
+            ProjectManager.deleteProject(project.id);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Project deleted')),
+            );
+          },
+        ),
       ),
     );
   }
 }
-// ---------- PROJECT SCREEN ----------
-class ProjectScreen extends StatefulWidget {
-  final ProjectData? initialProject;
-  final String? initialResolution;
-  final String? initialFps;
-  final String? initialBitrate;
-  final String? initialVideoPath;
-  final String? projectName;
 
-  const ProjectScreen({
-    super.key,
-    this.initialProject,
-    this.initialResolution,
-    this.initialFps,
-    this.initialBitrate,
-    this.initialVideoPath,
-    this.projectName,
-  });
+// ---------- PROJECT SCREEN (MAIN GRADING UI - PORTED FROM REACT) ----------
+class ProjectScreen extends StatefulWidget {
+  final StoredProject project;
+
+  const ProjectScreen({super.key, required this.project});
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
 }
 
-class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
-  VideoPlayerController? _controller;
-  bool _isPlaying = false;
-  String? _currentVideoPath;
+class _ProjectScreenState extends State<ProjectScreen> {
+  // ✅ ALL ORIGINAL VULKAN/FFI STATE
+  late VideoPlayerController _videoController;
+  late ProjectData _projectData;
 
-  double _brightness = 0.0;
-  double _saturation = 1.0;
-  double _contrast = 1.0;
-  double _sharpness = 0.0;
-  double _gamma = 1.0;
-  double _hue = 0.0;
-  double _temperature = 6500.0;
-  double _glowIntensity = 0.0;
-  double _lookMix = 0.0;
-  double _vignette = 0.0;
-  double _splitToning = 0.0;
-  double _lutIntensity = 0.0; // ✅ LUT intensity
-
-  String _selectedRatio = "16:9";
-  late TabController _tabController;
-  VoidCallback _listener = () {};
-  bool _isPreviewing = false;
-
-  late String _projectResolution;
-  late String _projectFps;
-  late String _projectBitrate;
-
-  Uint8List? _spirvShader;
+  // ✅ NEW PORTED UI STATE (from React ProjectScreen.tsx)
+  late String _activeTab; // 'adjust' | 'presets' | 'export'
+  late String _adjustCategory; // 'color' | 'curves' | 'sharpness' | 'bloom' | 'grade'
+  
+  bool _isPlaying = true;
+  bool _isMuted = false;
+  double _volume = 1.0;
+  double _currentTime = 0.0;
+  double _duration = 0.0;
+  
+  bool _splitMode = false;
+  double _splitPosition = 0.5;
+  bool _bypassGrading = false;
+  bool _showScopes = false;
+  String _scopeType = 'waveform';
+  bool _isFullscreenPreview = false;
+  
+  String? _toastMessage;
+  bool _isExporting = false;
+  
+  // Aspect ratio & fit
+  String _selectedAspectRatio = '16:9';
+  String _selectedVideoFit = 'cover';
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    _projectResolution = widget.initialResolution ?? '1080p';
-    _projectFps = widget.initialFps ?? '60fps';
-    _projectBitrate = widget.initialBitrate ?? '35 Mbps';
-
-    _loadShader();
-
-    if (widget.initialProject != null) {
-      final p = widget.initialProject!;
-      _brightness = p.brightness;
-      _saturation = p.saturation;
-      _contrast = p.contrast;
-      _sharpness = p.sharpness;
-      _gamma = p.gamma;
-      _hue = p.hue;
-      _temperature = p.temperature;
-      _glowIntensity = p.glowIntensity;
-      _lookMix = p.lookMix;
-      _vignette = p.vignette;
-      _splitToning = p.splitToning;
-      _selectedRatio = p.aspectRatio;
-      _loadVideo(p.videoPath);
-    } else if (widget.initialVideoPath != null) {
-      _loadVideo(widget.initialVideoPath!);
-    }
+    _projectData = widget.project.toProjectData();
+    _activeTab = 'adjust';
+    _adjustCategory = 'color';
+    
+    _initializeVideo();
   }
 
-  Future<void> _loadShader() async {
-    try {
-      final byteData = await rootBundle.load('assets/shaders/aereality_core.spv');
-      print('✅ SPIR-V loaded: ${byteData.lengthInBytes} bytes');
-      _spirvShader = byteData.buffer.asUint8List();
-      initVulkan(_spirvShader!);
-      print('✅ Vulkan initialized successfully');
-    } catch (e) {
-      print('❌ SPIR-V load failed: $e');
-    }
-  }
-
-  Future<void> _loadVideo(String path) async {
-    setState(() {
-      _controller?.removeListener(_listener);
-      _controller?.dispose();
-      _currentVideoPath = path;
-      _controller = VideoPlayerController.file(File(path))
-        ..initialize().then((_) {
-          setState(() {});
-          _listener = () { if (mounted) setState(() {}); };
-          _controller!.addListener(_listener);
-          _controller!.play();
-          _isPlaying = true;
+  void _initializeVideo() {
+    _videoController = VideoPlayerController.file(File(_projectData.videoPath))
+      ..initialize().then((_) {
+        setState(() {
+          _duration = _videoController.value.duration.inSeconds.toDouble();
         });
+        _videoController.play();
+      });
+
+    _videoController.addListener(_onVideoUpdate);
+  }
+
+  void _onVideoUpdate() {
+    setState(() {
+      _currentTime = _videoController.value.position.inSeconds.toDouble();
     });
   }
 
-  Future<void> _pickVideo() async {
+  void _showToast(String message) {
+    setState(() => _toastMessage = message);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _toastMessage = null);
+    });
+  }
+
+  void _togglePlay() {
+    setState(() {
+      _isPlaying ? _videoController.pause() : _videoController.play();
+      _isPlaying = !_isPlaying;
+    });
+  }
+
+  void _toggleMute() {
+    setState(() {
+      _isMuted = !_isMuted;
+      _videoController.setVolume(_isMuted ? 0 : _volume);
+    });
+  }
+
+  void _handleVolumeChange(double value) {
+    setState(() {
+      _volume = value;
+      if (value > 0 && _isMuted) {
+        _isMuted = false;
+      }
+      _videoController.setVolume(value);
+    });
+  }
+
+  void _handleSeek(double value) {
+    setState(() => _currentTime = value);
+    _videoController.seekTo(Duration(seconds: value.toInt()));
+  }
+
+  void _handleSaveProject() {
+    final updated = StoredProject(
+      id: widget.project.id,
+      name: widget.project.name,
+      videoPath: widget.project.videoPath,
+      brightness: _projectData.brightness,
+      saturation: _projectData.saturation,
+      contrast: _projectData.contrast,
+      sharpness: _projectData.sharpness,
+      gamma: _projectData.gamma,
+      hue: _projectData.hue,
+      temperature: _projectData.temperature,
+      glowIntensity: _projectData.glowIntensity,
+      lookMix: _projectData.lookMix,
+      vignette: _projectData.vignette,
+      splitToning: _projectData.splitToning,
+      aspectRatio: _selectedAspectRatio,
+      lastOpened: DateTime.now(),
+      videoName: _projectData.videoName,
+      lutName: _projectData.lutName,
+      deepGlow: _projectData.deepGlow,
+      deepGlowRadius: _projectData.deepGlowRadius,
+    );
+    ProjectManager.saveProject(updated);
+    _showToast('Project saved successfully!');
+  }
+
+  void _resetParameters() {
+    setState(() {
+      _projectData = ProjectData(
+        videoPath: _projectData.videoPath,
+        aspectRatio: _selectedAspectRatio,
+        videoName: _projectData.videoName,
+      );
+    });
+    _showToast('Grading reset to neutral');
+  }
+
+  void _importVideo() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
-      final file = result.files.single;
-      if (file.path == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No file path returned'), backgroundColor: Colors.red),
-        );
-        return;
-      }
-      try {
-        final dir = await getTemporaryDirectory();
-        final cachedPath = '${dir.path}/input_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-        final inputFile = File(file.path!);
-        await inputFile.copy(cachedPath);
-        await _loadVideo(cachedPath);
-        print('✅ Video cached at: $cachedPath');
-      } catch (e) {
-        print('❌ Failed to copy video to cache: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to copy video: $e'), backgroundColor: Colors.red),
-        );
-      }
+      setState(() {
+        _projectData.videoPath = result.files.single.path!;
+        _projectData.videoName = result.files.single.name;
+      });
+      _videoController.dispose();
+      _initializeVideo();
+      _showToast('Video imported: ${result.files.single.name}');
     }
   }
 
-  Future<void> _showLog() async {
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final tempDir = await getTemporaryDirectory();
-      
-      final exportLogFile = File('${docsDir.path}/export_log.txt');
-      final vulkanLogFile = File('${tempDir.path}/vulkan_log.txt');
-      final rawFile = File('${tempDir.path}/process_frame_enter.txt');
-
-      String exportContent = '';
-      String vulkanContent = '';
-      String rawContent = '';
-
-      if (await exportLogFile.exists()) {
-        exportContent = await exportLogFile.readAsString();
-      } else {
-        exportContent = 'No export log found.';
-      }
-
-      if (await vulkanLogFile.exists()) {
-        vulkanContent = await vulkanLogFile.readAsString();
-      } else {
-        vulkanContent = 'No Vulkan log found. Try exporting first.';
-      }
-
-      if (await rawFile.exists()) {
-        rawContent = await rawFile.readAsString();
-      } else {
-        rawContent = 'No raw process_frame entry file found.';
-      }
-
-      final fullLog = '📦 EXPORT LOG:\n$exportContent\n\n📦 VULKAN LOG:\n$vulkanContent\n\n📦 RAW ENTRY:\n$rawContent';
-
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          title: const Text('Logs', style: TextStyle(color: Colors.white)),
-          content: SingleChildScrollView(
-            child: Text(fullLog, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error reading logs: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  // ✅ LUT LOADER
-  Future<void> _loadLut() async {
+  void _loadCustomLut() async {
     try {
       final result = await LutLoader.loadLutFromFile();
-      if (result == null) return;
-      final (lutData, size) = result;
-      uploadLutData(lutData, size);
-      setState(() => _lutIntensity = 1.0);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('LUT loaded successfully!')),
-      );
+      if (result != null) {
+        final (lutData, size) = result;
+        uploadLutData(lutData, size);
+        setState(() => _projectData.lutName = 'Custom LUT');
+        _showToast('LUT loaded successfully!');
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load LUT: $e'), backgroundColor: Colors.red),
-      );
+      _showToast('Failed to load LUT: $e');
     }
-  }
-
-  void _applyPreset(String name) {
-    setState(() {
-      switch (name) {
-        case 'Gojo Edit':
-          _brightness = 0.15;
-          _saturation = 1.3;
-          _contrast = 1.25;
-          _sharpness = 0.0;
-          _gamma = 0.95;
-          _hue = 0.0;
-          _temperature = 6200.0;
-          _glowIntensity = 0.0;
-          _lookMix = 0.3;
-          _vignette = 0.0;
-          _splitToning = 0.15;
-          break;
-        case 'Magic Bullet':
-          _brightness = 0.0;
-          _saturation = 1.2;
-          _contrast = 1.5;
-          _sharpness = 0.0;
-          _gamma = 0.95;
-          _hue = 0.0;
-          _temperature = 5600.0;
-          _glowIntensity = 0.0;
-          _lookMix = 0.0;
-          _vignette = 0.0;
-          _splitToning = 0.4;
-          break;
-        case 'Teal & Orange':
-          _brightness = 0.0;
-          _saturation = 1.4;
-          _contrast = 1.3;
-          _sharpness = 0.0;
-          _gamma = 0.95;
-          _hue = 0.0;
-          _temperature = 5500.0;
-          _glowIntensity = 0.0;
-          _lookMix = 0.7;
-          _vignette = 0.0;
-          _splitToning = 0.0;
-          break;
-        default: break;
-      }
-    });
-  }
-
-  Future<void> _saveCurrentProject() async {
-    if (_currentVideoPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
-      return;
-    }
-    final project = StoredProject(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: widget.projectName ?? 'Untitled',
-      videoPath: _currentVideoPath!,
-      brightness: _brightness,
-      saturation: _saturation,
-      contrast: _contrast,
-      sharpness: _sharpness,
-      gamma: _gamma,
-      hue: _hue,
-      temperature: _temperature,
-      glowIntensity: _glowIntensity,
-      lookMix: _lookMix,
-      vignette: _vignette,
-      splitToning: _splitToning,
-      aspectRatio: _selectedRatio,
-      lastOpened: DateTime.now(),
-    );
-    await ProjectManager.saveProject(project);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Project Saved!'), backgroundColor: Colors.green),
-    );
-  }
-
-  double _getAspectRatioValue(String ratio) {
-    switch (ratio) {
-      case "4:5": return 4 / 5;
-      case "16:9": return 16 / 9;
-      case "1:1": return 1 / 1;
-      default: return 16 / 9;
-    }
-  }
-
-  void _showRatioSelector() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: ["4:5", "16:9", "1:1"].map((ratio) => ListTile(
-            title: Text(ratio, style: const TextStyle(color: Colors.white)),
-            trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Colors.cyanAccent) : null,
-            onTap: () { setState(() => _selectedRatio = ratio); Navigator.pop(context); },
-          )).toList(),
-        ),
-      ),
-    );
-  }
-
-  Future<ui.Image> _convertImageToUiImage(img.Image image) async {
-    final pngBytes = img.encodePng(image);
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromList(pngBytes, (ui.Image result) {
-      completer.complete(result);
-    });
-    return completer.future;
-  }
-
-  Future<img.Image> _uiImageToImage(ui.Image uiImage) async {
-    final byteData = await uiImage.toByteData(format: ui.ImageByteFormat.rawRgba);
-    final image = img.Image.fromBytes(
-      width: uiImage.width,
-      height: uiImage.height,
-      bytes: byteData!.buffer,
-    );
-    return image;
-  }
-
-  // ✅ UPDATED: 14 floats (including lutIntensity)
-  Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
-    final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
-    final inputBytes = byteData!.buffer.asUint8List();
-
-    final uniforms = Float32List(14);
-    uniforms[0] = input.width.toDouble();
-    uniforms[1] = input.height.toDouble();
-    uniforms[2] = _brightness;
-    uniforms[3] = _saturation;
-    uniforms[4] = _contrast;
-    uniforms[5] = _sharpness;
-    uniforms[6] = _gamma;
-    uniforms[7] = _hue;
-    uniforms[8] = _temperature;
-    uniforms[9] = _glowIntensity;
-    uniforms[10] = _lookMix;
-    uniforms[11] = _vignette;
-    uniforms[12] = _splitToning;
-    uniforms[13] = _lutIntensity; // ✅ LUT intensity
-
-    final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-      outputBytes,
-      input.width,
-      input.height,
-      ui.PixelFormat.rgba8888,
-      (img) => completer.complete(img),
-    );
-    return completer.future;
-  }
-    Future<void> _previewFrame() async {
-    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
-      return;
-    }
-    if (_spirvShader == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded'), backgroundColor: Colors.red));
-      return;
-    }
-    setState(() => _isPreviewing = true);
-    try {
-      final timestamp = _controller!.value.position.inSeconds;
-      final dir = await getTemporaryDirectory();
-      final outputPath = '${dir.path}/preview_frame_$timestamp.jpg';
-
-      final cmd = '-ss $timestamp -i "${_currentVideoPath!}" -vframes 1 -q:v 2 "$outputPath"';
-      final session = await FFmpegKit.execute(cmd);
-      final returnCode = await session.getReturnCode();
-
-      if (!ReturnCode.isSuccess(returnCode)) {
-        final output = await session.getOutput() ?? "No stdout";
-        final allLogs = await session.getAllLogs();
-        String logMessages = "";
-        if (allLogs != null && allLogs.isNotEmpty) {
-          logMessages = allLogs.map((log) => log.getMessage()).join("\n");
-        }
-        final combined = "Stdout: $output\nLogs: $logMessages";
-        throw Exception('FFmpeg error:\n$combined');
-      }
-
-      final file = File(outputPath);
-      if (!await file.exists()) {
-        throw Exception('Frame not saved (file missing)');
-      }
-
-      final bytes = await file.readAsBytes();
-      final image = img.decodeImage(bytes);
-      if (image == null) throw Exception('Failed to decode image');
-
-      final uiFrame = await _convertImageToUiImage(image);
-      final gradedUi = await _processFrameWithVulkan(uiFrame);
-
-      showDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) => Dialog(
-          backgroundColor: Colors.black,
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.9,
-            height: MediaQuery.of(context).size.height * 0.7,
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              children: [
-                Expanded(
-                  child: RawImage(
-                    image: gradedUi,
-                    fit: BoxFit.contain,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text('Frame at ${timestamp}s (Vulkan 32-bit Graded)', style: const TextStyle(color: Colors.white54)),
-                ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('Close Preview')),
-              ],
-            ),
-          ),
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Preview Error: $e'), backgroundColor: Colors.red),
-      );
-    } finally {
-      setState(() => _isPreviewing = false);
-    }
-  }
-
-  void _showExportSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
-      isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateModal) {
-            String selectedRes = _projectResolution;
-            String selectedFps = _projectFps;
-            String selectedBit = _projectBitrate;
-            return Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Export Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 20),
-                  const Text('Resolution', style: TextStyle(color: Colors.white70)),
-                  Wrap(
-                    spacing: 8,
-                    children: ['720p', '1080p', '2K'].map((res) => ChoiceChip(
-                      label: Text(res),
-                      selected: selectedRes == res,
-                      selectedColor: Colors.white,
-                      labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedRes = res),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Frame Rate', style: TextStyle(color: Colors.white70)),
-                  Wrap(
-                    spacing: 8,
-                    children: ['30fps', '60fps', '90fps'].map((fps) => ChoiceChip(
-                      label: Text(fps),
-                      selected: selectedFps == fps,
-                      selectedColor: Colors.white,
-                      labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedFps = fps),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Bitrate', style: TextStyle(color: Colors.white70)),
-                  Wrap(
-                    spacing: 8,
-                    children: ['15 Mbps', '35 Mbps', '50 Mbps'].map((bit) => ChoiceChip(
-                      label: Text(bit),
-                      selected: selectedBit == bit,
-                      selectedColor: Colors.white,
-                      labelStyle: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white),
-                      onSelected: (sel) => setStateModal(() => selectedBit = bit),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _exportVideo(selectedRes, selectedFps, selectedBit);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: const Text('RENDER VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text('Exporting to 8-bit SDR (test)', style: TextStyle(color: Colors.white38, fontSize: 10)),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _slider(String label, double min, double max, double val, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13))),
-        Expanded(
-          child: Slider(
-            value: val.clamp(min, max),
-            min: min,
-            max: max,
-            activeColor: Colors.white,
-            inactiveColor: Colors.grey[800],
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
-      ],
-    );
-  }
-    // ✅ FIXED EXPORT – 14 floats, batchSize=1, proper conversion, padded filenames
-  Future<void> _exportVideo(String resolution, String fps, String bitrate) async {
-    final logFile = File('${(await getApplicationDocumentsDirectory()).path}/export_log.txt');
-    await logFile.writeAsString('🟢 Export started at ${DateTime.now()}\n', mode: FileMode.append);
-
-    try {
-      await logFile.writeAsString('✅ Step 0: Log file created\n', mode: FileMode.append);
-
-      // ---- Checks ----
-      if (_controller == null) {
-        await logFile.writeAsString('❌ _controller is null\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller is null')));
-        return;
-      }
-      if (!_controller!.value.isInitialized) {
-        await logFile.writeAsString('❌ Controller not initialized\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Controller not initialized')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 1: Controller OK\n', mode: FileMode.append);
-
-      if (_currentVideoPath == null) {
-        await logFile.writeAsString('❌ _currentVideoPath is null\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video path')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 2: Video path: $_currentVideoPath\n', mode: FileMode.append);
-
-      if (_spirvShader == null) {
-        await logFile.writeAsString('❌ Shader not loaded\n', mode: FileMode.append);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shader not loaded')));
-        return;
-      }
-      await logFile.writeAsString('✅ Step 3: Shader loaded\n', mode: FileMode.append);
-
-      // ---- Capture slider values ----
-      final double brightness = _brightness;
-      final double saturation = _saturation;
-      final double contrast = _contrast;
-      final double sharpness = _sharpness;
-      final double gamma = _gamma;
-      final double hue = _hue;
-      final double temperature = _temperature;
-      final double glowIntensity = _glowIntensity;
-      final double lookMix = _lookMix;
-      final double vignette = _vignette;
-      final double splitToning = _splitToning;
-      final double lutIntensity = _lutIntensity; // ✅ capture LUT intensity
-
-      await logFile.writeAsString('✅ Step 4: Values captured\n', mode: FileMode.append);
-
-      // ---- Progress dialog ----
-      final progressNotifier = ValueNotifier<double>(0.0);
-      final statusNotifier = ValueNotifier<String>('Initializing...');
-      final etaNotifier = ValueNotifier<String>('--:--');
-      final stopwatch = Stopwatch();
-
-      BuildContext? dialogContext;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) {
-          dialogContext = ctx;
-          return AlertDialog(
-            backgroundColor: const Color(0xFF1A1A1A),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Exporting... (Vulkan 32-bit → 8-bit SDR Test)',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
-                const SizedBox(height: 16),
-                ValueListenableBuilder<double>(
-                  valueListenable: progressNotifier,
-                  builder: (_, progress, __) =>
-                      LinearProgressIndicator(value: progress, color: Colors.white),
-                ),
-                const SizedBox(height: 12),
-                ValueListenableBuilder<String>(
-                  valueListenable: statusNotifier,
-                  builder: (_, status, __) => Text(status,
-                      style: const TextStyle(color: Colors.white70)),
-                ),
-                ValueListenableBuilder<String>(
-                  valueListenable: etaNotifier,
-                  builder: (_, eta, __) =>
-                      Text('Estimated time remaining: $eta',
-                          style: const TextStyle(color: Colors.white54)),
-                ),
-              ],
-            ),
-          );
-        },
-      );
-
-      await logFile.writeAsString('✅ Step 5: Dialog shown\n', mode: FileMode.append);
-
-      // ---- Create temporary directories ----
-      final dir = await getTemporaryDirectory();
-      final videoPath = _currentVideoPath!;
-
-      final framesDir = Directory('${dir.path}/export_frames');
-      final processedDir = Directory('${dir.path}/export_processed');
-      if (await framesDir.exists()) await framesDir.delete(recursive: true);
-      if (await processedDir.exists()) await processedDir.delete(recursive: true);
-      await framesDir.create();
-      await processedDir.create();
-
-      await logFile.writeAsString('✅ Step 6: Directories created\n', mode: FileMode.append);
-
-      // ---- Extract frames ----
-      statusNotifier.value = 'Extracting frames...';
-      final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
-      final extractSession = await FFmpegKit.execute(extractCmd);
-      final extractReturnCode = await extractSession.getReturnCode();
-      if (!ReturnCode.isSuccess(extractReturnCode)) {
-        final err = await extractSession.getOutput();
-        throw Exception('Extract failed: ${err ?? "Unknown error"}');
-      }
-      await logFile.writeAsString('✅ Step 7: Frames extracted\n', mode: FileMode.append);
-
-      // ---- List frames ----
-      final frameFiles = await framesDir.list().toList();
-      if (frameFiles.isEmpty) throw Exception('No frames extracted.');
-      await logFile.writeAsString('✅ Step 8: Frame list size: ${frameFiles.length}\n', mode: FileMode.append);
-
-      // ---- Process frames (batchSize = 1) ----
-      final totalFrames = frameFiles.length;
-      int processedFrames = 0;
-      stopwatch.start();
-      const batchSize = 1;
-
-      await logFile.writeAsString('🔄 Entering frame processing loop (batchSize=1)\n', mode: FileMode.append);
-
-      for (int i = 0; i < totalFrames; i += batchSize) {
-        await logFile.writeAsString('🔄 Batch $i starting\n', mode: FileMode.append);
-
-        final batch = frameFiles.skip(i).take(batchSize).toList();
-        await logFile.writeAsString('🔄 Batch size: ${batch.length}\n', mode: FileMode.append);
-
-        try {
-          await Future.wait(batch.map((file) async {
-            if (file is! File) {
-              await logFile.writeAsString('⚠️ Skipping non-file: ${file.path}\n', mode: FileMode.append);
-              return;
-            }
-            await logFile.writeAsString('📄 Processing file: ${file.path}\n', mode: FileMode.append);
-
-            try {
-              final bytes = await file.readAsBytes();
-              final decoded = img.decodeImage(bytes);
-              if (decoded == null) {
-                throw Exception('Failed to decode frame: ${file.path}');
-              }
-              await logFile.writeAsString('✅ Frame decoded\n', mode: FileMode.append);
-
-              final rawInput = decoded.data!.buffer.asUint8List();
-              await logFile.writeAsString('🔧 Building uniforms for frame $processedFrames\n', mode: FileMode.append);
-
-              // ✅ 14 uniforms
-              final uniforms = Float32List(14);
-              uniforms[0] = decoded.width.toDouble();
-              uniforms[1] = decoded.height.toDouble();
-              uniforms[2] = brightness;
-              uniforms[3] = saturation;
-              uniforms[4] = contrast;
-              uniforms[5] = sharpness;
-              uniforms[6] = gamma;
-              uniforms[7] = hue;
-              uniforms[8] = temperature;
-              uniforms[9] = glowIntensity;
-              uniforms[10] = lookMix;
-              uniforms[11] = vignette;
-              uniforms[12] = splitToning;
-              uniforms[13] = lutIntensity;
-
-              await logFile.writeAsString('🔧 Calling processImage for frame $processedFrames\n', mode: FileMode.append);
-
-              final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
-                  .timeout(const Duration(seconds: 30),
-                      onTimeout: () => throw Exception('processImage timed out after 30s'));
-
-              await logFile.writeAsString('✅ processImage returned for frame $processedFrames (bytes: ${outputRaw.length})\n', mode: FileMode.append);
-
-              final gradedImg = img.Image.fromBytes(
-                width: decoded.width,
-                height: decoded.height,
-                bytes: outputRaw.buffer,
-              );
-              final pngBytes = img.encodePng(gradedImg);
-
-              final paddedIndex = (i + 1).toString().padLeft(5, '0');
-              final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
-              await outputFile.writeAsBytes(pngBytes);
-
-              if (!await outputFile.exists()) {
-                throw Exception('Failed to write processed frame to: ${outputFile.path}');
-              }
-              await logFile.writeAsString('✅ Frame $processedFrames written to ${outputFile.path}\n', mode: FileMode.append);
-
-              if (processedFrames == 0) {
-                try {
-                  final testDir = await getTemporaryDirectory();
-                  final testFile = File('${testDir.path}/test_frame.png');
-                  await outputFile.copy(testFile.path);
-                  print('✅ Test frame saved to: ${testFile.path}');
-                } catch (e) {
-                  print('❌ Failed to save test frame: $e');
-                }
-              }
-
-              processedFrames++;
-              final p = processedFrames / totalFrames;
-              progressNotifier.value = p;
-              final percent = (processedFrames / totalFrames * 100).toInt();
-              statusNotifier.value = 'Processing... $percent%';
-              if (stopwatch.elapsed.inSeconds > 5 && processedFrames > 0) {
-                final totalSec = (totalFrames / processedFrames) * stopwatch.elapsed.inSeconds;
-                final remaining = totalSec - stopwatch.elapsed.inSeconds;
-                final mins = remaining ~/ 60;
-                final secs = remaining % 60;
-                etaNotifier.value =
-                    '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-              }
-            } catch (e) {
-              await logFile.writeAsString('❌ Error processing frame: $e\n', mode: FileMode.append);
-              throw Exception('Frame processing failed: $e');
-            }
-          }));
-        } catch (e) {
-          await logFile.writeAsString('❌ Batch failed: $e\n', mode: FileMode.append);
-          throw Exception('Batch processing failed: $e');
-        }
-
-        await logFile.writeAsString('🔄 Batch $i completed\n', mode: FileMode.append);
-      }
-
-      stopwatch.stop();
-      await logFile.writeAsString('✅ Step 9: Frames processed\n', mode: FileMode.append);
-
-      // ---- Encode ----
-      statusNotifier.value = 'Encoding 8-bit SDR video...';
-      final targetFps = int.parse(fps.replaceAll('fps', ''));
-      final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
-      var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
-      var encodeSession = await FFmpegKit.execute(encodeCmd);
-      var encodeReturnCode = await encodeSession.getReturnCode();
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        statusNotifier.value = 'Retrying with mpeg4...';
-        final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
-        encodeSession = await FFmpegKit.execute(fallbackCmd);
-        encodeReturnCode = await encodeSession.getReturnCode();
-      }
-
-      if (!ReturnCode.isSuccess(encodeReturnCode)) {
-        final combined = await encodeSession.getOutput() ?? "No output";
-        final errorSnippet = combined.length > 500
-            ? "...${combined.substring(combined.length - 500)}"
-            : combined;
-        throw Exception('Encode failed:\n$errorSnippet');
-      }
-      await logFile.writeAsString('✅ Step 10: Encoding done\n', mode: FileMode.append);
-
-      // ---- Audio ----
-      statusNotifier.value = 'Extracting audio...';
-      final audioPath = '${dir.path}/extracted_audio.aac';
-      final audioCmd = '-i "$videoPath" -vn -acodec copy "$audioPath"';
-      final audioSession = await FFmpegKit.execute(audioCmd);
-      if (!ReturnCode.isSuccess(await audioSession.getReturnCode())) {
-        print('Audio extraction skipped');
-      }
-      await logFile.writeAsString('✅ Step 11: Audio extracted\n', mode: FileMode.append);
-
-      // ---- Mux ----
-      statusNotifier.value = 'Muxing audio and video...';
-      final finalOutputPath = '${dir.path}/final_export_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final muxCmd = '-i "$silentOutputPath" -i "$audioPath" -c copy -shortest "$finalOutputPath"';
-      final muxSession = await FFmpegKit.execute(muxCmd);
-      if (!ReturnCode.isSuccess(await muxSession.getReturnCode())) {
-        await File(silentOutputPath).copy(File(finalOutputPath).path);
-      }
-      await logFile.writeAsString('✅ Step 12: Muxing done\n', mode: FileMode.append);
-
-      // ---- Save final ----
-      final docsDir = await getApplicationDocumentsDirectory();
-      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-      await File(finalOutputPath).copy(finalFile.path);
-      await logFile.writeAsString('✅ Step 13: Final file saved: ${finalFile.path}\n', mode: FileMode.append);
-
-      // ---- Cleanup ----
-      await framesDir.delete(recursive: true);
-      await processedDir.delete(recursive: true);
-      try { await File(audioPath).delete(); } catch (_) {}
-      try { await File(silentOutputPath).delete(); } catch (_) {}
-
-      // ---- Close dialog and show success ----
-      if (dialogContext != null) Navigator.pop(dialogContext!);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Export saved to:\n${finalFile.path}'),
-            duration: const Duration(seconds: 8),
-          ),
-        );
-      }
-      await logFile.writeAsString('✅ Step 14: Export completed successfully\n', mode: FileMode.append);
-    } catch (e, stack) {
-      await logFile.writeAsString('❌ Export error: $e\n$stack\n', mode: FileMode.append);
-      if (mounted) {
-        try { Navigator.pop(context); } catch (_) {}
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Export Error: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 10),
-          ),
-        );
-      }
-    }
-  }
-    @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.projectName ?? 'Project'),
-        backgroundColor: const Color(0xFF0A0A0A),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(icon: const Icon(Icons.save), onPressed: _saveCurrentProject, tooltip: 'Save Project'),
-          IconButton(icon: const Icon(Icons.aspect_ratio), onPressed: _showRatioSelector, tooltip: 'Aspect Ratio'),
-          IconButton(icon: const Icon(Icons.folder_open), onPressed: _pickVideo, tooltip: 'Import Video'),
-          // ✅ LUT BUTTON
-          IconButton(
-            icon: const Icon(Icons.color_lens),
-            onPressed: _loadLut,
-            tooltip: 'Load LUT',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: Colors.black,
-              child: Center(
-                child: _controller != null && _controller!.value.isInitialized
-                    ? AspectRatio(
-                        aspectRatio: _getAspectRatioValue(_selectedRatio),
-                        child: VideoPlayer(_controller!),
-                      )
-                    : Container(
-                        color: const Color(0xFF1A1A1A),
-                        child: const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.play_circle_outline, size: 60, color: Colors.white24),
-                              SizedBox(height: 8),
-                              Text('Tap Import to add video', style: TextStyle(color: Colors.white38)),
-                            ],
-                          ),
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          Container(
-            color: const Color(0xFF111111),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
-                  onPressed: _controller != null && _controller!.value.isInitialized
-                      ? () => setState(() {
-                          if (_controller!.value.isPlaying) {
-                            _controller!.pause();
-                            _isPlaying = false;
-                          } else {
-                            _controller!.play();
-                            _isPlaying = true;
-                          }
-                        })
-                      : null,
-                ),
-                Expanded(
-                  child: Slider(
-                    value: _controller != null && _controller!.value.isInitialized
-                        ? _controller!.value.position.inSeconds.toDouble()
-                        : 0.0,
-                    min: 0,
-                    max: _controller != null && _controller!.value.isInitialized
-                        ? _controller!.value.duration.inSeconds.toDouble()
-                        : 1.0,
-                    activeColor: Colors.white,
-                    inactiveColor: Colors.grey[800],
-                    onChanged: (val) {
-                      if (_controller != null && _controller!.value.isInitialized) {
-                        _controller!.seekTo(Duration(milliseconds: (val * 1000).round()));
-                      }
-                    },
-                  ),
-                ),
-                Text(
-                  _controller != null && _controller!.value.isInitialized
-                      ? '${_controller!.value.position.inSeconds ~/ 60}:${(_controller!.value.position.inSeconds % 60).toString().padLeft(2, '0')}'
-                      : '--:--',
-                  style: const TextStyle(color: Colors.white54),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            color: const Color(0xFF141414),
-            child: Column(
-              children: [
-                TabBar(
-                  controller: _tabController,
-                  indicatorColor: Colors.white,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.grey,
-                  tabs: const [
-                    Tab(icon: Icon(Icons.tune), text: 'Adjust'),
-                    Tab(icon: Icon(Icons.auto_awesome), text: 'Presets'),
-                    Tab(icon: Icon(Icons.save_alt), text: 'Export'),
-                  ],
-                ),
-                SizedBox(
-                  height: 190,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      // Adjust tab
-                      ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        children: [
-                          _slider('Bright', -1.0, 1.0, _brightness, (v) => setState(() => _brightness = v)),
-                          _slider('Sat', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
-                          _slider('Contrast', 0.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
-                          _slider('Sharp', 0.0, 5.0, _sharpness, (v) => setState(() => _sharpness = v)),
-                          _slider('Gamma', 0.1, 2.5, _gamma, (v) => setState(() => _gamma = v)),
-                          _slider('Hue', -180, 180, _hue, (v) => setState(() => _hue = v)),
-                          _slider('Temp', 2000, 12000, _temperature, (v) => setState(() => _temperature = v)),
-                          _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
-                          _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
-                          _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
-                        ],
-                      ),
-                      // Presets tab
-                      GridView.count(
-                        crossAxisCount: 3,
-                        padding: const EdgeInsets.all(8),
-                        children: ['Gojo Edit', 'Magic Bullet', 'Teal & Orange', 'Film Grain', 'Vintage', 'Cinematic'].map((name) {
-                          return GestureDetector(
-                            onTap: () => _applyPreset(name),
-                            child: Container(
-                              margin: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[900],
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey[800]!),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.image, color: Colors.white24, size: 30),
-                                  const SizedBox(height: 4),
-                                  Text(name, style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
-                                ],
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      // Export tab
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              ElevatedButton.icon(
-                                onPressed: _isPreviewing ? null : _previewFrame,
-                                icon: const Icon(Icons.image, color: Colors.black),
-                                label: Text(_isPreviewing ? 'Loading...' : 'Preview Frame'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.cyanAccent,
-                                  foregroundColor: Colors.black,
-                                ),
-                              ),
-                              ElevatedButton(
-                                onPressed: _showExportSheet,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 16),
-                                ),
-                                child: const Text('EXPORT VIDEO', style: TextStyle(fontWeight: FontWeight.bold)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          const Text('Preview applies Vulkan 32-bit grading to the frame',
-                            style: TextStyle(color: Colors.white38, fontSize: 10)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showLog,
-        child: const Icon(Icons.bug_report),
-        backgroundColor: Colors.cyanAccent,
-      ),
-    );
   }
 
   @override
   void dispose() {
-    _controller?.removeListener(_listener);
-    _controller?.dispose();
-    cleanupVulkan();
+    _videoController.dispose();
     super.dispose();
+  }
+
+  // ✅ SLIDER WIDGET
+  Widget _buildSlider({
+    required String label,
+    required double min,
+    required double max,
+    required double value,
+    required Function(double) onChanged,
+    double step = 0.01,
+    String unit = '',
+    String? description,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            Text(
+              '${value.toStringAsFixed(2)}$unit',
+              style: const TextStyle(
+                fontSize: 12,
+                fontFamily: 'monospace',
+                color: Color(0xFF06B6D4),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        if (description != null)
+          Text(
+            description,
+            style: const TextStyle(fontSize: 9, color: Colors.white54),
+          ),
+        Slider(
+          min: min,
+          max: max,
+          value: value,
+          onChanged: onChanged,
+          activeColor: const Color(0xFF06B6D4),
+          inactiveColor: Colors.white12,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 1024;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF121212),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.project.name),
+            Text(
+              _projectData.videoName,
+              style: const TextStyle(fontSize: 10, color: Colors.white54),
+            ),
+          ],
+        ),
+        actions: [
+          Tooltip(
+            message: 'Save Project',
+            child: IconButton(
+              icon: const Icon(Icons.save),
+              onPressed: _handleSaveProject,
+            ),
+          ),
+        ],
+      ),
+      body: isMobile
+          ? _buildMobileLayout()
+          : _buildDesktopLayout(),
+    );
+  }
+
+  // ✅ DESKTOP LAYOUT (Main UI Port from React)
+  Widget _buildDesktopLayout() {
+    return Row(
+      children: [
+        // ✅ MAIN VIDEO VIEWPORT (8/12 cols)
+        Expanded(
+          flex: 8,
+          child: Column(
+            children: [
+              // ✅ HEADER BAR
+              Container(
+                height: 48,
+                color: const Color(0xFF121212),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Left: Aspect Ratio, LUT, Import
+                    Row(
+                      children: [
+                        Tooltip(
+                          message: 'Change Aspect Ratio',
+                          child: ElevatedButton.icon(
+                            onPressed: () => _showAspectRatioDialog(),
+                            icon: const Icon(Icons.aspect_ratio, size: 16),
+                            label: Text(_selectedAspectRatio),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white12,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: 'Load 3D LUT',
+                          child: ElevatedButton.icon(
+                            onPressed: _loadCustomLut,
+                            icon: const Icon(Icons.palette, size: 16),
+                            label: Text(_projectData.lutName ?? '3D LUT'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _projectData.lutName != null
+                                  ? const Color(0xFF06B6D4).withOpacity(0.2)
+                                  : Colors.white12,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: 'Import Video',
+                          child: ElevatedButton.icon(
+                            onPressed: _importVideo,
+                            icon: const Icon(Icons.folder_open, size: 16),
+                            label: const Text('Import'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white12,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    // Right: Save Project
+                    Tooltip(
+                      message: 'Save Project',
+                      child: ElevatedButton.icon(
+                        onPressed: _handleSaveProject,
+                        icon: const Icon(Icons.save, size: 16),
+                        label: const Text('Save'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white12,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // ✅ VIDEO CANVAS VIEWPORT
+              Expanded(
+                child: Container(
+                  color: const Color(0xFF050505),
+                  padding: const EdgeInsets.all(12),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Video
+                      if (_videoController.value.isInitialized)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: AspectRatio(
+                            aspectRatio: _videoController.value.aspectRatio,
+                            child: VideoPlayer(_videoController),
+                          ),
+                        ),
+                      // Toast
+                      if (_toastMessage != null)
+                        Positioned(
+                          top: 16,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF06B6D4),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              _toastMessage!,
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      // Play/Pause + Split + Bypass buttons
+                      Positioned(
+                        bottom: 16,
+                        left: 16,
+                        child: Wrap(
+                          spacing: 8,
+                          children: [
+                            ElevatedButton(
+                              onPressed: _togglePlay,
+                              style: ElevatedButton.styleFrom(
+                                shape: const CircleBorder(),
+                                backgroundColor: Colors.white,
+                                padding: const EdgeInsets.all(8),
+                              ),
+                              child: Icon(
+                                _isPlaying ? Icons.pause : Icons.play_arrow,
+                                color: Colors.black,
+                              ),
+                            ),
+                            ElevatedButton(
+                              onPressed: () => setState(() => _splitMode = !_splitMode),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _splitMode
+                                    ? const Color(0xFF06B6D4)
+                                    : Colors.black54,
+                              ),
+                              child: const Text('A/B Split'),
+                            ),
+                            ElevatedButton(
+                              onPressed: () => setState(() => _bypassGrading = !_bypassGrading),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _bypassGrading
+                                    ? Colors.orange
+                                    : Colors.black54,
+                              ),
+                              child: const Text('Bypass'),
+                            ),
+                            ElevatedButton(
+                              onPressed: () => setState(() => _showScopes = !_showScopes),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _showScopes
+                                    ? const Color(0xFF06B6D4)
+                                    : Colors.black54,
+                              ),
+                              child: const Text('Scopes'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Fullscreen Button
+                      if (!_isFullscreenPreview)
+                        Positioned(
+                          bottom: 16,
+                          right: 16,
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() => _isFullscreenPreview = true);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white12,
+                            ),
+                            child: const Icon(Icons.fullscreen),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              // ✅ SCRUBBER & TIME
+              Container(
+                color: const Color(0xFF111111),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        min: 0,
+                        max: _duration,
+                        value: _currentTime,
+                        onChanged: _handleSeek,
+                        activeColor: const Color(0xFF06B6D4),
+                        inactiveColor: Colors.white12,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_currentTime.toInt()}:${((_currentTime % 60).toInt()).toString().padLeft(2, '0')} / ${_duration.toInt()}:${((_duration % 60).toInt()).toString().padLeft(2, '0')}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Colors.white54,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        // ✅ RIGHT SIDEBAR - ADJUSTMENT CONTROLS (4/12 cols)
+        Container(
+          width: 400,
+          color: const Color(0xFF0A0A0A),
+          child: Column(
+            children: [
+              // Tab Headers
+              Container(
+                color: const Color(0xFF0E0E0E),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _buildTabButton('Adjust', 'adjust'),
+                    ),
+                    Expanded(
+                      child: _buildTabButton('Presets', 'presets'),
+                    ),
+                    Expanded(
+                      child: _buildTabButton('Export', 'export'),
+                    ),
+                  ],
+                ),
+              ),
+              // Tab Content
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: _activeTab == 'adjust'
+                      ? _buildAdjustPanel()
+                      : _activeTab == 'presets'
+                          ? _buildPresetsPanel()
+                          : _buildExportPanel(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ✅ TAB BUTTON
+  Widget _buildTabButton(String label, String tabId) {
+    final isActive = _activeTab == tabId;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: isActive ? const Color(0xFF06B6D4) : Colors.transparent,
+            width: 2,
+          ),
+        ),
+      ),
+      child: TextButton(
+        onPressed: () => setState(() => _activeTab = tabId),
+        style: TextButton.styleFrom(
+          backgroundColor: isActive ? const Color(0xFF06B6D4).withOpacity(0.1) : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isActive ? const Color(0xFF06B6D4) : Colors.white54,
+            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ ADJUST PANEL (Color, Curves, Sharpness, Bloom, etc.)
+  Widget _buildAdjustPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 16,
+      children: [
+        // Sub-category Pills
+        Wrap(
+          spacing: 8,
+          children: [
+            _buildCategoryPill('Color', 'color'),
+            _buildCategoryPill('Sharpness', 'sharpness'),
+            _buildCategoryPill('Bloom', 'bloom'),
+            _buildCategoryPill('Grade', 'grade'),
+          ],
+        ),
+        const Divider(color: Colors.white12),
+        // Reset Button
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _resetParameters,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Reset all'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white54,
+            ),
+          ),
+        ),
+        // Dynamic Controls Based on Category
+        if (_adjustCategory == 'color') ...[
+          _buildSlider(
+            label: 'Brightness',
+            min: -3.0,
+            max: 3.0,
+            value: _projectData.brightness,
+            onChanged: (v) => setState(() => _projectData.brightness = v),
+            description: 'Exposure compensation in full EV stops',
+          ),
+          _buildSlider(
+            label: 'Contrast',
+            min: 0.0,
+            max: 3.0,
+            value: _projectData.contrast,
+            onChanged: (v) => setState(() => _projectData.contrast = v),
+            description: 'Punchy 32-bit S-curve contrast',
+          ),
+          _buildSlider(
+            label: 'Saturation',
+            min: 0.0,
+            max: 3.0,
+            value: _projectData.saturation,
+            onChanged: (v) => setState(() => _projectData.saturation = v),
+            description: 'Rec.709 color vibrancy',
+          ),
+          _buildSlider(
+            label: 'Gamma',
+            min: 0.1,
+            max: 2.5,
+            value: _projectData.gamma,
+            onChanged: (v) => setState(() => _projectData.gamma = v),
+            description: 'Non-linear power curve balance',
+          ),
+          _buildSlider(
+            label: 'Hue Rotate',
+            min: -180,
+            max: 180,
+            value: _projectData.hue,
+            onChanged: (v) => setState(() => _projectData.hue = v),
+            unit: '°',
+            description: '3x3 RGB color rotation matrix',
+          ),
+          _buildSlider(
+            label: 'Color Temp',
+            min: 2000,
+            max: 12000,
+            value: _projectData.temperature,
+            onChanged: (v) => setState(() => _projectData.temperature = v),
+            unit: 'K',
+            description: 'Kelvin white balance (6500K neutral)',
+          ),
+        ],
+        if (_adjustCategory == 'sharpness') ...[
+          _buildSlider(
+            label: 'Sharpness',
+            min: 0.0,
+            max: 6.0,
+            value: _projectData.sharpness,
+            onChanged: (v) => setState(() => _projectData.sharpness = v),
+            step: 0.05,
+            description: 'Laplacian high-pass unsharp mask convolution',
+          ),
+        ],
+        if (_adjustCategory == 'bloom') ...[
+          _buildSlider(
+            label: 'Bloom Intensity',
+            min: 0.0,
+            max: 1.0,
+            value: _projectData.glowIntensity,
+            onChanged: (v) => setState(() => _projectData.glowIntensity = v),
+            step: 0.01,
+            description: 'Smooth continuous 32-bit Gaussian radiance',
+          ),
+        ],
+        if (_adjustCategory == 'grade') ...[
+          _buildSlider(
+            label: 'Look Mix (Teal/Orange)',
+            min: 0.0,
+            max: 1.0,
+            value: _projectData.lookMix,
+            onChanged: (v) => setState(() => _projectData.lookMix = v),
+            description: 'Cinematic Hollywood blockbuster matrix',
+          ),
+          _buildSlider(
+            label: 'Split Toning',
+            min: 0.0,
+            max: 1.0,
+            value: _projectData.splitToning,
+            onChanged: (v) => setState(() => _projectData.splitToning = v),
+            description: 'Deep navy shadow tone vs warm golden highlight split',
+          ),
+          _buildSlider(
+            label: 'Vignette Darkness',
+            min: 0.0,
+            max: 1.0,
+            value: _projectData.vignette,
+            onChanged: (v) => setState(() => _projectData.vignette = v),
+            step: 0.01,
+            description: 'Intense radial corner falloff darkening',
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCategoryPill(String label, String categoryId) {
+    final isActive = _adjustCategory == categoryId;
+    return FilterChip(
+      label: Text(label),
+      backgroundColor: isActive ? const Color(0xFF06B6D4) : Colors.white12,
+      labelStyle: TextStyle(
+        color: isActive ? Colors.black : Colors.white,
+        fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+      ),
+      onSelected: (selected) {
+        if (selected) {
+          setState(() => _adjustCategory = categoryId);
+        }
+      },
+    );
+  }
+
+  // ✅ PRESETS PANEL
+  Widget _buildPresetsPanel() {
+    return const Column(
+      spacing: 8,
+      children: [
+        Text('Coming soon: Built-in color presets'),
+      ],
+    );
+  }
+
+  // ✅ EXPORT PANEL
+  Widget _buildExportPanel() {
+    return Column(
+      spacing: 12,
+      children: [
+        ElevatedButton.icon(
+          onPressed: () => _showToast('Preview feature coming soon'),
+          icon: const Icon(Icons.preview),
+          label: const Text('Preview Graded Frame'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF06B6D4),
+            foregroundColor: Colors.black,
+            minimumSize: const Size.fromHeight(40),
+          ),
+        ),
+        ElevatedButton.icon(
+          onPressed: () => _showToast('Export feature coming soon'),
+          icon: const Icon(Icons.download),
+          label: const Text('EXPORT MASTER VIDEO'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            minimumSize: const Size.fromHeight(40),
+          ),
+        ),
+        const Text(
+          'MP4 / WebM / MOV Encodings • 168k-384k Audio • Vulkan 32-Bit Floating Point Pipeline',
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.white54,
+            fontFamily: 'monospace',
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ✅ MOBILE LAYOUT
+  Widget _buildMobileLayout() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Video
+          _videoController.value.isInitialized
+              ? AspectRatio(
+                  aspectRatio: _videoController.value.aspectRatio,
+                  child: VideoPlayer(_videoController),
+                )
+              : const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
+          // Controls
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              spacing: 16,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: _togglePlay,
+                      child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => setState(() => _splitMode = !_splitMode),
+                      child: const Text('Split'),
+                    ),
+                    ElevatedButton(
+                      onPressed: _toggleMute,
+                      child: Icon(_isMuted ? Icons.volume_off : Icons.volume_up),
+                    ),
+                  ],
+                ),
+                Slider(
+                  min: 0,
+                  max: _duration,
+                  value: _currentTime,
+                  onChanged: _handleSeek,
+                ),
+                _buildAdjustPanel(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAspectRatioDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Text('Select Aspect Ratio'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: ['4:5', '9:16', '1:1', '16:9', '21:9'].map((ratio) {
+              return ListTile(
+                title: Text(ratio),
+                selected: _selectedAspectRatio == ratio,
+                onTap: () {
+                  setState(() => _selectedAspectRatio = ratio);
+                  Navigator.pop(context);
+                },
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
   }
 }
