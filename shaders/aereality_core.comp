@@ -2,26 +2,27 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;   // 16-bit float
-layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;  // 16-bit float
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
 
 layout(set = 0, binding = 2, std140) uniform Uniforms {
     vec2 resolution;
-    float brightness;    // EV stops: 0 = neutral
-    float saturation;    // 1 = neutral
-    float contrast;      // 1 = neutral
-    float sharpness;     // unused for now
-    float gamma;         // 1 = neutral
-    float hue;           // degrees
-    float temperature;   // Kelvin
-    float glowIntensity; // bloom intensity
-    float lookMix;       // teal/orange mix
-    float vignette;      // vignette amount
-    float splitToning;   // split toning amount
-    float lutIntensity;  // 0.0 = no LUT, 1.0 = full LUT (unused)
+    float brightness;
+    float saturation;
+    float contrast;
+    float sharpness;
+    float gamma;
+    float hue;
+    float temperature;
+    float glowIntensity;
+    float lookMix;
+    float vignette;
+    float splitToning;
+    float edgeDarken;
+    float denoise;       // 0.0 = off, 1.0 = strong
+    float cellShading;   // 0.0 = off, 1.0 = strong black lines
+    float colourCrush;   // 0.0 = off, 1.0 = heavy posterization
 } u;
-
-layout(set = 0, binding = 3) uniform sampler3D lutSampler;
 
 // ---------- HELPERS ----------
 vec3 srgbToLinear(vec3 srgb) {
@@ -124,22 +125,69 @@ vec3 largeBloom(ivec2 pos, ivec2 size, float threshold, float intensity) {
     return clamp(bloom * scale, vec3(0.0), vec3(8.0));
 }
 
+// ---------- EDGE DARKEN ----------
+float edgeDarkenFactor(vec2 uv, float amount) {
+    float dist = distance(uv, vec2(0.5));
+    float darken = 1.0 - amount * smoothstep(0.3, 0.9, dist);
+    return clamp(darken, 0.0, 1.0);
+}
+
+// ---------- DENOISE (3x3 box blur) ----------
+vec3 denoise3x3(ivec2 pos, ivec2 size) {
+    vec3 result = vec3(0.0);
+    float total = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
+            result += imageLoad(inputImage, samplePos).rgb;
+            total += 1.0;
+        }
+    }
+    return result / total;
+}
+
+// ---------- CELL SHADING (Sobel edge detection) ----------
+float sobelEdge(ivec2 pos, ivec2 size) {
+    // Convert to grayscale
+    float gx = 0.0, gy = 0.0;
+    float kernelX[9] = float[9](-1,0,1, -2,0,2, -1,0,1);
+    float kernelY[9] = float[9](-1,-2,-1, 0,0,0, 1,2,1);
+    int idx = 0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
+            vec3 sample = imageLoad(inputImage, samplePos).rgb;
+            float lum = dot(sample, vec3(0.299, 0.587, 0.114));
+            gx += lum * kernelX[idx];
+            gy += lum * kernelY[idx];
+            idx++;
+        }
+    }
+    return sqrt(gx*gx + gy*gy);
+}
+
 // ---------- DITHER ----------
 float dither(vec2 pos) {
     float d = dot(pos, vec2(12.9898, 78.233));
     return fract(sin(d) * 43758.5453);
 }
 
+// ---------- MAIN ----------
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(inputImage);
     if (pos.x >= size.x || pos.y >= size.y) return;
 
     vec4 color = imageLoad(inputImage, pos);
-
-    // ---------- Grading ----------
     vec3 linear = srgbToLinear(color.rgb);
 
+    // ---------- 1. DENOISE (applied early) ----------
+    if (u.denoise > 0.0) {
+        vec3 blurred = denoise3x3(pos, size);
+        linear = mix(linear, blurred, u.denoise);
+    }
+
+    // ---------- 2. GRADING ----------
     float gain = pow(2.0, u.brightness);
     linear *= gain;
 
@@ -166,18 +214,37 @@ void main() {
     float vig = vignetteEffect(uv, u.vignette);
     linear *= vig;
 
+    // ---------- 3. EDGE DARKEN ----------
+    float edge = edgeDarkenFactor(uv, u.edgeDarken);
+    linear *= edge;
+
     linear = splitTone(linear, u.splitToning);
 
-    // ---------- LUT (unused, but kept for compatibility) ----------
-    // if (u.lutIntensity > 0.0) {
-    //     vec3 lutColor = texture(lutSampler, linear).rgb;
-    //     linear = mix(linear, lutColor, u.lutIntensity);
-    // }
+    // ---------- 4. CELL SHADING (applied after grading to keep lines sharp) ----------
+    if (u.cellShading > 0.0) {
+        float edgeStrength = sobelEdge(pos, size);
+        float threshold = mix(0.8, 0.3, u.cellShading); // lower threshold = more lines
+        float line = 1.0 - smoothstep(threshold, 1.0, edgeStrength);
+        // Darken the line (multiply) and blend with original
+        vec3 lineColor = vec3(0.0); // pure black lines
+        linear = mix(linear, linear * line, u.cellShading);
+        // Optionally add pure black overlay
+        float lineFactor = smoothstep(threshold, threshold + 0.1, edgeStrength);
+        linear = mix(linear, vec3(0.0), lineFactor * u.cellShading);
+    }
+
+    // ---------- 5. COLOUR CRUSH (posterization) ----------
+    if (u.colourCrush > 0.0) {
+        // Map 0.0-1.0 to 4-256 steps
+        float steps = mix(256.0, 4.0, u.colourCrush);
+        linear = floor(linear * steps) / steps;
+    }
 
     linear = clamp(linear, vec3(0.0), vec3(1.0));
 
     vec3 srgb = linearToSrgb(linear);
 
+    // Dither
     float d = (dither(vec2(pos)) - 0.5) * 0.008;
     srgb += d;
     srgb = clamp(srgb, vec3(0.0), vec3(1.0));
