@@ -544,6 +544,120 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+  // ---------- PROJECT SETUP SCREEN (continued) ----------
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('New Project'),
+        backgroundColor: const Color(0xFF0A0A0A),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ... (from the previous part, the rest of the build method) ...
+            // I'll paste the full build method to avoid truncation.
+            const Text('PROJECT NAME', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 4),
+            TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+              decoration: InputDecoration(
+                hintText: 'Untitled Project',
+                hintStyle: const TextStyle(color: Colors.white38),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.grey[800]!),
+                ),
+                focusedBorder: const UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF00E5FF)),
+                ),
+              ),
+              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Untitled Project',
+              controller: TextEditingController(text: _projectName),
+            ),
+            const SizedBox(height: 20),
+            const Text('SOURCE FOOTAGE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () async {
+                final result = await FilePicker.platform.pickFiles(type: FileType.video);
+                if (result != null) {
+                  setState(() => _selectedFile = File(result.files.single.path!));
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[700]!, style: BorderStyle.solid),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(_selectedFile == null ? Icons.cloud_upload : Icons.check_circle, color: const Color(0xFF00E5FF), size: 40),
+                    const SizedBox(height: 8),
+                    Text(_selectedFile == null ? 'Click to select footage or image from device' : _selectedFile!.path.split('/').last,
+                      style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('CANVAS ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _aspectRatios.map((ratio) => ChoiceChip(
+                label: Text(ratio, style: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70)),
+                selected: _selectedAspect == ratio,
+                selectedColor: const Color(0xFF00E5FF),
+                backgroundColor: Colors.grey[900],
+                onSelected: (sel) => setState(() => _selectedAspect = ratio),
+              )).toList(),
+            ),
+            const SizedBox(height: 20),
+            const Text('PROJECT PIPELINE SPECS', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Canvas Aspect Ratio', style: TextStyle(color: Colors.white54)),
+                      Text(_selectedAspect, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Quality / Resolution', style: TextStyle(color: Colors.white54)),
+                      DropdownButton<String>(
+                        value: _selectedRes,
+                        items: _resolutions.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+                        onChanged: (v) => setState(() => _selectedRes = v!),
+                        dropdownColor: Colors.grey[900],
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
             Row(
               children: [
                 Expanded(
@@ -615,6 +729,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
     );
   }
 }
+
 // ---------- PROJECTS SCREEN ----------
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key});
@@ -836,36 +951,33 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- TIMELINE PREVIEW (FIXED) ----------
+  // ---------- TIMELINE PREVIEW ----------
   void _startTimelinePreview() {
-  _previewTimer?.cancel();
-  _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
-    if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
-    _isUpdating = true;   // ✅ set to true before processing
-    try {
-      final frame = await _controller!.toImage();
-      if (frame == null) return;
-      final processed = await _processFrameWithVulkan(frame);
-      if (mounted) {
-        setState(() {
-          _processedImage = processed;
-        });
+    _previewTimer?.cancel();
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
+      if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
+      _isUpdating = true;
+      try {
+        final frame = await _controller!.toImage();
+        if (frame == null) return;
+        final processed = await _processFrameWithVulkan(frame);
+        if (mounted) {
+          setState(() {
+            _processedImage = processed;
+          });
+        }
+        frame.dispose();
+      } catch (e) {
+        // ignore
       }
-      frame.dispose();
-    } catch (e) {
-      // ignore
-    }
-    _isUpdating = false;  // ✅ set back to false after processing
-  });
+      _isUpdating = false;
+    });
   }
 
   void _stopTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = null;
   }
-
-  // ---------- ONLY ONE dispose ----------
-  
 
   // ---------- PICK VIDEO ----------
   Future<void> _pickVideo() async {
@@ -878,7 +990,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       await File(file.path!).copy(cachedPath);
       _loadVideo(cachedPath);
     }
-  
+  }
 
   // ---------- SHOW LOG ----------
   Future<void> _showLog() async { /* implement if needed */ }
@@ -977,8 +1089,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
     return completer.future;
   }
-
-  // ---------- VULKAN PROCESSING (18 floats) ----------
+    // ---------- VULKAN PROCESSING (18 floats) ----------
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
@@ -1015,7 +1126,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
     return completer.future;
   }
-    // ---------- SINGLE PREVIEW FRAME ----------
+
+  // ---------- SINGLE PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
     // you can keep this empty or implement it if needed
   }
@@ -1444,7 +1556,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      // ---------- Adjust tab ----------
+                      // Adjust tab
                       ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         children: [
@@ -1464,7 +1576,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Colour Crush', 0.0, 1.0, _colourCrush, (v) => setState(() => _colourCrush = v)),
                         ],
                       ),
-                      // ---------- Presets tab ----------
+                      // Presets tab
                       GridView.count(
                         crossAxisCount: 3,
                         padding: const EdgeInsets.all(8),
@@ -1490,7 +1602,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           );
                         }).toList(),
                       ),
-                      // ---------- Export tab ----------
+                      // Export tab
                       Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
