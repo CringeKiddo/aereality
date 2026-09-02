@@ -764,23 +764,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isPlaying = false;
   String? _currentVideoPath;
 
-  // Grading params – updated ranges
-  double _brightness = 0.0;      // range 0.0 – 3.0
-  double _saturation = 1.0;      // range -2.0 – 2.0
-  double _contrast = 1.0;        // range -2.0 – 2.0
-  double _sharpness = 0.0;       // range 0.0 – 3.0
-  double _gamma = 1.0;           // range -2.0 – 2.0 (shader clamps to positive)
-  double _hue = 0.0;             // range -180 – 180
-  double _temperature = 6500.0;  // range 2000 – 12000
-  double _glowIntensity = 0.0;   // range 0.0 – 3.0
-  double _lookMix = 0.0;         // range 0.0 – 3.0
-  double _vignette = 0.0;        // range 0.0 – 3.0
-  double _splitToning = 0.0;     // range 0.0 – 3.0
-  double _edgeDarken = 0.0;      // range 0.0 – 3.0
-  double _denoise = 0.0;         // range 0.0 – 3.0
-  double _cellShading = 0.0;     // range 0.0 – 3.0
-  double _colourCrush = 0.0;     // range 0.0 – 0.5 (clamped in UI)
-  double _cellThickness = 0.3;   // range 0.0 – 3.0
+  // Grading params – expanded ranges
+  double _brightness = 0.0;      // 0.0 – 3.0
+  double _saturation = 1.0;      // -2.0 – 2.0
+  double _contrast = 1.0;        // -2.0 – 2.0
+  double _sharpness = 0.0;       // 0.0 – 3.0
+  double _gamma = 1.0;           // -2.0 – 2.0 (shader clamps positive)
+  double _hue = 0.0;             // -180 – 180
+  double _temperature = 6500.0;  // 2000 – 12000
+  double _glowIntensity = 0.0;   // 0.0 – 3.0
+  double _lookMix = 0.0;         // 0.0 – 3.0
+  double _vignette = 0.0;        // 0.0 – 3.0
+  double _splitToning = 0.0;     // 0.0 – 3.0
+  double _edgeDarken = 0.0;      // 0.0 – 3.0
+  double _denoise = 0.0;         // 0.0 – 3.0
+  double _cellShading = 0.0;     // 0.0 – 3.0
+  double _colourCrush = 0.0;     // 0.0 – 0.5 (UI clamped)
+  double _cellThickness = 0.3;   // 0.0 – 3.0
 
   String _selectedRatio = "16:9";
   late TabController _tabController;
@@ -859,13 +859,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _controller!.addListener(_listener);
           _controller!.play();
           _isPlaying = true;
-          // Start preview timer if not already running
           _startTimelinePreview();
         });
     });
   }
 
-  // ---------- TIMELINE PREVIEW (33ms ≈ 30fps) ----------
+  // ---------- TIMELINE PREVIEW (33ms) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
@@ -901,7 +900,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _pickVideo() async {
     // Clean up old Vulkan resources before loading new video
     cleanupVulkan();
-    // Re-init shader
     if (_spirvShader != null) {
       initVulkan(_spirvShader!);
     }
@@ -1070,7 +1068,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- SINGLE PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
-    // Optional: manually trigger a frame render if needed
+    // Optional – can be left empty
   }
 
   // ---------- EXPORT SHEET ----------
@@ -1188,7 +1186,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             inactiveColor: Colors.grey[800],
             onChanged: (v) {
               onChanged(v);
-              // If paused, still update preview via timer (it's always running now)
+              // Timer always runs, so no need to trigger separately
             },
           ),
         ),
@@ -1339,7 +1337,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           uniforms[14] = colourCrush;
           uniforms[15] = cellThickness;
 
-          // Process frame – use canvas size for export (same as preview canvas)
+          // Process frame using canvas size (scaling happens in shader)
           final outputRaw = await Future(() => processImage(
             rawInput,
             decoded.width,
@@ -1396,18 +1394,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      // Save to Movies directory using MediaStore (or fallback)
+      // Save to Movies directory with fallback
       String savedPath;
       try {
-        // Try to save to external Movies folder
-        final moviesDir = await getExternalStoragePublicDirectory('Movies');
-        if (moviesDir != null) {
+        final externalDir = await getExternalStorageDirectory();
+        if (externalDir != null) {
+          final moviesDir = Directory('${externalDir.path}/Movies');
+          if (!await moviesDir.exists()) {
+            await moviesDir.create(recursive: true);
+          }
           final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
           final destFile = File('${moviesDir.path}/$fileName');
           await File(finalOutputPath).copy(destFile.path);
           savedPath = destFile.path;
         } else {
-          // Fallback to app documents
+          // fallback to app documents
           final docsDir = await getApplicationDocumentsDirectory();
           final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
           final destFile = File('${docsDir.path}/$fileName');
@@ -1415,7 +1416,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           savedPath = destFile.path;
         }
       } catch (e) {
-        // Fallback to app documents
+        // fallback to app documents
         final docsDir = await getApplicationDocumentsDirectory();
         final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
         final destFile = File('${docsDir.path}/$fileName');
@@ -1519,7 +1520,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           if (_controller!.value.isPlaying) {
                             _controller!.pause();
                             _isPlaying = false;
-                            // Keep preview timer running
                           } else {
                             _controller!.play();
                             _isPlaying = true;
