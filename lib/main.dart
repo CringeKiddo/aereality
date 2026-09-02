@@ -75,7 +75,7 @@ class ProjectData {
     this.denoise = 0.0,
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
-    this.cellThickness = 0.3, // ✅ added — shader's 16th grading param, was missing entirely
+    this.cellThickness = 0.3,
     this.aspectRatio = "16:9",
   });
 
@@ -96,7 +96,7 @@ class ProjectData {
     'denoise': denoise,
     'cellShading': cellShading,
     'colourCrush': colourCrush,
-    'cellThickness': cellThickness, // ✅ added
+    'cellThickness': cellThickness,
     'aspectRatio': aspectRatio,
   };
 
@@ -117,7 +117,7 @@ class ProjectData {
     denoise: json['denoise'] ?? 0.0,
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
-    cellThickness: json['cellThickness'] ?? 0.3, // ✅ added
+    cellThickness: json['cellThickness'] ?? 0.3,
     aspectRatio: json['aspectRatio'] ?? "16:9",
   );
 }
@@ -152,7 +152,7 @@ class StoredProject {
     this.denoise = 0.0,
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
-    this.cellThickness = 0.3, // ✅ added
+    this.cellThickness = 0.3,
     this.aspectRatio = "16:9",
     required this.lastOpened,
   });
@@ -176,7 +176,7 @@ class StoredProject {
     'denoise': denoise,
     'cellShading': cellShading,
     'colourCrush': colourCrush,
-    'cellThickness': cellThickness, // ✅ added
+    'cellThickness': cellThickness,
     'aspectRatio': aspectRatio,
     'lastOpened': lastOpened.toIso8601String(),
   };
@@ -200,7 +200,7 @@ class StoredProject {
     denoise: json['denoise'] ?? 0.0,
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
-    cellThickness: json['cellThickness'] ?? 0.3, // ✅ added
+    cellThickness: json['cellThickness'] ?? 0.3,
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
   );
@@ -222,7 +222,7 @@ class StoredProject {
     denoise: denoise,
     cellShading: cellShading,
     colourCrush: colourCrush,
-    cellThickness: cellThickness, // ✅ added
+    cellThickness: cellThickness,
     aspectRatio: aspectRatio,
   );
 }
@@ -268,6 +268,7 @@ class ProjectManager {
     await saveProjects(projects);
   }
 }
+
 // ---------- HOME SCREEN ----------
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -379,6 +380,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
 // ---------- SETTINGS ----------
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -597,7 +599,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                   }
                   Navigator.pushReplacement(
                     context,
-                                        MaterialPageRoute(
+                    MaterialPageRoute(
                       builder: (_) => ProjectScreen(
                         initialProject: ProjectData(videoPath: _selectedFile!.path),
                         projectName: _projectName,
@@ -623,6 +625,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
     );
   }
 }
+
 // ---------- PROJECTS SCREEN ----------
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key});
@@ -665,7 +668,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       denoise: project.denoise,
       cellShading: project.cellShading,
       colourCrush: project.colourCrush,
-      cellThickness: project.cellThickness, // ✅ added
+      cellThickness: project.cellThickness,
       aspectRatio: project.aspectRatio,
       lastOpened: DateTime.now(),
     );
@@ -734,6 +737,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     );
   }
 }
+
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -760,23 +764,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isPlaying = false;
   String? _currentVideoPath;
 
-  // Grading params
-  double _brightness = 0.0;
-  double _saturation = 1.0;
-  double _contrast = 1.0;
-  double _sharpness = 0.0;
-  double _gamma = 1.0;
-  double _hue = 0.0;
-  double _temperature = 6500.0;
-  double _glowIntensity = 0.0;
-  double _lookMix = 0.0;
-  double _vignette = 0.0;
-  double _splitToning = 0.0;
-  double _edgeDarken = 0.0;
-  double _denoise = 0.0;
-  double _cellShading = 0.0;
-  double _colourCrush = 0.0;
-  double _cellThickness = 0.3; // ✅ added — shader's 16th grading param, was missing entirely
+  // Grading params – updated ranges
+  double _brightness = 0.0;      // range 0.0 – 3.0
+  double _saturation = 1.0;      // range -2.0 – 2.0
+  double _contrast = 1.0;        // range -2.0 – 2.0
+  double _sharpness = 0.0;       // range 0.0 – 3.0
+  double _gamma = 1.0;           // range -2.0 – 2.0 (shader clamps to positive)
+  double _hue = 0.0;             // range -180 – 180
+  double _temperature = 6500.0;  // range 2000 – 12000
+  double _glowIntensity = 0.0;   // range 0.0 – 3.0
+  double _lookMix = 0.0;         // range 0.0 – 3.0
+  double _vignette = 0.0;        // range 0.0 – 3.0
+  double _splitToning = 0.0;     // range 0.0 – 3.0
+  double _edgeDarken = 0.0;      // range 0.0 – 3.0
+  double _denoise = 0.0;         // range 0.0 – 3.0
+  double _cellShading = 0.0;     // range 0.0 – 3.0
+  double _colourCrush = 0.0;     // range 0.0 – 0.5 (clamped in UI)
+  double _cellThickness = 0.3;   // range 0.0 – 3.0
 
   String _selectedRatio = "16:9";
   late TabController _tabController;
@@ -791,10 +795,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isUpdating = false;
   final GlobalKey _videoCaptureKey = GlobalKey();
 
+  // Canvas dimensions for Vulkan processing
+  int _canvasWidth = 1920;
+  int _canvasHeight = 1080;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _updateCanvasSize();
 
     _loadShader();
     
@@ -815,10 +824,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _denoise = p.denoise;
       _cellShading = p.cellShading;
       _colourCrush = p.colourCrush;
-      _cellThickness = p.cellThickness; // ✅ added
+      _cellThickness = p.cellThickness;
       _selectedRatio = p.aspectRatio;
       _loadVideo(p.videoPath);
     }
+  }
+
+  void _updateCanvasSize() {
+    const baseHeight = 1080;
+    final ratio = _getAspectRatioValue(_selectedRatio);
+    _canvasWidth = (baseHeight * ratio).round();
+    _canvasHeight = baseHeight;
   }
 
   Future<void> _loadShader() async {
@@ -843,21 +859,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _controller!.addListener(_listener);
           _controller!.play();
           _isPlaying = true;
+          // Start preview timer if not already running
           _startTimelinePreview();
         });
     });
   }
 
-  // ---------- TIMELINE PREVIEW (captures the hidden RepaintBoundary) ----------
+  // ---------- TIMELINE PREVIEW (33ms ≈ 30fps) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) async {
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
-        // VideoPlayerController has no toImage(). Instead we grab whatever is
-        // currently painted inside the hidden RepaintBoundary (see build()),
-        // which mirrors the live video frame.
         final renderObject = _videoCaptureKey.currentContext?.findRenderObject();
         if (renderObject is! RenderRepaintBoundary) {
           _isUpdating = false;
@@ -885,6 +899,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- PICK VIDEO ----------
   Future<void> _pickVideo() async {
+    // Clean up old Vulkan resources before loading new video
+    cleanupVulkan();
+    // Re-init shader
+    if (_spirvShader != null) {
+      initVulkan(_spirvShader!);
+    }
+    
     final result = await FilePicker.platform.pickFiles(type: FileType.video);
     if (result != null) {
       final file = result.files.single;
@@ -950,7 +971,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       denoise: _denoise,
       cellShading: _cellShading,
       colourCrush: _colourCrush,
-      cellThickness: _cellThickness, // ✅ added
+      cellThickness: _cellThickness,
       aspectRatio: _selectedRatio,
       lastOpened: DateTime.now(),
     );
@@ -981,7 +1002,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           children: ["4:5", "9:16", "16:9", "1:1", "3:4", "21:9"].map((ratio) => ListTile(
             title: Text(ratio, style: const TextStyle(color: Colors.white)),
             trailing: _selectedRatio == ratio ? const Icon(Icons.check, color: Color(0xFF00E5FF)) : null,
-            onTap: () { setState(() => _selectedRatio = ratio); Navigator.pop(context); },
+            onTap: () { 
+              setState(() {
+                _selectedRatio = ratio;
+                _updateCanvasSize();
+              }); 
+              Navigator.pop(context);
+            },
           )).toList(),
         ),
       ),
@@ -998,20 +1025,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
   
   // ---------- VULKAN PROCESSING ----------
-  // ⚠️ FIXED: was building an 18-float array (resolution + 16 params) and
-  // passing that whole thing as `uniforms`. process_frame() in the native
-  // code already receives width/height as separate int arguments and sets
-  // the shader's resolution uniform from those directly — it expects
-  // `uniforms` to contain ONLY the 16 grading floats, in the exact order
-  // the shader's Uniforms struct declares them. This is what threw
-  // "uniforms must contain exactly 16 floats, got 18".
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
 
-    // 16 floats, matching the shader's Uniforms struct order exactly
-    // (after its own vec2 resolution, which is set separately by the
-    // native side from the w/h arguments — not from this array).
+    // 16 floats matching shader Uniforms order
     final uniforms = Float32List(16);
     uniforms[0] = _brightness;
     uniforms[1] = _saturation;
@@ -1030,20 +1048,29 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[14] = _colourCrush;
     uniforms[15] = _cellThickness;
 
-    final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
+    final outputBytes = processImage(
+      inputBytes,
+      input.width,
+      input.height,
+      _canvasWidth,
+      _canvasHeight,
+      uniforms,
+    );
+    
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       outputBytes,
-      input.width,
-      input.height,
+      _canvasWidth,
+      _canvasHeight,
       ui.PixelFormat.rgba8888,
       (img) => completer.complete(img),
     );
     return completer.future;
   }
-    // ---------- SINGLE PREVIEW FRAME ----------
+
+  // ---------- SINGLE PREVIEW FRAME ----------
   Future<void> _previewFrame() async {
-    // keep existing – you can keep it empty or implement it
+    // Optional: manually trigger a frame render if needed
   }
 
   // ---------- EXPORT SHEET ----------
@@ -1076,6 +1103,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white),
                       onSelected: (sel) => setStateModal(() { if (sel) selectedRes = res; }),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
@@ -1089,6 +1117,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white),
                       onSelected: (sel) => setStateModal(() { if (sel) selectedFps = fps; }),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
@@ -1102,6 +1131,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedBit == bit ? Colors.black : Colors.white),
                       onSelected: (sel) => setStateModal(() { if (sel) selectedBit = bit; }),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     )).toList(),
                   ),
                   const SizedBox(height: 12),
@@ -1115,6 +1145,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       selectedColor: const Color(0xFF00E5FF),
                       labelStyle: TextStyle(color: selectedColorDepth == depth ? Colors.black : Colors.white),
                       onSelected: (sel) => setStateModal(() { if (sel) selectedColorDepth = depth; }),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     )).toList(),
                   ),
                   const SizedBox(height: 24),
@@ -1155,14 +1186,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             max: max,
             activeColor: const Color(0xFF00E5FF),
             inactiveColor: Colors.grey[800],
-            onChanged: onChanged,
+            onChanged: (v) {
+              onChanged(v);
+              // If paused, still update preview via timer (it's always running now)
+            },
           ),
         ),
         SizedBox(width: 40, child: Text(val.toStringAsFixed(1), style: const TextStyle(color: Colors.white38))),
       ],
     );
   }
-    // ---------- EXPORT VIDEO ----------
+
+  // ---------- EXPORT VIDEO ----------
   Future<void> _exportVideo(String resolution, String fps, String bitrate, String colorDepth) async {
     if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Import a video first'), backgroundColor: Colors.orange));
@@ -1189,8 +1224,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final double denoise = _denoise;
     final double cellShading = _cellShading;
     final double colourCrush = _colourCrush;
-    final double cellThickness = _cellThickness; // ✅ added
+    final double cellThickness = _cellThickness;
 
+    // Parse export settings
+    int outW, outH;
+    switch (resolution) {
+      case '720p': outW = 1280; outH = 720; break;
+      case '1080p': outW = 1920; outH = 1080; break;
+      case '2K': outW = 2560; outH = 1440; break;
+      default: outW = 1920; outH = 1080;
+    }
+
+    int bitrateKbps;
+    switch (bitrate) {
+      case '15 Mbps': bitrateKbps = 15000; break;
+      case '35 Mbps': bitrateKbps = 35000; break;
+      case '50 Mbps': bitrateKbps = 50000; break;
+      default: bitrateKbps = 35000;
+    }
+
+    int targetFps = int.parse(fps.replaceAll('fps', ''));
     String pixFmt = (colorDepth == '10-bit HDR') ? 'yuv420p10le' : 'yuv420p';
 
     final progressNotifier = ValueNotifier<double>(0.0);
@@ -1248,12 +1301,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         throw Exception('Extract failed');
       }
 
-      // ⚠️ FIXED: Directory.list() does not guarantee alphabetical/numeric
-      // order across platforms. Since frame_%05d.png is zero-padded,
-      // sorting by path lexically is equivalent to sorting by frame
-      // number — without this, exported frames could end up shuffled.
       final frameFiles = await framesDir.list().toList();
-      frameFiles.sort((a, b) => a.path.compareTo(b.path)); // ✅ added
+      frameFiles.sort((a, b) => a.path.compareTo(b.path));
 
       final totalFrames = frameFiles.length;
       int processedFrames = 0;
@@ -1262,30 +1311,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
-        // ⚠️ FIXED: was mapping `batch` directly and using the outer loop's
-        // `i` as every frame's output index. That's harmless only because
-        // batchSize is hardcoded to 1 (so each batch has exactly one frame,
-        // and `i` happens to line up). If batchSize is ever raised above 1,
-        // every frame in that batch would have collided on the same output
-        // filename. Using .asMap().entries gives each frame its own correct
-        // index regardless of batch size.
         await Future.wait(batch.asMap().entries.map((entry) async {
-          final frameIndex = i + entry.key; // ✅ correct per-frame index
+          final frameIndex = i + entry.key;
           final file = entry.value;
           if (file is! File) return;
           final bytes = await file.readAsBytes();
           final decoded = img.decodeImage(bytes);
           if (decoded == null) return;
 
-          // ⚠️ FIXED: was `decoded.data!.buffer.asUint8List()`, which grabs
-          // whatever the decoder's internal storage happens to be without
-          // guaranteeing 8-bit RGBA channel order. getBytes(order: rgba)
-          // is the image package's explicit, safe way to get exactly that.
-          final rawInput = decoded.getBytes(order: img.ChannelOrder.rgba); // ✅ fixed
+          final rawInput = decoded.getBytes(order: img.ChannelOrder.rgba);
 
-          // 16 floats, matching the shader's Uniforms struct order exactly
-          // — see the note in _processFrameWithVulkan above.
-          final uniforms = Float32List(16); // ✅ was 18 with resolution prepended
+          final uniforms = Float32List(16);
           uniforms[0] = brightness;
           uniforms[1] = saturation;
           uniforms[2] = contrast;
@@ -1301,20 +1337,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           uniforms[12] = denoise;
           uniforms[13] = cellShading;
           uniforms[14] = colourCrush;
-          uniforms[15] = cellThickness; // ✅ added
+          uniforms[15] = cellThickness;
 
-          final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
-              .timeout(const Duration(seconds: 30));
+          // Process frame – use canvas size for export (same as preview canvas)
+          final outputRaw = await Future(() => processImage(
+            rawInput,
+            decoded.width,
+            decoded.height,
+            _canvasWidth,
+            _canvasHeight,
+            uniforms
+          )).timeout(const Duration(seconds: 30));
 
           final gradedImg = img.Image.fromBytes(
-            width: decoded.width,
-            height: decoded.height,
+            width: _canvasWidth,
+            height: _canvasHeight,
             bytes: outputRaw.buffer,
-            numChannels: 4, // ✅ added — explicit, matches getBytes(order: rgba) above
-            order: img.ChannelOrder.rgba, // ✅ added
+            numChannels: 4,
+            order: img.ChannelOrder.rgba,
           );
           final pngBytes = img.encodePng(gradedImg);
-          final paddedIndex = (frameIndex + 1).toString().padLeft(5, '0'); // ✅ uses frameIndex now
+          final paddedIndex = (frameIndex + 1).toString().padLeft(5, '0');
           final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
           await outputFile.writeAsBytes(pngBytes);
 
@@ -1325,14 +1368,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
 
       statusNotifier.value = 'Encoding video...';
-      final targetFps = int.parse(fps.replaceAll('fps', ''));
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
+      // Build encode command with scaling and bitrate
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
-                      '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt $pixFmt "$silentOutputPath"';
+                      '-vf scale=$outW:$outH ' +
+                      '-c:v libx264 -preset ultrafast -b:v ${bitrateKbps}k -pix_fmt $pixFmt "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
         final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
+                            '-vf scale=$outW:$outH ' +
                             '-c:v mpeg4 -q:v 5 -pix_fmt $pixFmt "$silentOutputPath"';
         encodeSession = await FFmpegKit.execute(fallbackCmd);
         if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
@@ -1351,9 +1396,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      final docsDir = await getApplicationDocumentsDirectory();
-      final finalFile = File('${docsDir.path}/AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4');
-      await File(finalOutputPath).copy(finalFile.path);
+      // Save to Movies directory using MediaStore (or fallback)
+      String savedPath;
+      try {
+        // Try to save to external Movies folder
+        final moviesDir = await getExternalStoragePublicDirectory('Movies');
+        if (moviesDir != null) {
+          final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+          final destFile = File('${moviesDir.path}/$fileName');
+          await File(finalOutputPath).copy(destFile.path);
+          savedPath = destFile.path;
+        } else {
+          // Fallback to app documents
+          final docsDir = await getApplicationDocumentsDirectory();
+          final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+          final destFile = File('${docsDir.path}/$fileName');
+          await File(finalOutputPath).copy(destFile.path);
+          savedPath = destFile.path;
+        }
+      } catch (e) {
+        // Fallback to app documents
+        final docsDir = await getApplicationDocumentsDirectory();
+        final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        final destFile = File('${docsDir.path}/$fileName');
+        await File(finalOutputPath).copy(destFile.path);
+        savedPath = destFile.path;
+      }
 
       await framesDir.delete(recursive: true);
       await processedDir.delete(recursive: true);
@@ -1363,7 +1431,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (dialogContext != null) Navigator.pop(dialogContext!);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Export saved to:\n${finalFile.path}'), duration: const Duration(seconds: 8)),
+          SnackBar(content: Text('✅ Export saved to:\n$savedPath'), duration: const Duration(seconds: 8)),
         );
       }
     } catch (e) {
@@ -1375,7 +1443,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
-    @override
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -1400,10 +1469,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               color: Colors.black,
               child: Stack(
                 children: [
-                  // Hidden raw-video render surface. It must actually be painted
-                  // (not Offstage/opacity 0, which skip painting entirely) for the
-                  // RepaintBoundary capture in _startTimelinePreview to work, so
-                  // we use a near-zero but non-zero opacity instead.
                   if (_controller != null && _controller!.value.isInitialized)
                     Positioned.fill(
                       child: Opacity(
@@ -1454,11 +1519,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           if (_controller!.value.isPlaying) {
                             _controller!.pause();
                             _isPlaying = false;
-                            _stopTimelinePreview();
+                            // Keep preview timer running
                           } else {
                             _controller!.play();
                             _isPlaying = true;
-                            _startTimelinePreview();
                           }
                         })
                       : null,
@@ -1515,21 +1579,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         children: [
-                          _slider('Bright', -1.0, 1.0, _brightness, (v) => setState(() => _brightness = v)),
-                          _slider('Sat', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
-                          _slider('Contrast', 0.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
-                          _slider('Sharp', 0.0, 5.0, _sharpness, (v) => setState(() => _sharpness = v)),
-                          _slider('Gamma', 0.1, 2.5, _gamma, (v) => setState(() => _gamma = v)),
+                          _slider('Bright', 0.0, 3.0, _brightness, (v) => setState(() => _brightness = v)),
+                          _slider('Sat', -2.0, 2.0, _saturation, (v) => setState(() => _saturation = v)),
+                          _slider('Contrast', -2.0, 2.0, _contrast, (v) => setState(() => _contrast = v)),
+                          _slider('Sharp', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                          _slider('Gamma', -2.0, 2.0, _gamma, (v) => setState(() => _gamma = v)),
                           _slider('Hue', -180, 180, _hue, (v) => setState(() => _hue = v)),
                           _slider('Temp', 2000, 12000, _temperature, (v) => setState(() => _temperature = v)),
-                          _slider('Glow', 0.0, 1.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
-                          _slider('Vignette', 0.0, 1.0, _vignette, (v) => setState(() => _vignette = v)),
-                          _slider('Split Tone', 0.0, 1.0, _splitToning, (v) => setState(() => _splitToning = v)),
-                          _slider('Edge Darken', 0.0, 1.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
-                          _slider('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
-                          _slider('Cell Shading', 0.0, 1.0, _cellShading, (v) => setState(() => _cellShading = v)),
-                          _slider('Cell Thickness', 0.0, 1.0, _cellThickness, (v) => setState(() => _cellThickness = v)), // ✅ added
-                          _slider('Colour Crush', 0.0, 1.0, _colourCrush, (v) => setState(() => _colourCrush = v)),
+                          _slider('Glow', 0.0, 3.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
+                          _slider('Vignette', 0.0, 3.0, _vignette, (v) => setState(() => _vignette = v)),
+                          _slider('Split Tone', 0.0, 3.0, _splitToning, (v) => setState(() => _splitToning = v)),
+                          _slider('Edge Darken', 0.0, 3.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
+                          _slider('Denoise', 0.0, 3.0, _denoise, (v) => setState(() => _denoise = v)),
+                          _slider('Cell Shading', 0.0, 3.0, _cellShading, (v) => setState(() => _cellShading = v)),
+                          _slider('Cell Thickness', 0.0, 3.0, _cellThickness, (v) => setState(() => _cellThickness = v)),
+                          _slider('Colour Crush', 0.0, 0.5, _colourCrush, (v) => setState(() => _colourCrush = v)),
                         ],
                       ),
                       // ---------- Presets tab ----------
