@@ -55,7 +55,7 @@ class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
   double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
-  double denoise, cellShading, colourCrush;
+  double denoise, cellShading, colourCrush, cellThickness;
   String aspectRatio;
 
   ProjectData({
@@ -75,6 +75,7 @@ class ProjectData {
     this.denoise = 0.0,
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
+    this.cellThickness = 0.3, // ✅ added — shader's 16th grading param, was missing entirely
     this.aspectRatio = "16:9",
   });
 
@@ -95,6 +96,7 @@ class ProjectData {
     'denoise': denoise,
     'cellShading': cellShading,
     'colourCrush': colourCrush,
+    'cellThickness': cellThickness, // ✅ added
     'aspectRatio': aspectRatio,
   };
 
@@ -115,6 +117,7 @@ class ProjectData {
     denoise: json['denoise'] ?? 0.0,
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
+    cellThickness: json['cellThickness'] ?? 0.3, // ✅ added
     aspectRatio: json['aspectRatio'] ?? "16:9",
   );
 }
@@ -126,7 +129,7 @@ class StoredProject {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
   double temperature, glowIntensity, lookMix, vignette, splitToning, edgeDarken;
-  double denoise, cellShading, colourCrush;
+  double denoise, cellShading, colourCrush, cellThickness;
   String aspectRatio;
   DateTime lastOpened;
 
@@ -149,6 +152,7 @@ class StoredProject {
     this.denoise = 0.0,
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
+    this.cellThickness = 0.3, // ✅ added
     this.aspectRatio = "16:9",
     required this.lastOpened,
   });
@@ -172,6 +176,7 @@ class StoredProject {
     'denoise': denoise,
     'cellShading': cellShading,
     'colourCrush': colourCrush,
+    'cellThickness': cellThickness, // ✅ added
     'aspectRatio': aspectRatio,
     'lastOpened': lastOpened.toIso8601String(),
   };
@@ -195,10 +200,11 @@ class StoredProject {
     denoise: json['denoise'] ?? 0.0,
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
+    cellThickness: json['cellThickness'] ?? 0.3, // ✅ added
     aspectRatio: json['aspectRatio'] ?? "16:9",
     lastOpened: DateTime.parse(json['lastOpened']),
   );
-  
+
   ProjectData toProjectData() => ProjectData(
     videoPath: videoPath,
     brightness: brightness,
@@ -216,6 +222,7 @@ class StoredProject {
     denoise: denoise,
     cellShading: cellShading,
     colourCrush: colourCrush,
+    cellThickness: cellThickness, // ✅ added
     aspectRatio: aspectRatio,
   );
 }
@@ -658,6 +665,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       denoise: project.denoise,
       cellShading: project.cellShading,
       colourCrush: project.colourCrush,
+      cellThickness: project.cellThickness, // ✅ added
       aspectRatio: project.aspectRatio,
       lastOpened: DateTime.now(),
     );
@@ -768,6 +776,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _denoise = 0.0;
   double _cellShading = 0.0;
   double _colourCrush = 0.0;
+  double _cellThickness = 0.3; // ✅ added — shader's 16th grading param, was missing entirely
 
   String _selectedRatio = "16:9";
   late TabController _tabController;
@@ -806,6 +815,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _denoise = p.denoise;
       _cellShading = p.cellShading;
       _colourCrush = p.colourCrush;
+      _cellThickness = p.cellThickness; // ✅ added
       _selectedRatio = p.aspectRatio;
       _loadVideo(p.videoPath);
     }
@@ -899,19 +909,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _brightness = 0.15; _saturation = 1.3; _contrast = 1.25; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 6200.0; _glowIntensity = 0.0; _lookMix = 0.3;
           _vignette = 0.0; _splitToning = 0.15; _edgeDarken = 0.0;
-          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0; _cellThickness = 0.3;
           break;
         case 'Magic Bullet':
           _brightness = 0.0; _saturation = 1.2; _contrast = 1.5; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 5600.0; _glowIntensity = 0.0; _lookMix = 0.0;
           _vignette = 0.0; _splitToning = 0.4; _edgeDarken = 0.0;
-          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0; _cellThickness = 0.3;
           break;
         case 'Teal & Orange':
           _brightness = 0.0; _saturation = 1.4; _contrast = 1.3; _sharpness = 0.0; _gamma = 0.95;
           _hue = 0.0; _temperature = 5500.0; _glowIntensity = 0.0; _lookMix = 0.7;
           _vignette = 0.0; _splitToning = 0.0; _edgeDarken = 0.0;
-          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0;
+          _denoise = 0.0; _cellShading = 0.0; _colourCrush = 0.0; _cellThickness = 0.3;
           break;
         default: break;
       }
@@ -940,6 +950,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       denoise: _denoise,
       cellShading: _cellShading,
       colourCrush: _colourCrush,
+      cellThickness: _cellThickness, // ✅ added
       aspectRatio: _selectedRatio,
       lastOpened: DateTime.now(),
     );
@@ -986,31 +997,38 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return completer.future;
   }
   
-  // ---------- VULKAN PROCESSING (18 floats) ----------
+  // ---------- VULKAN PROCESSING ----------
+  // ⚠️ FIXED: was building an 18-float array (resolution + 16 params) and
+  // passing that whole thing as `uniforms`. process_frame() in the native
+  // code already receives width/height as separate int arguments and sets
+  // the shader's resolution uniform from those directly — it expects
+  // `uniforms` to contain ONLY the 16 grading floats, in the exact order
+  // the shader's Uniforms struct declares them. This is what threw
+  // "uniforms must contain exactly 16 floats, got 18".
   Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
 
-    // 18 floats: resolution (2) + 16 grading params
-    final uniforms = Float32List(18);
-    uniforms[0] = input.width.toDouble();
-    uniforms[1] = input.height.toDouble();
-    uniforms[2] = _brightness;
-    uniforms[3] = _saturation;
-    uniforms[4] = _contrast;
-    uniforms[5] = _sharpness;
-    uniforms[6] = _gamma;
-    uniforms[7] = _hue;
-    uniforms[8] = _temperature;
-    uniforms[9] = _glowIntensity;
-    uniforms[10] = _lookMix;
-    uniforms[11] = _vignette;
-    uniforms[12] = _splitToning;
-    uniforms[13] = _edgeDarken;
-    uniforms[14] = _denoise;
-    uniforms[15] = _cellShading;
-    uniforms[16] = _colourCrush;
-    uniforms[17] = 0.0; // placeholder
+    // 16 floats, matching the shader's Uniforms struct order exactly
+    // (after its own vec2 resolution, which is set separately by the
+    // native side from the w/h arguments — not from this array).
+    final uniforms = Float32List(16);
+    uniforms[0] = _brightness;
+    uniforms[1] = _saturation;
+    uniforms[2] = _contrast;
+    uniforms[3] = _sharpness;
+    uniforms[4] = _gamma;
+    uniforms[5] = _hue;
+    uniforms[6] = _temperature;
+    uniforms[7] = _glowIntensity;
+    uniforms[8] = _lookMix;
+    uniforms[9] = _vignette;
+    uniforms[10] = _splitToning;
+    uniforms[11] = _edgeDarken;
+    uniforms[12] = _denoise;
+    uniforms[13] = _cellShading;
+    uniforms[14] = _colourCrush;
+    uniforms[15] = _cellThickness;
 
     final outputBytes = processImage(inputBytes, input.width, input.height, uniforms);
     final completer = Completer<ui.Image>();
@@ -1171,6 +1189,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final double denoise = _denoise;
     final double cellShading = _cellShading;
     final double colourCrush = _colourCrush;
+    final double cellThickness = _cellThickness; // ✅ added
 
     String pixFmt = (colorDepth == '10-bit HDR') ? 'yuv420p10le' : 'yuv420p';
 
@@ -1229,7 +1248,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         throw Exception('Extract failed');
       }
 
+      // ⚠️ FIXED: Directory.list() does not guarantee alphabetical/numeric
+      // order across platforms. Since frame_%05d.png is zero-padded,
+      // sorting by path lexically is equivalent to sorting by frame
+      // number — without this, exported frames could end up shuffled.
       final frameFiles = await framesDir.list().toList();
+      frameFiles.sort((a, b) => a.path.compareTo(b.path)); // ✅ added
+
       final totalFrames = frameFiles.length;
       int processedFrames = 0;
       stopwatch.start();
@@ -1237,32 +1262,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
-        await Future.wait(batch.map((file) async {
+        // ⚠️ FIXED: was mapping `batch` directly and using the outer loop's
+        // `i` as every frame's output index. That's harmless only because
+        // batchSize is hardcoded to 1 (so each batch has exactly one frame,
+        // and `i` happens to line up). If batchSize is ever raised above 1,
+        // every frame in that batch would have collided on the same output
+        // filename. Using .asMap().entries gives each frame its own correct
+        // index regardless of batch size.
+        await Future.wait(batch.asMap().entries.map((entry) async {
+          final frameIndex = i + entry.key; // ✅ correct per-frame index
+          final file = entry.value;
           if (file is! File) return;
           final bytes = await file.readAsBytes();
           final decoded = img.decodeImage(bytes);
           if (decoded == null) return;
 
-          final rawInput = decoded.data!.buffer.asUint8List();
-          final uniforms = Float32List(18);
-          uniforms[0] = decoded.width.toDouble();
-          uniforms[1] = decoded.height.toDouble();
-          uniforms[2] = brightness;
-          uniforms[3] = saturation;
-          uniforms[4] = contrast;
-          uniforms[5] = sharpness;
-          uniforms[6] = gamma;
-          uniforms[7] = hue;
-          uniforms[8] = temperature;
-          uniforms[9] = glowIntensity;
-          uniforms[10] = lookMix;
-          uniforms[11] = vignette;
-          uniforms[12] = splitToning;
-          uniforms[13] = edgeDarken;
-          uniforms[14] = denoise;
-          uniforms[15] = cellShading;
-          uniforms[16] = colourCrush;
-          uniforms[17] = 0.0;
+          // ⚠️ FIXED: was `decoded.data!.buffer.asUint8List()`, which grabs
+          // whatever the decoder's internal storage happens to be without
+          // guaranteeing 8-bit RGBA channel order. getBytes(order: rgba)
+          // is the image package's explicit, safe way to get exactly that.
+          final rawInput = decoded.getBytes(order: img.ChannelOrder.rgba); // ✅ fixed
+
+          // 16 floats, matching the shader's Uniforms struct order exactly
+          // — see the note in _processFrameWithVulkan above.
+          final uniforms = Float32List(16); // ✅ was 18 with resolution prepended
+          uniforms[0] = brightness;
+          uniforms[1] = saturation;
+          uniforms[2] = contrast;
+          uniforms[3] = sharpness;
+          uniforms[4] = gamma;
+          uniforms[5] = hue;
+          uniforms[6] = temperature;
+          uniforms[7] = glowIntensity;
+          uniforms[8] = lookMix;
+          uniforms[9] = vignette;
+          uniforms[10] = splitToning;
+          uniforms[11] = edgeDarken;
+          uniforms[12] = denoise;
+          uniforms[13] = cellShading;
+          uniforms[14] = colourCrush;
+          uniforms[15] = cellThickness; // ✅ added
 
           final outputRaw = await Future(() => processImage(rawInput, decoded.width, decoded.height, uniforms))
               .timeout(const Duration(seconds: 30));
@@ -1271,9 +1310,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             width: decoded.width,
             height: decoded.height,
             bytes: outputRaw.buffer,
+            numChannels: 4, // ✅ added — explicit, matches getBytes(order: rgba) above
+            order: img.ChannelOrder.rgba, // ✅ added
           );
           final pngBytes = img.encodePng(gradedImg);
-          final paddedIndex = (i + 1).toString().padLeft(5, '0');
+          final paddedIndex = (frameIndex + 1).toString().padLeft(5, '0'); // ✅ uses frameIndex now
           final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
           await outputFile.writeAsBytes(pngBytes);
 
@@ -1379,7 +1420,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             aspectRatio: _getAspectRatioValue(_selectedRatio),
                             child: RawImage(
                               image: _processedImage,
-                                                            fit: BoxFit.contain,
+                              fit: BoxFit.contain,
                             ),
                           )
                         : Container(
@@ -1487,6 +1528,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _slider('Edge Darken', 0.0, 1.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
                           _slider('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
                           _slider('Cell Shading', 0.0, 1.0, _cellShading, (v) => setState(() => _cellShading = v)),
+                          _slider('Cell Thickness', 0.0, 1.0, _cellThickness, (v) => setState(() => _cellThickness = v)), // ✅ added
                           _slider('Colour Crush', 0.0, 1.0, _colourCrush, (v) => setState(() => _colourCrush = v)),
                         ],
                       ),
