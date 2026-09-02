@@ -7,26 +7,29 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     ? DynamicLibrary.open('libvulkan_processor.so')
     : DynamicLibrary.process();
 
+// New signature: process_frame(input, inW, inH, outW, outH, output, uniforms)
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
 typedef NativeProcess = Void Function(
     Pointer<Uint8> input,
-    Int32 w,
-    Int32 h,
+    Int32 inW,
+    Int32 inH,
+    Int32 outW,
+    Int32 outH,
     Pointer<Uint8> output,
     Pointer<Float> uniforms,
 );
-typedef NativeUploadLut = Void Function(Pointer<Float> data, Int32 size);
 typedef NativeCleanup = Void Function();
 
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
 typedef DartProcess = void Function(
     Pointer<Uint8> input,
-    int w,
-    int h,
+    int inW,
+    int inH,
+    int outW,
+    int outH,
     Pointer<Uint8> output,
     Pointer<Float> uniforms,
 );
-typedef DartUploadLut = void Function(Pointer<Float> data, int size);
 typedef DartCleanup = void Function();
 
 final initProcessor = nativeLib
@@ -37,10 +40,6 @@ final processFrame = nativeLib
     .lookup<NativeFunction<NativeProcess>>('process_frame')
     .asFunction<DartProcess>();
 
-final uploadLut = nativeLib
-    .lookup<NativeFunction<NativeUploadLut>>('upload_lut')
-    .asFunction<DartUploadLut>();
-
 final cleanupProcessor = nativeLib
     .lookup<NativeFunction<NativeCleanup>>('cleanup_processor')
     .asFunction<DartCleanup>();
@@ -48,6 +47,7 @@ final cleanupProcessor = nativeLib
 bool _initialized = false;
 
 // Must match the shader's Uniforms struct exactly, in this order:
+// (resolution is set separately by the native side from outW/outH)
 // brightness, saturation, contrast, sharpness, gamma, hue, temperature,
 // glowIntensity, lookMix, vignette, splitToning, edgeDarken, denoise,
 // cellShading, colourCrush, cellThickness  (16 floats total)
@@ -64,8 +64,10 @@ void initVulkan(Uint8List spirv) {
 
 Uint8List processImage(
     Uint8List input,
-    int width,
-    int height,
+    int inWidth,
+    int inHeight,
+    int outWidth,
+    int outHeight,
     Float32List uniforms, // must be length kUniformCount (16)
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
@@ -77,7 +79,7 @@ Uint8List processImage(
   final inputPtr = calloc<Uint8>(input.length);
   inputPtr.asTypedList(input.length).setAll(0, input);
 
-  final output = Uint8List(width * height * 4);
+  final output = Uint8List(outWidth * outHeight * 4);
   final outputPtr = calloc<Uint8>(output.length);
 
   final uniformPtr = calloc<Float>(uniforms.length);
@@ -85,7 +87,7 @@ Uint8List processImage(
     uniformPtr[i] = uniforms[i];
   }
 
-  processFrame(inputPtr, width, height, outputPtr, uniformPtr);
+  processFrame(inputPtr, inWidth, inHeight, outWidth, outHeight, outputPtr, uniformPtr);
 
   output.setAll(0, outputPtr.asTypedList(output.length));
 
@@ -94,16 +96,6 @@ Uint8List processImage(
   calloc.free(uniformPtr);
 
   return output;
-}
-
-void uploadLutData(Float32List lutData, int size) {
-  if (!_initialized) throw Exception('Vulkan not initialized.');
-  final ptr = calloc<Float>(lutData.length);
-  for (int i = 0; i < lutData.length; i++) {
-    ptr[i] = lutData[i];
-  }
-  uploadLut(ptr, size);
-  calloc.free(ptr);
 }
 
 void cleanupVulkan() {
