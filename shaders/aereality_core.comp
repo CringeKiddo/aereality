@@ -16,18 +16,18 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     float gamma;              // offset 7
     float hue;                // offset 8
     float temperature;        // offset 9
-    float bloomIntensity;     // offset 10 (replaces glowIntensity)
-    float bloomSpread;        // offset 11 (replaces glowSpread)
-    float bloomThreshold;     // offset 12 (soft-knee threshold)
-    float bloomRadius;        // offset 13 (dual-filter scale)
+    float bloomIntensity;     // offset 10
+    float bloomSpread;        // offset 11
+    float bloomThreshold;     // offset 12
+    float bloomRadius;        // offset 13
     float edgeGlowTint;       // offset 14 (0=White, 1=Gold, 2=Quincy, 3=Cyan, 4=Crimson)
     float anamorphicFlare;    // offset 15
     float flareAmount;        // offset 16
-    float lightRays;          // offset 17 (Screen-Space Crepuscular God Rays)
-    float lightRaysDecay;     // offset 18 (Rays falloff/density)
+    float lightRays;          // offset 17
+    float lightRaysDecay;     // offset 18
     float shadows;            // offset 19
     float highlights;         // offset 20
-    float darkOutlines;       // offset 21 (Sobel ink lines)
+    float darkOutlines;       // offset 21
     float edgeDarken;         // offset 22
     float vignette;           // offset 23
     float splitToning;        // offset 24
@@ -53,17 +53,29 @@ layout(set = 0, binding = 2, std140) uniform Uniforms {
     vec4 curveBlueB;          // offset 64..67
 } u;
 
+// Safe float sanitation helpers
+bool isBad(float v) {
+    return isnan(v) || isinf(v);
+}
+vec3 sanitize(vec3 v) {
+    return vec3(
+        isBad(v.r) ? 0.0 : clamp(v.r, 0.0, 10.0),
+        isBad(v.g) ? 0.0 : clamp(v.g, 0.0, 10.0),
+        isBad(v.b) ? 0.0 : clamp(v.b, 0.0, 10.0)
+    );
+}
+
 // Linear <-> sRGB conversions
 vec3 srgbToLinear(vec3 srgb) {
     vec3 safe = clamp(srgb, 0.0, 1.0);
     vec3 less = step(vec3(0.04045), safe);
-    return mix(safe / 12.92, pow((safe + 0.055) / 1.055, vec3(2.4)), less);
+    return mix(safe / 12.92, pow(max((safe + 0.055) / 1.055, vec3(0.0)), vec3(2.4)), less);
 }
 
 vec3 linearToSrgb(vec3 lin) {
-    lin = max(lin, vec3(0.0));
+    lin = clamp(lin, 0.0, 1.0);
     vec3 less = step(vec3(0.0031308), lin);
-    return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
+    return mix(lin * 12.92, pow(max(lin, vec3(0.0)), vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
 }
 
 // Triangular Probability Density Function (TPDF) Dithering
@@ -73,29 +85,26 @@ float getTPDFDither(vec2 coord) {
     return (r1 + r2 - 1.0);
 }
 
-// ---------- PART 3: HIGHLIGHT & SATURATION SAFETY ----------
-
-// 1. Contrast & Black Crush with Soft Shoulder above 0.9
+// Contrast & Black Crush with Soft Shoulder above 0.9
 vec3 applyContrastBlackCrushSafe(vec3 color, float contrast, float blackCrush) {
     if (contrast <= 0.001) return vec3(0.5);
     float p = 0.18;
     vec3 norm = color / p;
-    vec3 high = pow(max(norm, vec3(1e-4)), vec3(contrast));
+    vec3 high = pow(max(norm, vec3(1e-4)), vec3(clamp(contrast, 0.1, 5.0)));
     vec3 result = high * p;
 
-    // Soft shoulder above 0.9 stops contrast from blasting values into a hard wall
     vec3 over = max(result - 0.9, vec3(0.0));
     result = 0.9 + over / (1.0 + over * 3.0);
 
     if (blackCrush > 0.001) {
         float crushAmt = blackCrush * 0.4;
         result = max(result - vec3(crushAmt * 0.06), vec3(0.0));
-        result = pow(result, vec3(1.0 + blackCrush * 0.5));
+        result = pow(max(result, vec3(1e-4)), vec3(1.0 + blackCrush * 0.5));
     }
     return result;
 }
 
-// 2. Headroom-Aware Saturation (reduces saturation boost on already-hot pixels)
+// Headroom-Aware Saturation
 vec3 applySaturationSafe(vec3 color, float saturation) {
     float lum = dot(color, vec3(0.299, 0.587, 0.114));
     float headroom = 1.0 - smoothstep(0.7, 1.3, lum);
@@ -103,34 +112,32 @@ vec3 applySaturationSafe(vec3 color, float saturation) {
     return mix(vec3(lum), color, effectiveSat);
 }
 
-// 3. Highlight Desaturation (Chroma Rolloff towards natural highlight white)
+// Highlight Desaturation
 vec3 highlightDesaturate(vec3 color, float rolloffStart, float rolloffRange) {
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     float t = clamp((lum - rolloffStart) / max(rolloffRange, 1e-4), 0.0, 1.0);
-    t = t * t * (3.0 - 2.0 * t); // smoothstep-style easing
-    return mix(color, vec3(lum), t * 0.6); // 0.6 max desaturation: keeps color, avoids blown white
+    t = t * t * (3.0 - 2.0 * t);
+    return mix(color, vec3(lum), t * 0.6);
 }
 
-// 4. Unconditional ACES Filmic Tone Mapping Curve
+// Unconditional ACES Filmic Tone Mapping Curve
 vec3 filmicTonemap(vec3 x) {
     float a = 2.51;
     float b = 0.03;
     float c = 2.43;
     float d = 0.59;
     float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    return clamp((x * (a * x + b)) / max(x * (c * x + d) + e, vec3(1e-4)), 0.0, 1.0);
 }
 
-// 5. Proportional Hue-Preserving Vector Compression (replaces hard per-channel clip)
+// Proportional Hue-Preserving Vector Compression
 vec3 preserveHueCompress(vec3 color) {
     float maxCh = max(max(color.r, color.g), color.b);
     if (maxCh <= 1.0) return max(color, vec3(0.0));
-    return max(color / maxCh, vec3(0.0)); // Keeps channel ratio intact (preserves hue)
+    return max(color / maxCh, vec3(0.0));
 }
 
-// ---------- PART 1 & 2: UNIFIED SINGLE BRIGHT PASS & DUAL-FILTER BLOOM ----------
-
-// Soft-knee bright-pass extract: single detection for bloom, rays, and flares
+// Soft-knee bright-pass extract
 vec3 brightPassExtract(vec3 color, float threshold, float knee) {
     float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     float soft = lum - threshold + knee;
@@ -140,7 +147,7 @@ vec3 brightPassExtract(vec3 color, float threshold, float knee) {
     return color * clamp(contribution, 0.0, 10.0);
 }
 
-// Safe bilinear tap helper
+// Bilinear tap helper
 vec3 sampleInputLinear(vec2 uv, ivec2 inSize) {
     vec2 pos = uv * vec2(inSize) - 0.5;
     ivec2 p00 = clamp(ivec2(floor(pos)), ivec2(0), inSize - 1);
@@ -155,7 +162,7 @@ vec3 sampleInputLinear(vec2 uv, ivec2 inSize) {
     return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
-// Dual-Filter Bloom: Downsample/Upsample hierarchy across 4 mip scales
+// Dual-Filter Bloom across 4 mip scales
 vec3 calculateDualFilterBloom(vec2 uv, ivec2 inSize, float intensity, float spread, float threshold, float tintMode) {
     if (intensity <= 0.001) return vec3(0.0);
 
@@ -164,13 +171,11 @@ vec3 calculateDualFilterBloom(vec2 uv, ivec2 inSize, float intensity, float spre
     vec3 bloomSum = vec3(0.0);
     float baseRadius = 2.5 + spread * 18.0;
 
-    // 4 successive dual-filter mip levels (Mips 1..4)
     float mipWeights[4] = float[4](0.40, 0.30, 0.20, 0.10);
     for (int m = 0; m < 4; m++) {
         float scale = baseRadius * pow(2.0, float(m));
         vec4 d = vec4(1.0, 1.0, -1.0, 0.0) * texel.xyxy * scale;
 
-        // 9-tap tent upsample filter
         vec3 tap = vec3(0.0);
         tap += brightPassExtract(sampleInputLinear(uv - d.xy, inSize), threshold, knee) * 1.0;
         tap += brightPassExtract(sampleInputLinear(uv - d.wy, inSize), threshold, knee) * 2.0;
@@ -186,12 +191,11 @@ vec3 calculateDualFilterBloom(vec2 uv, ivec2 inSize, float intensity, float spre
         bloomSum += tap * mipWeights[m];
     }
 
-    // Tint modes
-    vec3 tint = vec3(1.0, 1.0, 1.0); // 0: Neutral White
-    if (tintMode > 0.5 && tintMode < 1.5) tint = vec3(1.30, 1.05, 0.65); // 1: Gold
-    else if (tintMode >= 1.5 && tintMode < 2.5) tint = vec3(0.70, 1.10, 1.60); // 2: Quincy
-    else if (tintMode >= 2.5 && tintMode < 3.5) tint = vec3(0.40, 1.30, 1.50); // 3: Cyan
-    else if (tintMode >= 3.5) tint = vec3(1.60, 0.50, 0.60); // 4: Crimson
+    vec3 tint = vec3(1.0, 1.0, 1.0);
+    if (tintMode > 0.5 && tintMode < 1.5) tint = vec3(1.30, 1.05, 0.65);
+    else if (tintMode >= 1.5 && tintMode < 2.5) tint = vec3(0.70, 1.10, 1.60);
+    else if (tintMode >= 2.5 && tintMode < 3.5) tint = vec3(0.40, 1.30, 1.50);
+    else if (tintMode >= 3.5) tint = vec3(1.60, 0.50, 0.60);
 
     return bloomSum * (intensity * 1.7) * tint;
 }
@@ -200,7 +204,6 @@ vec3 calculateDualFilterBloom(vec2 uv, ivec2 inSize, float intensity, float spre
 vec3 calculateScreenSpaceLightRays(vec2 uv, ivec2 inSize, float intensity, float decayStrength, float threshold) {
     if (intensity <= 0.001) return vec3(0.0);
 
-    // Screen-space light source center (upper-third center of frame)
     vec2 lightSourceUV = vec2(0.5, 0.28);
     const int NUM_SAMPLES = 20;
     vec2 rayDir = (uv - lightSourceUV) * (1.0 / float(NUM_SAMPLES));
@@ -222,12 +225,11 @@ vec3 calculateScreenSpaceLightRays(vec2 uv, ivec2 inSize, float intensity, float
     return accum * (intensity * 0.75 / float(NUM_SAMPLES));
 }
 
-// Optical Anamorphic Glass Flares (sampled from single bright-pass extraction)
+// Optical Anamorphic Flares
 vec3 calculateAnamorphicFlares(vec2 uv, ivec2 inSize, float intensity, float streakSpread, float threshold) {
     if (intensity <= 0.001) return vec3(0.0);
 
     float streakWidth = 0.06 + streakSpread * 0.35;
-    vec2 texel = 1.0 / vec2(inSize);
     vec3 flareAccum = vec3(0.0);
     float totalWeight = 0.0;
     float knee = max(threshold * 0.5, 0.10);
@@ -354,7 +356,7 @@ vec3 applyBilateralDenoise(ivec2 pos, ivec2 inSize, vec3 centerCol, float denois
     return mix(centerCol, accum / max(totalWeight, 1e-4), clamp(denoiseStrength * 1.3, 0.0, 1.0));
 }
 
-// High-Precision Unsharp Mask Sharpness with Controlled Halo Clamp
+// Sharpness with Controlled Halo
 vec3 applySharpnessWithHalo(vec3 center, ivec2 pos, ivec2 inSize, float amount) {
     if (amount <= 0.001) return center;
     ivec2 pN = clamp(pos + ivec2(0, -1), ivec2(0), inSize - 1);
@@ -373,7 +375,7 @@ vec3 applySharpnessWithHalo(vec3 center, ivec2 pos, ivec2 inSize, float amount) 
     return max(center + sharpDelta, vec3(0.0));
 }
 
-// True Sobel Line Art Darkener
+// True Sobel Line Art
 vec3 applySobelLineArt(vec3 color, ivec2 pos, ivec2 inSize, float intensity) {
     if (intensity <= 0.001) return color;
     ivec2 pN = clamp(pos + ivec2(0, -1), ivec2(0), inSize - 1);
@@ -422,7 +424,7 @@ vec3 applyPerimeterEdgeBlur(vec3 baseCol, vec2 uv, ivec2 inSize, float amount) {
     float blurFactor = smoothstep(0.4, 1.2, dist) * amount;
     if (blurFactor <= 0.001) return baseCol;
 
-    vec2 dir = normalize(centered) * blurFactor * 12.0;
+    vec2 dir = normalize(centered + vec2(1e-4)) * blurFactor * 12.0;
     vec3 accum = baseCol * 2.0;
     ivec2 p1 = clamp(ivec2(vec2(inSize) * uv + dir * 0.5), ivec2(0), inSize - 1);
     ivec2 p2 = clamp(ivec2(vec2(inSize) * uv - dir * 0.5), ivec2(0), inSize - 1);
@@ -431,7 +433,7 @@ vec3 applyPerimeterEdgeBlur(vec3 baseCol, vec2 uv, ivec2 inSize, float amount) {
     return mix(baseCol, accum / 4.0, clamp(blurFactor * 1.2, 0.0, 1.0));
 }
 
-// Cinematic Vignette
+// Vignette
 float calculateVignette(vec2 uv, float amount) {
     if (amount <= 0.001) return 1.0;
     vec2 d = (uv - 0.5) * vec2(1.1, 0.9);
@@ -465,19 +467,19 @@ float calculateFlicker(float intensity, float speed, float time) {
 vec3 applyMathOps(vec3 base, float mode, float mixAmt) {
     if (mixAmt <= 0.001 || mode <= 0.5) return base;
     vec3 blend = vec3(0.0);
-    if (mode > 0.5 && mode < 1.5) blend = vec3(1.0) - (vec3(1.0) - base) * (vec3(1.0) - base); // Screen
-    else if (mode >= 1.5 && mode < 2.5) blend = base * base; // Multiply
-    else if (mode >= 2.5 && mode < 3.5) { // Overlay
+    if (mode > 0.5 && mode < 1.5) blend = vec3(1.0) - (vec3(1.0) - base) * (vec3(1.0) - base);
+    else if (mode >= 1.5 && mode < 2.5) blend = base * base;
+    else if (mode >= 2.5 && mode < 3.5) {
         vec3 less = step(vec3(0.5), base);
         blend = mix(2.0 * base * base, vec3(1.0) - 2.0 * (vec3(1.0) - base) * (vec3(1.0) - base), less);
-    } else if (mode >= 3.5) blend = max(vec3(1.0) - (vec3(1.0) - base) / max(base, vec3(1e-4)), vec3(0.0)); // Color Burn
+    } else if (mode >= 3.5) blend = max(vec3(1.0) - (vec3(1.0) - base) / max(base, vec3(1e-4)), vec3(0.0));
     return mix(base, blend, mixAmt);
 }
 
 // FilmConvert Nitrate Curve
 vec3 applyFilmConvertNitrate(vec3 col, float amount) {
     if (amount <= 0.001) return col;
-    vec3 film = pow(col, vec3(1.12));
+    vec3 film = pow(max(col, vec3(0.0)), vec3(1.12));
     film = film / (film + vec3(0.18)) * 1.18;
     film += vec3(0.015, 0.008, -0.005) * (1.0 - dot(film, vec3(0.299, 0.587, 0.114)));
     return mix(col, film, amount);
@@ -504,21 +506,18 @@ void main() {
 
     if (outPos.x >= outSize.x || outPos.y >= outSize.y) return;
 
-    // Aspect-ratio correct scaling
+    // Cover / Crop mode for 4:5, 9:16, 16:9, 3:4:
     float scaleX = float(outSize.x) / float(inSize.x);
     float scaleY = float(outSize.y) / float(inSize.y);
-    float scale = min(scaleX, scaleY);
+    float scale = max(scaleX, scaleY);
     vec2 offset = (vec2(outSize) - vec2(inSize) * scale) * 0.5;
     vec2 uv = (vec2(outPos) - offset) / (vec2(inSize) * scale);
-
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        imageStore(outputImage, outPos, vec4(0.0, 0.0, 0.0, 1.0));
-        return;
-    }
+    uv = clamp(uv, 0.0, 1.0);
 
     ivec2 inPos = clamp(ivec2(uv * vec2(inSize)), ivec2(0), inSize - 1);
     vec4 srcColor = imageLoad(inputImage, inPos);
     vec3 linear = srgbToLinear(srcColor.rgb);
+    linear = sanitize(linear);
 
     // 1. Bilateral Denoise
     linear = applyBilateralDenoise(inPos, inSize, linear, u.denoise);
@@ -533,7 +532,7 @@ void main() {
     linear = applyDepthOfField(linear, uv, inSize, u.depthOfField, u.dofFocus, u.dofAngle);
 
     // 5. Exposure Gain
-    linear *= pow(2.0, u.brightness);
+    linear *= pow(2.0, clamp(u.brightness, -4.0, 4.0));
 
     // 6. Spline Curves (Master, R, G, B)
     linear = applyCurves(linear);
@@ -541,7 +540,7 @@ void main() {
     // 7. Shadows & Highlights Lift/Compression
     linear = adjustShadowsHighlights(linear, u.shadows, u.highlights);
 
-    // 8. Safe Contrast & S-Curve Black Crush (With Soft Shoulder above 0.9)
+    // 8. Safe Contrast & S-Curve Black Crush
     linear = applyContrastBlackCrushSafe(linear, u.contrast, u.blackCrush);
 
     // 9. Gamma Correction
@@ -552,16 +551,16 @@ void main() {
     linear = adjustTemperature(linear, u.temperature);
     linear = rotateHue(linear, u.hue);
 
-    // 11. UNIFIED DUAL-FILTER BLOOM (Replaces 3 duplicated old glow functions)
+    // 11. UNIFIED DUAL-FILTER BLOOM
     float threshold = u.bloomThreshold > 0.001 ? u.bloomThreshold : 0.50;
     vec3 bloom = calculateDualFilterBloom(uv, inSize, u.bloomIntensity, u.bloomSpread, threshold, u.edgeGlowTint);
     linear += bloom;
 
-    // 12. SCREEN-SPACE CREPUSCULAR LIGHT RAYS (God Rays from single bright pass)
+    // 12. SCREEN-SPACE CREPUSCULAR LIGHT RAYS (God Rays)
     vec3 rays = calculateScreenSpaceLightRays(uv, inSize, u.lightRays, u.lightRaysDecay, threshold);
     linear += rays;
 
-    // 13. COHERENT ANAMORPHIC GLASS FLARES (Driven from single bright pass)
+    // 13. COHERENT ANAMORPHIC GLASS FLARES
     vec3 flares = calculateAnamorphicFlares(uv, inSize, u.anamorphicFlare, u.flareAmount, threshold);
     linear += flares;
 
@@ -574,10 +573,13 @@ void main() {
     // 16. 4-Color Gradient
     linear = apply4ColorGradient(linear, uv, u.fourColorGradMix);
 
-    // 17. HIGHLIGHT DESATURATION (Chroma rolloff towards natural highlight white)
+    // 17. HIGHLIGHT DESATURATION
     linear = highlightDesaturate(linear, 0.55, 0.9);
 
-    // 18. UNCONDITIONAL ACES FILMIC TONE MAPPING (No threshold gating)
+    // Sanitize before Tonemapping
+    linear = sanitize(linear);
+
+    // 18. UNCONDITIONAL ACES FILMIC TONE MAPPING
     linear = filmicTonemap(linear);
 
     // 19. Vignette & Perimeter Blur
@@ -590,13 +592,14 @@ void main() {
     // 21. Shutter Strobe to Black
     linear *= calculateFlicker(u.flickerIntensity, u.flickerSpeed, u.time);
 
-    // 22. PROPORTIONAL HUE-PRESERVING VECTOR COMPRESSION (Replaces hard per-channel clamp)
+    // 22. PROPORTIONAL HUE-PRESERVING VECTOR COMPRESSION
     linear = preserveHueCompress(linear);
 
-    // 23. Linear to sRGB with TPDF Spatial Dithering (Eliminates 8-Bit Banding)
+    // 23. Linear to sRGB with TPDF Spatial Dithering
     vec3 srgb = linearToSrgb(linear);
     float dither = getTPDFDither(vec2(outPos)) * (1.0 / 255.0);
     srgb = clamp(srgb + vec3(dither), vec3(0.0), vec3(1.0));
 
-    imageStore(outputImage, outPos, vec4(srgb, srcColor.a));
+    // Force 1.0 opaque alpha
+    imageStore(outputImage, outPos, vec4(srgb, 1.0));
 }
