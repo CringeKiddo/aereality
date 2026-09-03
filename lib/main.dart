@@ -1,4 +1,4 @@
-// lib/main.dart (Part 1 of 2)
+// lib/main.dart
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -60,9 +60,8 @@ class ProjectData {
   String mediaPath;
   bool isImage;
   double brightness, saturation, contrast, sharpness, gamma, hue, temperature;
-  double glowIntensity, glowSpread, isDeepGlow, deepGlowRadius;
-  double edgeGlow, edgeGlowSpread, edgeGlowTint;
-  double anamorphicFlare, flareAmount;
+  double bloomIntensity, bloomSpread, bloomThreshold, bloomRadius, edgeGlowTint;
+  double anamorphicFlare, flareAmount, lightRays, lightRaysDecay;
   double shadows, highlights;
   double darkOutlines, edgeDarken, vignette, splitToning, denoise, blackCrush;
   double flickerIntensity, flickerSpeed;
@@ -85,15 +84,15 @@ class ProjectData {
     this.gamma = 1.0,
     this.hue = 0.0,
     this.temperature = 6500.0,
-    this.glowIntensity = 0.0,
-    this.glowSpread = 0.35,
-    this.isDeepGlow = 1.0, // Default to deep glow
-    this.deepGlowRadius = 0.5,
-    this.edgeGlow = 0.0,
-    this.edgeGlowSpread = 0.35,
+    this.bloomIntensity = 0.0,
+    this.bloomSpread = 0.40,
+    this.bloomThreshold = 0.45,
+    this.bloomRadius = 1.0,
     this.edgeGlowTint = 0.0, // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
     this.anamorphicFlare = 0.0,
-    this.flareAmount = 0.5,
+    this.flareAmount = 0.50,
+    this.lightRays = 0.0,
+    this.lightRaysDecay = 0.90,
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.darkOutlines = 0.0,
@@ -131,15 +130,15 @@ class ProjectData {
         'gamma': gamma,
         'hue': hue,
         'temperature': temperature,
-        'glowIntensity': glowIntensity,
-        'glowSpread': glowSpread,
-        'isDeepGlow': isDeepGlow,
-        'deepGlowRadius': deepGlowRadius,
-        'edgeGlow': edgeGlow,
-        'edgeGlowSpread': edgeGlowSpread,
+        'bloomIntensity': bloomIntensity,
+        'bloomSpread': bloomSpread,
+        'bloomThreshold': bloomThreshold,
+        'bloomRadius': bloomRadius,
         'edgeGlowTint': edgeGlowTint,
         'anamorphicFlare': anamorphicFlare,
         'flareAmount': flareAmount,
+        'lightRays': lightRays,
+        'lightRaysDecay': lightRaysDecay,
         'shadows': shadows,
         'highlights': highlights,
         'darkOutlines': darkOutlines,
@@ -174,15 +173,15 @@ class ProjectData {
         gamma: (json['gamma'] ?? 1.0).toDouble(),
         hue: (json['hue'] ?? 0.0).toDouble(),
         temperature: (json['temperature'] ?? 6500.0).toDouble(),
-        glowIntensity: (json['glowIntensity'] ?? 0.0).toDouble(),
-        glowSpread: (json['glowSpread'] ?? 0.35).toDouble(),
-        isDeepGlow: (json['isDeepGlow'] ?? 1.0).toDouble(),
-        deepGlowRadius: (json['deepGlowRadius'] ?? 0.5).toDouble(),
-        edgeGlow: (json['edgeGlow'] ?? 0.0).toDouble(),
-        edgeGlowSpread: (json['edgeGlowSpread'] ?? 0.35).toDouble(),
+        bloomIntensity: (json['bloomIntensity'] ?? json['glowIntensity'] ?? 0.0).toDouble(),
+        bloomSpread: (json['bloomSpread'] ?? json['glowSpread'] ?? 0.40).toDouble(),
+        bloomThreshold: (json['bloomThreshold'] ?? 0.45).toDouble(),
+        bloomRadius: (json['bloomRadius'] ?? 1.0).toDouble(),
         edgeGlowTint: (json['edgeGlowTint'] ?? json['edgeGlowColorMode'] ?? 0.0).toDouble(),
         anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
-        flareAmount: (json['flareAmount'] ?? 0.5).toDouble(),
+        flareAmount: (json['flareAmount'] ?? 0.50).toDouble(),
+        lightRays: (json['lightRays'] ?? 0.0).toDouble(),
+        lightRaysDecay: (json['lightRaysDecay'] ?? 0.90).toDouble(),
         shadows: (json['shadows'] ?? 0.0).toDouble(),
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
@@ -336,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 6),
             const Text('Professional WIS Grading Engine', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            const Text('Hardware-accelerated deep optical glow, spline curves, and black crush on Mali & Adreno GPUs.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+            const Text('Unified Dual-Filter Bloom, Screen-Space Crepuscular Rays, and ACES Tonemapping on GPU.', style: TextStyle(color: Colors.white54, fontSize: 13)),
             const SizedBox(height: 24),
             Row(
               children: [
@@ -734,6 +733,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     );
   }
 }
+
 // ---------- STUDIO EDITOR SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -755,7 +755,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // Active Category Pill
   String _activeCategory = 'bloom';
-  String _activeCurveChannel = 'master'; // 'master' | 'red' | 'green' | 'blue'
+  String _activeCurveChannel = 'master';
 
   // Master Sliders
   double _brightness = 0.0;
@@ -765,15 +765,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _gamma = 1.0;
   double _hue = 0.0;
   double _temperature = 6500.0;
-  double _glowIntensity = 0.0;
-  double _glowSpread = 0.35;
-  double _isDeepGlow = 1.0; // 0.0 = Normal Gaussian, 1.0 = Inverse Square Deep Glow
-  double _deepGlowRadius = 0.5;
-  double _edgeGlow = 0.0;
-  double _edgeGlowSpread = 0.35;
+  
+  // UNIFIED DUAL-FILTER BLOOM & RAYS
+  double _bloomIntensity = 0.0;
+  double _bloomSpread = 0.40;
+  double _bloomThreshold = 0.45;
+  double _bloomRadius = 1.0;
   double _edgeGlowTint = 0.0; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
   double _anamorphicFlare = 0.0;
-  double _flareAmount = 0.5;
+  double _flareAmount = 0.50;
+  double _lightRays = 0.0;
+  double _lightRaysDecay = 0.90;
+
   double _shadows = 0.0;
   double _highlights = 0.0;
   double _darkOutlines = 0.0;
@@ -789,7 +792,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _dofAngle = 0.0;
 
   // AE Effects
-  double _mathOpsMode = 0.0; // 0=Off, 1=Screen, 2=Multiply, 3=Overlay, 4=ColorBurn
+  double _mathOpsMode = 0.0;
   double _mathOpsMix = 0.0;
   double _filmConvertNitrate = 0.0;
   double _fourColorGradMix = 0.0;
@@ -829,15 +832,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _gamma = p.gamma;
       _hue = p.hue;
       _temperature = p.temperature;
-      _glowIntensity = p.glowIntensity;
-      _glowSpread = p.glowSpread;
-      _isDeepGlow = p.isDeepGlow;
-      _deepGlowRadius = p.deepGlowRadius;
-      _edgeGlow = p.edgeGlow;
-      _edgeGlowSpread = p.edgeGlowSpread;
+      _bloomIntensity = p.bloomIntensity;
+      _bloomSpread = p.bloomSpread;
+      _bloomThreshold = p.bloomThreshold;
+      _bloomRadius = p.bloomRadius;
       _edgeGlowTint = p.edgeGlowTint;
       _anamorphicFlare = p.anamorphicFlare;
       _flareAmount = p.flareAmount;
+      _lightRays = p.lightRays;
+      _lightRaysDecay = p.lightRaysDecay;
       _shadows = p.shadows;
       _highlights = p.highlights;
       _darkOutlines = p.darkOutlines;
@@ -1006,15 +1009,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[5] = _gamma;
     uniforms[6] = _hue;
     uniforms[7] = _temperature;
-    uniforms[8] = _glowIntensity;
-    uniforms[9] = _glowSpread;
-    uniforms[10] = _isDeepGlow;
-    uniforms[11] = _deepGlowRadius;
-    uniforms[12] = _edgeGlow;
-    uniforms[13] = _edgeGlowSpread;
-    uniforms[14] = _edgeGlowTint;
-    uniforms[15] = _anamorphicFlare;
-    uniforms[16] = _flareAmount;
+    
+    // UNIFIED DUAL-FILTER BLOOM & RAYS (Offsets 8..16)
+    uniforms[8] = _bloomIntensity;
+    uniforms[9] = _bloomSpread;
+    uniforms[10] = _bloomThreshold;
+    uniforms[11] = _bloomRadius;
+    uniforms[12] = _edgeGlowTint;
+    uniforms[13] = _anamorphicFlare;
+    uniforms[14] = _flareAmount;
+    uniforms[15] = _lightRays;
+    uniforms[16] = _lightRaysDecay;
+
     uniforms[17] = _shadows;
     uniforms[18] = _highlights;
     uniforms[19] = _darkOutlines;
@@ -1122,15 +1128,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _gamma = 1.0;
       _hue = 0.0;
       _temperature = 6500.0;
-      _glowIntensity = 0.0;
-      _glowSpread = 0.35;
-      _isDeepGlow = 1.0;
-      _deepGlowRadius = 0.5;
-      _edgeGlow = 0.0;
-      _edgeGlowSpread = 0.35;
+      _bloomIntensity = 0.0;
+      _bloomSpread = 0.40;
+      _bloomThreshold = 0.45;
+      _bloomRadius = 1.0;
       _edgeGlowTint = 0.0;
       _anamorphicFlare = 0.0;
-      _flareAmount = 0.5;
+      _flareAmount = 0.50;
+      _lightRays = 0.0;
+      _lightRaysDecay = 0.90;
       _shadows = 0.0;
       _highlights = 0.0;
       _darkOutlines = 0.0;
@@ -1188,15 +1194,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         gamma: _gamma,
         hue: _hue,
         temperature: _temperature,
-        glowIntensity: _glowIntensity,
-        glowSpread: _glowSpread,
-        isDeepGlow: _isDeepGlow,
-        deepGlowRadius: _deepGlowRadius,
-        edgeGlow: _edgeGlow,
-        edgeGlowSpread: _edgeGlowSpread,
+        bloomIntensity: _bloomIntensity,
+        bloomSpread: _bloomSpread,
+        bloomThreshold: _bloomThreshold,
+        bloomRadius: _bloomRadius,
         edgeGlowTint: _edgeGlowTint,
         anamorphicFlare: _anamorphicFlare,
         flareAmount: _flareAmount,
+        lightRays: _lightRays,
+        lightRaysDecay: _lightRaysDecay,
         shadows: _shadows,
         highlights: _highlights,
         darkOutlines: _darkOutlines,
@@ -1228,55 +1234,55 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // EXACT WEB-MATCHING PRESETS
+  // EXACT WEB-MATCHING PRESETS (Updated to use Unified Bloom & Rays)
   void _applyPreset(String name) {
     setState(() {
       _resetAllEffects();
       switch (name) {
         case 'vintage cc':
           _brightness = 0.05; _saturation = 0.90; _contrast = 1.15; _sharpness = 0.18; _gamma = 1.04;
-          _temperature = 5800.0; _glowIntensity = 0.22; _glowSpread = 0.40; _isDeepGlow = 0.0;
+          _temperature = 5800.0; _bloomIntensity = 0.25; _bloomSpread = 0.40; _bloomThreshold = 0.40;
           _vignette = 0.25; _splitToning = 0.15; _blackCrush = 0.04; _filmConvertNitrate = 0.35;
           _curveMaster = [0.05, 0.26, 0.50, 0.76, 0.96];
           break;
         case 'adevob+junho':
-          _brightness = 0.02; _saturation = 1.40; _contrast = 1.55; _sharpness = 0.70; _gamma = 0.92;
-          _temperature = 6000.0; _glowIntensity = 0.55; _glowSpread = 0.38; _isDeepGlow = 1.0;
-          _deepGlowRadius = 0.50; _edgeGlow = 0.22; _edgeGlowTint = 1.0; // Gold
-          _darkOutlines = 0.45; _blackCrush = 0.35; _vignette = 0.20;
+          _brightness = 0.02; _saturation = 1.35; _contrast = 1.45; _sharpness = 0.70; _gamma = 0.92;
+          _temperature = 6000.0; _bloomIntensity = 0.55; _bloomSpread = 0.45; _bloomThreshold = 0.38;
+          _edgeGlowTint = 1.0; // Gold
+          _darkOutlines = 0.45; _blackCrush = 0.28; _vignette = 0.20;
           _curveMaster = [0.0, 0.18, 0.50, 0.82, 1.0];
           break;
         case 'adevobfiller':
-          _brightness = 0.0; _saturation = 1.30; _contrast = 1.40; _sharpness = 0.55; _gamma = 0.95;
-          _temperature = 6200.0; _glowIntensity = 0.40; _glowSpread = 0.48; _isDeepGlow = 1.0;
-          _deepGlowRadius = 0.45; _blackCrush = 0.24; _darkOutlines = 0.30; _vignette = 0.15;
+          _brightness = 0.0; _saturation = 1.25; _contrast = 1.38; _sharpness = 0.55; _gamma = 0.95;
+          _temperature = 6200.0; _bloomIntensity = 0.42; _bloomSpread = 0.50; _bloomThreshold = 0.40;
+          _blackCrush = 0.22; _darkOutlines = 0.30; _vignette = 0.15;
           _curveMaster = [0.0, 0.20, 0.50, 0.80, 1.0];
           break;
         case 'uryu vs ichigo':
-          _brightness = -0.02; _saturation = 1.25; _contrast = 1.50; _sharpness = 0.65; _gamma = 0.94;
-          _temperature = 7800.0; _glowIntensity = 0.48; _glowSpread = 0.35; _isDeepGlow = 1.0;
-          _edgeGlow = 0.38; _edgeGlowTint = 2.0; // Quincy Blue
-          _anamorphicFlare = 0.45; _flareAmount = 0.60; _darkOutlines = 0.50; _blackCrush = 0.32;
+          _brightness = -0.02; _saturation = 1.25; _contrast = 1.45; _sharpness = 0.65; _gamma = 0.94;
+          _temperature = 7800.0; _bloomIntensity = 0.50; _bloomSpread = 0.40; _bloomThreshold = 0.35;
+          _edgeGlowTint = 2.0; // Quincy Blue
+          _anamorphicFlare = 0.45; _flareAmount = 0.60; _darkOutlines = 0.50; _blackCrush = 0.28;
           _vignette = 0.22;
           _curveMaster = [0.0, 0.16, 0.48, 0.84, 1.0];
           break;
         case 'saber vs Rin':
-          _brightness = 0.04; _saturation = 1.45; _contrast = 1.45; _sharpness = 0.60; _gamma = 0.93;
-          _temperature = 6500.0; _glowIntensity = 0.65; _glowSpread = 0.50; _isDeepGlow = 1.0;
-          _anamorphicFlare = 0.55; _flareAmount = 0.70; _edgeGlow = 0.28; _vignette = 0.18;
-          _blackCrush = 0.25;
+          _brightness = 0.04; _saturation = 1.35; _contrast = 1.40; _sharpness = 0.60; _gamma = 0.93;
+          _temperature = 6500.0; _bloomIntensity = 0.65; _bloomSpread = 0.55; _bloomThreshold = 0.35;
+          _anamorphicFlare = 0.55; _flareAmount = 0.70; _lightRays = 0.35; _vignette = 0.18;
+          _blackCrush = 0.24;
           _curveMaster = [0.0, 0.22, 0.52, 0.85, 1.0];
           break;
         case 'Dantae cc':
-          _brightness = -0.03; _saturation = 1.25; _contrast = 1.55; _sharpness = 0.75; _gamma = 0.90;
-          _temperature = 6800.0; _glowIntensity = 0.38; _glowSpread = 0.32; _isDeepGlow = 1.0;
-          _edgeDarken = 0.25; _darkOutlines = 0.55; _blackCrush = 0.38; _vignette = 0.22;
+          _brightness = -0.03; _saturation = 1.22; _contrast = 1.50; _sharpness = 0.75; _gamma = 0.90;
+          _temperature = 6800.0; _bloomIntensity = 0.40; _bloomSpread = 0.35; _bloomThreshold = 0.42;
+          _edgeDarken = 0.25; _darkOutlines = 0.55; _blackCrush = 0.32; _vignette = 0.22;
           _curveMaster = [0.0, 0.14, 0.48, 0.85, 1.0];
           break;
         case 'toji junho':
-          _brightness = -0.01; _saturation = 1.15; _contrast = 1.60; _sharpness = 0.72; _gamma = 0.88;
-          _temperature = 6100.0; _glowIntensity = 0.45; _glowSpread = 0.35; _isDeepGlow = 1.0;
-          _darkOutlines = 0.58; _blackCrush = 0.44; _vignette = 0.26;
+          _brightness = -0.01; _saturation = 1.15; _contrast = 1.55; _sharpness = 0.72; _gamma = 0.88;
+          _temperature = 6100.0; _bloomIntensity = 0.48; _bloomSpread = 0.38; _bloomThreshold = 0.40;
+          _darkOutlines = 0.58; _blackCrush = 0.38; _vignette = 0.26;
           _curveMaster = [0.0, 0.12, 0.46, 0.86, 1.0];
           break;
       }
@@ -2027,7 +2033,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
     }
 
-    // Timeline duration values
     final currentPos = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position
         : Duration.zero;
@@ -2039,7 +2044,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       appBar: AppBar(
         title: Text(widget.projectName ?? 'Untitled Project'),
         actions: [
-          // GOLD FOLDER IMPORT BUTTON AT TOP RIGHT
           IconButton(
             icon: const Icon(Icons.folder_open, color: Color(0xFFFFD700), size: 24),
             tooltip: 'Import Video or Image',
@@ -2140,7 +2144,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
           ),
 
-          // TIMELINE SCRUBBER WITH THICKER BAR & EXACT ELAPSED/TOTAL TIMESTAMP COUNTER
+          // TIMELINE SCRUBBER
           Container(
             color: const Color(0xFF0A0A0D),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2178,7 +2182,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                        trackHeight: 5, // THICKER PLAYBACK BAR
+                        trackHeight: 5,
                         activeTrackColor: const Color(0xFF00F0FF),
                         inactiveTrackColor: Colors.white12,
                         thumbColor: Colors.white,
@@ -2196,7 +2200,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // EXACT TIME COUNTER
                   Text(
                     '${_formatDuration(currentPos)} / ${_formatDuration(totalDuration)}',
                     style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
@@ -2234,13 +2237,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
           ),
 
-          // TAB CONTENT (CARD DRAWERS)
+          // TAB CONTENT
           SizedBox(
             height: 260,
             child: TabBarView(
               controller: _tabController,
               children: [
-                // TAB 1: ADJUST & EFFECTS (CARD DRAWERS)
+                // TAB 1: ADJUST & EFFECTS
                 Column(
                   children: [
                     SingleChildScrollView(
@@ -2248,7 +2251,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       child: Row(
                         children: [
-                          _buildSubcategoryPill('bloom', 'Bloom & Flares'),
+                          _buildSubcategoryPill('bloom', 'Bloom & Rays'),
                           _buildSubcategoryPill('color', 'Color & Tone'),
                           _buildSubcategoryPill('curves', 'Curves'),
                           _buildSubcategoryPill('ae_tools', 'AE / Sapphire'),
@@ -2263,49 +2266,38 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         child: Column(
                           children: [
                             if (_activeCategory == 'bloom') ...[
-                              // DEEP GLOW / NORMAL GLOW TOGGLEABLE
+                              // UNIFIED DUAL-FILTER BLOOM CARD
                               _buildDrawerCard(
-                                title: _isDeepGlow > 0.5 ? 'AE Deep Glow (Inverse Square)' : 'Normal Gaussian Bloom',
-                                badge1: _isDeepGlow > 0.5 ? 'Deep Glow' : 'Normal',
-                                subtitle: '36-tap continuous Vogel spiral with soft-knee highlight threshold (0 clumping, 0 duplicate halos)',
-                                headerTrailing: ChoiceChip(
-                                  label: Text(_isDeepGlow > 0.5 ? 'Deep' : 'Normal', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                  selected: _isDeepGlow > 0.5,
-                                  selectedColor: const Color(0xFF00F0FF),
-                                  backgroundColor: const Color(0xFF18181E),
-                                  onSelected: (sel) {
-                                    setState(() => _isDeepGlow = sel ? 1.0 : 0.0);
-                                    if (_isImage) _processStaticImage();
-                                  },
-                                ),
-                                child: Column(
-                                  children: [
-                                    _buildSliderRow('Glow Intensity', 0.0, 3.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
-                                    _buildSliderRow('Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
-                                    if (_isDeepGlow > 0.5)
-                                      _buildSliderRow('Falloff Radius', 0.1, 1.5, _deepGlowRadius, (v) => setState(() => _deepGlowRadius = v)),
-                                  ],
-                                ),
-                              ),
-                              // SCREEN-SPACE DIFFUSED EDGE GLOW
-                              _buildDrawerCard(
-                                title: 'Screen-Space Edge Rim Glow',
-                                badge1: 'Rim',
-                                subtitle: 'Luminous character contour bloom with spreading radius and tint palette',
+                                title: 'Dual-Filter Optical Bloom',
+                                badge1: 'Unified',
+                                badge2: 'Energy-Conserving',
+                                subtitle: 'Single-pass soft-knee extraction with 13-tap tent filter falloff (Zero duplicate halos)',
                                 headerTrailing: _buildEdgeGlowPalette(),
                                 child: Column(
                                   children: [
-                                    _buildSliderRow('Edge Glow Intensity', 0.0, 3.0, _edgeGlow, (v) => setState(() => _edgeGlow = v)),
-                                    _buildSliderRow('Edge Spread', 0.1, 2.0, _edgeGlowSpread, (v) => setState(() => _edgeGlowSpread = v)),
+                                    _buildSliderRow('Bloom Intensity', 0.0, 3.0, _bloomIntensity, (v) => setState(() => _bloomIntensity = v)),
+                                    _buildSliderRow('Bloom Spread', 0.1, 2.0, _bloomSpread, (v) => setState(() => _bloomSpread = v)),
+                                    _buildSliderRow('Soft-Knee Cutoff', 0.05, 1.0, _bloomThreshold, (v) => setState(() => _bloomThreshold = v)),
                                   ],
                                 ),
                               ),
-                              // ANAMORPHIC GLASS FLARES
+                              // SCREEN-SPACE CREPUSCULAR LIGHT RAYS
                               _buildDrawerCard(
-                                title: 'Optical Anamorphic Flares',
+                                title: 'Screen-Space Crepuscular Rays',
+                                badge1: 'God Rays',
+                                subtitle: 'Directional radial light shafts emanating outward from bright sources',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Rays Intensity', 0.0, 3.0, _lightRays, (v) => setState(() => _lightRays = v)),
+                                    _buildSliderRow('Ray Decay/Length', 0.5, 0.99, _lightRaysDecay, (v) => setState(() => _lightRaysDecay = v)),
+                                  ],
+                                ),
+                              ),
+                              // COHERENT ANAMORPHIC GLASS FLARES
+                              _buildDrawerCard(
+                                title: 'Optical Anamorphic Glass Flares',
                                 badge1: 'Flares',
-                                badge2: 'Streak',
-                                subtitle: 'Horizontal specular glass glints with continuous Gaussian decay',
+                                subtitle: 'Horizontal specular glints driven directly by the unified bright-pass buffer',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Flare Intensity', 0.0, 3.0, _anamorphicFlare, (v) => setState(() => _anamorphicFlare = v)),
@@ -2317,7 +2309,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               _buildDrawerCard(
                                 title: 'Tone & Dynamic Contrast',
                                 badge1: 'Exposure',
-                                subtitle: 'Perceptual HDR luminance lift, contrast pivot and gamma grading',
+                                subtitle: 'Perceptual HDR luminance lift, soft-shoulder contrast pivot, and gamma grading',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Brightness', -1.0, 3.0, _brightness, (v) => setState(() => _brightness = v)),
@@ -2328,11 +2320,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ],
                                 ),
                               ),
-                              // SHADOWS & HIGHLIGHTS
                               _buildDrawerCard(
                                 title: 'Shadows & Highlights Tone Map',
                                 badge1: 'Dynamic Range',
-                                subtitle: 'Isolates and lifts deep shadows while compressing or boosting hot highlights',
+                                subtitle: 'Isolates and lifts deep shadows while compressing hot highlights',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Shadows Lift', -1.0, 1.0, _shadows, (v) => setState(() => _shadows = v)),
@@ -2359,7 +2350,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                 child: _buildCurvesEditor(),
                               ),
                             ] else if (_activeCategory == 'ae_tools') ...[
-                              // AE / SAPPHIRE RECREATIONS
                               _buildDrawerCard(
                                 title: 'Sapphire S_MathOps',
                                 badge1: 'Sapphire',
@@ -2400,11 +2390,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                 subtitle: 'High-pass unsharp masking tailored for anime with crisp micro-halos',
                                 child: _buildSliderRow('Sharpness', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
                               ),
-                              // TRUE SOBEL LINE ART
                               _buildDrawerCard(
                                 title: 'True Sobel Anime Ink Line Darkener',
                                 badge1: 'Manga FX',
-                                subtitle: 'Isolates and darkens ONLY character ink lines and outlines without touching shadow fills',
+                                subtitle: 'Isolates and darkens ONLY character ink lines without touching shadow fills',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Ink Outlines', 0.0, 3.0, _darkOutlines, (v) => setState(() => _darkOutlines = v)),
@@ -2412,7 +2401,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ],
                                 ),
                               ),
-                              // DIRECTIONAL DEPTH OF FIELD
                               _buildDrawerCard(
                                 title: 'Directional Depth of Field (Bokeh)',
                                 badge1: 'Optics',
@@ -2465,11 +2453,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   mainAxisSpacing: 8,
                   crossAxisSpacing: 8,
                   children: [
-                    _buildPresetCard('vintage cc', 'Filmic warm pedestal, soft glow & grain'),
+                    _buildPresetCard('vintage cc', 'Filmic warm pedestal, soft bloom & grain'),
                     _buildPresetCard('adevob+junho', 'Signature Adevob x Junho golden specular & black crush'),
                     _buildPresetCard('adevobfiller', 'High-saturation amber bloom & deep teal contrast'),
                     _buildPresetCard('uryu vs ichigo', 'Bleach TYBW cyan specular core & cold shadows'),
-                    _buildPresetCard('saber vs Rin', 'Fate UBW anamorphic glow & glass flares'),
+                    _buildPresetCard('saber vs Rin', 'Fate UBW anamorphic bloom & crepuscular rays'),
                     _buildPresetCard('Dantae cc', 'High-voltage contrast, micro-sharpness & edge blur'),
                     _buildPresetCard('toji junho', 'Gritty bleach bypass, golden weapon glints & crushed gamma'),
                   ],
