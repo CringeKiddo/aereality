@@ -39,7 +39,7 @@ static void* uniformMapped = nullptr;
 
 static int inputWidth = 0, inputHeight = 0;
 static int outputWidth = 0, outputHeight = 0;
-static bool use32BitFloat = false; // Toggleable via engine settings
+static bool use32BitFloat = false;
 static bool initialized = false;
 static bool imagesCreated = false;
 
@@ -324,11 +324,11 @@ void createImages(int inW, int inH, int outW, int outH) {
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
 
-    // Uniform buffer (240 bytes for std140 layout with curves)
+    // Uniform buffer (272 bytes: 68 floats for std140 layout)
     if (!uniformBuffer) {
         VkBufferCreateInfo uInfo = {};
         uInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        uInfo.size = 240;
+        uInfo.size = 272;
         uInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         uInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         vkCreateBuffer(device, &uInfo, nullptr, &uniformBuffer);
@@ -512,7 +512,7 @@ void set_engine_precision(int mode) {
     bool nextMode = (mode == 32);
     if (nextMode != use32BitFloat) {
         use32BitFloat = nextMode;
-        cleanupImages(); // Recreates swapchain with new float format
+        cleanupImages();
     }
 }
 
@@ -526,8 +526,8 @@ void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, u
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)outW;
         ubo[1] = (float)outH;
-        // Copy 58 parameter floats directly into std140 block
-        memcpy(ubo + 2, uniforms, 58 * sizeof(float));
+        // Copy 66 parameter floats directly into std140 block (offset 2..67)
+        memcpy(ubo + 2, uniforms, 66 * sizeof(float));
 
         VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, uniformMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(device, 1, &flushRange);
