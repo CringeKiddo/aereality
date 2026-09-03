@@ -5,47 +5,45 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
 
-// std140 byte-aligned uniform block (208 bytes)
+// std140 uniform block (60 floats / 240 bytes)
 layout(set = 0, binding = 2, std140) uniform Uniforms {
-    vec2 resolution;          // offset 0  (8 bytes)
-    float time;               // offset 8  (4 bytes)
-    float brightness;         // offset 12 (4 bytes)
-    float saturation;         // offset 16 (4 bytes)
-    float contrast;           // offset 20 (4 bytes)
-    float sharpness;          // offset 24 (4 bytes)
-    float gamma;              // offset 28 (4 bytes)
-    float hue;                // offset 32 (4 bytes)
-    float temperature;        // offset 36 (4 bytes)
-    float glowIntensity;      // offset 40 (4 bytes)
-    float glowSpread;         // offset 44 (4 bytes)
-    float edgeGlow;           // offset 48 (4 bytes)
-    float edgeDarken;         // offset 52 (4 bytes)
-    float vignette;           // offset 56 (4 bytes)
-    float splitToning;        // offset 60 (4 bytes)
-    float denoise;            // offset 64 (4 bytes)
-    float darkOutlines;       // offset 68 (4 bytes)
-    float blackCrush;         // offset 72 (4 bytes)
-    float flickerIntensity;   // offset 76 (4 bytes)
-    float flickerSpeed;       // offset 80 (4 bytes)
-    float dustParticles;      // offset 84 (4 bytes)
-    float dustIntensity;      // offset 88 (4 bytes)
-    float dustSpeed;          // offset 92 (4 bytes)
-    float godRays;            // offset 96 (4 bytes)
-    float volumetricFog;      // offset 100 (4 bytes)
-    float depthOfField;       // offset 104 (4 bytes)
-    float pad0;               // offset 108 (4 bytes) - padding to 16-byte boundary
-    // Curves (Master, Red, Green, Blue 5-point splines)
-    vec4 curveMasterA;        // offset 112 (pts 0, 1, 2, 3)
-    vec4 curveMasterB;        // offset 128 (pt 4, pad, pad, pad)
-    vec4 curveRedA;           // offset 144
-    vec4 curveRedB;           // offset 160
-    vec4 curveGreenA;         // offset 176
-    vec4 curveGreenB;         // offset 192
-    vec4 curveBlueA;          // offset 208
-    vec4 curveBlueB;          // offset 224
+    vec2 resolution;          // offset 0..1 (8 bytes)
+    float time;               // offset 2    (4 bytes)
+    float brightness;         // offset 3    (4 bytes)
+    float saturation;         // offset 4    (4 bytes)
+    float contrast;           // offset 5    (4 bytes)
+    float sharpness;          // offset 6    (4 bytes)
+    float gamma;              // offset 7    (4 bytes)
+    float hue;                // offset 8    (4 bytes)
+    float temperature;        // offset 9    (4 bytes)
+    float glowIntensity;      // offset 10   (4 bytes)
+    float glowSpread;         // offset 11   (4 bytes)
+    float edgeGlow;           // offset 12   (4 bytes)
+    float edgeDarken;         // offset 13   (4 bytes)
+    float vignette;           // offset 14   (4 bytes)
+    float splitToning;        // offset 15   (4 bytes)
+    float denoise;            // offset 16   (4 bytes)
+    float darkOutlines;       // offset 17   (4 bytes)
+    float blackCrush;         // offset 18   (4 bytes)
+    float flickerIntensity;   // offset 19   (4 bytes)
+    float flickerSpeed;       // offset 20   (4 bytes)
+    float dustParticles;      // offset 21   (4 bytes)
+    float dustIntensity;      // offset 22   (4 bytes)
+    float dustSpeed;          // offset 23   (4 bytes)
+    float godRays;            // offset 24   (4 bytes)
+    float volumetricFog;      // offset 25   (4 bytes)
+    float depthOfField;       // offset 26   (4 bytes)
+    float edgeGlowColorMode;  // offset 27   (4 bytes) 0: White, 1: Gold, 2: Quincy Blue, 3: Cyan, 4: Crimson
+    vec4 curveMasterA;        // offset 28..31
+    vec4 curveMasterB;        // offset 32..35
+    vec4 curveRedA;           // offset 36..39
+    vec4 curveRedB;           // offset 40..43
+    vec4 curveGreenA;         // offset 44..47
+    vec4 curveGreenB;         // offset 48..51
+    vec4 curveBlueA;          // offset 52..55
+    vec4 curveBlueB;          // offset 56..59
 } u;
 
-// ---------- HELPERS & COLOR SPACES ----------
 vec3 srgbToLinear(vec3 srgb) {
     vec3 less = step(vec3(0.04045), srgb);
     return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), less);
@@ -57,7 +55,6 @@ vec3 linearToSrgb(vec3 lin) {
     return mix(lin * 12.92, pow(lin, vec3(1.0 / 2.4)) * 1.055 - 0.055, less);
 }
 
-// 5-Point Monotonic Cubic Curve Evaluator
 float evalCurve5(float x, vec4 cA, float c4) {
     x = clamp(x, 0.0, 1.0);
     float p0 = cA.x, p1 = cA.y, p2 = cA.z, p3 = cA.w, p4 = c4;
@@ -93,14 +90,12 @@ vec3 applyCurves(vec3 col) {
     return outCol;
 }
 
-// Kelvin Color Temperature Balance
 vec3 adjustTemperature(vec3 color, float temp) {
     float r = color.r * (temp / 6500.0);
     float b = color.b * (6500.0 / temp);
     return vec3(r, color.g, b);
 }
 
-// 3x3 Perceptual Hue Rotation
 vec3 rotateHue(vec3 color, float angle) {
     float cosA = cos(angle * 3.14159265 / 180.0);
     float sinA = sin(angle * 3.14159265 / 180.0);
@@ -118,7 +113,7 @@ vec3 rotateHue(vec3 color, float angle) {
     return rotMat * color;
 }
 
-// True Optical Deep Glow with Inverse-Squared Falloff
+// True AE Optical Deep Glow with Inverse-Squared Falloff
 vec3 deepGlowInverseSquare(ivec2 pos, ivec2 size, float intensity, float spread) {
     if (intensity <= 0.001) return vec3(0.0);
     const int SAMPLES = 32;
@@ -134,15 +129,11 @@ vec3 deepGlowInverseSquare(ivec2 pos, ivec2 size, float intensity, float spread)
         vec3 col = srgbToLinear(imageLoad(inputImage, sPos).rgb);
         float lum = dot(col, vec3(0.299, 0.587, 0.114));
 
-        // Threshold on super-white HDR speculars
         float threshold = max((lum - 0.75) / 0.25, 0.0);
         float dist = length(vec2(sPos - pos));
-
-        // Inverse-squared falloff 1 / (1 + (d / r0)^2)
         float invSq = 1.0 / (1.0 + pow(dist / (maxR * 0.35 + 1.0), 2.0));
         float weight = invSq * threshold;
 
-        // Warm specular tint (golden amber)
         vec3 glowTint = mix(vec3(1.0, 1.0, 1.0), vec3(1.15, 0.95, 0.75), 0.5);
         accum += col * glowTint * weight;
         wTotal += weight;
@@ -151,8 +142,8 @@ vec3 deepGlowInverseSquare(ivec2 pos, ivec2 size, float intensity, float spread)
     return (accum / wTotal) * (intensity * 1.8);
 }
 
-// Edge Glow Radiating Outward
-vec3 calculateEdgeGlow(ivec2 pos, ivec2 size, float intensity) {
+// Edge Glow with Dynamic Palette (White, Gold, Quincy Blue, Cyan, Crimson)
+vec3 calculateEdgeGlow(ivec2 pos, ivec2 size, float intensity, float colorMode) {
     if (intensity <= 0.001) return vec3(0.0);
     ivec2 pN = clamp(pos + ivec2(0, -2), ivec2(0), size - 1);
     ivec2 pS = clamp(pos + ivec2(0,  2), ivec2(0), size - 1);
@@ -170,10 +161,17 @@ vec3 calculateEdgeGlow(ivec2 pos, ivec2 size, float intensity) {
     float lumE = dot(cE, vec3(0.299, 0.587, 0.114));
 
     float edge = length(vec2(lumE - lumW, lumS - lumN));
-    return vec3(0.8, 0.95, 1.1) * smoothstep(0.12, 0.65, edge) * (intensity * 0.75);
+    
+    vec3 tint = vec3(1.0, 1.0, 1.0); // 0: White
+    if (colorMode > 0.5 && colorMode < 1.5) tint = vec3(1.2, 0.95, 0.55); // 1: Gold
+    else if (colorMode >= 1.5 && colorMode < 2.5) tint = vec3(0.5, 0.75, 1.3); // 2: Quincy Blue
+    else if (colorMode >= 2.5 && colorMode < 3.5) tint = vec3(0.2, 1.1, 1.2); // 3: Cyan
+    else if (colorMode >= 3.5) tint = vec3(1.3, 0.3, 0.4); // 4: Crimson
+
+    return tint * smoothstep(0.10, 0.60, edge) * (intensity * 0.85);
 }
 
-// Character Edge Darkening Blur
+// Manga / Anime Character Edge Darkening Blur
 vec3 applyDarkEdgeBlur(vec3 col, ivec2 pos, ivec2 size, float amount) {
     if (amount <= 0.001) return col;
     ivec2 pN = clamp(pos + ivec2(0, -2), ivec2(0), size - 1);
@@ -191,7 +189,7 @@ vec3 applyDarkEdgeBlur(vec3 col, ivec2 pos, ivec2 size, float amount) {
     return mix(col, col * 0.45, darkEdge * 0.65);
 }
 
-// Unsharp Mask Edge Crispness
+// Unsharp Mask Edge Sharpness
 vec3 applySharpness(vec3 center, ivec2 pos, ivec2 size, float amount) {
     if (amount <= 0.001) return center;
     ivec2 pN = clamp(pos + ivec2(0, -1), ivec2(0), size - 1);
@@ -325,12 +323,12 @@ void main() {
     vec4 srcColor = imageLoad(inputImage, inPos);
     vec3 linear = srgbToLinear(srcColor.rgb);
 
-    // 1. Sharpness & Dark Line Enhancement
+    // 1. Sharpness & Line Art
     linear = applySharpness(linear, inPos, inSize, u.sharpness);
     linear = applyDarkOutlines(linear, inPos, inSize, u.darkOutlines);
     linear = applyDarkEdgeBlur(linear, inPos, inSize, u.edgeDarken);
 
-    // 2. Color & Tone Adjustments
+    // 2. Color & Tone
     float gain = pow(2.0, u.brightness);
     linear *= gain;
     linear = (linear - 0.5) * u.contrast + 0.5;
@@ -340,18 +338,18 @@ void main() {
     linear = adjustTemperature(linear, u.temperature);
     linear = rotateHue(linear, u.hue);
 
-    // 3. Curves Evaluation
+    // 3. Curves
     linear = applyCurves(linear);
 
-    // 4. Black Crush
+    // 4. Inky Black Crush
     linear = applyBlackCrush(linear, u.blackCrush);
 
-    // 5. Deep Glow (Inverse-Squared) & Edge Glow
+    // 5. Deep Glow (Inverse Square) & Colored Edge Glow
     vec3 bloom = deepGlowInverseSquare(inPos, inSize, u.glowIntensity, u.glowSpread);
-    vec3 eGlow = calculateEdgeGlow(inPos, inSize, u.edgeGlow);
+    vec3 eGlow = calculateEdgeGlow(inPos, inSize, u.edgeGlow, u.edgeGlowColorMode);
     linear += bloom + eGlow;
 
-    // 6. Volumetric Rays & Dust Motes
+    // 6. Volumetric Rays & Dust
     linear += calculateGodRays(uv, u.godRays, inSize);
     if (u.dustParticles > 0.5) {
         linear += calculateDust(uv, u.dustIntensity, u.dustSpeed, u.time, u.resolution);
@@ -362,7 +360,7 @@ void main() {
     linear *= calculateVignette(outUV, u.vignette);
     linear = splitTone(linear, u.splitToning);
 
-    // 8. Exposure Black Flicker
+    // 8. Black Strobe
     linear *= calculateBlackFlicker(u.flickerIntensity, u.flickerSpeed, u.time);
 
     linear = clamp(linear, vec3(0.0), vec3(1.0));
