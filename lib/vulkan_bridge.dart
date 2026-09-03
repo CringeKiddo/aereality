@@ -51,8 +51,9 @@ final cleanupProcessor = nativeLib
     .asFunction<DartCleanup>();
 
 bool _initialized = false;
+bool get isVulkanReady => _initialized;
 
-// 1 time float + 25 parameters + 32 floats for 4 curves (8 floats per curve) = 58 floats total
+// 1 time float + 25 parameters + 32 floats for 4 curves = 58 floats total
 const int kUniformCount = 58;
 
 void initVulkan(Uint8List spirv, [int precision = 16]) {
