@@ -1,10 +1,9 @@
-// native/vulkan_processor.cpp – Fixed, High-Performance Vulkan FFI Engine
+// native/vulkan_processor.cpp – Supports 16-Bit Half Float & 32-Bit True Float
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include <iostream>
 #include <algorithm>
 
 static VkInstance instance = VK_NULL_HANDLE;
@@ -40,6 +39,7 @@ static void* uniformMapped = nullptr;
 
 static int inputWidth = 0, inputHeight = 0;
 static int outputWidth = 0, outputHeight = 0;
+static bool use32BitFloat = false; // Toggleable via settings
 static bool initialized = false;
 static bool imagesCreated = false;
 
@@ -59,13 +59,9 @@ float halfToFloat(uint16_t h) {
     uint32_t exponent = (h >> 10) & 0x1F;
     uint32_t mantissa = h & 0x3FF;
     uint32_t bits;
-    if (exponent == 0) {
-        bits = sign;
-    } else if (exponent == 31) {
-        bits = sign | 0x7F800000 | (mantissa << 13);
-    } else {
-        bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
-    }
+    if (exponent == 0) bits = sign;
+    else if (exponent == 31) bits = sign | 0x7F800000 | (mantissa << 13);
+    else bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
     float f; memcpy(&f, &bits, 4);
     return f;
 }
@@ -98,6 +94,7 @@ void initVulkan() {
     if (deviceCount == 0) return;
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+    physicalDevice = devices[0];
     for (auto dev : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(dev, &props);
@@ -107,7 +104,6 @@ void initVulkan() {
             break;
         }
     }
-    if (physicalDevice == VK_NULL_HANDLE) physicalDevice = devices[0];
 
     uint32_t familyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
@@ -157,19 +153,12 @@ void initVulkan() {
     vkCreateSampler(device, &samplerInfo, nullptr, &sampler);
 }
 
-VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
+void initShader(const uint32_t* spirv, size_t size) {
     VkShaderModuleCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     createInfo.codeSize = size;
-    createInfo.pCode = code;
-    VkShaderModule module;
-    if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) return VK_NULL_HANDLE;
-    return module;
-}
-
-void initShader(const uint32_t* spirv, size_t size) {
-    shaderModule = createShaderModule(spirv, size);
-    if (!shaderModule) return;
+    createInfo.pCode = spirv;
+    if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) return;
 
     VkDescriptorSetLayoutBinding bindings[3] = {};
     bindings[0].binding = 0;
@@ -265,22 +254,23 @@ void createImages(int inW, int inH, int outW, int outH) {
     inputWidth = inW; inputHeight = inH;
     outputWidth = outW; outputHeight = outH;
 
+    VkFormat imgFormat = use32BitFloat ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT;
+    size_t pixelBytes = use32BitFloat ? (sizeof(float) * 4) : (sizeof(uint16_t) * 4);
+
     VkImageCreateInfo imgInfo = {};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType = VK_IMAGE_TYPE_2D;
-    imgInfo.extent.depth = 1;
+    imgInfo.extent = {(uint32_t)inW, (uint32_t)inH, 1};
     imgInfo.mipLevels = 1;
     imgInfo.arrayLayers = 1;
-    imgInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    imgInfo.format = imgFormat;
     imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    // Input image
-    imgInfo.extent.width = inW; imgInfo.extent.height = inH;
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     vkCreateImage(device, &imgInfo, nullptr, &inputImage);
+
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(device, inputImage, &memReq);
     VkMemoryAllocateInfo memAlloc = {};
@@ -293,7 +283,7 @@ void createImages(int inW, int inH, int outW, int outH) {
     VkImageViewCreateInfo viewInfo = {};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    viewInfo.format = imgFormat;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -301,7 +291,7 @@ void createImages(int inW, int inH, int outW, int outH) {
     vkCreateImageView(device, &viewInfo, nullptr, &inputView);
 
     // Output image
-    imgInfo.extent.width = outW; imgInfo.extent.height = outH;
+    imgInfo.extent = {(uint32_t)outW, (uint32_t)outH, 1};
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     vkCreateImage(device, &imgInfo, nullptr, &outputImage);
     vkGetImageMemoryRequirements(device, outputImage, &memReq);
@@ -315,7 +305,7 @@ void createImages(int inW, int inH, int outW, int outH) {
     // Staging buffers
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = inW * inH * 4 * sizeof(uint16_t);
+    bufInfo.size = inW * inH * pixelBytes;
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
@@ -325,7 +315,7 @@ void createImages(int inW, int inH, int outW, int outH) {
     vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
 
-    bufInfo.size = outW * outH * 4 * sizeof(uint16_t);
+    bufInfo.size = outW * outH * pixelBytes;
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     vkCreateBuffer(device, &bufInfo, nullptr, &outputStagingBuffer);
     vkGetBufferMemoryRequirements(device, outputStagingBuffer, &memReq);
@@ -334,14 +324,14 @@ void createImages(int inW, int inH, int outW, int outH) {
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
 
-    // Uniform buffer (26 floats: resolution(2) + time(1) + 23 parameters)
+    // Uniform buffer (240 bytes for std140 layout with curves)
     if (!uniformBuffer) {
-        VkBufferCreateInfo uniformBufInfo = {};
-        uniformBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        uniformBufInfo.size = 26 * sizeof(float);
-        uniformBufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        uniformBufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCreateBuffer(device, &uniformBufInfo, nullptr, &uniformBuffer);
+        VkBufferCreateInfo uInfo = {};
+        uInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        uInfo.size = 240;
+        uInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        uInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateBuffer(device, &uInfo, nullptr, &uniformBuffer);
         vkGetBufferMemoryRequirements(device, uniformBuffer, &memReq);
         memAlloc.allocationSize = memReq.size;
         memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -350,19 +340,9 @@ void createImages(int inW, int inH, int outW, int outH) {
         vkMapMemory(device, uniformMemory, 0, VK_WHOLE_SIZE, 0, &uniformMapped);
     }
 
-    VkDescriptorImageInfo imageInfo = {};
-    imageInfo.imageView = inputView;
-    imageInfo.sampler = sampler;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkDescriptorImageInfo outputInfo = {};
-    outputInfo.imageView = outputView;
-    outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkDescriptorBufferInfo uniformDesc = {};
-    uniformDesc.buffer = uniformBuffer;
-    uniformDesc.range = VK_WHOLE_SIZE;
-    uniformDesc.offset = 0;
+    VkDescriptorImageInfo imageDesc = {sampler, inputView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo outputDesc = {VK_NULL_HANDLE, outputView, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorBufferInfo uDesc = {uniformBuffer, 0, VK_WHOLE_SIZE};
 
     VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -370,69 +350,64 @@ void createImages(int inW, int inH, int outW, int outH) {
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo = &imageInfo;
+    writes[0].pImageInfo = &imageDesc;
 
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[1].dstSet = descSet;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].pImageInfo = &outputInfo;
+    writes[1].pImageInfo = &outputDesc;
 
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[2].dstSet = descSet;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[2].pBufferInfo = &uniformDesc;
+    writes[2].pBufferInfo = &uDesc;
 
     vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
     imagesCreated = true;
 }
 
 void uploadInput(const uint8_t* rgba, int inW, int inH) {
-    uint16_t* data;
-    vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-    for (int i = 0; i < inW * inH; i++) {
-        int idx = i * 4;
-        data[idx]   = floatToHalf(rgba[idx]   / 255.0f);
-        data[idx+1] = floatToHalf(rgba[idx+1] / 255.0f);
-        data[idx+2] = floatToHalf(rgba[idx+2] / 255.0f);
-        data[idx+3] = floatToHalf(rgba[idx+3] / 255.0f);
+    if (use32BitFloat) {
+        float* data;
+        vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+        for (int i = 0; i < inW * inH * 4; i++) {
+            data[i] = rgba[i] / 255.0f;
+        }
+        VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, stagingMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(device, 1, &flushRange);
+        vkUnmapMemory(device, stagingMemory);
+    } else {
+        uint16_t* data;
+        vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+        for (int i = 0; i < inW * inH * 4; i++) {
+            data[i] = floatToHalf(rgba[i] / 255.0f);
+        }
+        VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, stagingMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(device, 1, &flushRange);
+        vkUnmapMemory(device, stagingMemory);
     }
-    VkMappedMemoryRange flushRange = {};
-    flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    flushRange.memory = stagingMemory;
-    flushRange.offset = 0;
-    flushRange.size = VK_WHOLE_SIZE;
-    vkFlushMappedMemoryRanges(device, 1, &flushRange);
-    vkUnmapMemory(device, stagingMemory);
 
-    // CRITICAL: Reset command buffer before recording
     vkResetCommandBuffer(cmdBuffer, 0);
-
-    VkCommandBufferBeginInfo beginInfo = {};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, nullptr};
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    VkImageMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = inputImage;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy region = {};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {(uint32_t)inW, (uint32_t)inH, 1};
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
@@ -456,10 +431,7 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     uint32_t groupY = (outputHeight + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
 
-    VkMemoryBarrier memBarrier = {};
-    memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    memBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    VkMemoryBarrier memBarrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT};
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &memBarrier, 0, nullptr, 0, nullptr);
 
     barrier.image = outputImage;
@@ -470,43 +442,37 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy copyRegion = {};
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copyRegion.imageExtent = {(uint32_t)outputWidth, (uint32_t)outputHeight, 1};
     vkCmdCopyImageToBuffer(cmdBuffer, outputImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, outputStagingBuffer, 1, &copyRegion);
 
     vkEndCommandBuffer(cmdBuffer);
 
-    // CRITICAL: Reset fence before queue submit to prevent DEVICE_LOST
     vkResetFences(device, 1, &fence);
-    VkSubmitInfo submitInfo = {};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmdBuffer;
+    VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr, 0, nullptr, nullptr, 1, &cmdBuffer, 0, nullptr};
     vkQueueSubmit(queue, 1, &submitInfo, fence);
-
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 }
 
 void readOutput(uint8_t* rgba, int outW, int outH) {
-    VkMappedMemoryRange range = {};
-    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    range.memory = outputStagingMemory;
-    range.offset = 0;
-    range.size = VK_WHOLE_SIZE;
+    VkMappedMemoryRange range = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, outputStagingMemory, 0, VK_WHOLE_SIZE};
     vkInvalidateMappedMemoryRanges(device, 1, &range);
 
-    uint16_t* data;
-    vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-
-    for (int i = 0; i < outW * outH; i++) {
-        int idx = i * 4;
-        rgba[idx]   = (uint8_t)(std::clamp(halfToFloat(data[idx]),   0.0f, 1.0f) * 255.0f);
-        rgba[idx+1] = (uint8_t)(std::clamp(halfToFloat(data[idx+1]), 0.0f, 1.0f) * 255.0f);
-        rgba[idx+2] = (uint8_t)(std::clamp(halfToFloat(data[idx+2]), 0.0f, 1.0f) * 255.0f);
-        rgba[idx+3] = (uint8_t)(std::clamp(halfToFloat(data[idx+3]), 0.0f, 1.0f) * 255.0f);
+    if (use32BitFloat) {
+        float* data;
+        vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+        for (int i = 0; i < outW * outH * 4; i++) {
+            rgba[i] = (uint8_t)(std::clamp(data[i], 0.0f, 1.0f) * 255.0f);
+        }
+        vkUnmapMemory(device, outputStagingMemory);
+    } else {
+        uint16_t* data;
+        vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+        for (int i = 0; i < outW * outH * 4; i++) {
+            rgba[i] = (uint8_t)(std::clamp(halfToFloat(data[i]), 0.0f, 1.0f) * 255.0f);
+        }
+        vkUnmapMemory(device, outputStagingMemory);
     }
-    vkUnmapMemory(device, outputStagingMemory);
 }
 
 void cleanupVulkan() {
@@ -542,7 +508,14 @@ void init_processor(const uint32_t* spirv, size_t size) {
     initialized = true;
 }
 
-// 23 parameters + time + outW/outH resolution = 26 floats
+void set_engine_precision(int mode) {
+    bool nextMode = (mode == 32);
+    if (nextMode != use32BitFloat) {
+        use32BitFloat = nextMode;
+        cleanupImages(); // Recreate with new float format
+    }
+}
+
 void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, uint8_t* output, const float* uniforms) {
     if (!initialized) return;
     if (!imagesCreated || inputWidth != inW || inputHeight != inH || outputWidth != outW || outputHeight != outH) {
@@ -553,14 +526,10 @@ void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, u
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)outW;
         ubo[1] = (float)outH;
-        // Copy 24 floats (time + 23 parameters)
-        memcpy(ubo + 2, uniforms, 24 * sizeof(float));
+        // Copy 58 floats (time, parameters, and 4 sets of 5-point curve vectors)
+        memcpy(ubo + 2, uniforms, 58 * sizeof(float));
 
-        VkMappedMemoryRange flushRange = {};
-        flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        flushRange.memory = uniformMemory;
-        flushRange.offset = 0;
-        flushRange.size = VK_WHOLE_SIZE;
+        VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, uniformMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(device, 1, &flushRange);
     }
 
