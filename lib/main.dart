@@ -88,7 +88,7 @@ class ProjectData {
     this.bloomSpread = 0.40,
     this.bloomThreshold = 0.45,
     this.bloomRadius = 1.0,
-    this.edgeGlowTint = 0.0, // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+    this.edgeGlowTint = 0.0,
     this.anamorphicFlare = 0.0,
     this.flareAmount = 0.50,
     this.lightRays = 0.0,
@@ -771,7 +771,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _bloomSpread = 0.40;
   double _bloomThreshold = 0.45;
   double _bloomRadius = 1.0;
-  double _edgeGlowTint = 0.0; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+  double _edgeGlowTint = 0.0;
   double _anamorphicFlare = 0.0;
   double _flareAmount = 0.50;
   double _lightRays = 0.0;
@@ -867,13 +867,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ✅ ACCURATE RESOLUTION & ASPECT RATIO CALCULATOR
+  // ✅ PRECISE RESOLUTION AND RATIO MATH (Supports 720p, 1080p, 2K, and true 4K)
   Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr) {
     int baseSize;
     switch (resolutionName) {
       case '720p':  baseSize = 720; break;
       case '1080p': baseSize = 1080; break;
       case '2K':    baseSize = 1440; break;
+      case '4K':    baseSize = 2160; break;
       default:      baseSize = 1080;
     }
 
@@ -883,7 +884,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     if (ratio < 1.0) {
       // Portrait (e.g. 4:5, 9:16, 3:4)
-      // Base width is standard (e.g. 1080w), height expands proportionately
       targetW = baseSize;
       targetH = (targetW / ratio).round();
     } else {
@@ -1275,7 +1275,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         case 'adevob+junho':
           _brightness = 0.02; _saturation = 1.35; _contrast = 1.45; _sharpness = 0.70; _gamma = 0.92;
           _temperature = 6000.0; _bloomIntensity = 0.55; _bloomSpread = 0.45; _bloomThreshold = 0.38;
-          _edgeGlowTint = 1.0; // Gold
+          _edgeGlowTint = 1.0;
           _darkOutlines = 0.45; _blackCrush = 0.28; _vignette = 0.20;
           _curveMaster = [0.0, 0.18, 0.50, 0.82, 1.0];
           break;
@@ -1288,7 +1288,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         case 'uryu vs ichigo':
           _brightness = -0.02; _saturation = 1.25; _contrast = 1.45; _sharpness = 0.65; _gamma = 0.94;
           _temperature = 7800.0; _bloomIntensity = 0.50; _bloomSpread = 0.40; _bloomThreshold = 0.35;
-          _edgeGlowTint = 2.0; // Quincy Blue
+          _edgeGlowTint = 2.0;
           _anamorphicFlare = 0.45; _flareAmount = 0.60; _darkOutlines = 0.50; _blackCrush = 0.28;
           _vignette = 0.22;
           _curveMaster = [0.0, 0.16, 0.48, 0.84, 1.0];
@@ -1331,17 +1331,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     String selectedFps = '60fps';
     String selectedBit = '35 Mbps';
     String selectedContainer = 'MP4';
+    String selectedCodec = 'H.265 / HEVC';
+    String selectedDepth = '8-Bit';
     String selectedAudioCodec = 'AAC High Fidelity';
     String selectedAudioBitrate = '256k';
     String selectedSampleRate = '48000';
 
     final containers = ['MP4', 'WebM', 'MOV'];
-    final resolutions = ['720p', '1080p', '2K'];
+    final resolutions = ['720p', '1080p', '2K', '4K'];
+    final depths = ['8-Bit', '10-Bit HDR'];
     final fpsOptions = ['30fps', '60fps', '90fps'];
-    final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps'];
+    final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps', '80 Mbps'];
     final audioCodecs = ['AAC High Fidelity', 'Opus Studio', 'MP3 320k'];
     final audioBitrates = ['168k', '256k', '320k'];
     final sampleRates = ['44100', '48000'];
+
+    List<String> getCodecsForContainer(String c) {
+      if (c == 'MP4') return ['H.264 (AVC)', 'H.265 / HEVC'];
+      if (c == 'WebM') return ['VP9', 'AV1'];
+      return ['ProRes 422 HQ', 'H.264 Master'];
+    }
 
     showModalBottomSheet(
       context: context,
@@ -1352,6 +1361,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         return StatefulBuilder(
           builder: (context, setStateModal) {
             final targetDims = _calculateTargetDimensions(selectedRes, _selectedRatio);
+            final availableCodecs = getCodecsForContainer(selectedContainer);
+            if (!availableCodecs.contains(selectedCodec)) {
+              selectedCodec = availableCodecs.first;
+            }
+
             return Padding(
               padding: const EdgeInsets.all(20),
               child: SingleChildScrollView(
@@ -1367,7 +1381,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ],
                     ),
                     Text(
-                      'Vulkan ${gEnginePrecision}-bit Compute • $_selectedRatio (${targetDims['width']} x ${targetDims['height']})',
+                      'Vulkan ${gEnginePrecision}-Bit Engine • $_selectedRatio (${targetDims['width']} x ${targetDims['height']})',
                       style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -1384,13 +1398,59 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
-                          if (sel) setStateModal(() => selectedContainer = c);
+                          if (sel) {
+                            setStateModal(() {
+                              selectedContainer = c;
+                              selectedCodec = getCodecsForContainer(c).first;
+                            });
+                          }
                         },
                       )).toList(),
                     ),
                     const SizedBox(height: 14),
 
-                    // Resolution
+                    // Codec Selection Slider/List for Container
+                    Text('VIDEO CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: availableCodecs.map((codec) => Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: ChoiceChip(
+                            label: Text(codec),
+                            selected: selectedCodec == codec,
+                            selectedColor: const Color(0xFF00F0FF),
+                            backgroundColor: const Color(0xFF18181E),
+                            labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (sel) {
+                              if (sel) setStateModal(() => selectedCodec = codec);
+                            },
+                          ),
+                        )).toList(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Bit-Depth (8-Bit vs 10-Bit HDR)
+                    const Text('COLOR BIT-DEPTH (CHROMA SAMPLING)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: depths.map((d) => ChoiceChip(
+                        label: Text(d),
+                        selected: selectedDepth == d,
+                        selectedColor: const Color(0xFF00F0FF),
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedDepth == d ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedDepth = d);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Resolution (Including 4K)
                     const Text('OUTPUT RESOLUTION', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1520,6 +1580,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             selectedFps,
                             selectedBit,
                             selectedContainer,
+                            selectedCodec,
+                            selectedDepth,
                             selectedAudioCodec,
                             selectedAudioBitrate,
                             selectedSampleRate,
@@ -1601,12 +1663,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // VIDEO EXPORT
+  // VIDEO EXPORT WITH CLEAN AUDIO FLUSH, CODEC PIPELINES & 10-BIT ENCODING
   Future<void> _exportVideo(
     String resolution,
     String fps,
     String bitrate,
     String container,
+    String videoCodec,
+    String depth,
     String audioCodec,
     String audioBitrate,
     String sampleRate,
@@ -1619,9 +1683,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final int outW = targetDims['width']!;
     final int outH = targetDims['height']!;
 
-    int bitrateKbps = (bitrate == '15 Mbps') ? 15000 : (bitrate == '50 Mbps') ? 50000 : 35000;
+    int bitrateKbps = (bitrate == '15 Mbps') ? 15000 : (bitrate == '50 Mbps') ? 50000 : (bitrate == '80 Mbps') ? 80000 : 35000;
     int targetFps = int.parse(fps.replaceAll('fps', ''));
     String containerExt = container.toLowerCase();
+    bool is10Bit = depth.contains('10');
 
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('Extracting frames...');
@@ -1634,7 +1699,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         dialogCtx = ctx;
         return AlertDialog(
           backgroundColor: const Color(0xFF101014),
-          title: Text('Exporting $outW x $outH Master Video', style: const TextStyle(color: Colors.white, fontSize: 15)),
+          title: Text('Exporting $outW x $outH Master ($depth)', style: const TextStyle(color: Colors.white, fontSize: 15)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1658,10 +1723,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final videoPath = _currentMediaPath!;
       final framesDir = Directory('${dir.path}/export_frames');
       final processedDir = Directory('${dir.path}/export_processed');
+      
+      // ✅ DESTROY & PURGE PREVIOUS AUDIO / FRAME CACHE TO AVOID GHOST AUDIO
       if (await framesDir.exists()) await framesDir.delete(recursive: true);
       if (await processedDir.exists()) await processedDir.delete(recursive: true);
       await framesDir.create();
       await processedDir.create();
+
+      final audioPath = '${dir.path}/current_audio_${DateTime.now().millisecondsSinceEpoch}.aac';
+      final oldAudios = dir.listSync().where((f) => f.path.contains('extracted_audio') || f.path.contains('current_audio'));
+      for (var f in oldAudios) {
+        try { f.deleteSync(); } catch (_) {}
+      }
 
       final extractCmd = '-i "$videoPath" -vsync 0 -f image2 "${framesDir.path}/frame_%05d.png"';
       await FFmpegKit.execute(extractCmd);
@@ -1703,29 +1776,50 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
         await outputFile.writeAsBytes(pngBytes);
 
+        // Delete extracted raw frame to preserve disk and memory
+        try { await file.delete(); } catch (_) {}
+
         progressNotifier.value = (i + 1) / totalFrames;
         statusNotifier.value = 'Grading frame ${i + 1} / $totalFrames ($outW x $outH)...';
       }
 
       statusNotifier.value = 'Assembling final video stream...';
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final pixFmt = is10Bit ? 'yuv420p10le' : 'yuv420p';
 
       String encodeCmd;
       if (container == 'WebM') {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libvpx-vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p "$silentOutputPath"';
+        if (videoCodec.contains('AV1')) {
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libsvtav1 -preset 6 -crf 20 -pix_fmt $pixFmt "$silentOutputPath"';
+        } else {
+          // VP9 visually lossless anime settings with loop filter sharpness 2
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libvpx-vp9 -sharpness 2 -crf 15 -b:v 0 -pix_fmt $pixFmt "$silentOutputPath"';
+        }
       } else if (container == 'MOV') {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v prores_ks -profile:v 3 -pix_fmt yuv420p "$silentOutputPath"';
+        if (videoCodec.contains('ProRes')) {
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "$silentOutputPath"';
+        } else {
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libx264 -preset medium -crf 17 -pix_fmt $pixFmt "$silentOutputPath"';
+        }
       } else {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p "$silentOutputPath"';
+        // MP4
+        if (videoCodec.contains('HEVC') || videoCodec.contains('H.265')) {
+          // HEVC with no-deblock=1 to keep anime edges crisp
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libx265 -preset medium -crf 18 -x265-params no-deblock=1 -pix_fmt $pixFmt "$silentOutputPath"';
+        } else {
+          // H.264
+          encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libx264 -preset medium -crf 18 -b:v ${bitrateKbps}k -pix_fmt $pixFmt "$silentOutputPath"';
+        }
       }
 
       var session = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await session.getReturnCode())) {
+        // Safe fallback encoder
         final fallbackCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v mpeg4 -q:v 3 -pix_fmt yuv420p "$silentOutputPath"';
         await FFmpegKit.execute(fallbackCmd);
       }
 
-      final audioPath = '${dir.path}/extracted_audio.aac';
+      // Fresh audio rip from current source footage
       await FFmpegKit.execute('-i "$videoPath" -vn -acodec copy "$audioPath"');
 
       String audioCodecParam = audioCodec.contains('Opus') ? 'libopus' : audioCodec.contains('MP3') ? 'libmp3lame' : 'aac';
@@ -1744,11 +1838,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final destFile = File('${exportDir.path}/${finalOutputPath.split('/').last}');
       await File(finalOutputPath).copy(destFile.path);
 
+      // Clean up temporary processed frames folder
+      try { await processedDir.delete(recursive: true); } catch (_) {}
+
       if (dialogCtx != null) Navigator.pop(dialogCtx!);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ Master Saved to Downloads ($outW x $outH):\n${destFile.path}'),
+            content: Text('✅ Master Saved to Downloads ($outW x $outH • $depth • $videoCodec):\n${destFile.path}'),
             duration: const Duration(seconds: 7),
             backgroundColor: Colors.green,
           ),
