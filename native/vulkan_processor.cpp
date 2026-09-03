@@ -1,4 +1,4 @@
-// native/vulkan_processor.cpp – Full updated version
+// native/vulkan_processor.cpp – Fixed, High-Performance Vulkan FFI Engine
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
@@ -7,37 +7,35 @@
 #include <iostream>
 #include <algorithm>
 
-#define CHECK_VK(call) if ((call) != VK_SUCCESS) { fprintf(stderr, "❌ Vulkan error at %s:%d\n", __FILE__, __LINE__); return; }
-
-static VkInstance instance;
+static VkInstance instance = VK_NULL_HANDLE;
 static VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-static VkDevice device;
-static VkQueue queue;
+static VkDevice device = VK_NULL_HANDLE;
+static VkQueue queue = VK_NULL_HANDLE;
 static uint32_t queueFamilyIndex = 0;
-static VkCommandPool cmdPool;
-static VkShaderModule shaderModule;
-static VkPipelineLayout pipelineLayout;
-static VkPipeline pipeline;
-static VkDescriptorSetLayout descSetLayout;
-static VkDescriptorPool descPool;
-static VkDescriptorSet descSet;
-static VkSampler sampler;
-static VkCommandBuffer cmdBuffer;
-static VkFence fence;
+static VkCommandPool cmdPool = VK_NULL_HANDLE;
+static VkShaderModule shaderModule = VK_NULL_HANDLE;
+static VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+static VkPipeline pipeline = VK_NULL_HANDLE;
+static VkDescriptorSetLayout descSetLayout = VK_NULL_HANDLE;
+static VkDescriptorPool descPool = VK_NULL_HANDLE;
+static VkDescriptorSet descSet = VK_NULL_HANDLE;
+static VkSampler sampler = VK_NULL_HANDLE;
+static VkCommandBuffer cmdBuffer = VK_NULL_HANDLE;
+static VkFence fence = VK_NULL_HANDLE;
 
-static VkImage inputImage;
-static VkDeviceMemory inputMemory;
-static VkImageView inputView;
-static VkImage outputImage;
-static VkDeviceMemory outputMemory;
-static VkImageView outputView;
-static VkBuffer stagingBuffer;
-static VkDeviceMemory stagingMemory;
-static VkBuffer outputStagingBuffer;
-static VkDeviceMemory outputStagingMemory;
+static VkImage inputImage = VK_NULL_HANDLE;
+static VkDeviceMemory inputMemory = VK_NULL_HANDLE;
+static VkImageView inputView = VK_NULL_HANDLE;
+static VkImage outputImage = VK_NULL_HANDLE;
+static VkDeviceMemory outputMemory = VK_NULL_HANDLE;
+static VkImageView outputView = VK_NULL_HANDLE;
+static VkBuffer stagingBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+static VkBuffer outputStagingBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory outputStagingMemory = VK_NULL_HANDLE;
 
-static VkBuffer uniformBuffer;
-static VkDeviceMemory uniformMemory;
+static VkBuffer uniformBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory uniformMemory = VK_NULL_HANDLE;
 static void* uniformMapped = nullptr;
 
 static int inputWidth = 0, inputHeight = 0;
@@ -45,14 +43,14 @@ static int outputWidth = 0, outputHeight = 0;
 static bool initialized = false;
 static bool imagesCreated = false;
 
-// ---------- HALF FLOAT CONVERSION ----------
+// Half float converters
 uint16_t floatToHalf(float f) {
     uint32_t x; memcpy(&x, &f, 4);
     uint32_t sign = (x >> 16) & 0x8000;
     int32_t exponent = ((x >> 23) & 0xFF) - 127 + 15;
     uint32_t mantissa = x & 0x7FFFFF;
-    if (exponent <= 0) return (uint16_t)sign;              // flush to 0
-    if (exponent >= 31) return (uint16_t)(sign | 0x7C00);  // inf
+    if (exponent <= 0) return (uint16_t)sign;
+    if (exponent >= 31) return (uint16_t)(sign | 0x7C00);
     return (uint16_t)(sign | (exponent << 10) | (mantissa >> 13));
 }
 
@@ -72,9 +70,18 @@ float halfToFloat(uint16_t h) {
     return f;
 }
 
-// ---------- VULKAN INITIALIZATION ----------
+uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
 void initVulkan() {
-    fprintf(stderr, "🔄 initVulkan started\n");
     VkApplicationInfo appInfo = {};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "AEReality";
@@ -84,55 +91,34 @@ void initVulkan() {
     VkInstanceCreateInfo instInfo = {};
     instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instInfo.pApplicationInfo = &appInfo;
-    instInfo.enabledLayerCount = 0;
-    instInfo.enabledExtensionCount = 0;
-
-    if (vkCreateInstance(&instInfo, nullptr, &instance) != VK_SUCCESS) {
-        fprintf(stderr, "❌ Failed to create Vulkan instance\n");
-        return;
-    }
-    fprintf(stderr, "✅ Vulkan instance created\n");
+    if (vkCreateInstance(&instInfo, nullptr, &instance) != VK_SUCCESS) return;
 
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
-    if (deviceCount == 0) {
-        fprintf(stderr, "❌ No Vulkan devices found\n");
-        return;
-    }
+    if (deviceCount == 0) return;
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
     for (auto dev : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(dev, &props);
-        fprintf(stderr, "📱 Found device: %s (type: %d)\n", props.deviceName, props.deviceType);
         if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
             physicalDevice = dev;
             break;
         }
     }
-    if (physicalDevice == VK_NULL_HANDLE) {
-        physicalDevice = devices[0];
-    }
-    fprintf(stderr, "✅ Physical device selected\n");
+    if (physicalDevice == VK_NULL_HANDLE) physicalDevice = devices[0];
 
     uint32_t familyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
     std::vector<VkQueueFamilyProperties> families(familyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, families.data());
-    bool found = false;
     for (uint32_t i = 0; i < familyCount; i++) {
         if (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
             queueFamilyIndex = i;
-            found = true;
             break;
         }
     }
-    if (!found) {
-        fprintf(stderr, "❌ No compute queue found\n");
-        return;
-    }
-    fprintf(stderr, "✅ Compute queue family found: %d\n", queueFamilyIndex);
 
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueInfo = {};
@@ -145,32 +131,20 @@ void initVulkan() {
     devInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &queueInfo;
-    devInfo.enabledExtensionCount = 0;
-
-    if (vkCreateDevice(physicalDevice, &devInfo, nullptr, &device) != VK_SUCCESS) {
-        fprintf(stderr, "❌ Failed to create device\n");
-        return;
-    }
-    fprintf(stderr, "✅ Device created\n");
+    if (vkCreateDevice(physicalDevice, &devInfo, nullptr, &device) != VK_SUCCESS) return;
 
     vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
-    fprintf(stderr, "✅ Queue obtained\n");
 
     VkCommandPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = queueFamilyIndex;
-    if (vkCreateCommandPool(device, &poolInfo, nullptr, &cmdPool) != VK_SUCCESS) {
-        fprintf(stderr, "❌ Failed to create command pool\n");
-        return;
-    }
-    fprintf(stderr, "✅ Command pool created\n");
+    vkCreateCommandPool(device, &poolInfo, nullptr, &cmdPool);
 
     VkFenceCreateInfo fenceInfo = {};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    fenceInfo.flags = 0;
     vkCreateFence(device, &fenceInfo, nullptr, &fence);
-    fprintf(stderr, "✅ Fence created\n");
 
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -181,7 +155,6 @@ void initVulkan() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.maxLod = 1.0f;
     vkCreateSampler(device, &samplerInfo, nullptr, &sampler);
-    fprintf(stderr, "✅ Sampler created\n");
 }
 
 VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
@@ -190,33 +163,13 @@ VkShaderModule createShaderModule(const uint32_t* code, size_t size) {
     createInfo.codeSize = size;
     createInfo.pCode = code;
     VkShaderModule module;
-    if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) {
-        fprintf(stderr, "❌ Failed to create shader module\n");
-        return VK_NULL_HANDLE;
-    }
-    fprintf(stderr, "✅ Shader module created\n");
+    if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) return VK_NULL_HANDLE;
     return module;
 }
 
-uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-    fprintf(stderr, "❌ No suitable memory type found\n");
-    return UINT32_MAX;
-}
-
 void initShader(const uint32_t* spirv, size_t size) {
-    fprintf(stderr, "🔄 initShader called with size: %zu\n", size);
     shaderModule = createShaderModule(spirv, size);
-    if (!shaderModule) {
-        fprintf(stderr, "❌ Shader module is null\n");
-        return;
-    }
+    if (!shaderModule) return;
 
     VkDescriptorSetLayoutBinding bindings[3] = {};
     bindings[0].binding = 0;
@@ -239,14 +192,12 @@ void initShader(const uint32_t* spirv, size_t size) {
     layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descSetLayout);
-    fprintf(stderr, "✅ Descriptor set layout created\n");
 
     VkPipelineLayoutCreateInfo pipeLayoutInfo = {};
     pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeLayoutInfo.setLayoutCount = 1;
     pipeLayoutInfo.pSetLayouts = &descSetLayout;
     vkCreatePipelineLayout(device, &pipeLayoutInfo, nullptr, &pipelineLayout);
-    fprintf(stderr, "✅ Pipeline layout created\n");
 
     VkComputePipelineCreateInfo pipeInfo = {};
     pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -255,11 +206,7 @@ void initShader(const uint32_t* spirv, size_t size) {
     pipeInfo.stage.module = shaderModule;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = pipelineLayout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline) != VK_SUCCESS) {
-        fprintf(stderr, "❌ Failed to create compute pipeline\n");
-        return;
-    }
-    fprintf(stderr, "✅ Compute pipeline created\n");
+    vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
 
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -275,7 +222,6 @@ void initShader(const uint32_t* spirv, size_t size) {
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
     vkCreateDescriptorPool(device, &poolInfo, nullptr, &descPool);
-    fprintf(stderr, "✅ Descriptor pool created\n");
 
     VkDescriptorSetAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -283,7 +229,6 @@ void initShader(const uint32_t* spirv, size_t size) {
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &descSetLayout;
     vkAllocateDescriptorSets(device, &allocInfo, &descSet);
-    fprintf(stderr, "✅ Descriptor set allocated\n");
 
     VkCommandBufferAllocateInfo cmdAlloc = {};
     cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -291,13 +236,10 @@ void initShader(const uint32_t* spirv, size_t size) {
     cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAlloc.commandBufferCount = 1;
     vkAllocateCommandBuffers(device, &cmdAlloc, &cmdBuffer);
-    fprintf(stderr, "✅ Command buffer allocated\n");
 }
 
-// ---------- CLEANUP IMAGES (fixes crash on re-import) ----------
 void cleanupImages() {
     if (!imagesCreated) return;
-    fprintf(stderr, "🔄 Cleaning up Vulkan image resources\n");
     vkDeviceWaitIdle(device);
 
     vkDestroyImageView(device, inputView, nullptr);
@@ -314,19 +256,12 @@ void cleanupImages() {
     vkDestroyBuffer(device, outputStagingBuffer, nullptr);
     vkFreeMemory(device, outputStagingMemory, nullptr);
 
-    // Uniform buffer and memory are reused, so keep them.
-
     imagesCreated = false;
     inputWidth = inputHeight = outputWidth = outputHeight = 0;
-    fprintf(stderr, "✅ Image resources cleaned up\n");
 }
 
-// ---------- CREATE IMAGES (with separate input/output dims) ----------
 void createImages(int inW, int inH, int outW, int outH) {
-    fprintf(stderr, "🔄 createImages called: in=%dx%d, out=%dx%d\n", inW, inH, outW, outH);
-    if (imagesCreated) {
-        cleanupImages();
-    }
+    if (imagesCreated) cleanupImages();
     inputWidth = inW; inputHeight = inH;
     outputWidth = outW; outputHeight = outH;
 
@@ -364,9 +299,8 @@ void createImages(int inW, int inH, int outW, int outH) {
     viewInfo.subresourceRange.layerCount = 1;
     viewInfo.image = inputImage;
     vkCreateImageView(device, &viewInfo, nullptr, &inputView);
-    fprintf(stderr, "✅ Input image created (%dx%d)\n", inW, inH);
 
-    // Output image (canvas size)
+    // Output image
     imgInfo.extent.width = outW; imgInfo.extent.height = outH;
     imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     vkCreateImage(device, &imgInfo, nullptr, &outputImage);
@@ -377,56 +311,45 @@ void createImages(int inW, int inH, int outW, int outH) {
     vkBindImageMemory(device, outputImage, outputMemory, 0);
     viewInfo.image = outputImage;
     vkCreateImageView(device, &viewInfo, nullptr, &outputView);
-    fprintf(stderr, "✅ Output image created (%dx%d)\n", outW, outH);
 
-    // Input staging buffer (for upload) – sized for input
+    // Staging buffers
     VkBufferCreateInfo bufInfo = {};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = inW * inH * 4 * 2; // half-float
+    bufInfo.size = inW * inH * 4 * sizeof(uint16_t);
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
     vkGetBufferMemoryRequirements(device, stagingBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
-    memAlloc.memoryTypeIndex = findMemoryType(
-        memReq.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
+    memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &stagingMemory);
     vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
 
-    // Output staging buffer (for readback) – sized for output
-    bufInfo.size = outW * outH * 4 * 2;
+    bufInfo.size = outW * outH * 4 * sizeof(uint16_t);
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     vkCreateBuffer(device, &bufInfo, nullptr, &outputStagingBuffer);
     vkGetBufferMemoryRequirements(device, outputStagingBuffer, &memReq);
     memAlloc.allocationSize = memReq.size;
-    memAlloc.memoryTypeIndex = findMemoryType(
-        memReq.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
+    memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     vkAllocateMemory(device, &memAlloc, nullptr, &outputStagingMemory);
     vkBindBufferMemory(device, outputStagingBuffer, outputStagingMemory, 0);
 
-    // Uniform buffer (18 floats: resolution (2) + 16 params)
-    VkBufferCreateInfo uniformBufInfo = {};
-    uniformBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    uniformBufInfo.size = 18 * sizeof(float);
-    uniformBufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    uniformBufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    vkCreateBuffer(device, &uniformBufInfo, nullptr, &uniformBuffer);
-    vkGetBufferMemoryRequirements(device, uniformBuffer, &memReq);
-    memAlloc.allocationSize = memReq.size;
-    memAlloc.memoryTypeIndex = findMemoryType(
-        memReq.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-    );
-    vkAllocateMemory(device, &memAlloc, nullptr, &uniformMemory);
-    vkBindBufferMemory(device, uniformBuffer, uniformMemory, 0);
-    vkMapMemory(device, uniformMemory, 0, VK_WHOLE_SIZE, 0, &uniformMapped);
-    fprintf(stderr, "✅ Uniform buffer created (18 floats)\n");
+    // Uniform buffer (26 floats: resolution(2) + time(1) + 23 parameters)
+    if (!uniformBuffer) {
+        VkBufferCreateInfo uniformBufInfo = {};
+        uniformBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        uniformBufInfo.size = 26 * sizeof(float);
+        uniformBufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        uniformBufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateBuffer(device, &uniformBufInfo, nullptr, &uniformBuffer);
+        vkGetBufferMemoryRequirements(device, uniformBuffer, &memReq);
+        memAlloc.allocationSize = memReq.size;
+        memAlloc.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(device, &memAlloc, nullptr, &uniformMemory);
+        vkBindBufferMemory(device, uniformBuffer, uniformMemory, 0);
+        vkMapMemory(device, uniformMemory, 0, VK_WHOLE_SIZE, 0, &uniformMapped);
+    }
 
-    // Update descriptor set
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView = inputView;
     imageInfo.sampler = sampler;
@@ -436,10 +359,10 @@ void createImages(int inW, int inH, int outW, int outH) {
     outputInfo.imageView = outputView;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkDescriptorBufferInfo uniformDescriptorBufferInfo = {};
-    uniformDescriptorBufferInfo.buffer = uniformBuffer;
-    uniformDescriptorBufferInfo.range = VK_WHOLE_SIZE;
-    uniformDescriptorBufferInfo.offset = 0;
+    VkDescriptorBufferInfo uniformDesc = {};
+    uniformDesc.buffer = uniformBuffer;
+    uniformDesc.range = VK_WHOLE_SIZE;
+    uniformDesc.offset = 0;
 
     VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -461,35 +384,38 @@ void createImages(int inW, int inH, int outW, int outH) {
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[2].pBufferInfo = &uniformDescriptorBufferInfo;
+    writes[2].pBufferInfo = &uniformDesc;
 
     vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
-    fprintf(stderr, "✅ Descriptor set updated\n");
-
     imagesCreated = true;
 }
 
-// ---------- UPLOAD INPUT ----------
 void uploadInput(const uint8_t* rgba, int inW, int inH) {
-    fprintf(stderr, "📤 Uploading input frame (%dx%d)\n", inW, inH);
     uint16_t* data;
     vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
     for (int i = 0; i < inW * inH; i++) {
-        int src = i * 4;
-        int dst = i * 4;
-        data[dst]   = floatToHalf(rgba[src]   / 255.0f);
-        data[dst+1] = floatToHalf(rgba[src+1] / 255.0f);
-        data[dst+2] = floatToHalf(rgba[src+2] / 255.0f);
-        data[dst+3] = floatToHalf(rgba[src+3] / 255.0f);
+        int idx = i * 4;
+        data[idx]   = floatToHalf(rgba[idx]   / 255.0f);
+        data[idx+1] = floatToHalf(rgba[idx+1] / 255.0f);
+        data[idx+2] = floatToHalf(rgba[idx+2] / 255.0f);
+        data[idx+3] = floatToHalf(rgba[idx+3] / 255.0f);
     }
+    VkMappedMemoryRange flushRange = {};
+    flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    flushRange.memory = stagingMemory;
+    flushRange.offset = 0;
+    flushRange.size = VK_WHOLE_SIZE;
+    vkFlushMappedMemoryRanges(device, 1, &flushRange);
     vkUnmapMemory(device, stagingMemory);
+
+    // CRITICAL: Reset command buffer before recording
+    vkResetCommandBuffer(cmdBuffer, 0);
 
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmdBuffer, &beginInfo);
 
-    // Transition input image to TRANSFER_DST_OPTIMAL
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -505,24 +431,17 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy region = {};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.layerCount = 1;
-    region.imageExtent.width = inW;
-    region.imageExtent.height = inH;
-    region.imageExtent.depth = 1;
+    region.imageExtent = {(uint32_t)inW, (uint32_t)inH, 1};
     vkCmdCopyBufferToImage(cmdBuffer, stagingBuffer, inputImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // Transition input to SHADER_READ_ONLY_OPTIMAL
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Transition output image to GENERAL (storage)
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -530,31 +449,19 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Bind pipeline and descriptors
     vkCmdBindPipeline(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descSet, 0, nullptr);
 
-    // Dispatch compute – using output dimensions
     uint32_t groupX = (outputWidth + 15) / 16;
     uint32_t groupY = (outputHeight + 15) / 16;
     vkCmdDispatch(cmdBuffer, groupX, groupY, 1);
 
-    // Memory barrier: shader write -> transfer read
     VkMemoryBarrier memBarrier = {};
     memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     memBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(
-        cmdBuffer,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0,
-        1, &memBarrier,
-        0, nullptr,
-        0, nullptr
-    );
+    vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &memBarrier, 0, nullptr, 0, nullptr);
 
-    // Transition output to TRANSFER_SRC_OPTIMAL for copy to staging
     barrier.image = outputImage;
     barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -562,33 +469,26 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(cmdBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    // Copy output image to staging buffer
     VkBufferImageCopy copyRegion = {};
-    copyRegion.bufferOffset = 0;
-    copyRegion.bufferRowLength = 0;
-    copyRegion.bufferImageHeight = 0;
     copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageExtent.width = outputWidth;
-    copyRegion.imageExtent.height = outputHeight;
-    copyRegion.imageExtent.depth = 1;
+    copyRegion.imageExtent = {(uint32_t)outputWidth, (uint32_t)outputHeight, 1};
     vkCmdCopyImageToBuffer(cmdBuffer, outputImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, outputStagingBuffer, 1, &copyRegion);
 
     vkEndCommandBuffer(cmdBuffer);
 
+    // CRITICAL: Reset fence before queue submit to prevent DEVICE_LOST
+    vkResetFences(device, 1, &fence);
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmdBuffer;
     vkQueueSubmit(queue, 1, &submitInfo, fence);
 
-    vkQueueWaitIdle(queue);
-    fprintf(stderr, "📤 Upload and dispatch complete\n");
+    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 }
 
-// ---------- READ OUTPUT ----------
 void readOutput(uint8_t* rgba, int outW, int outH) {
-    fprintf(stderr, "📥 Reading output (%dx%d)\n", outW, outH);
     VkMappedMemoryRange range = {};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
     range.memory = outputStagingMemory;
@@ -600,22 +500,18 @@ void readOutput(uint8_t* rgba, int outW, int outH) {
     vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
 
     for (int i = 0; i < outW * outH; i++) {
-        int src = i * 4;
-        int dst = i * 4;
-        rgba[dst]   = (uint8_t)(std::clamp(halfToFloat(data[src]),   0.0f, 1.0f) * 255.0f);
-        rgba[dst+1] = (uint8_t)(std::clamp(halfToFloat(data[src+1]), 0.0f, 1.0f) * 255.0f);
-        rgba[dst+2] = (uint8_t)(std::clamp(halfToFloat(data[src+2]), 0.0f, 1.0f) * 255.0f);
-        rgba[dst+3] = (uint8_t)(std::clamp(halfToFloat(data[src+3]), 0.0f, 1.0f) * 255.0f);
+        int idx = i * 4;
+        rgba[idx]   = (uint8_t)(std::clamp(halfToFloat(data[idx]),   0.0f, 1.0f) * 255.0f);
+        rgba[idx+1] = (uint8_t)(std::clamp(halfToFloat(data[idx+1]), 0.0f, 1.0f) * 255.0f);
+        rgba[idx+2] = (uint8_t)(std::clamp(halfToFloat(data[idx+2]), 0.0f, 1.0f) * 255.0f);
+        rgba[idx+3] = (uint8_t)(std::clamp(halfToFloat(data[idx+3]), 0.0f, 1.0f) * 255.0f);
     }
     vkUnmapMemory(device, outputStagingMemory);
-    fprintf(stderr, "📥 Output read complete\n");
 }
 
-// ---------- CLEANUP VULKAN ----------
 void cleanupVulkan() {
-    fprintf(stderr, "🔄 Cleaning up Vulkan resources\n");
     vkDeviceWaitIdle(device);
-    cleanupImages(); // also destroys image resources
+    cleanupImages();
 
     vkDestroyFence(device, fence, nullptr);
     vkDestroyCommandPool(device, cmdPool, nullptr);
@@ -626,44 +522,39 @@ void cleanupVulkan() {
     vkDestroySampler(device, sampler, nullptr);
     vkDestroyShaderModule(device, shaderModule, nullptr);
 
-    vkDestroyBuffer(device, uniformBuffer, nullptr);
-    vkFreeMemory(device, uniformMemory, nullptr);
+    if (uniformBuffer) {
+        vkDestroyBuffer(device, uniformBuffer, nullptr);
+        vkFreeMemory(device, uniformMemory, nullptr);
+        uniformBuffer = VK_NULL_HANDLE;
+    }
 
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
     initialized = false;
-    fprintf(stderr, "✅ Cleanup complete\n");
 }
 
-// ---------- EXTERN "C" EXPORTS ----------
 extern "C" {
 
 void init_processor(const uint32_t* spirv, size_t size) {
-    fprintf(stderr, "🔄 init_processor called with size: %zu\n", size);
     if (initialized) return;
     initVulkan();
     initShader(spirv, size);
     initialized = true;
-    fprintf(stderr, "✅ init_processor complete\n");
 }
 
+// 23 parameters + time + outW/outH resolution = 26 floats
 void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, uint8_t* output, const float* uniforms) {
-    if (!initialized) {
-        fprintf(stderr, "❌ Vulkan not initialized\n");
-        return;
-    }
-    // Recreate images if dimensions changed or not created yet
+    if (!initialized) return;
     if (!imagesCreated || inputWidth != inW || inputHeight != inH || outputWidth != outW || outputHeight != outH) {
         createImages(inW, inH, outW, outH);
     }
 
-    // Update uniform buffer: first two floats = resolution (output width/height)
     if (uniformMapped != nullptr) {
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)outW;
         ubo[1] = (float)outH;
-        // Copy the 16 grading parameters (uniforms points to 16 floats)
-        memcpy(ubo + 2, uniforms, 16 * sizeof(float));
+        // Copy 24 floats (time + 23 parameters)
+        memcpy(ubo + 2, uniforms, 24 * sizeof(float));
 
         VkMappedMemoryRange flushRange = {};
         flushRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -678,11 +569,9 @@ void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, u
 }
 
 void cleanup_processor() {
-    fprintf(stderr, "🔄 cleanup_processor called\n");
     if (!initialized) return;
     cleanupVulkan();
     initialized = false;
-    fprintf(stderr, "✅ cleanup_processor complete\n");
 }
 
 } // extern "C"
