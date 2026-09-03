@@ -5,27 +5,38 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
 
+// std140 uniform block with 24 floats total
 layout(set = 0, binding = 2, std140) uniform Uniforms {
-    vec2 resolution;          // output canvas size (width, height)
-    float brightness;
-    float saturation;
-    float contrast;
-    float sharpness;
-    float gamma;
-    float hue;
-    float temperature;
-    float glowIntensity;
-    float lookMix;
-    float vignette;
-    float splitToning;
-    float edgeDarken;
-    float denoise;
-    float cellShading;
-    float colourCrush;
-    float cellThickness;
+    vec2 resolution;          // offset 0 (8 bytes)
+    float time;               // offset 8 (4 bytes)
+    float brightness;         // offset 12 (4 bytes)
+    float saturation;         // offset 16 (4 bytes)
+    float contrast;           // offset 20 (4 bytes)
+    float sharpness;          // offset 24 (4 bytes)
+    float gamma;              // offset 28 (4 bytes)
+    float hue;                // offset 32 (4 bytes)
+    float temperature;        // offset 36 (4 bytes)
+    float glowIntensity;      // offset 40 (4 bytes)
+    float lookMix;            // offset 44 (4 bytes)
+    float vignette;           // offset 48 (4 bytes)
+    float splitToning;        // offset 52 (4 bytes)
+    float edgeDarken;         // offset 56 (4 bytes)
+    float denoise;            // offset 60 (4 bytes)
+    float cellShading;        // offset 64 (4 bytes)
+    float colourCrush;        // offset 68 (4 bytes)
+    float cellThickness;      // offset 72 (4 bytes)
+    // New 2026 Stylized FX
+    float mangaRageAura;      // offset 76 (4 bytes) - Gon Manga Rage Outlines & Smear
+    float mangaRageSpread;    // offset 80 (4 bytes) - Smear Tendril Reach
+    float mangaRageJitter;    // offset 84 (4 bytes) - Boil/Vibration speed
+    float flickerIntensity;   // offset 88 (4 bytes) - Exposure Strobe
+    float flickerSpeed;       // offset 92 (4 bytes) - Strobe Frequency
+    float dustParticles;      // offset 96 (4 bytes) - 1.0 = on, 0.0 = off
+    float dustIntensity;      // offset 100 (4 bytes) - Mote brightness
+    float dustSpeed;          // offset 104 (4 bytes) - Drift speed
 } u;
 
-// ---------- HELPERS ----------
+// ---------- COLOR SPACE CONVERSIONS ----------
 vec3 srgbToLinear(vec3 srgb) {
     vec3 less = step(vec3(0.04045), srgb);
     return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), less);
@@ -44,8 +55,8 @@ vec3 adjustTemperature(vec3 color, float temp) {
 }
 
 vec3 rotateHue(vec3 color, float angle) {
-    float cosA = cos(angle * 3.14159 / 180.0);
-    float sinA = sin(angle * 3.14159 / 180.0);
+    float cosA = cos(angle * 3.14159265 / 180.0);
+    float sinA = sin(angle * 3.14159265 / 180.0);
     mat3 rotMat = mat3(
         0.299 + 0.701 * cosA + 0.168 * sinA,
         0.587 - 0.587 * cosA + 0.330 * sinA,
@@ -68,12 +79,7 @@ vec3 tealOrange(vec3 color, float mixAmount) {
 }
 
 vec3 filmicTonemap(vec3 color) {
-    const float A = 0.15;
-    const float B = 0.50;
-    const float C = 0.10;
-    const float D = 0.20;
-    const float E = 0.02;
-    const float F = 0.30;
+    const float A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
     float eps = 1e-6;
     return ((color * (A * color + C * B) + D * E) / (color * (A * color + B) + D * F + eps)) - E / F;
 }
@@ -84,23 +90,137 @@ float vignetteEffect(vec2 uv, float amount) {
     return clamp(vig, 0.0, 1.0);
 }
 
+// 1. Perimeter Edge Darkening (4-edge linear box shadow falloff)
+float calculateEdgeDarkening(vec2 uv, float amount) {
+    if (amount <= 0.001) return 1.0;
+    vec2 edgeDist = min(uv, 1.0 - uv);
+    float dX = smoothstep(0.0, 0.32, edgeDist.x);
+    float dY = smoothstep(0.0, 0.32, edgeDist.y);
+    float edgeFactor = dX * dY;
+    float darkness = mix(1.0 - amount * 0.95, 1.0, pow(edgeFactor, 0.65 + amount * 0.45));
+    return clamp(darkness, 0.0, 1.0);
+}
+
+// 2. Exposure Strobe & Flicker
+float calculateFlicker(float intensity, float speed, float time) {
+    if (intensity <= 0.001) return 1.0;
+    float baseSpeed = max(speed, 0.1);
+    float t = time * baseSpeed * 9.0;
+    float wave = sin(t * 1.3) * 0.25 + cos(t * 2.7) * 0.25;
+    float stepSeed = floor(time * baseSpeed * 15.0);
+    float noise = (fract(sin(stepSeed * 78.233) * 43758.5453) - 0.5) * 1.4;
+    float pulse = (wave + noise) * (intensity * 0.85);
+    return max(1.0 + pulse, 0.0);
+}
+
+// 3. Floating Atmospheric Dust Motes
+vec3 calculateDustParticles(vec2 uv, float intensity, float speed, float time, vec2 res) {
+    if (intensity <= 0.001) return vec3(0.0);
+    float aspect = res.x / max(res.y, 1.0);
+    vec2 pUv = uv * vec2(aspect, 1.0);
+
+    vec3 dustAccum = vec3(0.0);
+    float t = time * max(speed, 0.05) * 0.35;
+
+    for (int layer = 0; layer < 3; layer++) {
+        float fLayer = float(layer);
+        float layerScale = 7.0 + fLayer * 5.5;
+        float layerSpeed = (0.5 + fLayer * 0.4) * t;
+
+        vec2 drift = vec2(sin(layerSpeed * 0.7 + fLayer * 1.8) * 0.06, -layerSpeed * 0.22);
+        vec2 gridCoord = (pUv + drift) * layerScale;
+        vec2 cellId = floor(gridCoord);
+        vec2 cellUv = fract(gridCoord) - 0.5;
+
+        float seed = dot(cellId + fLayer * 31.7, vec2(12.9898, 78.233));
+        vec2 pOffset = vec2(
+            fract(sin(seed) * 43758.5453) - 0.5,
+            fract(sin(seed * 1.414) * 23421.631) - 0.5
+        ) * 0.72;
+
+        float dist = length(cellUv - pOffset);
+        float pRadius = 0.032 + 0.028 * fract(sin(seed * 2.7) * 19283.1);
+        float core = smoothstep(pRadius, 0.0, dist);
+        float halo = smoothstep(pRadius * 4.0, 0.0, dist) * 0.42;
+
+        float twinkle = 0.65 + 0.35 * sin(time * (2.4 + fLayer * 1.6) + seed);
+        vec3 moteColor = mix(vec3(1.15, 1.10, 1.0), vec3(1.45, 1.25, 0.85), fLayer * 0.45);
+        dustAccum += moteColor * ((core + halo) * twinkle);
+    }
+    return dustAccum * (intensity * 0.9);
+}
+
+// 4. Gon Menacing Manga Outlines & Contour Smear
+vec3 applyMangaRageAura(vec3 color, ivec2 pos, ivec2 size, vec2 uv, float intensity, float spread, float jitter, float time) {
+    if (intensity <= 0.001) return color;
+
+    ivec2 pN = clamp(pos + ivec2(0, -2), ivec2(0), size - 1);
+    ivec2 pS = clamp(pos + ivec2(0,  2), ivec2(0), size - 1);
+    ivec2 pW = clamp(pos + ivec2(-2, 0), ivec2(0), size - 1);
+    ivec2 pE = clamp(pos + ivec2( 2, 0), ivec2(0), size - 1);
+
+    vec3 cN = srgbToLinear(imageLoad(inputImage, pN).rgb);
+    vec3 cS = srgbToLinear(imageLoad(inputImage, pS).rgb);
+    vec3 cW = srgbToLinear(imageLoad(inputImage, pW).rgb);
+    vec3 cE = srgbToLinear(imageLoad(inputImage, pE).rgb);
+
+    float lumN = dot(cN, vec3(0.299, 0.587, 0.114));
+    float lumS = dot(cS, vec3(0.299, 0.587, 0.114));
+    float lumW = dot(cW, vec3(0.299, 0.587, 0.114));
+    float lumE = dot(cE, vec3(0.299, 0.587, 0.114));
+    float lumC = dot(color, vec3(0.299, 0.587, 0.114));
+
+    float edgeGrad = length(vec2(lumE - lumW, lumS - lumN));
+    float charEdge = smoothstep(0.06, 0.40, edgeGrad) + (1.0 - smoothstep(0.02, 0.35, lumC)) * 0.45;
+
+    vec2 center = vec2(0.5, 0.5);
+    vec2 delta = uv - center;
+    float angle = atan(delta.y, delta.x);
+    float dist = length(delta);
+
+    float jTime = time * (6.0 + jitter * 16.0);
+    float lineNoise = sin(angle * 42.0 + jTime * 1.5) * cos(angle * 21.0 - jTime * 0.8);
+    float crossHatch = sin(angle * 84.0 + sin(dist * 35.0 + jTime));
+    float jaggedLines = smoothstep(0.25, 0.90, abs(lineNoise * crossHatch));
+
+    float smearAccum = 0.0;
+    float maxReach = (0.04 + spread * 0.35) * float(size.x);
+    vec2 rayDir = normalize(delta + vec2(sin(jTime + angle * 3.0), cos(jTime - angle * 3.0)) * (0.09 * jitter));
+
+    const int SMEAR_STEPS = 8;
+    for (int s = 1; s <= SMEAR_STEPS; s++) {
+        float stepDist = (float(s) / float(SMEAR_STEPS)) * maxReach;
+        ivec2 sPos = clamp(pos - ivec2(rayDir * stepDist), ivec2(0), size - 1);
+        vec3 sCol = srgbToLinear(imageLoad(inputImage, sPos).rgb);
+        float sLum = dot(sCol, vec3(0.299, 0.587, 0.114));
+        smearAccum += (1.0 - smoothstep(0.05, 0.50, sLum)) * (1.0 - float(s) / float(SMEAR_STEPS));
+    }
+    smearAccum /= float(SMEAR_STEPS);
+
+    float inkAmount = (charEdge * 0.6 + smearAccum * 1.4 + jaggedLines * charEdge * 2.2) * intensity;
+    inkAmount = clamp(inkAmount, 0.0, 0.95);
+
+    vec3 inkColor = vec3(0.01, 0.005, 0.015);
+    return mix(color, inkColor, inkAmount);
+}
+
 vec3 splitTone(vec3 color, float amount) {
     if (amount <= 0.0) return color;
     vec3 shadows = vec3(0.05, 0.12, 0.4);
     vec3 highlights = vec3(0.95, 0.5, 0.15);
     float lum = dot(color, vec3(0.299, 0.587, 0.114));
-    vec3 tone = mix(shadows, highlights, clamp((lum - 0.0) / 1.0, 0.0, 1.0));
+    vec3 tone = mix(shadows, highlights, clamp(lum, 0.0, 1.0));
     return mix(color, tone, amount * 0.7);
 }
 
 vec3 bloomGlow(ivec2 pos, ivec2 size, float threshold, float intensity) {
     if (intensity <= 0.0) return vec3(0.0);
-    const int samples = 64;
-    const float radius = 60.0;
+    const int samples = 48;
+    const float radius = 55.0;
     vec3 accum = vec3(0.0);
     float wsum = 0.0;
     for (int i = 0; i < samples; ++i) {
-        float angle = float(i) * 6.28318530718 / float(samples);
+        float angle = float(i) * 6.2831853 / float(samples);
         float r = radius * (0.25 + 0.75 * fract(sin(float(i) * 12.9898 + 0.5) * 43758.5453));
         ivec2 samplePos = clamp(pos + ivec2(int(r * cos(angle)), int(r * sin(angle))), ivec2(0), size - 1);
         vec3 s = imageLoad(inputImage, samplePos).rgb;
@@ -114,21 +234,18 @@ vec3 bloomGlow(ivec2 pos, ivec2 size, float threshold, float intensity) {
     }
     if (wsum <= 0.0) return vec3(0.0);
     vec3 bloom = accum / wsum;
-    float scale = intensity * 20.0;
-    return clamp(bloom * scale, vec3(0.0), vec3(12.0));
+    return clamp(bloom * (intensity * 18.0), vec3(0.0), vec3(10.0));
 }
 
 vec3 denoise3x3(ivec2 pos, ivec2 size) {
     vec3 result = vec3(0.0);
-    float total = 0.0;
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
             result += imageLoad(inputImage, samplePos).rgb;
-            total += 1.0;
         }
     }
-    return result / total;
+    return result / 9.0;
 }
 
 float thickEdge(ivec2 pos, ivec2 size, float thickness) {
@@ -137,69 +254,62 @@ float thickEdge(ivec2 pos, ivec2 size, float thickness) {
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
             ivec2 samplePos = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
-            float lum = dot(imageLoad(inputImage, samplePos).rgb, vec3(0.299, 0.587, 0.114));
             float gx = 0.0, gy = 0.0;
             for (int sy = -1; sy <= 1; sy++) {
                 for (int sx = -1; sx <= 1; sx++) {
                     ivec2 p = clamp(samplePos + ivec2(sx, sy), ivec2(0), size - 1);
                     float l = dot(imageLoad(inputImage, p).rgb, vec3(0.299, 0.587, 0.114));
-                    float kx = (sx == -1 ? -1 : (sx == 1 ? 1 : 0)) * (sy == -1 ? 1 : (sy == 0 ? 2 : 1));
-                    float ky = (sy == -1 ? -1 : (sy == 1 ? 1 : 0)) * (sx == -1 ? 1 : (sx == 0 ? 2 : 1));
+                    float kx = (sx == -1 ? -1.0 : (sx == 1 ? 1.0 : 0.0)) * (sy == -1 ? 1.0 : (sy == 0 ? 2.0 : 1.0));
+                    float ky = (sy == -1 ? -1.0 : (sy == 1 ? 1.0 : 0.0)) * (sx == -1 ? 1.0 : (sx == 0 ? 2.0 : 1.0));
                     gx += l * kx;
                     gy += l * ky;
                 }
             }
-            float edge = sqrt(gx*gx + gy*gy);
-            maxEdge = max(maxEdge, edge);
+            maxEdge = max(maxEdge, sqrt(gx * gx + gy * gy));
         }
     }
     return maxEdge;
 }
 
 float dither(vec2 pos) {
-    float d = dot(pos, vec2(12.9898, 78.233));
-    return fract(sin(d) * 43758.5453);
+    return fract(sin(dot(pos, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// ---------- MAIN ----------
 void main() {
     ivec2 outPos = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 outSize = ivec2(u.resolution);   // output canvas size from uniform
-    ivec2 inSize = imageSize(inputImage);  // input video size
+    ivec2 outSize = ivec2(u.resolution);
+    ivec2 inSize = imageSize(inputImage);
 
     if (outPos.x >= outSize.x || outPos.y >= outSize.y) return;
 
-    // Compute scaling to fit input inside output (letterbox)
     float scaleX = float(outSize.x) / float(inSize.x);
     float scaleY = float(outSize.y) / float(inSize.y);
-    float scale = min(scaleX, scaleY);  // 'fit' – use max() for crop
+    float scale = min(scaleX, scaleY);
 
     vec2 offset = (vec2(outSize) - vec2(inSize) * scale) * 0.5;
     vec2 uv = (vec2(outPos) - offset) / (vec2(inSize) * scale);
 
-    // Check for black borders
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         imageStore(outputImage, outPos, vec4(0.0));
         return;
     }
 
-    // Nearest-neighbor sampling (could be replaced with bilinear)
-    ivec2 inPos = ivec2(uv * vec2(inSize));
-    inPos = clamp(inPos, ivec2(0), inSize - 1);
+    ivec2 inPos = clamp(ivec2(uv * vec2(inSize)), ivec2(0), inSize - 1);
     vec4 color = imageLoad(inputImage, inPos);
-
-    // ----- Grading (same as before) -----
     vec3 linear = srgbToLinear(color.rgb);
 
     if (u.denoise > 0.0) {
-        vec3 blurred = denoise3x3(inPos, inSize); // use input pos for denoise
+        vec3 blurred = denoise3x3(inPos, inSize);
         linear = mix(linear, blurred, u.denoise);
     }
 
+    // Gon Manga Rage Aura & Ink Smear
+    linear = applyMangaRageAura(linear, inPos, inSize, uv, u.mangaRageAura, u.mangaRageSpread, u.mangaRageJitter, u.time);
+
+    // Color controls
     float gain = pow(2.0, u.brightness);
     linear *= gain;
     linear = (linear - 0.5) * u.contrast + 0.5;
-    // gamma: clamp to positive to avoid pow issues
     float gammaClamped = max(u.gamma, 0.01);
     linear = pow(max(linear, vec3(1e-4)), vec3(1.0 / gammaClamped));
     float lum = dot(linear, vec3(0.299, 0.587, 0.114));
@@ -208,28 +318,34 @@ void main() {
     linear = rotateHue(linear, u.hue);
     linear = tealOrange(linear, u.lookMix);
 
-    // Glow (bloom) using input image – we use input pos for consistency
+    // Glow / Bloom
     float bloomThreshold = mix(0.8, 0.2, clamp(u.vignette, 0.0, 1.0));
     vec3 bloom = bloomGlow(inPos, inSize, bloomThreshold, u.glowIntensity);
     linear += bloom;
 
+    // Atmospheric Dust Particles
+    if (u.dustParticles > 0.5) {
+        vec3 dust = calculateDustParticles(uv, u.dustIntensity, u.dustSpeed, u.time, u.resolution);
+        linear += dust;
+    }
+
+    // Tonemap
     vec3 tonemapped = filmicTonemap(linear);
     float exposure = max(max(linear.r, linear.g), linear.b);
     float tmBlend = clamp((exposure - 0.9) / (2.0 - 0.9), 0.0, 1.0);
     linear = mix(linear, tonemapped, tmBlend);
 
-    // Vignette uses output UV (canvas space)
+    // Vignette & Edge Darkening
     vec2 outUV = (vec2(outPos) + 0.5) / vec2(outSize);
-    float vig = vignetteEffect(outUV, u.vignette);
-    linear *= vig;
+    linear *= vignetteEffect(outUV, u.vignette);
+    linear *= calculateEdgeDarkening(outUV, u.edgeDarken);
 
-    // Edge Darken also on output UV
-    float edge = 1.0 - u.edgeDarken * smoothstep(0.3, 0.9, distance(outUV, vec2(0.5)));
-    linear *= edge;
+    // Exposure Strobe & Flicker
+    linear *= calculateFlicker(u.flickerIntensity, u.flickerSpeed, u.time);
 
     linear = splitTone(linear, u.splitToning);
 
-    // Cell Shading – use input image for edge detection
+    // Cell Shading & Anime Outline
     if (u.cellShading > 0.0) {
         float edgeStrength = thickEdge(inPos, inSize, u.cellThickness);
         float threshold = mix(0.8, 0.2, u.cellShading);
@@ -237,7 +353,7 @@ void main() {
         linear = mix(linear, vec3(0.0), line * u.cellShading * 0.8);
     }
 
-    // Colour Crush – clamp the value to 0.5 max
+    // Color Crush
     float crushAmount = clamp(u.colourCrush, 0.0, 0.5);
     if (crushAmount > 0.0) {
         float steps = mix(256.0, 4.0, crushAmount);
@@ -247,10 +363,8 @@ void main() {
     linear = clamp(linear, vec3(0.0), vec3(1.0));
     vec3 srgb = linearToSrgb(linear);
 
-    // Dither with increased amplitude (0.02 ≈ 5 quantization steps)
-    float d = (dither(vec2(outPos)) - 0.5) * 0.02;
-    srgb += d;
-    srgb = clamp(srgb, vec3(0.0), vec3(1.0));
+    float d = (dither(vec2(outPos)) - 0.5) * 0.015;
+    srgb = clamp(srgb + d, vec3(0.0), vec3(1.0));
 
     imageStore(outputImage, outPos, vec4(srgb, color.a));
 }
