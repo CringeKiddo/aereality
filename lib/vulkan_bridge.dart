@@ -53,7 +53,7 @@ final cleanupProcessor = nativeLib
 bool _initialized = false;
 bool get isVulkanReady => _initialized;
 
-// 1 time float + 33 effect floats + 32 curve floats = 66 floats total
+// 1 time float + 33 parameter floats + 32 spline curve floats = 66 floats total
 const int kUniformCount = 66;
 
 void initVulkan(Uint8List spirv, [int precision = 16]) {
