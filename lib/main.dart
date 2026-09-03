@@ -867,17 +867,45 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  void _updateCanvasSize(int srcW, int srcH) {
-    if (srcW <= 0 || srcH <= 0) {
-      srcW = 1080;
-      srcH = 1350;
+  // ✅ ACCURATE RESOLUTION & ASPECT RATIO CALCULATOR
+  Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr) {
+    int baseSize;
+    switch (resolutionName) {
+      case '720p':  baseSize = 720; break;
+      case '1080p': baseSize = 1080; break;
+      case '2K':    baseSize = 1440; break;
+      default:      baseSize = 1080;
     }
-    final ratio = _getAspectRatioValue(_selectedRatio);
-    int targetHeight = (srcH * gPreviewScale).round();
-    int targetWidth = (targetHeight * ratio).round();
 
-    _canvasWidth = (targetWidth % 2 == 0) ? targetWidth : targetWidth + 1;
-    _canvasHeight = (targetHeight % 2 == 0) ? targetHeight : targetHeight + 1;
+    final double ratio = _getAspectRatioValue(ratioStr);
+    int targetW;
+    int targetH;
+
+    if (ratio < 1.0) {
+      // Portrait (e.g. 4:5, 9:16, 3:4)
+      // Base width is standard (e.g. 1080w), height expands proportionately
+      targetW = baseSize;
+      targetH = (targetW / ratio).round();
+    } else {
+      // Landscape or Square (e.g. 16:9, 1:1, 21:9)
+      targetH = baseSize;
+      targetW = (targetH * ratio).round();
+    }
+
+    // Video encoders strictly require even pixel dimensions (multiple of 2)
+    targetW = (targetW % 2 == 0) ? targetW : targetW + 1;
+    targetH = (targetH % 2 == 0) ? targetH : targetH + 1;
+
+    return {'width': targetW, 'height': targetH};
+  }
+
+  void _updateCanvasSize(int srcW, int srcH) {
+    final dims = _calculateTargetDimensions('1080p', _selectedRatio);
+    int targetW = (dims['width']! * gPreviewScale).round();
+    int targetH = (dims['height']! * gPreviewScale).round();
+
+    _canvasWidth = (targetW % 2 == 0) ? targetW : targetW + 1;
+    _canvasHeight = (targetH % 2 == 0) ? targetH : targetH + 1;
   }
 
   Future<void> _loadShader() async {
@@ -1234,7 +1262,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // EXACT WEB-MATCHING PRESETS (Updated to use Unified Bloom & Rays)
   void _applyPreset(String name) {
     setState(() {
       _resetAllEffects();
@@ -1324,6 +1351,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
+            final targetDims = _calculateTargetDimensions(selectedRes, _selectedRatio);
             return Padding(
               padding: const EdgeInsets.all(20),
               child: SingleChildScrollView(
@@ -1339,7 +1367,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ],
                     ),
                     Text(
-                      'Vulkan ${gEnginePrecision}-bit Compute Pipeline',
+                      'Vulkan ${gEnginePrecision}-bit Compute • $_selectedRatio (${targetDims['width']} x ${targetDims['height']})',
                       style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -1524,9 +1552,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final byteData = await _loadedRawImage!.toByteData(format: ui.ImageByteFormat.rawRgba);
       final rawInput = byteData!.buffer.asUint8List();
 
-      final ratio = _getAspectRatioValue(_selectedRatio);
-      const exportHeight = 1350;
-      final exportWidth = (exportHeight * ratio).round();
+      final dims = _calculateTargetDimensions('1080p', _selectedRatio);
+      final exportWidth = dims['width']!;
+      final exportHeight = dims['height']!;
 
       final outputRaw = processImage(
         rawInput,
@@ -1587,13 +1615,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     final uniforms = _packUniforms();
 
-    int outW, outH;
-    switch (resolution) {
-      case '720p': outW = 1280; outH = 720; break;
-      case '1080p': outW = 1920; outH = 1080; break;
-      case '2K': outW = 2560; outH = 1440; break;
-      default: outW = 1920; outH = 1080;
-    }
+    final targetDims = _calculateTargetDimensions(resolution, _selectedRatio);
+    final int outW = targetDims['width']!;
+    final int outH = targetDims['height']!;
 
     int bitrateKbps = (bitrate == '15 Mbps') ? 15000 : (bitrate == '50 Mbps') ? 50000 : 35000;
     int targetFps = int.parse(fps.replaceAll('fps', ''));
@@ -1610,7 +1634,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         dialogCtx = ctx;
         return AlertDialog(
           backgroundColor: const Color(0xFF101014),
-          title: const Text('Exporting Master Video', style: TextStyle(color: Colors.white, fontSize: 15)),
+          title: Text('Exporting $outW x $outH Master Video', style: const TextStyle(color: Colors.white, fontSize: 15)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1646,8 +1670,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       frameFiles.sort((a, b) => a.path.compareTo(b.path));
 
       final totalFrames = frameFiles.length;
-      final exportHeight = 1080;
-      final exportWidth = (1080 * _getAspectRatioValue(_selectedRatio)).round();
 
       for (int i = 0; i < totalFrames; i++) {
         final file = frameFiles[i];
@@ -1663,14 +1685,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           rawInput,
           decoded.width,
           decoded.height,
-          exportWidth,
-          exportHeight,
+          outW,
+          outH,
           uniforms,
         );
 
         final gradedImg = img.Image.fromBytes(
-          width: exportWidth,
-          height: exportHeight,
+          width: outW,
+          height: outH,
           bytes: outputRaw.buffer,
           numChannels: 4,
           order: img.ChannelOrder.rgba,
@@ -1682,7 +1704,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await outputFile.writeAsBytes(pngBytes);
 
         progressNotifier.value = (i + 1) / totalFrames;
-        statusNotifier.value = 'Grading frame ${i + 1} / $totalFrames...';
+        statusNotifier.value = 'Grading frame ${i + 1} / $totalFrames ($outW x $outH)...';
       }
 
       statusNotifier.value = 'Assembling final video stream...';
@@ -1690,16 +1712,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       String encodeCmd;
       if (container == 'WebM') {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf scale=$outW:$outH -c:v libvpx-vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p "$silentOutputPath"';
+        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libvpx-vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p "$silentOutputPath"';
       } else if (container == 'MOV') {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf scale=$outW:$outH -c:v prores_ks -profile:v 3 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v prores_ks -profile:v 3 -pix_fmt yuv420p "$silentOutputPath"';
       } else {
-        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf scale=$outW:$outH -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p "$silentOutputPath"';
+        encodeCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p "$silentOutputPath"';
       }
 
       var session = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await session.getReturnCode())) {
-        final fallbackCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf scale=$outW:$outH -c:v mpeg4 -q:v 3 -pix_fmt yuv420p "$silentOutputPath"';
+        final fallbackCmd = '-start_number 1 -framerate $targetFps -i "${processedDir.path}/frame_%05d.png" -vf "scale=$outW:$outH" -c:v mpeg4 -q:v 3 -pix_fmt yuv420p "$silentOutputPath"';
         await FFmpegKit.execute(fallbackCmd);
       }
 
@@ -1726,7 +1748,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ Master Saved to Downloads:\n${destFile.path}'),
+            content: Text('✅ Master Saved to Downloads ($outW x $outH):\n${destFile.path}'),
             duration: const Duration(seconds: 7),
             backgroundColor: Colors.green,
           ),
@@ -2266,7 +2288,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         child: Column(
                           children: [
                             if (_activeCategory == 'bloom') ...[
-                              // UNIFIED DUAL-FILTER BLOOM CARD
                               _buildDrawerCard(
                                 title: 'Dual-Filter Optical Bloom',
                                 badge1: 'Unified',
@@ -2281,7 +2302,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ],
                                 ),
                               ),
-                              // SCREEN-SPACE CREPUSCULAR LIGHT RAYS
                               _buildDrawerCard(
                                 title: 'Screen-Space Crepuscular Rays',
                                 badge1: 'God Rays',
@@ -2293,7 +2313,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ],
                                 ),
                               ),
-                              // COHERENT ANAMORPHIC GLASS FLARES
                               _buildDrawerCard(
                                 title: 'Optical Anamorphic Glass Flares',
                                 badge1: 'Flares',
