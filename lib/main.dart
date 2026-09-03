@@ -1,3 +1,4 @@
+// lib/main.dart (Part 1 of 2)
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -52,11 +53,9 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// Global Engine Precision: 16 (FP16 Fast) or 32 (FP32 True Float)
 int gEnginePrecision = 16;
 double gPreviewScale = 0.5;
 
-// ---------- PROJECT DATA MODEL ----------
 class ProjectData {
   String videoPath;
   double brightness, saturation, contrast, sharpness, gamma, hue;
@@ -66,9 +65,9 @@ class ProjectData {
   bool dustParticles;
   double dustIntensity, dustSpeed;
   double godRays, volumetricFog, depthOfField;
+  double edgeGlowColorMode; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
   String aspectRatio;
 
-  // 5-Point Spline Curves: [Blacks, Shadows, Midtones, Highlights, Whites]
   List<double> curveMaster;
   List<double> curveRed;
   List<double> curveGreen;
@@ -100,6 +99,7 @@ class ProjectData {
     this.godRays = 0.0,
     this.volumetricFog = 0.0,
     this.depthOfField = 0.0,
+    this.edgeGlowColorMode = 0.0,
     this.aspectRatio = "4:5",
     List<double>? curveMaster,
     List<double>? curveRed,
@@ -136,6 +136,7 @@ class ProjectData {
         'godRays': godRays,
         'volumetricFog': volumetricFog,
         'depthOfField': depthOfField,
+        'edgeGlowColorMode': edgeGlowColorMode,
         'aspectRatio': aspectRatio,
         'curveMaster': curveMaster,
         'curveRed': curveRed,
@@ -169,6 +170,7 @@ class ProjectData {
         godRays: (json['godRays'] ?? 0.0).toDouble(),
         volumetricFog: (json['volumetricFog'] ?? 0.0).toDouble(),
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
+        edgeGlowColorMode: (json['edgeGlowColorMode'] ?? 0.0).toDouble(),
         aspectRatio: json['aspectRatio'] ?? "4:5",
         curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
@@ -692,7 +694,6 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     );
   }
 }
-
 // ---------- STUDIO EDITOR SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -710,7 +711,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isMuted = false;
   String? _currentVideoPath;
 
-  String _activeCategory = 'color';
+  // Active Category Pill
+  String _activeCategory = 'bloom';
   String _activeCurveChannel = 'master'; // 'master' | 'red' | 'green' | 'blue'
 
   // Master Sliders
@@ -738,6 +740,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _godRays = 0.0;
   double _volumetricFog = 0.0;
   double _depthOfField = 0.0;
+  double _edgeGlowColorMode = 0.0; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
 
   // 5-Point Splines: [Blacks, Shadows, Midtones, Highlights, Whites]
   List<double> _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
@@ -791,6 +794,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _godRays = p.godRays;
       _volumetricFog = p.volumetricFog;
       _depthOfField = p.depthOfField;
+      _edgeGlowColorMode = p.edgeGlowColorMode;
       _selectedRatio = p.aspectRatio;
       _curveMaster = List.from(p.curveMaster);
       _curveRed = List.from(p.curveRed);
@@ -810,15 +814,45 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<void> _loadShader() async {
-    try {
-      final spvPath = gEnginePrecision == 32
-          ? 'assets/shaders/aereality_core_32.spv'
-          : 'assets/shaders/aereality_core_16.spv';
-      final byteData = await rootBundle.load(spvPath);
-      final spirvShader = byteData.buffer.asUint8List();
-      initVulkan(spirvShader, gEnginePrecision);
-    } catch (e) {
-      print('❌ SPIR-V load error: $e');
+    final candidateNames = [
+      'assets/shaders/aereality_core.spv',
+      gEnginePrecision == 32 ? 'assets/shaders/aereality_core_32.spv' : 'assets/shaders/aereality_core_16.spv',
+      'assets/shaders/shader.spv',
+    ];
+
+    Uint8List? shaderBytes;
+    String? loadedPath;
+
+    for (final path in candidateNames) {
+      try {
+        final byteData = await rootBundle.load(path);
+        shaderBytes = byteData.buffer.asUint8List();
+        loadedPath = path;
+        break;
+      } catch (_) {}
+    }
+
+    if (shaderBytes != null) {
+      initVulkan(shaderBytes, gEnginePrecision);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚡ Vulkan Initialized: ${loadedPath!.split('/').last}'),
+            duration: const Duration(seconds: 2),
+            backgroundColor: const Color(0xFF00F0FF).withOpacity(0.8),
+          ),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ No compiled .spv found in assets/shaders/! Recompile shader with glslc.'),
+            duration: Duration(seconds: 4),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     }
   }
 
@@ -892,7 +926,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[22] = _godRays;
     uniforms[23] = _volumetricFog;
     uniforms[24] = _depthOfField;
-    uniforms[25] = 0.0; // pad0
+    uniforms[25] = _edgeGlowColorMode;
 
     // Master Curve (8 floats)
     uniforms[26] = _curveMaster[0];
@@ -992,6 +1026,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _godRays = 0.0;
       _volumetricFog = 0.0;
       _depthOfField = 0.0;
+      _edgeGlowColorMode = 0.0;
       _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
@@ -999,6 +1034,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('All effects reset to neutral default!'), duration: Duration(seconds: 1)),
+    );
+  }
+
+  void _resetCurvesOnly() {
+    setState(() {
+      _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
+      _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
+      _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
+      _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Curves reset to linear!'), duration: Duration(seconds: 1)),
     );
   }
 
@@ -1034,6 +1081,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         godRays: _godRays,
         volumetricFog: _volumetricFog,
         depthOfField: _depthOfField,
+        edgeGlowColorMode: _edgeGlowColorMode,
         aspectRatio: _selectedRatio,
         curveMaster: _curveMaster,
         curveRed: _curveRed,
@@ -1048,7 +1096,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // Exact 2026 YouTube WIS Presets Analyzed from URLs
   void _applyPreset(String name) {
     setState(() {
       switch (name) {
@@ -1074,6 +1121,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         case 'uryu vs ichigo':
           _brightness = -0.02; _saturation = 1.25; _contrast = 1.55; _sharpness = 0.75; _gamma = 0.92;
           _temperature = 8200.0; _glowIntensity = 0.55; _glowSpread = 0.35; _edgeGlow = 0.45;
+          _edgeGlowColorMode = 2.0; // Quincy blue
           _edgeDarken = 0.25; _vignette = 0.28; _splitToning = 0.40; _blackCrush = 0.38; _darkOutlines = 0.60;
           _curveMaster = [0.0, 0.16, 0.48, 0.84, 1.0];
           break;
@@ -1184,7 +1232,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // Frame Rate
+                    // Framerate
                     const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1202,7 +1250,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // Video Bitrate
+                    // Bitrate
                     const Text('VIDEO BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1494,16 +1542,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     double max,
     double value,
     ValueChanged<double> onChanged, {
-    double step = 0.01,
     String unit = '',
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           SizedBox(
-            width: 110,
-            child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+            width: 120,
+            child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
           ),
           Expanded(
             child: SliderTheme(
@@ -1526,10 +1573,86 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             width: 48,
             child: Text(
               '${value.toStringAsFixed(2)}$unit',
-              style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
+              style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
               textAlign: TextAlign.end,
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // Card Drawer Container Widget (Matches Screenshot 2)
+  Widget _buildDrawerCard({
+    required String title,
+    required String badge1,
+    String? badge2,
+    required String subtitle,
+    required Widget child,
+    Widget? headerTrailing,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101014),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 2, right: 10),
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00F0FF).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.auto_awesome, color: Color(0xFF00F0FF), size: 16),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(title, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00F0FF).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(badge1, style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 9, fontWeight: FontWeight.bold)),
+                        ),
+                        if (badge2 != null) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: Colors.purpleAccent.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(badge2, style: const TextStyle(color: Colors.purpleAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                  ],
+                ),
+              ),
+              if (headerTrailing != null) headerTrailing,
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
         ],
       ),
     );
@@ -1559,15 +1682,29 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _buildCurveChannelBtn('master', 'Master', Colors.white),
-            const SizedBox(width: 8),
-            _buildCurveChannelBtn('red', 'Red', Colors.redAccent),
-            const SizedBox(width: 8),
-            _buildCurveChannelBtn('green', 'Green', Colors.greenAccent),
-            const SizedBox(width: 8),
-            _buildCurveChannelBtn('blue', 'Blue', Colors.lightBlueAccent),
+            Row(
+              children: [
+                _buildCurveChannelBtn('master', 'Master', Colors.white),
+                const SizedBox(width: 6),
+                _buildCurveChannelBtn('red', 'Red', Colors.redAccent),
+                const SizedBox(width: 6),
+                _buildCurveChannelBtn('green', 'Green', Colors.greenAccent),
+                const SizedBox(width: 6),
+                _buildCurveChannelBtn('blue', 'Blue', Colors.lightBlueAccent),
+              ],
+            ),
+            TextButton.icon(
+              onPressed: _resetCurvesOnly,
+              icon: const Icon(Icons.refresh, size: 14, color: Colors.white54),
+              label: const Text('Reset', style: TextStyle(color: Colors.white70, fontSize: 11)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                backgroundColor: const Color(0xFF18181E),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -1603,7 +1740,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return GestureDetector(
       onTap: () => setState(() => _activeCurveChannel = id),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           color: isSel ? c.withOpacity(0.25) : const Color(0xFF141418),
           borderRadius: BorderRadius.circular(6),
@@ -1611,6 +1748,43 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         child: Text(label, style: TextStyle(color: isSel ? c : Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
       ),
+    );
+  }
+
+  Widget _buildEdgeGlowPalette() {
+    final modes = [
+      {'label': 'White', 'mode': 0.0, 'color': Colors.white},
+      {'label': 'Gold', 'mode': 1.0, 'color': const Color(0xFFFFD700)},
+      {'label': 'Quincy', 'mode': 2.0, 'color': const Color(0xFF64B5F6)},
+      {'label': 'Cyan', 'mode': 3.0, 'color': const Color(0xFF00F0FF)},
+      {'label': 'Crimson', 'mode': 4.0, 'color': const Color(0xFFFF5252)},
+    ];
+
+    return Wrap(
+      spacing: 6,
+      children: modes.map((m) {
+        final isSel = (_edgeGlowColorMode - (m['mode'] as double)).abs() < 0.1;
+        final c = m['color'] as Color;
+        return GestureDetector(
+          onTap: () => setState(() => _edgeGlowColorMode = m['mode'] as double),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: isSel ? c : const Color(0xFF18181E),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: isSel ? c : Colors.white12),
+            ),
+            child: Text(
+              m['label'] as String,
+              style: TextStyle(
+                color: isSel ? Colors.black : Colors.white70,
+                fontSize: 10,
+                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -1627,7 +1801,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       aspectRatio: _getAspectRatioValue(_selectedRatio),
                       child: RawImage(image: _processedImage, fit: BoxFit.contain),
                     )
-                  : const CircularProgressIndicator(color: Color(0xFF00F0FF)),
+                  : (_controller != null && _controller!.value.isInitialized)
+                      ? AspectRatio(
+                          aspectRatio: _controller!.value.aspectRatio,
+                          child: VideoPlayer(_controller!),
+                        )
+                      : const CircularProgressIndicator(color: Color(0xFF00F0FF)),
             ),
             Positioned(
               top: 40,
@@ -1690,7 +1869,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // PREVIEW CANVAS
+          // PREVIEW CANVAS WITH DIRECT VIDEO FALLBACK
           Expanded(
             flex: 5,
             child: Container(
@@ -1713,10 +1892,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             aspectRatio: _getAspectRatioValue(_selectedRatio),
                             child: RawImage(image: _processedImage, fit: BoxFit.contain),
                           )
-                        : Container(
-                            color: const Color(0xFF0C0C0F),
-                            child: const Center(child: Icon(Icons.movie_outlined, size: 48, color: Colors.white24)),
-                          ),
+                        : (_controller != null && _controller!.value.isInitialized)
+                            ? AspectRatio(
+                                aspectRatio: _controller!.value.aspectRatio,
+                                child: VideoPlayer(_controller!),
+                              )
+                            : Container(
+                                color: const Color(0xFF0C0C0F),
+                                child: const Center(child: Icon(Icons.movie_outlined, size: 48, color: Colors.white24)),
+                              ),
                   ),
                 ],
               ),
@@ -1795,20 +1979,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               labelColor: Colors.white,
               unselectedLabelColor: Colors.white38,
               tabs: const [
-                Tab(text: 'Adjust'),
-                Tab(text: 'WIS Presets'),
-                Tab(text: 'Export'),
+                Tab(text: 'Adjust & Effects'),
+                Tab(text: '2026 WIS Presets'),
+                Tab(text: 'Master Export'),
               ],
             ),
           ),
 
-          // TAB CONTENT
+          // TAB CONTENT (CARD DRAWERS)
           SizedBox(
-            height: 250,
+            height: 260,
             child: TabBarView(
               controller: _tabController,
               children: [
-                // TAB 1: ADJUST
+                // TAB 1: ADJUST & EFFECTS (CARD DRAWERS)
                 Column(
                   children: [
                     SingleChildScrollView(
@@ -1816,9 +2000,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       child: Row(
                         children: [
+                          _buildSubcategoryPill('bloom', 'Bloom & Rim'),
                           _buildSubcategoryPill('color', 'Color & Tone'),
                           _buildSubcategoryPill('curves', 'Curves'),
-                          _buildSubcategoryPill('bloom', 'Deep Glow & Rays'),
                           _buildSubcategoryPill('sharpness', 'Sharpness & Inks'),
                           _buildSubcategoryPill('grade', 'Grade & Split'),
                           _buildSubcategoryPill('strobe', 'Strobe & Dust'),
@@ -1827,47 +2011,141 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     Expanded(
                       child: SingleChildScrollView(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
                         child: Column(
                           children: [
-                            if (_activeCategory == 'color') ...[
-                              _buildSliderRow('Brightness', -1.0, 3.0, _brightness, (v) => setState(() => _brightness = v)),
-                              _buildSliderRow('Contrast', 0.2, 3.0, _contrast, (v) => setState(() => _contrast = v)),
-                              _buildSliderRow('Saturation', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
-                              _buildSliderRow('Gamma', 0.2, 3.0, _gamma, (v) => setState(() => _gamma = v)),
-                              _buildSliderRow('Temperature', 2500, 10000, _temperature, (v) => setState(() => _temperature = v), unit: 'K'),
-                              _buildSliderRow('Hue Shift', -180, 180, _hue, (v) => setState(() => _hue = v), unit: '°'),
-                              _buildSliderRow('Black Crush', 0.0, 1.0, _blackCrush, (v) => setState(() => _blackCrush = v)),
-                            ] else if (_activeCategory == 'curves') ...[
-                              _buildCurvesEditor(),
-                            ] else if (_activeCategory == 'bloom') ...[
-                              _buildSliderRow('Deep Glow Intensity', 0.0, 3.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
-                              _buildSliderRow('Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
-                              _buildSliderRow('Edge Glow Outward', 0.0, 3.0, _edgeGlow, (v) => setState(() => _edgeGlow = v)),
-                              _buildSliderRow('RTX God Rays', 0.0, 3.0, _godRays, (v) => setState(() => _godRays = v)),
-                              _buildSliderRow('Volumetric Fog', 0.0, 3.0, _volumetricFog, (v) => setState(() => _volumetricFog = v)),
-                            ] else if (_activeCategory == 'sharpness') ...[
-                              _buildSliderRow('Laplacian Sharpness', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
-                              _buildSliderRow('Dark Manga Outlines', 0.0, 3.0, _darkOutlines, (v) => setState(() => _darkOutlines = v)),
-                              _buildSliderRow('Edge Darken Blur', 0.0, 3.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
-                              _buildSliderRow('Depth of Field', 0.0, 3.0, _depthOfField, (v) => setState(() => _depthOfField = v)),
-                            ] else if (_activeCategory == 'grade') ...[
-                              _buildSliderRow('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
-                              _buildSliderRow('Split Toning', 0.0, 3.0, _splitToning, (v) => setState(() => _splitToning = v)),
-                              _buildSliderRow('Vignette Falloff', 0.0, 3.0, _vignette, (v) => setState(() => _vignette = v)),
-                            ] else if (_activeCategory == 'strobe') ...[
-                              _buildSliderRow('Black Shutter Strobe', 0.0, 3.0, _flickerIntensity, (v) => setState(() => _flickerIntensity = v)),
-                              _buildSliderRow('Strobe Frequency', 0.1, 10.0, _flickerSpeed, (v) => setState(() => _flickerSpeed = v), unit: 'x'),
-                              SwitchListTile(
-                                title: const Text('Floating Dust Motes', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                                value: _dustParticles,
-                                activeColor: const Color(0xFF00F0FF),
-                                onChanged: (v) => setState(() => _dustParticles = v),
+                            if (_activeCategory == 'bloom') ...[
+                              _buildDrawerCard(
+                                title: 'Soft Ethereal Edge Glow',
+                                badge1: 'Bloom',
+                                badge2: 'Rim',
+                                subtitle: 'Soft luminous character contour bloom with spreading radius and tint palette',
+                                headerTrailing: _buildEdgeGlowPalette(),
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Edge Glow Intensity', 0.0, 3.0, _edgeGlow, (v) => setState(() => _edgeGlow = v)),
+                                    _buildSliderRow('Edge Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
+                                  ],
+                                ),
                               ),
-                              if (_dustParticles) ...[
-                                _buildSliderRow('Dust Intensity', 0.0, 3.0, _dustIntensity, (v) => setState(() => _dustIntensity = v)),
-                                _buildSliderRow('Dust Drift Speed', 0.1, 3.0, _dustSpeed, (v) => setState(() => _dustSpeed = v), unit: 'x'),
-                              ],
+                              _buildDrawerCard(
+                                title: 'Deep Glow (AE 2026 Replica)',
+                                badge1: 'After Effects',
+                                subtitle: 'Smooth 32-bit inverse-square falloff, chromatic dispersion aura & specular highlight core',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Glow Intensity', 0.0, 3.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
+                                    _buildSliderRow('Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
+                                  ],
+                                ),
+                              ),
+                              _buildDrawerCard(
+                                title: 'RTX God Rays & Volumetric Lumen',
+                                badge1: 'Optics',
+                                subtitle: 'Volumetric light shafts and ethereal atmospheric scattering',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('RTX God Rays', 0.0, 3.0, _godRays, (v) => setState(() => _godRays = v)),
+                                    _buildSliderRow('Volumetric Fog', 0.0, 3.0, _volumetricFog, (v) => setState(() => _volumetricFog = v)),
+                                  ],
+                                ),
+                              ),
+                            ] else if (_activeCategory == 'color') ...[
+                              _buildDrawerCard(
+                                title: 'Tone & Dynamic Contrast',
+                                badge1: 'Exposure',
+                                subtitle: 'Perceptual HDR luminance lift, contrast pivot and gamma grading',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Brightness', -1.0, 3.0, _brightness, (v) => setState(() => _brightness = v)),
+                                    _buildSliderRow('Contrast', 0.2, 3.0, _contrast, (v) => setState(() => _contrast = v)),
+                                    _buildSliderRow('Saturation', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
+                                    _buildSliderRow('Gamma', 0.2, 3.0, _gamma, (v) => setState(() => _gamma = v)),
+                                    _buildSliderRow('Black Crush', 0.0, 1.0, _blackCrush, (v) => setState(() => _blackCrush = v)),
+                                  ],
+                                ),
+                              ),
+                              _buildDrawerCard(
+                                title: 'White Balance & Hue',
+                                badge1: 'Color',
+                                subtitle: 'Kelvin temperature calibration and rotational hue shifting',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Temperature', 2500, 10000, _temperature, (v) => setState(() => _temperature = v), unit: 'K'),
+                                    _buildSliderRow('Hue Shift', -180, 180, _hue, (v) => setState(() => _hue = v), unit: '°'),
+                                  ],
+                                ),
+                              ),
+                            ] else if (_activeCategory == 'curves') ...[
+                              _buildDrawerCard(
+                                title: '5-Point Bezier Spline Curves',
+                                badge1: 'Colorista',
+                                subtitle: 'Master, Red, Green, and Blue independent tone grading splines',
+                                child: _buildCurvesEditor(),
+                              ),
+                            ] else if (_activeCategory == 'sharpness') ...[
+                              _buildDrawerCard(
+                                title: 'Laplacian Micro-Sharpness',
+                                badge1: 'USM',
+                                subtitle: 'High-pass unsharp masking tailored for anime contours without noise',
+                                child: _buildSliderRow('Laplacian Sharpness', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                              ),
+                              _buildDrawerCard(
+                                title: 'Anime Ink Lines & Edge Darken',
+                                badge1: 'Manga FX',
+                                subtitle: 'Deepens character ink lines and applies subtle perimeter dark blur',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Dark Manga Outlines', 0.0, 3.0, _darkOutlines, (v) => setState(() => _darkOutlines = v)),
+                                    _buildSliderRow('Edge Darken Blur', 0.0, 3.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
+                                    _buildSliderRow('Depth of Field', 0.0, 3.0, _depthOfField, (v) => setState(() => _depthOfField = v)),
+                                  ],
+                                ),
+                              ),
+                            ] else if (_activeCategory == 'grade') ...[
+                              _buildDrawerCard(
+                                title: 'Split Toning & Vignette',
+                                badge1: 'Look',
+                                subtitle: 'Complementary color division and centered optical lens falloff',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
+                                    _buildSliderRow('Split Toning', 0.0, 3.0, _splitToning, (v) => setState(() => _splitToning = v)),
+                                    _buildSliderRow('Vignette Falloff', 0.0, 3.0, _vignette, (v) => setState(() => _vignette = v)),
+                                  ],
+                                ),
+                              ),
+                            ] else if (_activeCategory == 'strobe') ...[
+                              _buildDrawerCard(
+                                title: 'Black Shutter Strobe',
+                                badge1: 'Shutter',
+                                subtitle: 'True exposure dip to pure black at custom rhythm frequencies',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Strobe Intensity', 0.0, 3.0, _flickerIntensity, (v) => setState(() => _flickerIntensity = v)),
+                                    _buildSliderRow('Strobe Frequency', 0.1, 10.0, _flickerSpeed, (v) => setState(() => _flickerSpeed = v), unit: 'x'),
+                                  ],
+                                ),
+                              ),
+                              _buildDrawerCard(
+                                title: 'Atmospheric Floating Dust Motes',
+                                badge1: 'Particles',
+                                subtitle: '3-layer parallax drifting motes with procedural glinting',
+                                child: Column(
+                                  children: [
+                                    SwitchListTile(
+                                      title: const Text('Enable Dust Particles', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      value: _dustParticles,
+                                      activeColor: const Color(0xFF00F0FF),
+                                      onChanged: (v) => setState(() => _dustParticles = v),
+                                    ),
+                                    if (_dustParticles) ...[
+                                      _buildSliderRow('Dust Intensity', 0.0, 3.0, _dustIntensity, (v) => setState(() => _dustIntensity = v)),
+                                      _buildSliderRow('Drift Speed', 0.1, 3.0, _dustSpeed, (v) => setState(() => _dustSpeed = v), unit: 'x'),
+                                    ],
+                                  ],
+                                ),
+                              ),
                             ],
                           ],
                         ),
