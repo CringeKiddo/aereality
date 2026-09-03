@@ -404,7 +404,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.between,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Resolution Mode', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
                       Text(resLabel, style: const TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold, fontSize: 13)),
@@ -935,7 +935,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.between,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text('Master Render Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                         IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(context)),
