@@ -1,4 +1,4 @@
-// native/vulkan_processor.cpp – Supports 16-Bit Half Float & 32-Bit True Float
+// native/vulkan_processor.cpp – High-Performance 16-Bit & 32-Bit Vulkan Compute Engine
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstring>
@@ -39,11 +39,11 @@ static void* uniformMapped = nullptr;
 
 static int inputWidth = 0, inputHeight = 0;
 static int outputWidth = 0, outputHeight = 0;
-static bool use32BitFloat = false; // Toggleable via settings
+static bool use32BitFloat = false; // Toggleable via engine settings
 static bool initialized = false;
 static bool imagesCreated = false;
 
-// Half float converters
+// Fast IEEE-754 Half-Precision Floating-Point Helpers
 uint16_t floatToHalf(float f) {
     uint32_t x; memcpy(&x, &f, 4);
     uint32_t sign = (x >> 16) & 0x8000;
@@ -512,7 +512,7 @@ void set_engine_precision(int mode) {
     bool nextMode = (mode == 32);
     if (nextMode != use32BitFloat) {
         use32BitFloat = nextMode;
-        cleanupImages(); // Recreate with new float format
+        cleanupImages(); // Recreates swapchain with new float format
     }
 }
 
@@ -526,7 +526,7 @@ void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, u
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)outW;
         ubo[1] = (float)outH;
-        // Copy 58 floats (time, parameters, and 4 sets of 5-point curve vectors)
+        // Copy 58 parameter floats directly into std140 block
         memcpy(ubo + 2, uniforms, 58 * sizeof(float));
 
         VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, uniformMemory, 0, VK_WHOLE_SIZE};
