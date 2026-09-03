@@ -1,3 +1,4 @@
+// lib/vulkan_bridge.dart
 import 'dart:ffi';
 import 'dart:typed_data';
 import 'dart:io';
@@ -8,6 +9,7 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     : DynamicLibrary.process();
 
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
+typedef NativePrecision = Void Function(Int32 mode);
 typedef NativeProcess = Void Function(
     Pointer<Uint8> input,
     Int32 inW,
@@ -20,6 +22,7 @@ typedef NativeProcess = Void Function(
 typedef NativeCleanup = Void Function();
 
 typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
+typedef DartPrecision = void Function(int mode);
 typedef DartProcess = void Function(
     Pointer<Uint8> input,
     int inW,
@@ -35,6 +38,10 @@ final initProcessor = nativeLib
     .lookup<NativeFunction<NativeInit>>('init_processor')
     .asFunction<DartInit>();
 
+final setPrecisionNative = nativeLib
+    .lookup<NativeFunction<NativePrecision>>('set_engine_precision')
+    .asFunction<DartPrecision>();
+
 final processFrame = nativeLib
     .lookup<NativeFunction<NativeProcess>>('process_frame')
     .asFunction<DartProcess>();
@@ -45,16 +52,25 @@ final cleanupProcessor = nativeLib
 
 bool _initialized = false;
 
-// 1 float (time) + 23 grading parameters = 24 floats total
-const int kUniformCount = 24;
+// 1 time float + 25 parameters + 32 floats for 4 curves (8 floats per curve) = 58 floats total
+const int kUniformCount = 58;
 
-void initVulkan(Uint8List spirv) {
-  if (_initialized) return;
+void initVulkan(Uint8List spirv, [int precision = 16]) {
+  if (_initialized) {
+    setEnginePrecision(precision);
+    return;
+  }
   final ptr = calloc<Uint32>(spirv.length ~/ 4);
   ptr.asTypedList(spirv.length ~/ 4).setAll(0, spirv.buffer.asUint32List());
   initProcessor(ptr, spirv.length);
   calloc.free(ptr);
   _initialized = true;
+  setEnginePrecision(precision);
+}
+
+void setEnginePrecision(int bits) {
+  if (!_initialized) return;
+  setPrecisionNative(bits);
 }
 
 Uint8List processImage(
@@ -63,7 +79,7 @@ Uint8List processImage(
     int inHeight,
     int outWidth,
     int outHeight,
-    Float32List uniforms, // Must be exactly length 24
+    Float32List uniforms,
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
   if (uniforms.length != kUniformCount) {
