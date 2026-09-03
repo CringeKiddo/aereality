@@ -76,7 +76,7 @@ class ProjectData {
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
     this.cellThickness = 0.3,
-    this.aspectRatio = "16:9",
+    this.aspectRatio = "4:5", // Default to 4:5
   });
 
   Map<String, dynamic> toJson() => {
@@ -118,7 +118,7 @@ class ProjectData {
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
     cellThickness: json['cellThickness'] ?? 0.3,
-    aspectRatio: json['aspectRatio'] ?? "16:9",
+    aspectRatio: json['aspectRatio'] ?? "4:5",
   );
 }
 
@@ -153,7 +153,7 @@ class StoredProject {
     this.cellShading = 0.0,
     this.colourCrush = 0.0,
     this.cellThickness = 0.3,
-    this.aspectRatio = "16:9",
+    this.aspectRatio = "4:5",
     required this.lastOpened,
   });
 
@@ -201,7 +201,7 @@ class StoredProject {
     cellShading: json['cellShading'] ?? 0.0,
     colourCrush: json['colourCrush'] ?? 0.0,
     cellThickness: json['cellThickness'] ?? 0.3,
-    aspectRatio: json['aspectRatio'] ?? "16:9",
+    aspectRatio: json['aspectRatio'] ?? "4:5",
     lastOpened: DateTime.parse(json['lastOpened']),
   );
 
@@ -390,8 +390,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  double _previewScale = 1.0;
-  
+  double _previewScale = 0.5; // Default: 540p for smooth timeline
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -428,7 +428,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ---------- PROJECT SETUP SCREEN ----------
+// ---------- PROJECT SETUP SCREEN (SIMPLIFIED) ----------
 class ProjectSetupScreen extends StatefulWidget {
   const ProjectSetupScreen({super.key});
 
@@ -436,18 +436,9 @@ class ProjectSetupScreen extends StatefulWidget {
   State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
 }
 
-class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTickerProviderStateMixin {
+class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
   String _projectName = 'Untitled Project';
-  String _selectedAspect = '16:9';
-  String _selectedRes = '1080p';
-  String _selectedFps = '60fps';
-  String _selectedBitrate = '35 Mbps';
   File? _selectedFile;
-
-  final List<String> _aspectRatios = ['4:5', '9:16', '16:9', '1:1', '3:4', '21:9'];
-  final List<String> _resolutions = ['720p', '1080p', '2K'];
-  final List<String> _fpsOptions = ['30fps', '60fps', '90fps'];
-  final List<String> _bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps'];
 
   @override
   Widget build(BuildContext context) {
@@ -509,85 +500,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                 ),
               ),
             ),
-            const SizedBox(height: 20),
-            const Text('CANVAS ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _aspectRatios.map((ratio) => ChoiceChip(
-                label: Text(ratio, style: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70)),
-                selected: _selectedAspect == ratio,
-                selectedColor: const Color(0xFF00E5FF),
-                backgroundColor: Colors.grey[900],
-                onSelected: (sel) => setState(() => _selectedAspect = ratio),
-              )).toList(),
-            ),
-            const SizedBox(height: 20),
-            const Text('PROJECT PIPELINE SPECS', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Canvas Aspect Ratio', style: TextStyle(color: Colors.white54)),
-                      Text(_selectedAspect, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Quality / Resolution', style: TextStyle(color: Colors.white54)),
-                      DropdownButton<String>(
-                        value: _selectedRes,
-                        items: _resolutions.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
-                        onChanged: (v) => setState(() => _selectedRes = v!),
-                        dropdownColor: Colors.grey[900],
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Framerate', style: TextStyle(color: Colors.white54)),
-                      DropdownButton<String>(
-                        value: _selectedFps,
-                        items: _fpsOptions.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
-                        onChanged: (v) => setState(() => _selectedFps = v!),
-                        dropdownColor: Colors.grey[900],
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Target Bitrate', style: TextStyle(color: Colors.white54)),
-                      DropdownButton<String>(
-                        value: _selectedBitrate,
-                        items: _bitrateOptions.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
-                        onChanged: (v) => setState(() => _selectedBitrate = v!),
-                        dropdownColor: Colors.grey[900],
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
             const Spacer(),
             SizedBox(
               width: double.infinity,
@@ -601,11 +513,11 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> with SingleTick
                     context,
                     MaterialPageRoute(
                       builder: (_) => ProjectScreen(
-                        initialProject: ProjectData(videoPath: _selectedFile!.path),
+                        initialProject: ProjectData(videoPath: _selectedFile!.path, aspectRatio: "4:5"),
                         projectName: _projectName,
-                        initialResolution: _selectedRes,
-                        initialFps: _selectedFps,
-                        initialBitrate: _selectedBitrate,
+                        initialResolution: '1080p',
+                        initialFps: '60fps',
+                        initialBitrate: '35 Mbps',
                       ),
                     ),
                   );
@@ -737,7 +649,6 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     );
   }
 }
-
 // ---------- PROJECT SCREEN ----------
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -765,24 +676,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   String? _currentVideoPath;
 
   // Grading params – expanded ranges
-  double _brightness = 0.0;      // 0.0 – 3.0
-  double _saturation = 1.0;      // -2.0 – 2.0
-  double _contrast = 1.0;        // -2.0 – 2.0
-  double _sharpness = 0.0;       // 0.0 – 3.0
-  double _gamma = 1.0;           // -2.0 – 2.0 (shader clamps positive)
-  double _hue = 0.0;             // -180 – 180
-  double _temperature = 6500.0;  // 2000 – 12000
-  double _glowIntensity = 0.0;   // 0.0 – 3.0
-  double _lookMix = 0.0;         // 0.0 – 3.0
-  double _vignette = 0.0;        // 0.0 – 3.0
-  double _splitToning = 0.0;     // 0.0 – 3.0
-  double _edgeDarken = 0.0;      // 0.0 – 3.0
-  double _denoise = 0.0;         // 0.0 – 3.0
-  double _cellShading = 0.0;     // 0.0 – 3.0
-  double _colourCrush = 0.0;     // 0.0 – 0.5 (UI clamped)
-  double _cellThickness = 0.3;   // 0.0 – 3.0
+  double _brightness = 0.0;
+  double _saturation = 1.0;
+  double _contrast = 1.0;
+  double _sharpness = 0.0;
+  double _gamma = 1.0;
+  double _hue = 0.0;
+  double _temperature = 6500.0;
+  double _glowIntensity = 0.0;
+  double _lookMix = 0.0;
+  double _vignette = 0.0;
+  double _splitToning = 0.0;
+  double _edgeDarken = 0.0;
+  double _denoise = 0.0;
+  double _cellShading = 0.0;
+  double _colourCrush = 0.0;
+  double _cellThickness = 0.3;
 
-  String _selectedRatio = "16:9";
+  String _selectedRatio = "4:5";
   late TabController _tabController;
   VoidCallback _listener = () {};
   bool _isPreviewing = false;
@@ -795,14 +706,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isUpdating = false;
   final GlobalKey _videoCaptureKey = GlobalKey();
 
-  // Canvas dimensions for Vulkan processing
-  int _canvasWidth = 1920;
+  // Canvas dimensions
+  int _canvasWidth = 864;   // 1080 * 0.8 (4:5 ratio)
   int _canvasHeight = 1080;
+  double _previewScale = 0.5; // Default 540p for smooth timeline
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _previewScale = 0.5; // Default to 540p
     _updateCanvasSize();
 
     _loadShader();
@@ -833,8 +746,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void _updateCanvasSize() {
     const baseHeight = 1080;
     final ratio = _getAspectRatioValue(_selectedRatio);
-    _canvasWidth = (baseHeight * ratio).round();
-    _canvasHeight = baseHeight;
+    final scaledHeight = (baseHeight * _previewScale).round();
+    final scaledWidth = (scaledHeight * ratio).round();
+    _canvasWidth = scaledWidth;
+    _canvasHeight = scaledHeight;
   }
 
   Future<void> _loadShader() async {
@@ -864,10 +779,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
   }
 
-  // ---------- TIMELINE PREVIEW (33ms) ----------
+  // ---------- TIMELINE PREVIEW (16ms ≈ 60fps with scaled resolution) ----------
   void _startTimelinePreview() {
     _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) async {
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
@@ -898,7 +813,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- PICK VIDEO ----------
   Future<void> _pickVideo() async {
-    // Clean up old Vulkan resources before loading new video
     cleanupVulkan();
     if (_spirvShader != null) {
       initVulkan(_spirvShader!);
@@ -987,7 +901,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       case "1:1": return 1 / 1;
       case "3:4": return 3 / 4;
       case "21:9": return 21 / 9;
-      default: return 16 / 9;
+      default: return 4 / 5;
     }
   }
 
@@ -1027,7 +941,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
     final inputBytes = byteData!.buffer.asUint8List();
 
-    // 16 floats matching shader Uniforms order
     final uniforms = Float32List(16);
     uniforms[0] = _brightness;
     uniforms[1] = _saturation;
@@ -1186,7 +1099,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             inactiveColor: Colors.grey[800],
             onChanged: (v) {
               onChanged(v);
-              // Timer always runs, so no need to trigger separately
             },
           ),
         ),
@@ -1307,6 +1219,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       stopwatch.start();
       const batchSize = 1;
 
+      // For debugging: save first frame as test PNG
+      bool firstFrameSaved = false;
+
       for (int i = 0; i < totalFrames; i += batchSize) {
         final batch = frameFiles.skip(i).take(batchSize).toList();
         await Future.wait(batch.asMap().entries.map((entry) async {
@@ -1337,19 +1252,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           uniforms[14] = colourCrush;
           uniforms[15] = cellThickness;
 
-          // Process frame using canvas size (scaling happens in shader)
+          // Use FULL resolution for export (not preview scale)
+          final exportWidth = (1080 * _getAspectRatioValue(_selectedRatio)).round();
+          final exportHeight = 1080;
+
           final outputRaw = await Future(() => processImage(
             rawInput,
             decoded.width,
             decoded.height,
-            _canvasWidth,
-            _canvasHeight,
+            exportWidth,
+            exportHeight,
             uniforms
           )).timeout(const Duration(seconds: 30));
 
           final gradedImg = img.Image.fromBytes(
-            width: _canvasWidth,
-            height: _canvasHeight,
+            width: exportWidth,
+            height: exportHeight,
             bytes: outputRaw.buffer,
             numChannels: 4,
             order: img.ChannelOrder.rgba,
@@ -1358,6 +1276,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           final paddedIndex = (frameIndex + 1).toString().padLeft(5, '0');
           final outputFile = File('${processedDir.path}/frame_${paddedIndex}.png');
           await outputFile.writeAsBytes(pngBytes);
+
+          // Save first frame as test PNG for debugging
+          if (!firstFrameSaved) {
+            final testDir = await getTemporaryDirectory();
+            final testFile = File('${testDir.path}/test_frame_export.png');
+            await testFile.writeAsBytes(pngBytes);
+            firstFrameSaved = true;
+            print('✅ Test frame saved to: ${testFile.path}');
+          }
 
           processedFrames++;
           progressNotifier.value = processedFrames / totalFrames;
@@ -1368,15 +1295,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       statusNotifier.value = 'Encoding video...';
       final silentOutputPath = '${dir.path}/silent_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      // Build encode command with scaling and bitrate
+      // Use simpler encoding with CRF for reliability
       var encodeCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                       '-vf scale=$outW:$outH ' +
-                      '-c:v libx264 -preset ultrafast -b:v ${bitrateKbps}k -pix_fmt $pixFmt "$silentOutputPath"';
+                      '-c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p "$silentOutputPath"';
       var encodeSession = await FFmpegKit.execute(encodeCmd);
       if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
         final fallbackCmd = '-framerate $targetFps -i "${processedDir.path}/frame_%05d.png" ' +
                             '-vf scale=$outW:$outH ' +
-                            '-c:v mpeg4 -q:v 5 -pix_fmt $pixFmt "$silentOutputPath"';
+                            '-c:v mpeg4 -q:v 5 -pix_fmt yuv420p "$silentOutputPath"';
         encodeSession = await FFmpegKit.execute(fallbackCmd);
         if (!ReturnCode.isSuccess(await encodeSession.getReturnCode())) {
           throw Exception('Encoding failed');
@@ -1394,12 +1321,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await File(silentOutputPath).copy(File(finalOutputPath).path);
       }
 
-      // Save to Movies directory with fallback
+      // Save to user-accessible Movies folder using MediaStore via file copy
       String savedPath;
       try {
+        // On Android, try external storage Movies folder
         final externalDir = await getExternalStorageDirectory();
-        if (externalDir != null) {
-          final moviesDir = Directory('${externalDir.path}/Movies');
+        if (externalDir != null && Platform.isAndroid) {
+          // Navigate to parent of Android/data to get to /storage/emulated/0
+          final storageDir = externalDir.parent.parent;
+          final moviesDir = Directory('${storageDir.path}/Movies');
           if (!await moviesDir.exists()) {
             await moviesDir.create(recursive: true);
           }
@@ -1408,7 +1338,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           await File(finalOutputPath).copy(destFile.path);
           savedPath = destFile.path;
         } else {
-          // fallback to app documents
+          // Fallback: Documents directory
           final docsDir = await getApplicationDocumentsDirectory();
           final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
           final destFile = File('${docsDir.path}/$fileName');
@@ -1416,12 +1346,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           savedPath = destFile.path;
         }
       } catch (e) {
-        // fallback to app documents
+        // Ultimate fallback: temporary directory (user can share from there)
         final docsDir = await getApplicationDocumentsDirectory();
         final fileName = 'AEReality_Export_${DateTime.now().millisecondsSinceEpoch}.mp4';
         final destFile = File('${docsDir.path}/$fileName');
         await File(finalOutputPath).copy(destFile.path);
         savedPath = destFile.path;
+        print('⚠️ Fallback save to: $savedPath');
       }
 
       await framesDir.delete(recursive: true);
