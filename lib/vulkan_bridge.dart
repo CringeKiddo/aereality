@@ -7,7 +7,6 @@ final DynamicLibrary nativeLib = Platform.isAndroid
     ? DynamicLibrary.open('libvulkan_processor.so')
     : DynamicLibrary.process();
 
-// New signature: process_frame(input, inW, inH, outW, outH, output, uniforms)
 typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
 typedef NativeProcess = Void Function(
     Pointer<Uint8> input,
@@ -46,12 +45,8 @@ final cleanupProcessor = nativeLib
 
 bool _initialized = false;
 
-// Must match the shader's Uniforms struct exactly, in this order:
-// (resolution is set separately by the native side from outW/outH)
-// brightness, saturation, contrast, sharpness, gamma, hue, temperature,
-// glowIntensity, lookMix, vignette, splitToning, edgeDarken, denoise,
-// cellShading, colourCrush, cellThickness  (16 floats total)
-const int kUniformCount = 16;
+// 1 float (time) + 23 grading parameters = 24 floats total
+const int kUniformCount = 24;
 
 void initVulkan(Uint8List spirv) {
   if (_initialized) return;
@@ -68,12 +63,11 @@ Uint8List processImage(
     int inHeight,
     int outWidth,
     int outHeight,
-    Float32List uniforms, // must be length kUniformCount (16)
+    Float32List uniforms, // Must be exactly length 24
 ) {
   if (!_initialized) throw Exception('Vulkan not initialized.');
   if (uniforms.length != kUniformCount) {
-    throw Exception(
-        'uniforms must contain exactly $kUniformCount floats, got ${uniforms.length}.');
+    throw Exception('uniforms must contain exactly $kUniformCount floats, got ${uniforms.length}.');
   }
 
   final inputPtr = calloc<Uint8>(input.length);
