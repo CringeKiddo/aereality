@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <algorithm>
 
 static VkInstance instance = VK_NULL_HANDLE;
@@ -43,8 +44,9 @@ static bool use32BitFloat = false;
 static bool initialized = false;
 static bool imagesCreated = false;
 
-// Fast IEEE-754 Half-Precision Floating-Point Helpers
+// Fast IEEE-754 Half-Precision Floating-Point Helpers with NaN guards
 uint16_t floatToHalf(float f) {
+    if (std::isnan(f)) return 0;
     uint32_t x; memcpy(&x, &f, 4);
     uint32_t sign = (x >> 16) & 0x8000;
     int32_t exponent = ((x >> 23) & 0xFF) - 127 + 15;
@@ -63,7 +65,7 @@ float halfToFloat(uint16_t h) {
     else if (exponent == 31) bits = sign | 0x7F800000 | (mantissa << 13);
     else bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
     float f; memcpy(&f, &bits, 4);
-    return f;
+    return std::isnan(f) ? 0.0f : f;
 }
 
 uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -231,19 +233,19 @@ void cleanupImages() {
     if (!imagesCreated) return;
     vkDeviceWaitIdle(device);
 
-    vkDestroyImageView(device, inputView, nullptr);
-    vkDestroyImage(device, inputImage, nullptr);
-    vkFreeMemory(device, inputMemory, nullptr);
+    if (inputView) { vkDestroyImageView(device, inputView, nullptr); inputView = VK_NULL_HANDLE; }
+    if (inputImage) { vkDestroyImage(device, inputImage, nullptr); inputImage = VK_NULL_HANDLE; }
+    if (inputMemory) { vkFreeMemory(device, inputMemory, nullptr); inputMemory = VK_NULL_HANDLE; }
 
-    vkDestroyImageView(device, outputView, nullptr);
-    vkDestroyImage(device, outputImage, nullptr);
-    vkFreeMemory(device, outputMemory, nullptr);
+    if (outputView) { vkDestroyImageView(device, outputView, nullptr); outputView = VK_NULL_HANDLE; }
+    if (outputImage) { vkDestroyImage(device, outputImage, nullptr); outputImage = VK_NULL_HANDLE; }
+    if (outputMemory) { vkFreeMemory(device, outputMemory, nullptr); outputMemory = VK_NULL_HANDLE; }
 
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingMemory, nullptr);
+    if (stagingBuffer) { vkDestroyBuffer(device, stagingBuffer, nullptr); stagingBuffer = VK_NULL_HANDLE; }
+    if (stagingMemory) { vkFreeMemory(device, stagingMemory, nullptr); stagingMemory = VK_NULL_HANDLE; }
 
-    vkDestroyBuffer(device, outputStagingBuffer, nullptr);
-    vkFreeMemory(device, outputStagingMemory, nullptr);
+    if (outputStagingBuffer) { vkDestroyBuffer(device, outputStagingBuffer, nullptr); outputStagingBuffer = VK_NULL_HANDLE; }
+    if (outputStagingMemory) { vkFreeMemory(device, outputStagingMemory, nullptr); outputStagingMemory = VK_NULL_HANDLE; }
 
     imagesCreated = false;
     inputWidth = inputHeight = outputWidth = outputHeight = 0;
@@ -257,6 +259,7 @@ void createImages(int inW, int inH, int outW, int outH) {
     VkFormat imgFormat = use32BitFloat ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT;
     size_t pixelBytes = use32BitFloat ? (sizeof(float) * 4) : (sizeof(uint16_t) * 4);
 
+    // Input image
     VkImageCreateInfo imgInfo = {};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -374,8 +377,11 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     if (use32BitFloat) {
         float* data;
         vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-        for (int i = 0; i < inW * inH * 4; i++) {
-            data[i] = rgba[i] / 255.0f;
+        for (int i = 0; i < inW * inH; i++) {
+            data[i * 4 + 0] = rgba[i * 4 + 0] / 255.0f;
+            data[i * 4 + 1] = rgba[i * 4 + 1] / 255.0f;
+            data[i * 4 + 2] = rgba[i * 4 + 2] / 255.0f;
+            data[i * 4 + 3] = (rgba[i * 4 + 3] > 0) ? (rgba[i * 4 + 3] / 255.0f) : 1.0f;
         }
         VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, stagingMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(device, 1, &flushRange);
@@ -383,8 +389,12 @@ void uploadInput(const uint8_t* rgba, int inW, int inH) {
     } else {
         uint16_t* data;
         vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-        for (int i = 0; i < inW * inH * 4; i++) {
-            data[i] = floatToHalf(rgba[i] / 255.0f);
+        for (int i = 0; i < inW * inH; i++) {
+            data[i * 4 + 0] = floatToHalf(rgba[i * 4 + 0] / 255.0f);
+            data[i * 4 + 1] = floatToHalf(rgba[i * 4 + 1] / 255.0f);
+            data[i * 4 + 2] = floatToHalf(rgba[i * 4 + 2] / 255.0f);
+            float a = (rgba[i * 4 + 3] > 0) ? (rgba[i * 4 + 3] / 255.0f) : 1.0f;
+            data[i * 4 + 3] = floatToHalf(a);
         }
         VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, stagingMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(device, 1, &flushRange);
@@ -461,15 +471,27 @@ void readOutput(uint8_t* rgba, int outW, int outH) {
     if (use32BitFloat) {
         float* data;
         vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-        for (int i = 0; i < outW * outH * 4; i++) {
-            rgba[i] = (uint8_t)(std::clamp(data[i], 0.0f, 1.0f) * 255.0f);
+        for (int i = 0; i < outW * outH; i++) {
+            float r = data[i * 4 + 0];
+            float g = data[i * 4 + 1];
+            float b = data[i * 4 + 2];
+            rgba[i * 4 + 0] = (uint8_t)(std::isnan(r) ? 0 : std::clamp(r, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 1] = (uint8_t)(std::isnan(g) ? 0 : std::clamp(g, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 2] = (uint8_t)(std::isnan(b) ? 0 : std::clamp(b, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 3] = 255;
         }
         vkUnmapMemory(device, outputStagingMemory);
     } else {
         uint16_t* data;
         vkMapMemory(device, outputStagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
-        for (int i = 0; i < outW * outH * 4; i++) {
-            rgba[i] = (uint8_t)(std::clamp(halfToFloat(data[i]), 0.0f, 1.0f) * 255.0f);
+        for (int i = 0; i < outW * outH; i++) {
+            float r = halfToFloat(data[i * 4 + 0]);
+            float g = halfToFloat(data[i * 4 + 1]);
+            float b = halfToFloat(data[i * 4 + 2]);
+            rgba[i * 4 + 0] = (uint8_t)(std::isnan(r) ? 0 : std::clamp(r, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 1] = (uint8_t)(std::isnan(g) ? 0 : std::clamp(g, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 2] = (uint8_t)(std::isnan(b) ? 0 : std::clamp(b, 0.0f, 1.0f) * 255.0f);
+            rgba[i * 4 + 3] = 255;
         }
         vkUnmapMemory(device, outputStagingMemory);
     }
@@ -479,14 +501,14 @@ void cleanupVulkan() {
     vkDeviceWaitIdle(device);
     cleanupImages();
 
-    vkDestroyFence(device, fence, nullptr);
-    vkDestroyCommandPool(device, cmdPool, nullptr);
-    vkDestroyPipeline(device, pipeline, nullptr);
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, descSetLayout, nullptr);
-    vkDestroyDescriptorPool(device, descPool, nullptr);
-    vkDestroySampler(device, sampler, nullptr);
-    vkDestroyShaderModule(device, shaderModule, nullptr);
+    if (fence) { vkDestroyFence(device, fence, nullptr); fence = VK_NULL_HANDLE; }
+    if (cmdPool) { vkDestroyCommandPool(device, cmdPool, nullptr); cmdPool = VK_NULL_HANDLE; }
+    if (pipeline) { vkDestroyPipeline(device, pipeline, nullptr); pipeline = VK_NULL_HANDLE; }
+    if (pipelineLayout) { vkDestroyPipelineLayout(device, pipelineLayout, nullptr); pipelineLayout = VK_NULL_HANDLE; }
+    if (descSetLayout) { vkDestroyDescriptorSetLayout(device, descSetLayout, nullptr); descSetLayout = VK_NULL_HANDLE; }
+    if (descPool) { vkDestroyDescriptorPool(device, descPool, nullptr); descPool = VK_NULL_HANDLE; }
+    if (sampler) { vkDestroySampler(device, sampler, nullptr); sampler = VK_NULL_HANDLE; }
+    if (shaderModule) { vkDestroyShaderModule(device, shaderModule, nullptr); shaderModule = VK_NULL_HANDLE; }
 
     if (uniformBuffer) {
         vkDestroyBuffer(device, uniformBuffer, nullptr);
@@ -494,8 +516,8 @@ void cleanupVulkan() {
         uniformBuffer = VK_NULL_HANDLE;
     }
 
-    vkDestroyDevice(device, nullptr);
-    vkDestroyInstance(instance, nullptr);
+    if (device) { vkDestroyDevice(device, nullptr); device = VK_NULL_HANDLE; }
+    if (instance) { vkDestroyInstance(instance, nullptr); instance = VK_NULL_HANDLE; }
     initialized = false;
 }
 
@@ -526,7 +548,6 @@ void process_frame(const uint8_t* input, int inW, int inH, int outW, int outH, u
         float* ubo = (float*)uniformMapped;
         ubo[0] = (float)outW;
         ubo[1] = (float)outH;
-        // Copy 66 parameter floats directly into std140 block (offset 2..67)
         memcpy(ubo + 2, uniforms, 66 * sizeof(float));
 
         VkMappedMemoryRange flushRange = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, uniformMemory, 0, VK_WHOLE_SIZE};
