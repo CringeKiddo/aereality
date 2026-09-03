@@ -57,15 +57,17 @@ int gEnginePrecision = 16;
 double gPreviewScale = 0.5;
 
 class ProjectData {
-  String videoPath;
-  double brightness, saturation, contrast, sharpness, gamma, hue;
-  double temperature, glowIntensity, glowSpread, edgeGlow, edgeDarken;
-  double vignette, splitToning, denoise, darkOutlines, blackCrush;
+  String mediaPath;
+  bool isImage;
+  double brightness, saturation, contrast, sharpness, gamma, hue, temperature;
+  double glowIntensity, glowSpread, isDeepGlow, deepGlowRadius;
+  double edgeGlow, edgeGlowSpread, edgeGlowTint;
+  double anamorphicFlare, flareAmount;
+  double shadows, highlights;
+  double darkOutlines, edgeDarken, vignette, splitToning, denoise, blackCrush;
   double flickerIntensity, flickerSpeed;
-  bool dustParticles;
-  double dustIntensity, dustSpeed;
-  double godRays, volumetricFog, depthOfField;
-  double edgeGlowColorMode; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+  double depthOfField, dofFocus, dofAngle;
+  double mathOpsMode, mathOpsMix, filmConvertNitrate, fourColorGradMix;
   String aspectRatio;
 
   List<double> curveMaster;
@@ -74,7 +76,8 @@ class ProjectData {
   List<double> curveBlue;
 
   ProjectData({
-    required this.videoPath,
+    required this.mediaPath,
+    this.isImage = false,
     this.brightness = 0.0,
     this.saturation = 1.0,
     this.contrast = 1.0,
@@ -84,22 +87,30 @@ class ProjectData {
     this.temperature = 6500.0,
     this.glowIntensity = 0.0,
     this.glowSpread = 0.35,
+    this.isDeepGlow = 1.0, // Default to deep glow
+    this.deepGlowRadius = 0.5,
     this.edgeGlow = 0.0,
+    this.edgeGlowSpread = 0.35,
+    this.edgeGlowTint = 0.0, // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+    this.anamorphicFlare = 0.0,
+    this.flareAmount = 0.5,
+    this.shadows = 0.0,
+    this.highlights = 0.0,
+    this.darkOutlines = 0.0,
     this.edgeDarken = 0.0,
     this.vignette = 0.0,
     this.splitToning = 0.0,
     this.denoise = 0.0,
-    this.darkOutlines = 0.0,
     this.blackCrush = 0.0,
     this.flickerIntensity = 0.0,
     this.flickerSpeed = 3.0,
-    this.dustParticles = false,
-    this.dustIntensity = 0.45,
-    this.dustSpeed = 1.0,
-    this.godRays = 0.0,
-    this.volumetricFog = 0.0,
     this.depthOfField = 0.0,
-    this.edgeGlowColorMode = 0.0,
+    this.dofFocus = 0.5,
+    this.dofAngle = 0.0,
+    this.mathOpsMode = 0.0,
+    this.mathOpsMix = 0.0,
+    this.filmConvertNitrate = 0.0,
+    this.fourColorGradMix = 0.0,
     this.aspectRatio = "4:5",
     List<double>? curveMaster,
     List<double>? curveRed,
@@ -111,7 +122,8 @@ class ProjectData {
         curveBlue = curveBlue ?? [0.0, 0.25, 0.5, 0.75, 1.0];
 
   Map<String, dynamic> toJson() => {
-        'videoPath': videoPath,
+        'mediaPath': mediaPath,
+        'isImage': isImage,
         'brightness': brightness,
         'saturation': saturation,
         'contrast': contrast,
@@ -121,22 +133,30 @@ class ProjectData {
         'temperature': temperature,
         'glowIntensity': glowIntensity,
         'glowSpread': glowSpread,
+        'isDeepGlow': isDeepGlow,
+        'deepGlowRadius': deepGlowRadius,
         'edgeGlow': edgeGlow,
+        'edgeGlowSpread': edgeGlowSpread,
+        'edgeGlowTint': edgeGlowTint,
+        'anamorphicFlare': anamorphicFlare,
+        'flareAmount': flareAmount,
+        'shadows': shadows,
+        'highlights': highlights,
+        'darkOutlines': darkOutlines,
         'edgeDarken': edgeDarken,
         'vignette': vignette,
         'splitToning': splitToning,
         'denoise': denoise,
-        'darkOutlines': darkOutlines,
         'blackCrush': blackCrush,
         'flickerIntensity': flickerIntensity,
         'flickerSpeed': flickerSpeed,
-        'dustParticles': dustParticles,
-        'dustIntensity': dustIntensity,
-        'dustSpeed': dustSpeed,
-        'godRays': godRays,
-        'volumetricFog': volumetricFog,
         'depthOfField': depthOfField,
-        'edgeGlowColorMode': edgeGlowColorMode,
+        'dofFocus': dofFocus,
+        'dofAngle': dofAngle,
+        'mathOpsMode': mathOpsMode,
+        'mathOpsMix': mathOpsMix,
+        'filmConvertNitrate': filmConvertNitrate,
+        'fourColorGradMix': fourColorGradMix,
         'aspectRatio': aspectRatio,
         'curveMaster': curveMaster,
         'curveRed': curveRed,
@@ -145,7 +165,8 @@ class ProjectData {
       };
 
   factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
-        videoPath: json['videoPath'],
+        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
+        isImage: json['isImage'] ?? false,
         brightness: (json['brightness'] ?? 0.0).toDouble(),
         saturation: (json['saturation'] ?? 1.0).toDouble(),
         contrast: (json['contrast'] ?? 1.0).toDouble(),
@@ -155,22 +176,30 @@ class ProjectData {
         temperature: (json['temperature'] ?? 6500.0).toDouble(),
         glowIntensity: (json['glowIntensity'] ?? 0.0).toDouble(),
         glowSpread: (json['glowSpread'] ?? 0.35).toDouble(),
+        isDeepGlow: (json['isDeepGlow'] ?? 1.0).toDouble(),
+        deepGlowRadius: (json['deepGlowRadius'] ?? 0.5).toDouble(),
         edgeGlow: (json['edgeGlow'] ?? 0.0).toDouble(),
+        edgeGlowSpread: (json['edgeGlowSpread'] ?? 0.35).toDouble(),
+        edgeGlowTint: (json['edgeGlowTint'] ?? json['edgeGlowColorMode'] ?? 0.0).toDouble(),
+        anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
+        flareAmount: (json['flareAmount'] ?? 0.5).toDouble(),
+        shadows: (json['shadows'] ?? 0.0).toDouble(),
+        highlights: (json['highlights'] ?? 0.0).toDouble(),
+        darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
         edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
         splitToning: (json['splitToning'] ?? 0.0).toDouble(),
         denoise: (json['denoise'] ?? 0.0).toDouble(),
-        darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
         flickerIntensity: (json['flickerIntensity'] ?? 0.0).toDouble(),
         flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
-        dustParticles: json['dustParticles'] ?? false,
-        dustIntensity: (json['dustIntensity'] ?? 0.45).toDouble(),
-        dustSpeed: (json['dustSpeed'] ?? 1.0).toDouble(),
-        godRays: (json['godRays'] ?? 0.0).toDouble(),
-        volumetricFog: (json['volumetricFog'] ?? 0.0).toDouble(),
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
-        edgeGlowColorMode: (json['edgeGlowColorMode'] ?? 0.0).toDouble(),
+        dofFocus: (json['dofFocus'] ?? 0.5).toDouble(),
+        dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
+        mathOpsMode: (json['mathOpsMode'] ?? 0.0).toDouble(),
+        mathOpsMix: (json['mathOpsMix'] ?? 0.0).toDouble(),
+        filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
+        fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
         aspectRatio: json['aspectRatio'] ?? "4:5",
         curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
@@ -180,16 +209,16 @@ class ProjectData {
 }
 
 class StoredProject {
-  String id, name, videoPath;
+  String id, name, mediaPath;
   ProjectData data;
   DateTime lastOpened;
 
-  StoredProject({required this.id, required this.name, required this.videoPath, required this.data, required this.lastOpened});
+  StoredProject({required this.id, required this.name, required this.mediaPath, required this.data, required this.lastOpened});
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
-        'videoPath': videoPath,
+        'mediaPath': mediaPath,
         'data': data.toJson(),
         'lastOpened': lastOpened.toIso8601String(),
       };
@@ -197,7 +226,7 @@ class StoredProject {
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
         id: json['id'],
         name: json['name'],
-        videoPath: json['videoPath'],
+        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
         data: ProjectData.fromJson(json['data'] ?? json),
         lastOpened: DateTime.parse(json['lastOpened']),
       );
@@ -366,9 +395,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         border: Border.all(color: Colors.white.withOpacity(0.06)),
                       ),
                       child: ListTile(
-                        leading: const Icon(Icons.movie_creation_outlined, color: Color(0xFF00F0FF)),
+                        leading: Icon(p.data.isImage ? Icons.image_outlined : Icons.movie_creation_outlined, color: const Color(0xFF00F0FF)),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                        subtitle: Text('${p.videoPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                         trailing: const Icon(Icons.chevron_right, color: Colors.white24),
                         onTap: () {
                           Navigator.push(
@@ -531,6 +560,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
   String _projectName = 'Untitled Project';
   String _selectedAspect = '4:5';
   File? _selectedFile;
+  bool _isImage = false;
 
   final List<String> _aspectRatios = ['4:5', '9:16', '16:9', '1:1', '3:4', '21:9'];
 
@@ -570,13 +600,22 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               )).toList(),
             ),
             const SizedBox(height: 24),
-            const Text('SOURCE FOOTAGE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('SOURCE FOOTAGE OR IMAGE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             GestureDetector(
               onTap: () async {
-                final result = await FilePicker.platform.pickFiles(type: FileType.video);
-                if (result != null) {
-                  setState(() => _selectedFile = File(result.files.single.path!));
+                final result = await FilePicker.platform.pickFiles(
+                  type: FileType.custom,
+                  allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
+                );
+                if (result != null && result.files.single.path != null) {
+                  final p = result.files.single.path!;
+                  final ext = p.split('.').last.toLowerCase();
+                  final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+                  setState(() {
+                    _selectedFile = File(p);
+                    _isImage = isImg;
+                  });
                 }
               },
               child: Container(
@@ -589,10 +628,10 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                 ),
                 child: Column(
                   children: [
-                    Icon(_selectedFile == null ? Icons.cloud_upload_outlined : Icons.check_circle, color: const Color(0xFF00F0FF), size: 36),
+                    Icon(_selectedFile == null ? Icons.cloud_upload_outlined : (_isImage ? Icons.image : Icons.movie_creation), color: const Color(0xFF00F0FF), size: 36),
                     const SizedBox(height: 10),
                     Text(
-                      _selectedFile == null ? 'Tap to select video footage' : _selectedFile!.path.split('/').last,
+                      _selectedFile == null ? 'Tap to select video footage or high-res image' : _selectedFile!.path.split('/').last,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                       textAlign: TextAlign.center,
                     ),
@@ -606,14 +645,14 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               child: ElevatedButton(
                 onPressed: () {
                   if (_selectedFile == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a video file first')));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a video or image file first')));
                     return;
                   }
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
                       builder: (_) => ProjectScreen(
-                        initialProject: ProjectData(videoPath: _selectedFile!.path, aspectRatio: _selectedAspect),
+                        initialProject: ProjectData(mediaPath: _selectedFile!.path, isImage: _isImage, aspectRatio: _selectedAspect),
                         projectName: _projectName,
                       ),
                     ),
@@ -672,8 +711,9 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                   color: const Color(0xFF101014),
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
+                    leading: Icon(p.data.isImage ? Icons.image_outlined : Icons.movie_creation_outlined, color: const Color(0xFF00F0FF)),
                     title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: Text('${p.videoPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white54)),
+                    subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white54)),
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline, color: Colors.white38),
                       onPressed: () async {
@@ -709,7 +749,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   VideoPlayerController? _controller;
   bool _isPlaying = false;
   bool _isMuted = false;
-  String? _currentVideoPath;
+  String? _currentMediaPath;
+  bool _isImage = false;
+  ui.Image? _loadedRawImage;
 
   // Active Category Pill
   String _activeCategory = 'bloom';
@@ -725,22 +767,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _temperature = 6500.0;
   double _glowIntensity = 0.0;
   double _glowSpread = 0.35;
+  double _isDeepGlow = 1.0; // 0.0 = Normal Gaussian, 1.0 = Inverse Square Deep Glow
+  double _deepGlowRadius = 0.5;
   double _edgeGlow = 0.0;
+  double _edgeGlowSpread = 0.35;
+  double _edgeGlowTint = 0.0; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+  double _anamorphicFlare = 0.0;
+  double _flareAmount = 0.5;
+  double _shadows = 0.0;
+  double _highlights = 0.0;
+  double _darkOutlines = 0.0;
   double _edgeDarken = 0.0;
   double _vignette = 0.0;
   double _splitToning = 0.0;
   double _denoise = 0.0;
-  double _darkOutlines = 0.0;
   double _blackCrush = 0.0;
   double _flickerIntensity = 0.0;
   double _flickerSpeed = 3.0;
-  bool _dustParticles = false;
-  double _dustIntensity = 0.45;
-  double _dustSpeed = 1.0;
-  double _godRays = 0.0;
-  double _volumetricFog = 0.0;
   double _depthOfField = 0.0;
-  double _edgeGlowColorMode = 0.0; // 0: White, 1: Gold, 2: Quincy, 3: Cyan, 4: Crimson
+  double _dofFocus = 0.5;
+  double _dofAngle = 0.0;
+
+  // AE Effects
+  double _mathOpsMode = 0.0; // 0=Off, 1=Screen, 2=Multiply, 3=Overlay, 4=ColorBurn
+  double _mathOpsMix = 0.0;
+  double _filmConvertNitrate = 0.0;
+  double _fourColorGradMix = 0.0;
 
   // 5-Point Splines: [Blacks, Shadows, Midtones, Highlights, Whites]
   List<double> _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
@@ -765,11 +817,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _updateCanvasSize();
     _loadShader();
 
     if (widget.initialProject != null) {
       final p = widget.initialProject!;
+      _isImage = p.isImage;
       _brightness = p.brightness;
       _saturation = p.saturation;
       _contrast = p.contrast;
@@ -779,38 +831,50 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _temperature = p.temperature;
       _glowIntensity = p.glowIntensity;
       _glowSpread = p.glowSpread;
+      _isDeepGlow = p.isDeepGlow;
+      _deepGlowRadius = p.deepGlowRadius;
       _edgeGlow = p.edgeGlow;
+      _edgeGlowSpread = p.edgeGlowSpread;
+      _edgeGlowTint = p.edgeGlowTint;
+      _anamorphicFlare = p.anamorphicFlare;
+      _flareAmount = p.flareAmount;
+      _shadows = p.shadows;
+      _highlights = p.highlights;
+      _darkOutlines = p.darkOutlines;
       _edgeDarken = p.edgeDarken;
       _vignette = p.vignette;
       _splitToning = p.splitToning;
       _denoise = p.denoise;
-      _darkOutlines = p.darkOutlines;
       _blackCrush = p.blackCrush;
       _flickerIntensity = p.flickerIntensity;
       _flickerSpeed = p.flickerSpeed;
-      _dustParticles = p.dustParticles;
-      _dustIntensity = p.dustIntensity;
-      _dustSpeed = p.dustSpeed;
-      _godRays = p.godRays;
-      _volumetricFog = p.volumetricFog;
       _depthOfField = p.depthOfField;
-      _edgeGlowColorMode = p.edgeGlowColorMode;
+      _dofFocus = p.dofFocus;
+      _dofAngle = p.dofAngle;
+      _mathOpsMode = p.mathOpsMode;
+      _mathOpsMix = p.mathOpsMix;
+      _filmConvertNitrate = p.filmConvertNitrate;
+      _fourColorGradMix = p.fourColorGradMix;
       _selectedRatio = p.aspectRatio;
       _curveMaster = List.from(p.curveMaster);
       _curveRed = List.from(p.curveRed);
       _curveGreen = List.from(p.curveGreen);
       _curveBlue = List.from(p.curveBlue);
-      _loadVideo(p.videoPath);
+      _loadMedia(p.mediaPath);
     }
   }
 
-  void _updateCanvasSize() {
-    const baseHeight = 1080;
+  void _updateCanvasSize(int srcW, int srcH) {
+    if (srcW <= 0 || srcH <= 0) {
+      srcW = 1080;
+      srcH = 1350;
+    }
     final ratio = _getAspectRatioValue(_selectedRatio);
-    final scaledHeight = (baseHeight * gPreviewScale).round();
-    final scaledWidth = (scaledHeight * ratio).round();
-    _canvasWidth = scaledWidth;
-    _canvasHeight = scaledHeight;
+    int targetHeight = (srcH * gPreviewScale).round();
+    int targetWidth = (targetHeight * ratio).round();
+
+    _canvasWidth = (targetWidth % 2 == 0) ? targetWidth : targetWidth + 1;
+    _canvasHeight = (targetHeight % 2 == 0) ? targetHeight : targetHeight + 1;
   }
 
   Future<void> _loadShader() async {
@@ -856,13 +920,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _loadVideo(String path) async {
+  Future<void> _loadMedia(String path) async {
+    final ext = path.split('.').last.toLowerCase();
+    final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+
+    _previewTimer?.cancel();
+    _controller?.removeListener(_listener);
+    _controller?.dispose();
+    _controller = null;
+
     setState(() {
-      _controller?.removeListener(_listener);
-      _controller?.dispose();
-      _currentVideoPath = path;
+      _currentMediaPath = path;
+      _isImage = isImg;
+      _processedImage = null;
+    });
+
+    if (isImg) {
+      final fileBytes = await File(path).readAsBytes();
+      final codec = await ui.instantiateImageCodec(fileBytes);
+      final frame = await codec.getNextFrame();
+      _loadedRawImage = frame.image;
+      _updateCanvasSize(_loadedRawImage!.width, _loadedRawImage!.height);
+      _processStaticImage();
+    } else {
+      _loadedRawImage = null;
       _controller = VideoPlayerController.file(File(path))
         ..initialize().then((_) {
+          if (!mounted) return;
+          final vw = _controller!.value.size.width.toInt();
+          final vh = _controller!.value.size.height.toInt();
+          _updateCanvasSize(vw, vh);
           setState(() {});
           _listener = () { if (mounted) setState(() {}); };
           _controller!.addListener(_listener);
@@ -870,12 +957,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _isPlaying = true;
           _startTimelinePreview();
         });
-    });
+    }
+  }
+
+  Future<void> _processStaticImage() async {
+    if (_loadedRawImage == null) return;
+    try {
+      final processed = await _processFrameWithVulkan(_loadedRawImage!);
+      if (mounted) setState(() => _processedImage = processed);
+    } catch (_) {}
   }
 
   void _startTimelinePreview() {
     _previewTimer?.cancel();
     _previewTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) async {
+      if (_isImage) return;
       if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
       _isUpdating = true;
       try {
@@ -897,10 +993,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Float32List _packUniforms() {
-    final uniforms = Float32List(58);
-    final timeSeconds = _controller != null && _controller!.value.isInitialized
+    final uniforms = Float32List(66);
+    final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
+
     uniforms[0] = timeSeconds;
     uniforms[1] = _brightness;
     uniforms[2] = _saturation;
@@ -911,54 +1008,62 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[7] = _temperature;
     uniforms[8] = _glowIntensity;
     uniforms[9] = _glowSpread;
-    uniforms[10] = _edgeGlow;
-    uniforms[11] = _edgeDarken;
-    uniforms[12] = _vignette;
-    uniforms[13] = _splitToning;
-    uniforms[14] = _denoise;
-    uniforms[15] = _darkOutlines;
-    uniforms[16] = _blackCrush;
-    uniforms[17] = _flickerIntensity;
-    uniforms[18] = _flickerSpeed;
-    uniforms[19] = _dustParticles ? 1.0 : 0.0;
-    uniforms[20] = _dustIntensity;
-    uniforms[21] = _dustSpeed;
-    uniforms[22] = _godRays;
-    uniforms[23] = _volumetricFog;
-    uniforms[24] = _depthOfField;
-    uniforms[25] = _edgeGlowColorMode;
+    uniforms[10] = _isDeepGlow;
+    uniforms[11] = _deepGlowRadius;
+    uniforms[12] = _edgeGlow;
+    uniforms[13] = _edgeGlowSpread;
+    uniforms[14] = _edgeGlowTint;
+    uniforms[15] = _anamorphicFlare;
+    uniforms[16] = _flareAmount;
+    uniforms[17] = _shadows;
+    uniforms[18] = _highlights;
+    uniforms[19] = _darkOutlines;
+    uniforms[20] = _edgeDarken;
+    uniforms[21] = _vignette;
+    uniforms[22] = _splitToning;
+    uniforms[23] = _denoise;
+    uniforms[24] = _blackCrush;
+    uniforms[25] = _flickerIntensity;
+    uniforms[26] = _flickerSpeed;
+    uniforms[27] = _depthOfField;
+    uniforms[28] = _dofFocus;
+    uniforms[29] = _dofAngle;
+    uniforms[30] = _mathOpsMode;
+    uniforms[31] = _mathOpsMix;
+    uniforms[32] = _filmConvertNitrate;
+    uniforms[33] = _fourColorGradMix;
 
     // Master Curve (8 floats)
-    uniforms[26] = _curveMaster[0];
-    uniforms[27] = _curveMaster[1];
-    uniforms[28] = _curveMaster[2];
-    uniforms[29] = _curveMaster[3];
-    uniforms[30] = _curveMaster[4];
-    uniforms[31] = 0.0; uniforms[32] = 0.0; uniforms[33] = 0.0;
-
-    // Red Curve (8 floats)
-    uniforms[34] = _curveRed[0];
-    uniforms[35] = _curveRed[1];
-    uniforms[36] = _curveRed[2];
-    uniforms[37] = _curveRed[3];
-    uniforms[38] = _curveRed[4];
+    uniforms[34] = _curveMaster[0];
+    uniforms[35] = _curveMaster[1];
+    uniforms[36] = _curveMaster[2];
+    uniforms[37] = _curveMaster[3];
+    uniforms[38] = _curveMaster[4];
     uniforms[39] = 0.0; uniforms[40] = 0.0; uniforms[41] = 0.0;
 
-    // Green Curve (8 floats)
-    uniforms[42] = _curveGreen[0];
-    uniforms[43] = _curveGreen[1];
-    uniforms[44] = _curveGreen[2];
-    uniforms[45] = _curveGreen[3];
-    uniforms[46] = _curveGreen[4];
+    // Red Curve (8 floats)
+    uniforms[42] = _curveRed[0];
+    uniforms[43] = _curveRed[1];
+    uniforms[44] = _curveRed[2];
+    uniforms[45] = _curveRed[3];
+    uniforms[46] = _curveRed[4];
     uniforms[47] = 0.0; uniforms[48] = 0.0; uniforms[49] = 0.0;
 
-    // Blue Curve (8 floats)
-    uniforms[50] = _curveBlue[0];
-    uniforms[51] = _curveBlue[1];
-    uniforms[52] = _curveBlue[2];
-    uniforms[53] = _curveBlue[3];
-    uniforms[54] = _curveBlue[4];
+    // Green Curve (8 floats)
+    uniforms[50] = _curveGreen[0];
+    uniforms[51] = _curveGreen[1];
+    uniforms[52] = _curveGreen[2];
+    uniforms[53] = _curveGreen[3];
+    uniforms[54] = _curveGreen[4];
     uniforms[55] = 0.0; uniforms[56] = 0.0; uniforms[57] = 0.0;
+
+    // Blue Curve (8 floats)
+    uniforms[58] = _curveBlue[0];
+    uniforms[59] = _curveBlue[1];
+    uniforms[60] = _curveBlue[2];
+    uniforms[61] = _curveBlue[3];
+    uniforms[62] = _curveBlue[4];
+    uniforms[63] = 0.0; uniforms[64] = 0.0; uniforms[65] = 0.0;
 
     return uniforms;
   }
@@ -1000,6 +1105,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(d.inMinutes.remainder(60));
+    final seconds = twoDigits(d.inSeconds.remainder(60));
+    final millis = (d.inMilliseconds.remainder(1000) ~/ 10).toString().padLeft(2, '0');
+    return '$minutes:$seconds.$millis';
+  }
+
   void _resetAllEffects() {
     setState(() {
       _brightness = 0.0;
@@ -1011,27 +1124,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _temperature = 6500.0;
       _glowIntensity = 0.0;
       _glowSpread = 0.35;
+      _isDeepGlow = 1.0;
+      _deepGlowRadius = 0.5;
       _edgeGlow = 0.0;
+      _edgeGlowSpread = 0.35;
+      _edgeGlowTint = 0.0;
+      _anamorphicFlare = 0.0;
+      _flareAmount = 0.5;
+      _shadows = 0.0;
+      _highlights = 0.0;
+      _darkOutlines = 0.0;
       _edgeDarken = 0.0;
       _vignette = 0.0;
       _splitToning = 0.0;
       _denoise = 0.0;
-      _darkOutlines = 0.0;
       _blackCrush = 0.0;
       _flickerIntensity = 0.0;
       _flickerSpeed = 3.0;
-      _dustParticles = false;
-      _dustIntensity = 0.45;
-      _dustSpeed = 1.0;
-      _godRays = 0.0;
-      _volumetricFog = 0.0;
       _depthOfField = 0.0;
-      _edgeGlowColorMode = 0.0;
+      _dofFocus = 0.5;
+      _dofAngle = 0.0;
+      _mathOpsMode = 0.0;
+      _mathOpsMix = 0.0;
+      _filmConvertNitrate = 0.0;
+      _fourColorGradMix = 0.0;
       _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
     });
+    if (_isImage) _processStaticImage();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('All effects reset to neutral default!'), duration: Duration(seconds: 1)),
     );
@@ -1044,19 +1166,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
     });
+    if (_isImage) _processStaticImage();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Curves reset to linear!'), duration: Duration(seconds: 1)),
     );
   }
 
   Future<void> _saveCurrentProject() async {
-    if (_currentVideoPath == null) return;
+    if (_currentMediaPath == null) return;
     final project = StoredProject(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: widget.projectName ?? 'Untitled Project',
-      videoPath: _currentVideoPath!,
+      mediaPath: _currentMediaPath!,
       data: ProjectData(
-        videoPath: _currentVideoPath!,
+        mediaPath: _currentMediaPath!,
+        isImage: _isImage,
         brightness: _brightness,
         saturation: _saturation,
         contrast: _contrast,
@@ -1066,22 +1190,30 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         temperature: _temperature,
         glowIntensity: _glowIntensity,
         glowSpread: _glowSpread,
+        isDeepGlow: _isDeepGlow,
+        deepGlowRadius: _deepGlowRadius,
         edgeGlow: _edgeGlow,
+        edgeGlowSpread: _edgeGlowSpread,
+        edgeGlowTint: _edgeGlowTint,
+        anamorphicFlare: _anamorphicFlare,
+        flareAmount: _flareAmount,
+        shadows: _shadows,
+        highlights: _highlights,
+        darkOutlines: _darkOutlines,
         edgeDarken: _edgeDarken,
         vignette: _vignette,
         splitToning: _splitToning,
         denoise: _denoise,
-        darkOutlines: _darkOutlines,
         blackCrush: _blackCrush,
         flickerIntensity: _flickerIntensity,
         flickerSpeed: _flickerSpeed,
-        dustParticles: _dustParticles,
-        dustIntensity: _dustIntensity,
-        dustSpeed: _dustSpeed,
-        godRays: _godRays,
-        volumetricFog: _volumetricFog,
         depthOfField: _depthOfField,
-        edgeGlowColorMode: _edgeGlowColorMode,
+        dofFocus: _dofFocus,
+        dofAngle: _dofAngle,
+        mathOpsMode: _mathOpsMode,
+        mathOpsMix: _mathOpsMix,
+        filmConvertNitrate: _filmConvertNitrate,
+        fourColorGradMix: _fourColorGradMix,
         aspectRatio: _selectedRatio,
         curveMaster: _curveMaster,
         curveRed: _curveRed,
@@ -1096,55 +1228,60 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // EXACT WEB-MATCHING PRESETS
   void _applyPreset(String name) {
     setState(() {
+      _resetAllEffects();
       switch (name) {
         case 'vintage cc':
-          _brightness = 0.08; _saturation = 0.88; _contrast = 1.15; _sharpness = 0.20; _gamma = 1.05;
-          _temperature = 5700.0; _glowIntensity = 0.25; _glowSpread = 0.45; _edgeDarken = 0.15;
-          _vignette = 0.35; _splitToning = 0.25; _blackCrush = 0.08; _dustParticles = true;
-          _dustIntensity = 0.40; _dustSpeed = 0.8;
-          _curveMaster = [0.06, 0.28, 0.50, 0.74, 0.94];
+          _brightness = 0.05; _saturation = 0.90; _contrast = 1.15; _sharpness = 0.18; _gamma = 1.04;
+          _temperature = 5800.0; _glowIntensity = 0.22; _glowSpread = 0.40; _isDeepGlow = 0.0;
+          _vignette = 0.25; _splitToning = 0.15; _blackCrush = 0.04; _filmConvertNitrate = 0.35;
+          _curveMaster = [0.05, 0.26, 0.50, 0.76, 0.96];
           break;
         case 'adevob+junho':
-          _brightness = 0.04; _saturation = 1.45; _contrast = 1.65; _sharpness = 0.85; _gamma = 0.90;
-          _temperature = 5900.0; _glowIntensity = 0.65; _glowSpread = 0.40; _edgeGlow = 0.25;
-          _edgeDarken = 0.20; _vignette = 0.25; _blackCrush = 0.42; _darkOutlines = 0.50;
+          _brightness = 0.02; _saturation = 1.40; _contrast = 1.55; _sharpness = 0.70; _gamma = 0.92;
+          _temperature = 6000.0; _glowIntensity = 0.55; _glowSpread = 0.38; _isDeepGlow = 1.0;
+          _deepGlowRadius = 0.50; _edgeGlow = 0.22; _edgeGlowTint = 1.0; // Gold
+          _darkOutlines = 0.45; _blackCrush = 0.35; _vignette = 0.20;
           _curveMaster = [0.0, 0.18, 0.50, 0.82, 1.0];
           break;
         case 'adevobfiller':
-          _brightness = 0.02; _saturation = 1.35; _contrast = 1.45; _sharpness = 0.60; _gamma = 0.94;
-          _temperature = 6100.0; _glowIntensity = 0.45; _glowSpread = 0.55; _edgeDarken = 0.12;
-          _vignette = 0.18; _blackCrush = 0.28; _darkOutlines = 0.35;
+          _brightness = 0.0; _saturation = 1.30; _contrast = 1.40; _sharpness = 0.55; _gamma = 0.95;
+          _temperature = 6200.0; _glowIntensity = 0.40; _glowSpread = 0.48; _isDeepGlow = 1.0;
+          _deepGlowRadius = 0.45; _blackCrush = 0.24; _darkOutlines = 0.30; _vignette = 0.15;
           _curveMaster = [0.0, 0.20, 0.50, 0.80, 1.0];
           break;
         case 'uryu vs ichigo':
-          _brightness = -0.02; _saturation = 1.25; _contrast = 1.55; _sharpness = 0.75; _gamma = 0.92;
-          _temperature = 8200.0; _glowIntensity = 0.55; _glowSpread = 0.35; _edgeGlow = 0.45;
-          _edgeGlowColorMode = 2.0; // Quincy blue
-          _edgeDarken = 0.25; _vignette = 0.28; _splitToning = 0.40; _blackCrush = 0.38; _darkOutlines = 0.60;
+          _brightness = -0.02; _saturation = 1.25; _contrast = 1.50; _sharpness = 0.65; _gamma = 0.94;
+          _temperature = 7800.0; _glowIntensity = 0.48; _glowSpread = 0.35; _isDeepGlow = 1.0;
+          _edgeGlow = 0.38; _edgeGlowTint = 2.0; // Quincy Blue
+          _anamorphicFlare = 0.45; _flareAmount = 0.60; _darkOutlines = 0.50; _blackCrush = 0.32;
+          _vignette = 0.22;
           _curveMaster = [0.0, 0.16, 0.48, 0.84, 1.0];
           break;
         case 'saber vs Rin':
-          _brightness = 0.06; _saturation = 1.50; _contrast = 1.50; _sharpness = 0.70; _gamma = 0.92;
-          _temperature = 6600.0; _glowIntensity = 0.80; _glowSpread = 0.60; _godRays = 0.45;
-          _edgeGlow = 0.35; _vignette = 0.20; _blackCrush = 0.30;
+          _brightness = 0.04; _saturation = 1.45; _contrast = 1.45; _sharpness = 0.60; _gamma = 0.93;
+          _temperature = 6500.0; _glowIntensity = 0.65; _glowSpread = 0.50; _isDeepGlow = 1.0;
+          _anamorphicFlare = 0.55; _flareAmount = 0.70; _edgeGlow = 0.28; _vignette = 0.18;
+          _blackCrush = 0.25;
           _curveMaster = [0.0, 0.22, 0.52, 0.85, 1.0];
           break;
         case 'Dantae cc':
-          _brightness = -0.04; _saturation = 1.30; _contrast = 1.60; _sharpness = 0.90; _gamma = 0.88;
-          _temperature = 6900.0; _glowIntensity = 0.40; _glowSpread = 0.30; _edgeDarken = 0.32;
-          _vignette = 0.25; _blackCrush = 0.45; _darkOutlines = 0.70;
+          _brightness = -0.03; _saturation = 1.25; _contrast = 1.55; _sharpness = 0.75; _gamma = 0.90;
+          _temperature = 6800.0; _glowIntensity = 0.38; _glowSpread = 0.32; _isDeepGlow = 1.0;
+          _edgeDarken = 0.25; _darkOutlines = 0.55; _blackCrush = 0.38; _vignette = 0.22;
           _curveMaster = [0.0, 0.14, 0.48, 0.85, 1.0];
           break;
         case 'toji junho':
-          _brightness = 0.0; _saturation = 1.15; _contrast = 1.70; _sharpness = 0.85; _gamma = 0.86;
-          _temperature = 6200.0; _glowIntensity = 0.50; _glowSpread = 0.38; _edgeDarken = 0.28;
-          _vignette = 0.30; _blackCrush = 0.50; _darkOutlines = 0.65;
+          _brightness = -0.01; _saturation = 1.15; _contrast = 1.60; _sharpness = 0.72; _gamma = 0.88;
+          _temperature = 6100.0; _glowIntensity = 0.45; _glowSpread = 0.35; _isDeepGlow = 1.0;
+          _darkOutlines = 0.58; _blackCrush = 0.44; _vignette = 0.26;
           _curveMaster = [0.0, 0.12, 0.46, 0.86, 1.0];
           break;
       }
     });
+    if (_isImage) _processStaticImage();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Loaded preset "$name"'), duration: const Duration(seconds: 1)),
     );
@@ -1152,6 +1289,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   // ---------- EXPORT SHEET ----------
   void _showExportSheet() {
+    if (_isImage) {
+      _exportStaticImage();
+      return;
+    }
+
     String selectedRes = '1080p';
     String selectedFps = '60fps';
     String selectedBit = '35 Mbps';
@@ -1368,7 +1510,64 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------- EXPORT VIDEO (Public /storage/emulated/0/Download/ Fix) ----------
+  // STATIC IMAGE EXPORT
+  Future<void> _exportStaticImage() async {
+    if (_loadedRawImage == null || _currentMediaPath == null) return;
+    try {
+      final uniforms = _packUniforms();
+      final byteData = await _loadedRawImage!.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final rawInput = byteData!.buffer.asUint8List();
+
+      final ratio = _getAspectRatioValue(_selectedRatio);
+      const exportHeight = 1350;
+      final exportWidth = (exportHeight * ratio).round();
+
+      final outputRaw = processImage(
+        rawInput,
+        _loadedRawImage!.width,
+        _loadedRawImage!.height,
+        exportWidth,
+        exportHeight,
+        uniforms,
+      );
+
+      final gradedImg = img.Image.fromBytes(
+        width: exportWidth,
+        height: exportHeight,
+        bytes: outputRaw.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+
+      final pngBytes = img.encodePng(gradedImg);
+
+      Directory exportDir = Directory('/storage/emulated/0/Download');
+      if (!await exportDir.exists()) {
+        final extDir = await getExternalStorageDirectory();
+        exportDir = extDir ?? await getApplicationDocumentsDirectory();
+      }
+
+      final fileName = 'AEReality_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
+      final destFile = File('${exportDir.path}/$fileName');
+      await destFile.writeAsBytes(pngBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Graded Image Saved to Downloads:\n${destFile.path}'),
+            duration: const Duration(seconds: 7),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image Export Error: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  // VIDEO EXPORT
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -1378,7 +1577,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     String audioBitrate,
     String sampleRate,
   ) async {
-    if (_controller == null || !_controller!.value.isInitialized || _currentVideoPath == null) return;
+    if (_controller == null || !_controller!.value.isInitialized || _currentMediaPath == null) return;
 
     final uniforms = _packUniforms();
 
@@ -1426,7 +1625,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     try {
       final dir = await getTemporaryDirectory();
-      final videoPath = _currentVideoPath!;
+      final videoPath = _currentMediaPath!;
       final framesDir = Directory('${dir.path}/export_frames');
       final processedDir = Directory('${dir.path}/export_processed');
       if (await framesDir.exists()) await framesDir.delete(recursive: true);
@@ -1441,8 +1640,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       frameFiles.sort((a, b) => a.path.compareTo(b.path));
 
       final totalFrames = frameFiles.length;
+      final exportHeight = 1080;
       final exportWidth = (1080 * _getAspectRatioValue(_selectedRatio)).round();
-      const exportHeight = 1080;
 
       for (int i = 0; i < totalFrames; i++) {
         final file = frameFiles[i];
@@ -1508,7 +1707,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         '-i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodecParam -b:a $audioBitrate -ar $sampleRate -shortest "$finalOutputPath"',
       );
 
-      // PUBLIC DOWNLOADS FOLDER FIX (Bypasses Scoped Storage errno = 13)
       Directory exportDir = Directory('/storage/emulated/0/Download');
       if (!await exportDir.exists()) {
         final extDir = await getExternalStorageDirectory();
@@ -1549,7 +1747,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       child: Row(
         children: [
           SizedBox(
-            width: 120,
+            width: 125,
             child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
           ),
           Expanded(
@@ -1565,12 +1763,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 value: value.clamp(min, max),
                 min: min,
                 max: max,
-                onChanged: onChanged,
+                onChanged: (v) {
+                  onChanged(v);
+                  if (_isImage) _processStaticImage();
+                },
               ),
             ),
           ),
           SizedBox(
-            width: 48,
+            width: 52,
             child: Text(
               '${value.toStringAsFixed(2)}$unit',
               style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
@@ -1582,7 +1783,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // Card Drawer Container Widget (Matches Screenshot 2)
   Widget _buildDrawerCard({
     required String title,
     required String badge1,
@@ -1729,7 +1929,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             0.0,
             1.0,
             activeCurve[i],
-            (v) => setState(() => activeCurve[i] = v),
+            (v) {
+              setState(() => activeCurve[i] = v);
+              if (_isImage) _processStaticImage();
+            },
           ),
       ],
     );
@@ -1763,10 +1966,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return Wrap(
       spacing: 6,
       children: modes.map((m) {
-        final isSel = (_edgeGlowColorMode - (m['mode'] as double)).abs() < 0.1;
+        final isSel = (_edgeGlowTint - (m['mode'] as double)).abs() < 0.1;
         final c = m['color'] as Color;
         return GestureDetector(
-          onTap: () => setState(() => _edgeGlowColorMode = m['mode'] as double),
+          onTap: () {
+            setState(() => _edgeGlowTint = m['mode'] as double);
+            if (_isImage) _processStaticImage();
+          },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
@@ -1821,10 +2027,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
     }
 
+    // Timeline duration values
+    final currentPos = (_controller != null && _controller!.value.isInitialized)
+        ? _controller!.value.position
+        : Duration.zero;
+    final totalDuration = (_controller != null && _controller!.value.isInitialized)
+        ? _controller!.value.duration
+        : Duration.zero;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.projectName ?? 'Untitled Project'),
         actions: [
+          // GOLD FOLDER IMPORT BUTTON AT TOP RIGHT
+          IconButton(
+            icon: const Icon(Icons.folder_open, color: Color(0xFFFFD700), size: 24),
+            tooltip: 'Import Video or Image',
+            onPressed: () async {
+              final result = await FilePicker.platform.pickFiles(
+                type: FileType.custom,
+                allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
+              );
+              if (result != null && result.files.single.path != null) {
+                _loadMedia(result.files.single.path!);
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white70),
             tooltip: 'Reset All Effects',
@@ -1850,7 +2078,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       onTap: () {
                         setState(() {
                           _selectedRatio = r;
-                          _updateCanvasSize();
+                          if (_isImage && _loadedRawImage != null) {
+                            _updateCanvasSize(_loadedRawImage!.width, _loadedRawImage!.height);
+                            _processStaticImage();
+                          } else if (_controller != null && _controller!.value.isInitialized) {
+                            _updateCanvasSize(_controller!.value.size.width.toInt(), _controller!.value.size.height.toInt());
+                          }
                         });
                         Navigator.pop(context);
                       },
@@ -1869,14 +2102,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // PREVIEW CANVAS WITH DIRECT VIDEO FALLBACK
+          // PREVIEW CANVAS
           Expanded(
             flex: 5,
             child: Container(
               color: Colors.black,
               child: Stack(
                 children: [
-                  if (_controller != null && _controller!.value.isInitialized)
+                  if (_controller != null && _controller!.value.isInitialized && !_isImage)
                     Positioned.fill(
                       child: Opacity(
                         opacity: 0.01,
@@ -1907,64 +2140,79 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
           ),
 
-          // TIMELINE SCRUBBER & VOLUME
+          // TIMELINE SCRUBBER WITH THICKER BAR & EXACT ELAPSED/TOTAL TIMESTAMP COUNTER
           Container(
             color: const Color(0xFF0A0A0D),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             child: Row(
               children: [
-                IconButton(
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 22),
-                  onPressed: () {
-                    if (_controller != null && _controller!.value.isInitialized) {
-                      setState(() {
-                        if (_controller!.value.isPlaying) {
-                          _controller!.pause();
-                          _isPlaying = false;
-                        } else {
-                          _controller!.play();
-                          _isPlaying = true;
-                        }
-                      });
-                    }
-                  },
-                ),
-                IconButton(
-                  icon: Icon(_isMuted ? Icons.volume_off : Icons.volume_up, color: Colors.white70, size: 20),
-                  onPressed: () {
-                    if (_controller != null && _controller!.value.isInitialized) {
-                      setState(() {
-                        _isMuted = !_isMuted;
-                        _controller!.setVolume(_isMuted ? 0.0 : 1.0);
-                      });
-                    }
-                  },
-                ),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      trackHeight: 2,
-                      activeTrackColor: const Color(0xFF00F0FF),
-                      inactiveTrackColor: Colors.white12,
-                      thumbColor: Colors.white,
-                    ),
-                    child: Slider(
-                      value: _controller != null && _controller!.value.isInitialized
-                          ? _controller!.value.position.inSeconds.toDouble()
-                          : 0.0,
-                      min: 0,
-                      max: _controller != null && _controller!.value.isInitialized
-                          ? _controller!.value.duration.inSeconds.toDouble()
-                          : 1.0,
-                      onChanged: (v) {
-                        if (_controller != null && _controller!.value.isInitialized) {
-                          _controller!.seekTo(Duration(milliseconds: (v * 1000).round()));
-                        }
-                      },
+                if (!_isImage) ...[
+                  IconButton(
+                    icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 24),
+                    onPressed: () {
+                      if (_controller != null && _controller!.value.isInitialized) {
+                        setState(() {
+                          if (_controller!.value.isPlaying) {
+                            _controller!.pause();
+                            _isPlaying = false;
+                          } else {
+                            _controller!.play();
+                            _isPlaying = true;
+                          }
+                        });
+                      }
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(_isMuted ? Icons.volume_off : Icons.volume_up, color: Colors.white70, size: 20),
+                    onPressed: () {
+                      if (_controller != null && _controller!.value.isInitialized) {
+                        setState(() {
+                          _isMuted = !_isMuted;
+                          _controller!.setVolume(_isMuted ? 0.0 : 1.0);
+                        });
+                      }
+                    },
+                  ),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                        trackHeight: 5, // THICKER PLAYBACK BAR
+                        activeTrackColor: const Color(0xFF00F0FF),
+                        inactiveTrackColor: Colors.white12,
+                        thumbColor: Colors.white,
+                      ),
+                      child: Slider(
+                        value: currentPos.inMilliseconds.toDouble().clamp(0.0, totalDuration.inMilliseconds.toDouble() > 0 ? totalDuration.inMilliseconds.toDouble() : 1.0),
+                        min: 0,
+                        max: totalDuration.inMilliseconds.toDouble() > 0 ? totalDuration.inMilliseconds.toDouble() : 1.0,
+                        onChanged: (v) {
+                          if (_controller != null && _controller!.value.isInitialized) {
+                            _controller!.seekTo(Duration(milliseconds: v.round()));
+                          }
+                        },
+                      ),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  // EXACT TIME COUNTER
+                  Text(
+                    '${_formatDuration(currentPos)} / ${_formatDuration(totalDuration)}',
+                    style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                  ),
+                ] else ...[
+                  const Icon(Icons.image, color: Color(0xFF00F0FF), size: 20),
+                  const SizedBox(width: 10),
+                  const Text('STATIC HIGH-RES IMAGE ACTIVE', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                  const Spacer(),
+                  ElevatedButton.icon(
+                    onPressed: _exportStaticImage,
+                    icon: const Icon(Icons.download, size: 16, color: Colors.black),
+                    label: const Text('Export PNG', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F0FF), padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
+                  ),
+                ],
               ],
             ),
           ),
@@ -2000,12 +2248,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       child: Row(
                         children: [
-                          _buildSubcategoryPill('bloom', 'Bloom & Rim'),
+                          _buildSubcategoryPill('bloom', 'Bloom & Flares'),
                           _buildSubcategoryPill('color', 'Color & Tone'),
                           _buildSubcategoryPill('curves', 'Curves'),
-                          _buildSubcategoryPill('sharpness', 'Sharpness & Inks'),
-                          _buildSubcategoryPill('grade', 'Grade & Split'),
-                          _buildSubcategoryPill('strobe', 'Strobe & Dust'),
+                          _buildSubcategoryPill('ae_tools', 'AE / Sapphire'),
+                          _buildSubcategoryPill('sharpness', 'Lines & Bokeh'),
+                          _buildSubcategoryPill('grade', 'Grade & Strobe'),
                         ],
                       ),
                     ),
@@ -2015,38 +2263,53 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         child: Column(
                           children: [
                             if (_activeCategory == 'bloom') ...[
+                              // DEEP GLOW / NORMAL GLOW TOGGLEABLE
                               _buildDrawerCard(
-                                title: 'Soft Ethereal Edge Glow',
-                                badge1: 'Bloom',
-                                badge2: 'Rim',
-                                subtitle: 'Soft luminous character contour bloom with spreading radius and tint palette',
-                                headerTrailing: _buildEdgeGlowPalette(),
-                                child: Column(
-                                  children: [
-                                    _buildSliderRow('Edge Glow Intensity', 0.0, 3.0, _edgeGlow, (v) => setState(() => _edgeGlow = v)),
-                                    _buildSliderRow('Edge Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
-                                  ],
+                                title: _isDeepGlow > 0.5 ? 'AE Deep Glow (Inverse Square)' : 'Normal Gaussian Bloom',
+                                badge1: _isDeepGlow > 0.5 ? 'Deep Glow' : 'Normal',
+                                subtitle: '36-tap continuous Vogel spiral with soft-knee highlight threshold (0 clumping, 0 duplicate halos)',
+                                headerTrailing: ChoiceChip(
+                                  label: Text(_isDeepGlow > 0.5 ? 'Deep' : 'Normal', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                  selected: _isDeepGlow > 0.5,
+                                  selectedColor: const Color(0xFF00F0FF),
+                                  backgroundColor: const Color(0xFF18181E),
+                                  onSelected: (sel) {
+                                    setState(() => _isDeepGlow = sel ? 1.0 : 0.0);
+                                    if (_isImage) _processStaticImage();
+                                  },
                                 ),
-                              ),
-                              _buildDrawerCard(
-                                title: 'Deep Glow (AE 2026 Replica)',
-                                badge1: 'After Effects',
-                                subtitle: 'Smooth 32-bit inverse-square falloff, chromatic dispersion aura & specular highlight core',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Glow Intensity', 0.0, 3.0, _glowIntensity, (v) => setState(() => _glowIntensity = v)),
                                     _buildSliderRow('Glow Spread', 0.1, 2.0, _glowSpread, (v) => setState(() => _glowSpread = v)),
+                                    if (_isDeepGlow > 0.5)
+                                      _buildSliderRow('Falloff Radius', 0.1, 1.5, _deepGlowRadius, (v) => setState(() => _deepGlowRadius = v)),
                                   ],
                                 ),
                               ),
+                              // SCREEN-SPACE DIFFUSED EDGE GLOW
                               _buildDrawerCard(
-                                title: 'RTX God Rays & Volumetric Lumen',
-                                badge1: 'Optics',
-                                subtitle: 'Volumetric light shafts and ethereal atmospheric scattering',
+                                title: 'Screen-Space Edge Rim Glow',
+                                badge1: 'Rim',
+                                subtitle: 'Luminous character contour bloom with spreading radius and tint palette',
+                                headerTrailing: _buildEdgeGlowPalette(),
                                 child: Column(
                                   children: [
-                                    _buildSliderRow('RTX God Rays', 0.0, 3.0, _godRays, (v) => setState(() => _godRays = v)),
-                                    _buildSliderRow('Volumetric Fog', 0.0, 3.0, _volumetricFog, (v) => setState(() => _volumetricFog = v)),
+                                    _buildSliderRow('Edge Glow Intensity', 0.0, 3.0, _edgeGlow, (v) => setState(() => _edgeGlow = v)),
+                                    _buildSliderRow('Edge Spread', 0.1, 2.0, _edgeGlowSpread, (v) => setState(() => _edgeGlowSpread = v)),
+                                  ],
+                                ),
+                              ),
+                              // ANAMORPHIC GLASS FLARES
+                              _buildDrawerCard(
+                                title: 'Optical Anamorphic Flares',
+                                badge1: 'Flares',
+                                badge2: 'Streak',
+                                subtitle: 'Horizontal specular glass glints with continuous Gaussian decay',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Flare Intensity', 0.0, 3.0, _anamorphicFlare, (v) => setState(() => _anamorphicFlare = v)),
+                                    _buildSliderRow('Streak Width', 0.1, 2.0, _flareAmount, (v) => setState(() => _flareAmount = v)),
                                   ],
                                 ),
                               ),
@@ -2062,6 +2325,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     _buildSliderRow('Saturation', 0.0, 3.0, _saturation, (v) => setState(() => _saturation = v)),
                                     _buildSliderRow('Gamma', 0.2, 3.0, _gamma, (v) => setState(() => _gamma = v)),
                                     _buildSliderRow('Black Crush', 0.0, 1.0, _blackCrush, (v) => setState(() => _blackCrush = v)),
+                                  ],
+                                ),
+                              ),
+                              // SHADOWS & HIGHLIGHTS
+                              _buildDrawerCard(
+                                title: 'Shadows & Highlights Tone Map',
+                                badge1: 'Dynamic Range',
+                                subtitle: 'Isolates and lifts deep shadows while compressing or boosting hot highlights',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Shadows Lift', -1.0, 1.0, _shadows, (v) => setState(() => _shadows = v)),
+                                    _buildSliderRow('Highlights', -1.0, 1.0, _highlights, (v) => setState(() => _highlights = v)),
                                   ],
                                 ),
                               ),
@@ -2083,66 +2358,94 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                 subtitle: 'Master, Red, Green, and Blue independent tone grading splines',
                                 child: _buildCurvesEditor(),
                               ),
-                            ] else if (_activeCategory == 'sharpness') ...[
+                            ] else if (_activeCategory == 'ae_tools') ...[
+                              // AE / SAPPHIRE RECREATIONS
                               _buildDrawerCard(
-                                title: 'Laplacian Micro-Sharpness',
-                                badge1: 'USM',
-                                subtitle: 'High-pass unsharp masking tailored for anime contours without noise',
-                                child: _buildSliderRow('Laplacian Sharpness', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                                title: 'Sapphire S_MathOps',
+                                badge1: 'Sapphire',
+                                subtitle: 'Hardware mathematical blend modes: Screen, Multiply, Overlay, Color Burn',
+                                headerTrailing: DropdownButton<double>(
+                                  value: _mathOpsMode,
+                                  dropdownColor: const Color(0xFF18181E),
+                                  items: const [
+                                    DropdownMenuItem(value: 0.0, child: Text('Off', style: TextStyle(fontSize: 11))),
+                                    DropdownMenuItem(value: 1.0, child: Text('Screen', style: TextStyle(fontSize: 11))),
+                                    DropdownMenuItem(value: 2.0, child: Text('Multiply', style: TextStyle(fontSize: 11))),
+                                    DropdownMenuItem(value: 3.0, child: Text('Overlay', style: TextStyle(fontSize: 11))),
+                                    DropdownMenuItem(value: 4.0, child: Text('Color Burn', style: TextStyle(fontSize: 11))),
+                                  ],
+                                  onChanged: (v) {
+                                    setState(() => _mathOpsMode = v!);
+                                    if (_isImage) _processStaticImage();
+                                  },
+                                ),
+                                child: _buildSliderRow('Blend Mix', 0.0, 1.0, _mathOpsMix, (v) => setState(() => _mathOpsMix = v)),
                               ),
                               _buildDrawerCard(
-                                title: 'Anime Ink Lines & Edge Darken',
+                                title: 'FilmConvert Nitrate',
+                                badge1: 'Film Stock',
+                                subtitle: 'Kodak/Fuji S-curve dynamic film response & warm shadow pedestal',
+                                child: _buildSliderRow('Nitrate Film Mix', 0.0, 1.0, _filmConvertNitrate, (v) => setState(() => _filmConvertNitrate = v)),
+                              ),
+                              _buildDrawerCard(
+                                title: '4-Color Corner Gradient',
+                                badge1: 'Gradient',
+                                subtitle: 'Amber, Quincy Blue, Crimson and Teal corner-pinned cinematic color wash',
+                                child: _buildSliderRow('Gradient Wash Mix', 0.0, 1.0, _fourColorGradMix, (v) => setState(() => _fourColorGradMix = v)),
+                              ),
+                            ] else if (_activeCategory == 'sharpness') ...[
+                              _buildDrawerCard(
+                                title: 'Laplacian Micro-Sharpness with Halos',
+                                badge1: 'USM',
+                                subtitle: 'High-pass unsharp masking tailored for anime with crisp micro-halos',
+                                child: _buildSliderRow('Sharpness', 0.0, 3.0, _sharpness, (v) => setState(() => _sharpness = v)),
+                              ),
+                              // TRUE SOBEL LINE ART
+                              _buildDrawerCard(
+                                title: 'True Sobel Anime Ink Line Darkener',
                                 badge1: 'Manga FX',
-                                subtitle: 'Deepens character ink lines and applies subtle perimeter dark blur',
+                                subtitle: 'Isolates and darkens ONLY character ink lines and outlines without touching shadow fills',
                                 child: Column(
                                   children: [
-                                    _buildSliderRow('Dark Manga Outlines', 0.0, 3.0, _darkOutlines, (v) => setState(() => _darkOutlines = v)),
-                                    _buildSliderRow('Edge Darken Blur', 0.0, 3.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
-                                    _buildSliderRow('Depth of Field', 0.0, 3.0, _depthOfField, (v) => setState(() => _depthOfField = v)),
+                                    _buildSliderRow('Ink Outlines', 0.0, 3.0, _darkOutlines, (v) => setState(() => _darkOutlines = v)),
+                                    _buildSliderRow('Perimeter Darken', 0.0, 3.0, _edgeDarken, (v) => setState(() => _edgeDarken = v)),
+                                  ],
+                                ),
+                              ),
+                              // DIRECTIONAL DEPTH OF FIELD
+                              _buildDrawerCard(
+                                title: 'Directional Depth of Field (Bokeh)',
+                                badge1: 'Optics',
+                                subtitle: 'Focal plane depth blur with angle rotation',
+                                child: Column(
+                                  children: [
+                                    _buildSliderRow('Bokeh Strength', 0.0, 3.0, _depthOfField, (v) => setState(() => _depthOfField = v)),
+                                    _buildSliderRow('Focus Plane', 0.0, 1.0, _dofFocus, (v) => setState(() => _dofFocus = v)),
+                                    _buildSliderRow('Angle', -180.0, 180.0, _dofAngle, (v) => setState(() => _dofAngle = v), unit: '°'),
                                   ],
                                 ),
                               ),
                             ] else if (_activeCategory == 'grade') ...[
                               _buildDrawerCard(
-                                title: 'Split Toning & Vignette',
+                                title: 'Bilateral Denoise & Vignette',
                                 badge1: 'Look',
-                                subtitle: 'Complementary color division and centered optical lens falloff',
+                                subtitle: 'Smooth color noise reduction and centered lens falloff',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Denoise', 0.0, 1.0, _denoise, (v) => setState(() => _denoise = v)),
-                                    _buildSliderRow('Split Toning', 0.0, 3.0, _splitToning, (v) => setState(() => _splitToning = v)),
                                     _buildSliderRow('Vignette Falloff', 0.0, 3.0, _vignette, (v) => setState(() => _vignette = v)),
+                                    _buildSliderRow('Split Toning', 0.0, 3.0, _splitToning, (v) => setState(() => _splitToning = v)),
                                   ],
                                 ),
                               ),
-                            ] else if (_activeCategory == 'strobe') ...[
                               _buildDrawerCard(
                                 title: 'Black Shutter Strobe',
                                 badge1: 'Shutter',
-                                subtitle: 'True exposure dip to pure black at custom rhythm frequencies',
+                                subtitle: 'Rhythmic exposure cut to pure black',
                                 child: Column(
                                   children: [
                                     _buildSliderRow('Strobe Intensity', 0.0, 3.0, _flickerIntensity, (v) => setState(() => _flickerIntensity = v)),
                                     _buildSliderRow('Strobe Frequency', 0.1, 10.0, _flickerSpeed, (v) => setState(() => _flickerSpeed = v), unit: 'x'),
-                                  ],
-                                ),
-                              ),
-                              _buildDrawerCard(
-                                title: 'Atmospheric Floating Dust Motes',
-                                badge1: 'Particles',
-                                subtitle: '3-layer parallax drifting motes with procedural glinting',
-                                child: Column(
-                                  children: [
-                                    SwitchListTile(
-                                      title: const Text('Enable Dust Particles', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                                      value: _dustParticles,
-                                      activeColor: const Color(0xFF00F0FF),
-                                      onChanged: (v) => setState(() => _dustParticles = v),
-                                    ),
-                                    if (_dustParticles) ...[
-                                      _buildSliderRow('Dust Intensity', 0.0, 3.0, _dustIntensity, (v) => setState(() => _dustIntensity = v)),
-                                      _buildSliderRow('Drift Speed', 0.1, 3.0, _dustSpeed, (v) => setState(() => _dustSpeed = v), unit: 'x'),
-                                    ],
                                   ],
                                 ),
                               ),
@@ -2166,7 +2469,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     _buildPresetCard('adevob+junho', 'Signature Adevob x Junho golden specular & black crush'),
                     _buildPresetCard('adevobfiller', 'High-saturation amber bloom & deep teal contrast'),
                     _buildPresetCard('uryu vs ichigo', 'Bleach TYBW cyan specular core & cold shadows'),
-                    _buildPresetCard('saber vs Rin', 'Fate UBW anamorphic glow & volumetric god rays'),
+                    _buildPresetCard('saber vs Rin', 'Fate UBW anamorphic glow & glass flares'),
                     _buildPresetCard('Dantae cc', 'High-voltage contrast, micro-sharpness & edge blur'),
                     _buildPresetCard('toji junho', 'Gritty bleach bypass, golden weapon glints & crushed gamma'),
                   ],
@@ -2178,7 +2481,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        'Render directly to phone storage with Vulkan ${gEnginePrecision}-Bit Compute.',
+                        _isImage
+                            ? 'Render full resolution graded PNG directly to phone Downloads.'
+                            : 'Render directly to phone Downloads with Vulkan ${gEnginePrecision}-Bit Compute.',
                         style: const TextStyle(color: Colors.white54, fontSize: 12),
                       ),
                       const SizedBox(height: 16),
@@ -2190,7 +2495,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
-                        child: const Text('OPEN EXPORT SETTINGS', style: TextStyle(fontWeight: FontWeight.bold)),
+                        child: Text(_isImage ? 'EXPORT GRADED IMAGE' : 'OPEN EXPORT SETTINGS', style: const TextStyle(fontWeight: FontWeight.bold)),
                       ),
                     ],
                   ),
