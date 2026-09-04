@@ -1,25 +1,25 @@
-name: aereality
-description: "AEReality 32-Bit HDR Node Grading Engine (Vulkan FFI)"
+name: aereality_studio
+description: "Vulkan Hardware-Accelerated Video Color Grading & Anime WIS Suite"
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.2.0 <4.0.0'
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
+  ffmpeg_kit_flutter_new_full_gpl: ^2.1.0
+  video_player: ^2.8.2
+  file_picker: ^8.0.0
+  path_provider: ^2.1.2
+  image: ^4.1.7
+  ffi: ^2.1.0
 
-  video_player: ^2.9.5
-  file_picker: ^8.1.7
-  path_provider: ^2.1.5
-  ffmpeg_kit_flutter_new_min_gpl: ^2.6.2
-  image: ^4.5.4
-  
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
