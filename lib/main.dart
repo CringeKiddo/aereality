@@ -17,10 +17,10 @@ import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
 
-// Modern Luxury Palette: Aquamarine & Soft Lavender
+// Modern Palette: Aquamarine Accents & Elegant Lavender Slider Tracks
 const Color kAquamarine = Color(0xFF7FFFD4);
 const Color kAquamarineDark = Color(0xFF45B39D);
-const Color kLavender = Color(0xFFC8B6FF);
+const Color kLavender = Color(0xFFC8B6FF);      // Lavender slider line
 const Color kLavenderSoft = Color(0xFFE6E6FA);
 const Color kSurfaceDark = Color(0xFF101015);
 const Color kCardDark = Color(0xFF15151C);
@@ -33,12 +33,10 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
-  // CRITICAL FIX FOR SCREENSHOT 1 & 3:
-  // FFmpegKitExtended MUST be initialized before calling any FFmpeg methods.
   try {
     await FFmpegKitExtended.initialize();
   } catch (e) {
-    debugPrint('FFmpegKitExtended init warning: $e');
+    debugPrint('FFmpegKitExtended initialization warning: $e');
   }
 
   runApp(const AERealityApp());
@@ -77,9 +75,8 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-// Global Engine Settings: Strictly FP32 Precision for Grading
 int gEnginePrecision = 32;
-double gPreviewScale = 0.5; // 0.25 (Draft), 0.5 (Balanced), 0.75 (High), 1.0 (Full)
+double gPreviewScale = 0.5;
 
 // ============================================================================
 // 1. EXPORT MATRIX & CODEC ENGINE
@@ -154,7 +151,6 @@ class ExportMatrix {
             : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
       }
     } else {
-      // MKV
       if (codec.startsWith('FFV1')) {
         if (is16) {
           codecFlags = '-c:v ffv1 -level 3 -pix_fmt gbrp16le';
@@ -170,12 +166,12 @@ class ExportMatrix {
       }
     }
 
-    return '-framerate $fps -i "$framePattern" $codecFlags -b:v ${bitrateKbps}k "$outputPath"';
+    return '-framerate $fps -i "$framePattern" $codecFlags -b:v ${bitrateKbps}k -y "$outputPath"';
   }
 }
 
 // ============================================================================
-// 2. PROJECT DATA MODEL & SERIALIZATION
+// 2. PROJECT DATA MODEL
 // ============================================================================
 class ProjectData {
   String mediaPath;
@@ -193,7 +189,7 @@ class ProjectData {
   double bloomThreshold;
   double bloomRadius;
   double edgeGlowTint;
-  double edgeDarken; // Subtle ink line edge shadow
+  double edgeDarken;
   double anamorphicFlare;
   double flareAmount;
   double lightRays;
@@ -213,14 +209,12 @@ class ProjectData {
   double dofFocus;
   double dofAngle;
 
-  // Sapphire / AE Category
   double sapphireBlendMix;
   double mathOpsMode;
   double filmConvertNitrate;
   double fourColorGradMix;
-  double tonemapMode; // Reinhard or ACES
+  double tonemapMode;
 
-  // Magic Bullet Suite
   double mblCosmoSkin;
   double mblRenoirHalation;
   double mblColoristaLift;
@@ -456,7 +450,7 @@ class ProjectManager {
 }
 
 // ============================================================================
-// 3. HOME SCREEN & LAUNCHER
+// 3. HOME SCREEN
 // ============================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -600,7 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.tune_rounded, color: kLavender),
-            tooltip: 'Engine & Preview Settings',
+            tooltip: 'Settings',
             onPressed: _showSettingsDialog,
           ),
         ],
@@ -614,7 +608,7 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'VULKAN COMPUTE • FP32 HIGH DYNAMIC RANGE',
+                  'VULKAN COMPUTE • FP32 HDR',
                   style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
                 Container(
@@ -635,8 +629,6 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(color: Colors.white54, fontSize: 13),
             ),
             const SizedBox(height: 20),
-
-            // Top Quick Action Buttons
             Row(
               children: [
                 Expanded(
@@ -677,7 +669,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-
             const SizedBox(height: 26),
             const Text('RECENT SESSIONS', style: TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
@@ -1054,7 +1045,7 @@ class _CurvePainter extends CustomPainter {
 }
 
 // ============================================================================
-// 6. 3-WAY COLORISTA COLOR WHEEL WIDGET
+// 6. COLORISTA WHEEL
 // ============================================================================
 class ColoristaWheel extends StatelessWidget {
   final String label;
@@ -1099,13 +1090,19 @@ class ColoristaWheel extends StatelessWidget {
         ),
         SizedBox(
           width: 84,
-          child: Slider(
-            value: value.clamp(-0.3, 0.3),
-            min: -0.3,
-            max: 0.3,
-            activeColor: accentColor,
-            inactiveColor: Colors.white12,
-            onChanged: onChanged,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2.2,
+              activeTrackColor: kLavender,
+              inactiveTrackColor: Colors.white12,
+              thumbColor: kLavenderSoft,
+            ),
+            child: Slider(
+              value: value.clamp(-0.3, 0.3),
+              min: -0.3,
+              max: 0.3,
+              onChanged: onChanged,
+            ),
           ),
         ),
       ],
@@ -1114,7 +1111,7 @@ class ColoristaWheel extends StatelessWidget {
 }
 
 // ============================================================================
-// 7. STUDIO EDITOR SCREEN (MASTER CONTROLLER)
+// 7. STUDIO EDITOR SCREEN
 // ============================================================================
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -1163,7 +1160,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _lightRays = 0.0;
   double _lightRaysDecay = 0.90;
 
-  // Flicker (Smooth, consistent frequency)
+  // Flicker
   double _flickerIntensity = 0.0;
   double _flickerSpeed = 3.0;
 
@@ -1177,7 +1174,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _mathOpsMode = 0.0;
   double _filmConvertNitrate = 0.0;
   double _fourColorGradMix = 0.0;
-  double _tonemapMode = 1.0; // 0=None, 1=Reinhard, 2=ACES
+  double _tonemapMode = 1.0;
 
   // Magic Bullet Suite
   double _mblCosmoSkin = 0.0;
@@ -1200,8 +1197,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   ui.Image? _processedImage;
   Timer? _previewTimer;
-  bool _isUpdating = false;
-  final GlobalKey _videoCaptureKey = GlobalKey();
+  bool _isProcessingFrame = false;
+  final GlobalKey _activeCanvasKey = GlobalKey();
 
   int _canvasWidth = 864;
   int _canvasHeight = 1080;
@@ -1323,7 +1320,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // COMPLETE AUDIO DESTRUCTION ON MEDIA RELOAD
   Future<void> _loadMedia(String path) async {
     final ext = path.split('.').last.toLowerCase();
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
@@ -1443,14 +1439,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     } catch (_) {}
   }
 
+  // ACTIVE LIVE-VIEW SAMPLER
   void _startTimelinePreview() {
     _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) async {
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
       if (_isImage) return;
-      if (_controller == null || !_controller!.value.isInitialized || _isUpdating) return;
-      _isUpdating = true;
+      if (_controller == null || !_controller!.value.isInitialized || _isProcessingFrame) return;
+      _isProcessingFrame = true;
       try {
-        final renderObject = _videoCaptureKey.currentContext?.findRenderObject();
+        final renderObject = _activeCanvasKey.currentContext?.findRenderObject();
         if (renderObject is RenderRepaintBoundary) {
           final frame = await renderObject.toImage();
           final processed = await _processFrameWithVulkan(frame);
@@ -1458,7 +1455,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           frame.dispose();
         }
       } catch (_) {}
-      _isUpdating = false;
+      _isProcessingFrame = false;
     });
   }
 
@@ -1490,7 +1487,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[17] = _shadows + _mblColoristaLift;
     uniforms[18] = _highlights + _mblColoristaGain;
     uniforms[19] = _darkOutlines;
-    uniforms[20] = _edgeDarken; // Subtle ink line edge shadow
+    uniforms[20] = _edgeDarken;
     uniforms[21] = _vignette;
     uniforms[22] = _splitToning + _mblMojoTealOrange;
     uniforms[23] = _denoise + _mblCosmoSkin;
@@ -1505,7 +1502,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[32] = _filmConvertNitrate + _mblRenoirHalation;
     uniforms[33] = _fourColorGradMix;
 
-    // Catmull-Rom Spline Curve Controls
     uniforms[34] = _curveMaster[0];
     uniforms[35] = _curveMaster[1];
     uniforms[36] = _curveMaster[2];
@@ -1515,21 +1511,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[39] = _filmGrain;
     uniforms[40] = _tonemapMode;
 
-    // Red Curve
     uniforms[42] = _curveRed[0];
     uniforms[43] = _curveRed[1];
     uniforms[44] = _curveRed[2];
     uniforms[45] = _curveRed[3];
     uniforms[46] = _curveRed[4];
 
-    // Green Curve
     uniforms[50] = _curveGreen[0];
     uniforms[51] = _curveGreen[1];
     uniforms[52] = _curveGreen[2];
     uniforms[53] = _curveGreen[3];
     uniforms[54] = _curveGreen[4];
 
-    // Blue Curve
     uniforms[58] = _curveBlue[0];
     uniforms[59] = _curveBlue[1];
     uniforms[60] = _curveBlue[2];
@@ -1822,7 +1815,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // EXPORT BOTTOM SHEET
   void _showExportSheet() {
     if (_isImage) {
       _exportStaticImage();
@@ -1883,7 +1875,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 16),
 
-                    // CONTAINER
                     const Text('CONTAINER', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1906,7 +1897,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // CODECS
                     Text('CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1924,7 +1914,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // BIT-DEPTH
                     const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Row(
@@ -1973,7 +1962,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // RESOLUTION
                     const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1991,7 +1979,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // FRAMERATE
                     const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -2009,7 +1996,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    // BITRATE
                     const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
@@ -2056,7 +2042,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // STATIC IMAGE EXPORT
   Future<void> _exportStaticImage() async {
     if (_loadedRawImage == null || _currentMediaPath == null) return;
     try {
@@ -2109,7 +2094,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // VIDEO MASTER EXPORT
+  // ROBUST FRAME EXTRACTION WITH COMPATIBILITY CHECKS
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -2173,25 +2158,34 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (await framesDir.exists()) await framesDir.delete(recursive: true);
       if (await processedDir.exists()) await processedDir.delete(recursive: true);
-      await framesDir.create();
-      await processedDir.create();
+      await framesDir.create(recursive: true);
+      await processedDir.create(recursive: true);
 
-      // Audio isolation
       final audioPath = '${dir.path}/current_audio.aac';
       final oldAudio = File(audioPath);
       if (await oldAudio.exists()) await oldAudio.delete();
       await FFmpegKit.execute('-i "$videoPath" -vn -c:a aac -y "$audioPath"');
 
-      // 16-Bit extraction for 10-bit and 16-bit pipelines
-      final extractPixFmt = (is10Bit || is16Bit) ? '-pix_fmt rgb48be' : '-pix_fmt rgba';
-      final extractCmd = '-i "$videoPath" -vsync 0 $extractPixFmt -f image2 "${framesDir.path}/frame_%05d.png"';
-      await FFmpegKit.execute(extractCmd);
+      // Robust extraction format that works cleanly across all Android builds
+      final extractSession = await FFmpegKit.execute(
+        '-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.png"',
+      );
+      final returnCode = await extractSession.getReturnCode();
 
-      final frameFiles = await framesDir.list().toList();
+      var frameFiles = await framesDir.list().toList();
+      if (frameFiles.isEmpty) {
+        // Fallback: extract as high-speed uncompressed bitmaps if png library is missing
+        await FFmpegKit.execute('-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.bmp"');
+        frameFiles = await framesDir.list().toList();
+      }
+
       frameFiles.sort((a, b) => a.path.compareTo(b.path));
-
       final totalFrames = frameFiles.length;
-      if (totalFrames == 0) throw Exception('No frames extracted from source footage.');
+
+      if (totalFrames == 0) {
+        final logs = await extractSession.getAllLogsAsString();
+        throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No log output"}');
+      }
 
       for (int i = 0; i < totalFrames; i++) {
         final file = frameFiles[i];
@@ -2286,7 +2280,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       appBar: AppBar(
         title: Text(widget.projectName ?? 'AEReality Editor'),
         actions: [
-          // File Importer from within Timeline (With full audio destruction on reload)
           IconButton(
             icon: const Icon(Icons.folder_open_rounded, color: kLavender),
             tooltip: 'Import New Footage/Art',
@@ -2315,7 +2308,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             tooltip: 'Reset Grading',
             onPressed: _resetAllEffects,
           ),
-          // Movie action film taker icon for export
           IconButton(
             icon: const Icon(Icons.movie_creation_outlined, color: kAquamarine),
             tooltip: 'Master Render Pipeline',
@@ -2325,7 +2317,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // 1. Stage / Canvas
+          // 1. Stage / Canvas with Active Repaint Boundary (Fixes Un-rendered Offstage Frame)
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Center(
@@ -2342,28 +2334,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
+                      // Active video layer that renders to RepaintBoundary for Vulkan capture
                       if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                        Offstage(
-                          offstage: true,
-                          child: RepaintBoundary(
-                            key: _videoCaptureKey,
-                            child: SizedBox(
-                              width: _canvasWidth.toDouble(),
-                              height: _canvasHeight.toDouble(),
-                              child: VideoPlayer(_controller!),
-                            ),
-                          ),
+                        RepaintBoundary(
+                          key: _activeCanvasKey,
+                          child: VideoPlayer(_controller!),
                         ),
-                      // Main Processed Texture Display with Direct Fallback
-                      if (_processedImage != null)
-                        RawImage(image: _processedImage, fit: BoxFit.contain)
-                      else if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                        // Immediate direct live feed fallback if GPU is compiling shader
-                        VideoPlayer(_controller!)
-                      else
-                        const Center(child: CircularProgressIndicator(color: kAquamarine)),
 
-                      // Canvas Controls (Play/Pause & Fullscreen)
+                      // Real-time Vulkan Processed Image Overlay (Direct live response to all sliders)
+                      if (_processedImage != null)
+                        RawImage(image: _processedImage, fit: BoxFit.contain),
+
+                      // Canvas Controls
                       Positioned(
                         bottom: 10,
                         left: 10,
@@ -2424,7 +2406,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ),
 
           if (!_isFullScreen) ...[
-            // 2. Tab Navigation Bar
             Container(
               color: kSurfaceDark,
               child: TabBar(
@@ -2445,7 +2426,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
             ),
 
-            // 3. Tab Views
             Expanded(
               flex: 4,
               child: Container(
@@ -2531,7 +2511,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 2: PRIMARY GRADING (RESTORED SLIDERS) ---
+  // --- TAB 2: PRIMARY GRADING ---
   Widget _buildGradingTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2556,7 +2536,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 3: SPLINE CURVES (WITH BOTH INTERACTIVE GRAPH & SLIDERS) ---
+  // --- TAB 3: CURVES ---
   Widget _buildCurvesTab() {
     final channelColors = [Colors.white, Colors.redAccent, Colors.greenAccent, Colors.blueAccent];
     final channelNames = ['RGB Master', 'Red', 'Green', 'Blue'];
@@ -2618,7 +2598,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           const SizedBox(height: 12),
           const Text('CURVE POINT SLIDERS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          // Sliders for each of the 5 curve points
           ...List.generate(5, (pIdx) {
             final labels = ['Blacks (P0)', 'Shadows (P1)', 'Midtones (P2)', 'Highlights (P3)', 'Whites (P4)'];
             return _buildSliderRow(
@@ -2648,7 +2627,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 4: GLOWS & LINEWORK (WITH BLACK / INK GLOW OPTION & EDGE DARKEN) ---
+  // --- TAB 4: GLOWS ---
   Widget _buildGlowsTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2710,7 +2689,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 5: SAPPHIRE & AFTER EFFECTS SUITE ---
+  // --- TAB 5: SAPPHIRE / AE ---
   Widget _buildSapphireTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2751,7 +2730,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 6: MAGIC BULLET SUITE & 3-WAY COLOR WHEELS ---
+  // --- TAB 6: MAGIC BULLET ---
   Widget _buildMagicBulletTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2791,6 +2770,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // SLIDER ROW: ACTIVE TRACK LINE IS NOW LAVENDER (kLavender)
   Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6.0),
@@ -2807,7 +2787,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 2.2,
-              activeTrackColor: kAquamarine,
+              activeTrackColor: kLavender, // LAVENDER TRACK LINE
               inactiveTrackColor: Colors.white12,
               thumbColor: kLavenderSoft,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
