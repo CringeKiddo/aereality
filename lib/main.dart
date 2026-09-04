@@ -12,8 +12,8 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:ffmpeg_kit_flutter_new_gpl/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new_gpl/return_code.dart';
+import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
