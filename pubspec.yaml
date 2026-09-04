@@ -12,7 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # FFmpeg Kit Extended (Modern Flutter 3+ / Android V2 embedding & NDK 26+ compatible)
+  # Modern FFmpeg Kit Extended
   ffmpeg_kit_extended_flutter: ^0.6.2
 
   # Media playback and file picking
@@ -20,7 +20,7 @@ dependencies:
   file_picker: ^8.0.0
   path_provider: ^2.1.2
 
-  # Frame encoding / decoding (supports 8-bit & 16-bit pipelines)
+  # Frame encoding / decoding (8-bit & 16-bit)
   image: ^4.1.7
 
   # Native C++ Vulkan FFI bindings
@@ -30,6 +30,10 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+
+# Instructs the build hook to download the full GPL package containing x264, x265, vid.stab, etc.
+ffmpeg_kit_extended_config:
+  type: full-gpl
 
 flutter:
   uses-material-design: true
