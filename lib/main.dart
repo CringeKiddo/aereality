@@ -17,12 +17,30 @@ import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
 
-void main() {
+// Modern Luxury Palette: Aquamarine & Soft Lavender
+const Color kAquamarine = Color(0xFF7FFFD4);
+const Color kAquamarineDark = Color(0xFF45B39D);
+const Color kLavender = Color(0xFFC8B6FF);
+const Color kLavenderSoft = Color(0xFFE6E6FA);
+const Color kSurfaceDark = Color(0xFF101015);
+const Color kCardDark = Color(0xFF15151C);
+const Color kBackgroundDark = Color(0xFF08080B);
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
+
+  // CRITICAL FIX FOR SCREENSHOT 1 & 3:
+  // FFmpegKitExtended MUST be initialized before calling any FFmpeg methods.
+  try {
+    await FFmpegKitExtended.initialize();
+  } catch (e) {
+    debugPrint('FFmpegKitExtended init warning: $e');
+  }
+
   runApp(const AERealityApp());
 }
 
@@ -32,17 +50,17 @@ class AERealityApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AEReality Studio',
+      title: 'AEReality Studio Pro',
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF070709),
-        primaryColor: const Color(0xFF00E5FF),
+        scaffoldBackgroundColor: kBackgroundDark,
+        primaryColor: kAquamarine,
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF00E5FF),
-          secondary: Color(0xFF00E5FF),
-          surface: Color(0xFF111116),
+          primary: kAquamarine,
+          secondary: kLavender,
+          surface: kCardDark,
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF070709),
+          backgroundColor: kBackgroundDark,
           elevation: 0,
           titleTextStyle: TextStyle(
             color: Colors.white,
@@ -59,11 +77,12 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-int gEnginePrecision = 16;
-double gPreviewScale = 0.5;
+// Global Engine Settings: Strictly FP32 Precision for Grading
+int gEnginePrecision = 32;
+double gPreviewScale = 0.5; // 0.25 (Draft), 0.5 (Balanced), 0.75 (High), 1.0 (Full)
 
 // ============================================================================
-// 1. EXPORT MATRIX & CODEC VALIDATION ENGINE
+// 1. EXPORT MATRIX & CODEC ENGINE
 // ============================================================================
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
@@ -174,6 +193,7 @@ class ProjectData {
   double bloomThreshold;
   double bloomRadius;
   double edgeGlowTint;
+  double edgeDarken; // Subtle ink line edge shadow
   double anamorphicFlare;
   double flareAmount;
   double lightRays;
@@ -182,21 +202,25 @@ class ProjectData {
   double shadows;
   double highlights;
   double darkOutlines;
-  double edgeDarken;
   double vignette;
   double splitToning;
   double denoise;
   double blackCrush;
+  double filmGrain;
   double flickerIntensity;
   double flickerSpeed;
   double depthOfField;
   double dofFocus;
   double dofAngle;
+
+  // Sapphire / AE Category
+  double sapphireBlendMix;
   double mathOpsMode;
-  double mathOpsMix;
   double filmConvertNitrate;
   double fourColorGradMix;
+  double tonemapMode; // Reinhard or ACES
 
+  // Magic Bullet Suite
   double mblCosmoSkin;
   double mblRenoirHalation;
   double mblColoristaLift;
@@ -226,6 +250,7 @@ class ProjectData {
     this.bloomThreshold = 0.45,
     this.bloomRadius = 1.0,
     this.edgeGlowTint = 0.0,
+    this.edgeDarken = 0.0,
     this.anamorphicFlare = 0.0,
     this.flareAmount = 0.50,
     this.lightRays = 0.0,
@@ -233,20 +258,21 @@ class ProjectData {
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.darkOutlines = 0.0,
-    this.edgeDarken = 0.0,
     this.vignette = 0.0,
     this.splitToning = 0.0,
     this.denoise = 0.0,
     this.blackCrush = 0.0,
+    this.filmGrain = 0.0,
     this.flickerIntensity = 0.0,
     this.flickerSpeed = 3.0,
     this.depthOfField = 0.0,
     this.dofFocus = 0.5,
     this.dofAngle = 0.0,
+    this.sapphireBlendMix = 0.0,
     this.mathOpsMode = 0.0,
-    this.mathOpsMix = 0.0,
     this.filmConvertNitrate = 0.0,
     this.fourColorGradMix = 0.0,
+    this.tonemapMode = 1.0,
     this.mblCosmoSkin = 0.0,
     this.mblRenoirHalation = 0.0,
     this.mblColoristaLift = 0.0,
@@ -278,6 +304,7 @@ class ProjectData {
         'bloomThreshold': bloomThreshold,
         'bloomRadius': bloomRadius,
         'edgeGlowTint': edgeGlowTint,
+        'edgeDarken': edgeDarken,
         'anamorphicFlare': anamorphicFlare,
         'flareAmount': flareAmount,
         'lightRays': lightRays,
@@ -285,20 +312,21 @@ class ProjectData {
         'shadows': shadows,
         'highlights': highlights,
         'darkOutlines': darkOutlines,
-        'edgeDarken': edgeDarken,
         'vignette': vignette,
         'splitToning': splitToning,
         'denoise': denoise,
         'blackCrush': blackCrush,
+        'filmGrain': filmGrain,
         'flickerIntensity': flickerIntensity,
         'flickerSpeed': flickerSpeed,
         'depthOfField': depthOfField,
         'dofFocus': dofFocus,
         'dofAngle': dofAngle,
+        'sapphireBlendMix': sapphireBlendMix,
         'mathOpsMode': mathOpsMode,
-        'mathOpsMix': mathOpsMix,
         'filmConvertNitrate': filmConvertNitrate,
         'fourColorGradMix': fourColorGradMix,
+        'tonemapMode': tonemapMode,
         'mblCosmoSkin': mblCosmoSkin,
         'mblRenoirHalation': mblRenoirHalation,
         'mblColoristaLift': mblColoristaLift,
@@ -327,6 +355,7 @@ class ProjectData {
         bloomThreshold: (json['bloomThreshold'] ?? 0.45).toDouble(),
         bloomRadius: (json['bloomRadius'] ?? 1.0).toDouble(),
         edgeGlowTint: (json['edgeGlowTint'] ?? 0.0).toDouble(),
+        edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
         anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
         flareAmount: (json['flareAmount'] ?? 0.50).toDouble(),
         lightRays: (json['lightRays'] ?? 0.0).toDouble(),
@@ -334,20 +363,21 @@ class ProjectData {
         shadows: (json['shadows'] ?? 0.0).toDouble(),
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
-        edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
         splitToning: (json['splitToning'] ?? 0.0).toDouble(),
         denoise: (json['denoise'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
+        filmGrain: (json['filmGrain'] ?? 0.0).toDouble(),
         flickerIntensity: (json['flickerIntensity'] ?? 0.0).toDouble(),
         flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
         dofFocus: (json['dofFocus'] ?? 0.5).toDouble(),
         dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
+        sapphireBlendMix: (json['sapphireBlendMix'] ?? 0.0).toDouble(),
         mathOpsMode: (json['mathOpsMode'] ?? 0.0).toDouble(),
-        mathOpsMix: (json['mathOpsMix'] ?? 0.0).toDouble(),
         filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
         fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
+        tonemapMode: (json['tonemapMode'] ?? 1.0).toDouble(),
         mblCosmoSkin: (json['mblCosmoSkin'] ?? 0.0).toDouble(),
         mblRenoirHalation: (json['mblRenoirHalation'] ?? 0.0).toDouble(),
         mblColoristaLift: (json['mblColoristaLift'] ?? 0.0).toDouble(),
@@ -395,7 +425,7 @@ class StoredProject {
 }
 
 class ProjectManager {
-  static const String _storageKey = 'aereality_projects_v2.json';
+  static const String _storageKey = 'aereality_projects_v3.json';
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
@@ -420,7 +450,7 @@ class ProjectManager {
     final projects = await loadProjects();
     projects.removeWhere((p) => p.id == project.id);
     projects.insert(0, project);
-    if (projects.length > 30) projects.removeRange(30, projects.length);
+    if (projects.length > 40) projects.removeRange(40, projects.length);
     await saveProjects(projects);
   }
 }
@@ -437,7 +467,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<StoredProject> _recent = [];
-  bool _isCheckingEncoders = false;
 
   @override
   void initState() {
@@ -450,36 +479,103 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _recent = projs);
   }
 
-  Future<void> _testEncoders() async {
-    setState(() => _isCheckingEncoders = true);
-    try {
-      final session = await FFmpegKit.execute('-encoders');
-      final output = await session.getOutput();
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF14141A),
-          title: const Text('Available GPL Encoders', style: TextStyle(color: Colors.white, fontSize: 14)),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 320,
-            child: SingleChildScrollView(
-              child: Text(output ?? 'No output', style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace')),
-            ),
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) => AlertDialog(
+          backgroundColor: kCardDark,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.tune_rounded, color: kAquamarine, size: 20),
+              SizedBox(width: 8),
+              Text('Engine & Preview Quality', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('25% Draft'),
+                    selected: gPreviewScale == 0.25,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.25 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.25);
+                      setState(() {});
+                    },
+                  ),
+                  ChoiceChip(
+                    label: const Text('50% Smooth'),
+                    selected: gPreviewScale == 0.50,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.50 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.50);
+                      setState(() {});
+                    },
+                  ),
+                  ChoiceChip(
+                    label: const Text('75% High'),
+                    selected: gPreviewScale == 0.75,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.75 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.75);
+                      setState(() {});
+                    },
+                  ),
+                  ChoiceChip(
+                    label: const Text('100% Native'),
+                    selected: gPreviewScale == 1.0,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 1.0);
+                      setState(() {});
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
+                child: const Row(
+                  children: [
+                    Icon(Icons.memory_rounded, color: kLavender, size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Grading Engine: IEEE FP32 Floating-Point Compute Shader Pipeline.',
+                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close', style: TextStyle(color: Color(0xFF00E5FF)))),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Save & Apply', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold)),
+            ),
           ],
         ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Encoder check failed: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _isCheckingEncoders = false);
-    }
+      ),
+    );
   }
 
   @override
@@ -489,25 +585,23 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Row(
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFF00E5FF).withOpacity(0.15),
+                color: kAquamarine.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.4)),
+                border: Border.all(color: kAquamarine.withOpacity(0.3)),
               ),
-              child: const Text('AE', style: TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontSize: 13)),
+              child: const Text('AE', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             const Text('AEReality Studio Pro'),
           ],
         ),
         actions: [
           IconButton(
-            icon: _isCheckingEncoders
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00E5FF)))
-                : const Icon(Icons.info_outline, color: Colors.white70),
-            tooltip: 'View FFmpeg Encoders',
-            onPressed: _testEncoders,
+            icon: const Icon(Icons.tune_rounded, color: kLavender),
+            tooltip: 'Engine & Preview Settings',
+            onPressed: _showSettingsDialog,
           ),
         ],
       ),
@@ -520,44 +614,71 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'VULKAN COMPUTE • FFmpeg GPL SUITE',
-                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                  'VULKAN COMPUTE • FP32 HIGH DYNAMIC RANGE',
+                  style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
-                  child: Text(
-                    gEnginePrecision == 32 ? 'FP32 PRECISION' : 'FP16 ULTRA-FAST',
-                    style: const TextStyle(color: Colors.white70, fontSize: 9, fontFamily: 'monospace'),
+                  decoration: BoxDecoration(color: kLavender.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                  child: const Text(
+                    'FP32 ENGINE',
+                    style: TextStyle(color: kLavenderSoft, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 6),
-            const Text('Professional Anime WIS & Master Grade', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            const Text('Anime WIS & Master Grade', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             const Text(
-              'Continuous Ring-Free Gaussian Bloom, 16-Bit FFV1, Magic Bullet Looks, 4K Master Exports.',
+              'Continuous Ring-Free Gaussian Glows, 4K Master Pipeline, Sapphire & Magic Bullet Suite.',
               style: TextStyle(color: Colors.white54, fontSize: 13),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+
+            // Top Quick Action Buttons
             Row(
               children: [
                 Expanded(
+                  flex: 3,
                   child: ElevatedButton.icon(
                     onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
-                    icon: const Icon(Icons.add, color: Colors.black, size: 20),
+                    icon: const Icon(Icons.add_rounded, color: Colors.black, size: 20),
                     label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00E5FF),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: kAquamarine,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      if (_recent.isNotEmpty) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
+                        ).then((_) => _load());
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved presets/sessions yet.')));
+                      }
+                    },
+                    icon: const Icon(Icons.bookmarks_rounded, color: kLavender, size: 18),
+                    label: const Text('SAVED', style: TextStyle(color: kLavenderSoft, fontWeight: FontWeight.w700, fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: kLavender, width: 1.2),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 32),
+
+            const SizedBox(height: 26),
             const Text('RECENT SESSIONS', style: TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             if (_recent.isEmpty)
@@ -565,17 +686,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(28),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF101014),
+                  color: kSurfaceDark,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white.withOpacity(0.05)),
                 ),
                 child: const Column(
                   children: [
-                    Icon(Icons.video_library_outlined, color: Colors.white24, size: 40),
+                    Icon(Icons.video_library_outlined, color: Colors.white24, size: 36),
                     SizedBox(height: 10),
                     Text('No saved sessions found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
                     SizedBox(height: 4),
-                    Text('Tap "NEW PROJECT" above to begin grading video or high-res images.', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                    Text('Tap "NEW PROJECT" to grade high-res footage or art.', style: TextStyle(color: Colors.white24, fontSize: 11)),
                   ],
                 ),
               )
@@ -588,18 +709,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     final p = _recent[i];
                     return Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF111116),
+                        color: kCardDark,
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.white.withOpacity(0.06)),
                       ),
                       child: ListTile(
-                        leading: Icon(p.data.isImage ? Icons.image_outlined : Icons.movie_filter_outlined, color: const Color(0xFF00E5FF)),
+                        leading: Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: kAquamarine),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text(
-                          '${p.mediaPath.split('/').last} • ${p.data.aspectRatio}',
-                          style: const TextStyle(color: Colors.white38, fontSize: 12),
-                        ),
-                        trailing: const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),
+                        subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
                         onTap: () {
                           Navigator.push(
                             context,
@@ -651,7 +769,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
               decoration: InputDecoration(
                 filled: true,
-                fillColor: const Color(0xFF111116),
+                fillColor: kCardDark,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
               onChanged: (val) => _projectName = val.isNotEmpty ? val : 'AEReality Master',
@@ -665,14 +783,14 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               children: _aspectRatios.map((ratio) => ChoiceChip(
                 label: Text(ratio),
                 selected: _selectedAspect == ratio,
-                selectedColor: const Color(0xFF00E5FF),
-                backgroundColor: const Color(0xFF111116),
+                selectedColor: kAquamarine,
+                backgroundColor: kCardDark,
                 labelStyle: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70, fontWeight: FontWeight.bold),
                 onSelected: (_) => setState(() => _selectedAspect = ratio),
               )).toList(),
             ),
             const SizedBox(height: 24),
-            const Text('SOURCE FOOTAGE OR IMAGE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('SOURCE FOOTAGE OR ART', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             GestureDetector(
               onTap: () async {
@@ -694,20 +812,20 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF111116),
+                  color: kCardDark,
                   border: Border.all(color: Colors.white.withOpacity(0.08)),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
                   children: [
                     Icon(
-                      _selectedFile == null ? Icons.file_upload_outlined : (_isImage ? Icons.image : Icons.movie_filter),
-                      color: const Color(0xFF00E5FF),
+                      _selectedFile == null ? Icons.folder_open_rounded : (_isImage ? Icons.image_rounded : Icons.movie_creation_rounded),
+                      color: kAquamarine,
                       size: 40,
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      _selectedFile == null ? 'Tap to browse video file or high-res image' : _selectedFile!.path.split('/').last,
+                      _selectedFile == null ? 'Browse video file or high-res image' : _selectedFile!.path.split('/').last,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                       textAlign: TextAlign.center,
                     ),
@@ -744,7 +862,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                   );
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00E5FF),
+                  backgroundColor: kAquamarine,
                   foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -785,7 +903,7 @@ class _SplineCurveEditorState extends State<SplineCurveEditor> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final double size = math.min(constraints.maxWidth, 260.0);
+        final double size = math.min(constraints.maxWidth, 220.0);
         return Center(
           child: GestureDetector(
             onPanStart: (details) {
@@ -805,7 +923,7 @@ class _SplineCurveEditorState extends State<SplineCurveEditor> {
                   bestIdx = i;
                 }
               }
-              if (bestDist < 0.2) {
+              if (bestDist < 0.25) {
                 setState(() => _activePointIndex = bestIdx);
               }
             },
@@ -824,7 +942,7 @@ class _SplineCurveEditorState extends State<SplineCurveEditor> {
               width: size,
               height: size,
               decoration: BoxDecoration(
-                color: const Color(0xFF0A0A0E),
+                color: const Color(0xFF0C0C10),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.white12),
               ),
@@ -895,13 +1013,13 @@ class _CurvePainter extends CustomPainter {
       final dotPaint = Paint()
         ..color = isAct ? Colors.white : color
         ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.5, dotPaint);
+      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.0, dotPaint);
 
       final ringPaint = Paint()
         ..color = Colors.black
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke;
-      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.5, ringPaint);
+      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.0, ringPaint);
     }
   }
 
@@ -956,11 +1074,11 @@ class ColoristaWheel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
         Container(
-          width: 80,
-          height: 80,
+          width: 72,
+          height: 72,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: SweepGradient(
@@ -979,9 +1097,8 @@ class ColoristaWheel extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 6),
         SizedBox(
-          width: 90,
+          width: 84,
           child: Slider(
             value: value.clamp(-0.3, 0.3),
             min: -0.3,
@@ -1015,8 +1132,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   String? _currentMediaPath;
   bool _isImage = false;
   ui.Image? _loadedRawImage;
+  bool _isFullScreen = false;
 
-  // Primary Color Grading
+  // Primary Grading
   double _brightness = 0.0;
   double _saturation = 1.0;
   double _contrast = 1.0;
@@ -1024,38 +1142,44 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _gamma = 1.0;
   double _hue = 0.0;
   double _temperature = 6500.0;
+  double _shadows = 0.0;
+  double _highlights = 0.0;
+  double _blackCrush = 0.0;
+  double _vignette = 0.0;
+  double _splitToning = 0.0;
+  double _denoise = 0.0;
+  double _filmGrain = 0.0;
 
-  // Continuous Ring-Free Gaussian Bloom & Flares
+  // Glow & Linework
   double _bloomIntensity = 0.0;
   double _bloomSpread = 0.40;
   double _bloomThreshold = 0.45;
   double _bloomRadius = 1.0;
   double _edgeGlowTint = 0.0;
+  double _edgeDarken = 0.0;
+  double _darkOutlines = 0.0;
   double _anamorphicFlare = 0.0;
   double _flareAmount = 0.50;
   double _lightRays = 0.0;
   double _lightRaysDecay = 0.90;
 
-  // Cinematic Outlines, Contrast & Tone
-  double _shadows = 0.0;
-  double _highlights = 0.0;
-  double _darkOutlines = 0.0;
-  double _edgeDarken = 0.0;
-  double _vignette = 0.0;
-  double _splitToning = 0.0;
-  double _denoise = 0.0;
-  double _blackCrush = 0.0;
+  // Flicker (Smooth, consistent frequency)
   double _flickerIntensity = 0.0;
   double _flickerSpeed = 3.0;
+
+  // Depth of Field
   double _depthOfField = 0.0;
   double _dofFocus = 0.5;
   double _dofAngle = 0.0;
+
+  // AE & Sapphire Suite
+  double _sapphireBlendMix = 0.0;
   double _mathOpsMode = 0.0;
-  double _mathOpsMix = 0.0;
   double _filmConvertNitrate = 0.0;
   double _fourColorGradMix = 0.0;
+  double _tonemapMode = 1.0; // 0=None, 1=Reinhard, 2=ACES
 
-  // Magic Bullet Suite Controls
+  // Magic Bullet Suite
   double _mblCosmoSkin = 0.0;
   double _mblRenoirHalation = 0.0;
   double _mblColoristaLift = 0.0;
@@ -1085,7 +1209,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     _loadShader();
 
     if (widget.initialProject != null) {
@@ -1103,6 +1227,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _bloomThreshold = p.bloomThreshold;
       _bloomRadius = p.bloomRadius;
       _edgeGlowTint = p.edgeGlowTint;
+      _edgeDarken = p.edgeDarken;
       _anamorphicFlare = p.anamorphicFlare;
       _flareAmount = p.flareAmount;
       _lightRays = p.lightRays;
@@ -1110,20 +1235,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _shadows = p.shadows;
       _highlights = p.highlights;
       _darkOutlines = p.darkOutlines;
-      _edgeDarken = p.edgeDarken;
       _vignette = p.vignette;
       _splitToning = p.splitToning;
       _denoise = p.denoise;
       _blackCrush = p.blackCrush;
+      _filmGrain = p.filmGrain;
       _flickerIntensity = p.flickerIntensity;
       _flickerSpeed = p.flickerSpeed;
       _depthOfField = p.depthOfField;
       _dofFocus = p.dofFocus;
       _dofAngle = p.dofAngle;
+      _sapphireBlendMix = p.sapphireBlendMix;
       _mathOpsMode = p.mathOpsMode;
-      _mathOpsMix = p.mathOpsMix;
       _filmConvertNitrate = p.filmConvertNitrate;
       _fourColorGradMix = p.fourColorGradMix;
+      _tonemapMode = p.tonemapMode;
       _mblCosmoSkin = p.mblCosmoSkin;
       _mblRenoirHalation = p.mblRenoirHalation;
       _mblColoristaLift = p.mblColoristaLift;
@@ -1178,8 +1304,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _loadShader() async {
     final candidateNames = [
       'assets/shaders/aereality_core.spv',
-      gEnginePrecision == 32 ? 'assets/shaders/aereality_core_32.spv' : 'assets/shaders/aereality_core_16.spv',
       'assets/shaders/shader.spv',
+      'assets/shaders/aereality_core_32.spv',
+      'assets/shaders/aereality_core_16.spv',
     ];
 
     Uint8List? shaderBytes;
@@ -1196,7 +1323,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // AUDIO DESTRUCTION ON MEDIA RESELECTION
+  // COMPLETE AUDIO DESTRUCTION ON MEDIA RELOAD
   Future<void> _loadMedia(String path) async {
     final ext = path.split('.').last.toLowerCase();
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
@@ -1271,6 +1398,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       bloomThreshold: _bloomThreshold,
       bloomRadius: _bloomRadius,
       edgeGlowTint: _edgeGlowTint,
+      edgeDarken: _edgeDarken,
       anamorphicFlare: _anamorphicFlare,
       flareAmount: _flareAmount,
       lightRays: _lightRays,
@@ -1278,20 +1406,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       shadows: _shadows,
       highlights: _highlights,
       darkOutlines: _darkOutlines,
-      edgeDarken: _edgeDarken,
       vignette: _vignette,
       splitToning: _splitToning,
       denoise: _denoise,
       blackCrush: _blackCrush,
+      filmGrain: _filmGrain,
       flickerIntensity: _flickerIntensity,
       flickerSpeed: _flickerSpeed,
       depthOfField: _depthOfField,
       dofFocus: _dofFocus,
       dofAngle: _dofAngle,
+      sapphireBlendMix: _sapphireBlendMix,
       mathOpsMode: _mathOpsMode,
-      mathOpsMix: _mathOpsMix,
       filmConvertNitrate: _filmConvertNitrate,
       fourColorGradMix: _fourColorGradMix,
+      tonemapMode: _tonemapMode,
       mblCosmoSkin: _mblCosmoSkin,
       mblRenoirHalation: _mblRenoirHalation,
       mblColoristaLift: _mblColoristaLift,
@@ -1361,7 +1490,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[17] = _shadows + _mblColoristaLift;
     uniforms[18] = _highlights + _mblColoristaGain;
     uniforms[19] = _darkOutlines;
-    uniforms[20] = _edgeDarken;
+    uniforms[20] = _edgeDarken; // Subtle ink line edge shadow
     uniforms[21] = _vignette;
     uniforms[22] = _splitToning + _mblMojoTealOrange;
     uniforms[23] = _denoise + _mblCosmoSkin;
@@ -1372,32 +1501,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[28] = _dofFocus;
     uniforms[29] = _dofAngle;
     uniforms[30] = _mathOpsMode;
-    uniforms[31] = _mathOpsMix;
+    uniforms[31] = _sapphireBlendMix;
     uniforms[32] = _filmConvertNitrate + _mblRenoirHalation;
     uniforms[33] = _fourColorGradMix;
 
-    // Master Catmull-Rom Spline Curve
+    // Catmull-Rom Spline Curve Controls
     uniforms[34] = _curveMaster[0];
     uniforms[35] = _curveMaster[1];
     uniforms[36] = _curveMaster[2];
     uniforms[37] = _curveMaster[3];
     uniforms[38] = _curveMaster[4];
 
-    // Red Spline Curve
+    uniforms[39] = _filmGrain;
+    uniforms[40] = _tonemapMode;
+
+    // Red Curve
     uniforms[42] = _curveRed[0];
     uniforms[43] = _curveRed[1];
     uniforms[44] = _curveRed[2];
     uniforms[45] = _curveRed[3];
     uniforms[46] = _curveRed[4];
 
-    // Green Spline Curve
+    // Green Curve
     uniforms[50] = _curveGreen[0];
     uniforms[51] = _curveGreen[1];
     uniforms[52] = _curveGreen[2];
     uniforms[53] = _curveGreen[3];
     uniforms[54] = _curveGreen[4];
 
-    // Blue Spline Curve
+    // Blue Curve
     uniforms[58] = _curveBlue[0];
     uniforms[59] = _curveBlue[1];
     uniforms[60] = _curveBlue[2];
@@ -1453,32 +1585,34 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _gamma = 1.0;
       _hue = 0.0;
       _temperature = 6500.0;
+      _shadows = 0.0;
+      _highlights = 0.0;
       _bloomIntensity = 0.0;
       _bloomSpread = 0.40;
       _bloomThreshold = 0.45;
       _bloomRadius = 1.0;
       _edgeGlowTint = 0.0;
+      _edgeDarken = 0.0;
+      _darkOutlines = 0.0;
       _anamorphicFlare = 0.0;
       _flareAmount = 0.50;
       _lightRays = 0.0;
       _lightRaysDecay = 0.90;
-      _shadows = 0.0;
-      _highlights = 0.0;
-      _darkOutlines = 0.0;
-      _edgeDarken = 0.0;
       _vignette = 0.0;
       _splitToning = 0.0;
       _denoise = 0.0;
       _blackCrush = 0.0;
+      _filmGrain = 0.0;
       _flickerIntensity = 0.0;
       _flickerSpeed = 3.0;
       _depthOfField = 0.0;
       _dofFocus = 0.5;
       _dofAngle = 0.0;
+      _sapphireBlendMix = 0.0;
       _mathOpsMode = 0.0;
-      _mathOpsMix = 0.0;
       _filmConvertNitrate = 0.0;
       _fourColorGradMix = 0.0;
+      _tonemapMode = 1.0;
       _mblCosmoSkin = 0.0;
       _mblRenoirHalation = 0.0;
       _mblColoristaLift = 0.0;
@@ -1494,7 +1628,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // 1:1 CALIBRATED ANIME WIS & MAGIC BULLET PRESETS
   void _applyPreset(String name) {
     setState(() {
       _resetAllEffects();
@@ -1512,6 +1645,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _blackCrush = 0.28;
           _darkOutlines = 0.35;
           _vignette = 0.28;
+          _filmGrain = 0.20;
           _curveMaster = [0.0, 0.22, 0.50, 0.78, 1.0];
           break;
 
@@ -1527,6 +1661,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _bloomThreshold = 0.42;
           _edgeGlowTint = 1.0;
           _darkOutlines = 0.52;
+          _edgeDarken = 0.25;
           _blackCrush = 0.30;
           _vignette = 0.16;
           _curveMaster = [0.0, 0.20, 0.50, 0.82, 1.0];
@@ -1560,6 +1695,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _bloomThreshold = 0.40;
           _edgeGlowTint = 2.0;
           _darkOutlines = 0.48;
+          _edgeDarken = 0.30;
           _blackCrush = 0.26;
           _vignette = 0.18;
           _curveMaster = [0.0, 0.18, 0.48, 0.82, 1.0];
@@ -1594,6 +1730,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _bloomSpread = 0.35;
           _bloomThreshold = 0.44;
           _darkOutlines = 0.60;
+          _edgeDarken = 0.40;
           _blackCrush = 0.36;
           _vignette = 0.20;
           _curveMaster = [0.0, 0.16, 0.48, 0.86, 1.0];
@@ -1627,6 +1764,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _bloomSpread = 0.32;
           _bloomThreshold = 0.46;
           _darkOutlines = 0.65;
+          _edgeDarken = 0.50;
           _blackCrush = 0.42;
           _vignette = 0.30;
           _curveMaster = [0.0, 0.14, 0.45, 0.85, 1.0];
@@ -1684,7 +1822,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // EXPORT BOTTOM SHEET (STRICT COMPATIBILITY MATRIX & 4K OPTION)
+  // EXPORT BOTTOM SHEET
   void _showExportSheet() {
     if (_isImage) {
       _exportStaticImage();
@@ -1740,8 +1878,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ],
                     ),
                     Text(
-                      '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • HW: Vulkan FP16/32',
-                      style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.bold),
+                      '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • Engine: Vulkan FP32',
+                      style: const TextStyle(color: kAquamarine, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
 
@@ -1753,7 +1891,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: containers.map((c) => ChoiceChip(
                         label: Text(c),
                         selected: selectedContainer == c,
-                        selectedColor: const Color(0xFF00E5FF),
+                        selectedColor: kAquamarine,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1776,7 +1914,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: availableCodecs.map((codec) => ChoiceChip(
                         label: Text(codec),
                         selected: selectedCodec == codec,
-                        selectedColor: const Color(0xFF00E5FF),
+                        selectedColor: kAquamarine,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1795,7 +1933,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('8-bit'),
                             selected: selectedBitDepth == '8-bit',
-                            selectedColor: const Color(0xFF00E5FF),
+                            selectedColor: kAquamarine,
                             backgroundColor: const Color(0xFF18181E),
                             labelStyle: TextStyle(color: selectedBitDepth == '8-bit' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                             onSelected: (_) => setStateModal(() => selectedBitDepth = '8-bit'),
@@ -1806,7 +1944,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('10-bit'),
                             selected: selectedBitDepth == '10-bit',
-                            selectedColor: const Color(0xFF00E5FF),
+                            selectedColor: kAquamarine,
                             disabledColor: const Color(0xFF121215),
                             backgroundColor: const Color(0xFF18181E),
                             labelStyle: TextStyle(
@@ -1821,7 +1959,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('16-bit (MKV)'),
                             selected: selectedBitDepth == '16-bit',
-                            selectedColor: const Color(0xFF00E5FF),
+                            selectedColor: kAquamarine,
                             disabledColor: const Color(0xFF121215),
                             backgroundColor: const Color(0xFF18181E),
                             labelStyle: TextStyle(
@@ -1843,7 +1981,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: resolutions.map((res) => ChoiceChip(
                         label: Text(res),
                         selected: selectedRes == res,
-                        selectedColor: const Color(0xFF00E5FF),
+                        selectedColor: kLavender,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1861,7 +1999,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: fpsOptions.map((fps) => ChoiceChip(
                         label: Text(fps),
                         selected: selectedFps == fps,
-                        selectedColor: const Color(0xFF00E5FF),
+                        selectedColor: kAquamarine,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1879,7 +2017,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: bitrateOptions.map((bit) => ChoiceChip(
                         label: Text(bit),
                         selected: selectedBitrate == bit,
-                        selectedColor: const Color(0xFF00E5FF),
+                        selectedColor: kLavender,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedBitrate == bit ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1897,7 +2035,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _exportVideo(selectedRes, selectedFps, selectedBitrate, selectedContainer, selectedCodec, selectedBitDepth);
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00E5FF),
+                          backgroundColor: kAquamarine,
                           foregroundColor: Colors.black,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1971,7 +2109,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // VIDEO MASTER EXPORT (16-Bit RGB48BE Extraction & Matrix-Verified Encoding)
+  // VIDEO MASTER EXPORT
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -2014,7 +2152,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             children: [
               ValueListenableBuilder<double>(
                 valueListenable: progressNotifier,
-                builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: const Color(0xFF00E5FF), backgroundColor: Colors.white12),
+                builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: kAquamarine, backgroundColor: Colors.white12),
               ),
               const SizedBox(height: 12),
               ValueListenableBuilder<String>(
@@ -2103,7 +2241,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final silentFile = File(silentOutputPath);
       if (await silentFile.exists()) await silentFile.delete();
 
-      // Encode using ExportMatrix
       final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
         fps: targetFps,
         framePattern: '${processedDir.path}/frame_%05d.png',
@@ -2115,7 +2252,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
       await FFmpegKit.execute(encodeCmd);
 
-      // Mux with audio if present
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       Directory exportDir = Directory('/storage/emulated/0/Download');
       if (!await exportDir.exists()) {
@@ -2123,7 +2259,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         exportDir = extDir ?? await getApplicationDocumentsDirectory();
       }
 
-      // Syntax fix for variable interpolation
       final cleanCodec = codec.split(' ').first;
       final fileName = 'AEReality_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
       final finalOutputFile = File('${exportDir.path}/$fileName');
@@ -2151,28 +2286,53 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       appBar: AppBar(
         title: Text(widget.projectName ?? 'AEReality Editor'),
         actions: [
+          // File Importer from within Timeline (With full audio destruction on reload)
           IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white70),
+            icon: const Icon(Icons.folder_open_rounded, color: kLavender),
+            tooltip: 'Import New Footage/Art',
+            onPressed: () async {
+              final result = await FilePicker.platform.pickFiles(
+                type: FileType.custom,
+                allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
+              );
+              if (result != null && result.files.single.path != null) {
+                _loadMedia(result.files.single.path!);
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.save_rounded, color: kLavenderSoft),
+            tooltip: 'Save Session',
+            onPressed: () async {
+              await _autoSaveProject();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project saved successfully!'), backgroundColor: Colors.teal));
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
             tooltip: 'Reset Grading',
             onPressed: _resetAllEffects,
           ),
+          // Movie action film taker icon for export
           IconButton(
-            icon: const Icon(Icons.download_rounded, color: Color(0xFF00E5FF)),
-            tooltip: 'Export Master',
+            icon: const Icon(Icons.movie_creation_outlined, color: kAquamarine),
+            tooltip: 'Master Render Pipeline',
             onPressed: _showExportSheet,
           ),
         ],
       ),
       body: Column(
         children: [
-          // 1. Interactive Preview Canvas Stage
+          // 1. Stage / Canvas
           Expanded(
-            flex: 5,
+            flex: _isFullScreen ? 10 : 5,
             child: Center(
               child: AspectRatio(
                 aspectRatio: _getAspectRatioValue(_selectedRatio),
                 child: Container(
-                  margin: const EdgeInsets.all(8),
+                  margin: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     color: Colors.black,
                     borderRadius: BorderRadius.circular(8),
@@ -2194,43 +2354,68 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             ),
                           ),
                         ),
+                      // Main Processed Texture Display with Direct Fallback
                       if (_processedImage != null)
                         RawImage(image: _processedImage, fit: BoxFit.contain)
+                      else if (!_isImage && _controller != null && _controller!.value.isInitialized)
+                        // Immediate direct live feed fallback if GPU is compiling shader
+                        VideoPlayer(_controller!)
                       else
-                        const Center(
-                          child: CircularProgressIndicator(color: Color(0xFF00E5FF)),
-                        ),
-                      if (!_isImage && _controller != null)
-                        Positioned(
-                          bottom: 12,
-                          left: 12,
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                if (_controller!.value.isPlaying) {
-                                  _controller!.pause();
-                                  _isPlaying = false;
-                                } else {
-                                  _controller!.play();
-                                  _isPlaying = true;
-                                }
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white24),
+                        const Center(child: CircularProgressIndicator(color: kAquamarine)),
+
+                      // Canvas Controls (Play/Pause & Fullscreen)
+                      Positioned(
+                        bottom: 10,
+                        left: 10,
+                        child: Row(
+                          children: [
+                            if (!_isImage && _controller != null)
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    if (_controller!.value.isPlaying) {
+                                      _controller!.pause();
+                                      _isPlaying = false;
+                                    } else {
+                                      _controller!.play();
+                                      _isPlaying = true;
+                                    }
+                                  });
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: Icon(
+                                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                ),
                               ),
-                              child: Icon(
-                                _isPlaying ? Icons.pause : Icons.play_arrow,
-                                color: Colors.white,
-                                size: 18,
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () => setState(() => _isFullScreen = !_isFullScreen),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                                child: Icon(
+                                  _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
+                      ),
                     ],
                   ),
                 ),
@@ -2238,49 +2423,53 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
           ),
 
-          // 2. Tab Navigation Bar
-          Container(
-            color: const Color(0xFF101014),
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: const Color(0xFF00E5FF),
-              labelColor: const Color(0xFF00E5FF),
-              unselectedLabelColor: Colors.white38,
-              isScrollable: true,
-              labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-              tabs: const [
-                Tab(text: 'PRESETS'),
-                Tab(text: 'GRADE'),
-                Tab(text: 'CURVES'),
-                Tab(text: 'GLOWS'),
-                Tab(text: 'MAGIC BULLET'),
-              ],
-            ),
-          ),
-
-          // 3. Tab Views
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: const Color(0xFF0A0A0D),
-              child: TabBarView(
+          if (!_isFullScreen) ...[
+            // 2. Tab Navigation Bar
+            Container(
+              color: kSurfaceDark,
+              child: TabBar(
                 controller: _tabController,
-                children: [
-                  _buildPresetsTab(),
-                  _buildGradingTab(),
-                  _buildCurvesTab(),
-                  _buildGlowsTab(),
-                  _buildMagicBulletTab(),
+                indicatorColor: kAquamarine,
+                labelColor: kAquamarine,
+                unselectedLabelColor: Colors.white38,
+                isScrollable: true,
+                labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                tabs: const [
+                  Tab(text: 'PRESETS'),
+                  Tab(text: 'GRADE'),
+                  Tab(text: 'CURVES'),
+                  Tab(text: 'GLOWS'),
+                  Tab(text: 'SAPPHIRE/AE'),
+                  Tab(text: 'MAGIC BULLET'),
                 ],
               ),
             ),
-          ),
+
+            // 3. Tab Views
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: kBackgroundDark,
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildPresetsTab(),
+                    _buildGradingTab(),
+                    _buildCurvesTab(),
+                    _buildGlowsTab(),
+                    _buildSapphireTab(),
+                    _buildMagicBulletTab(),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  // --- TAB 1: 1:1 CALIBRATED PRESETS ---
+  // --- TAB 1: PRESETS ---
   Widget _buildPresetsTab() {
     final presets = [
       {'name': 'adevob+junho', 'desc': 'Warm golden speculars, crisp ink outlines, clean contrast', 'color': 0xFFFFB300},
@@ -2308,7 +2497,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFF14141A),
+              color: kCardDark,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white.withOpacity(0.06)),
             ),
@@ -2333,7 +2522,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ],
                   ),
                 ),
-                const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),
+                const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
               ],
             ),
           ),
@@ -2342,25 +2531,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 2: COLOR GRADING CONTROLS ---
+  // --- TAB 2: PRIMARY GRADING (RESTORED SLIDERS) ---
   Widget _buildGradingTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
         _buildSliderRow('Contrast (0.18 Mid-Gray Pivot)', _contrast, 0.5, 2.5, (v) => setState(() => _contrast = v)),
+        _buildSliderRow('Highlights', _highlights, -1.0, 1.0, (v) => setState(() => _highlights = v)),
+        _buildSliderRow('Shadows', _shadows, -1.0, 1.0, (v) => setState(() => _shadows = v)),
         _buildSliderRow('Black Crush', _blackCrush, 0.0, 1.0, (v) => setState(() => _blackCrush = v)),
         _buildSliderRow('Gamma Curve', _gamma, 0.4, 2.0, (v) => setState(() => _gamma = v)),
         _buildSliderRow('Saturation (Headroom-Safe)', _saturation, 0.0, 2.5, (v) => setState(() => _saturation = v)),
+        _buildSliderRow('Hue Shift', _hue, -0.5, 0.5, (v) => setState(() => _hue = v)),
         _buildSliderRow('Exposure / Brightness', _brightness, -1.0, 1.0, (v) => setState(() => _brightness = v)),
-        _buildSliderRow('Micro-Sharpness', _sharpness, 0.0, 1.5, (v) => setState(() => _sharpness = v)),
-        _buildSliderRow('Anime Ink Lines (Sobel)', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
+        _buildSliderRow('Micro-Sharpness (With Edge Halo)', _sharpness, 0.0, 1.5, (v) => setState(() => _sharpness = v)),
+        _buildSliderRow('Split Toning (Subtle Push)', _splitToning, 0.0, 1.0, (v) => setState(() => _splitToning = v)),
+        _buildSliderRow('Denoise (Bilateral Filter)', _denoise, 0.0, 1.0, (v) => setState(() => _denoise = v)),
+        _buildSliderRow('Film Grain & Micro-Texture', _filmGrain, 0.0, 1.0, (v) => setState(() => _filmGrain = v)),
+        _buildSliderRow('Consistent Flicker Intensity', _flickerIntensity, 0.0, 1.0, (v) => setState(() => _flickerIntensity = v)),
+        _buildSliderRow('Consistent Flicker Speed', _flickerSpeed, 1.0, 10.0, (v) => setState(() => _flickerSpeed = v)),
         _buildSliderRow('Vignette', _vignette, 0.0, 1.0, (v) => setState(() => _vignette = v)),
         _buildSliderRow('Color Temperature (K)', _temperature, 3000.0, 9500.0, (v) => setState(() => _temperature = v)),
       ],
     );
   }
 
-  // --- TAB 3: 5-POINT SPLINE CURVES ---
+  // --- TAB 3: SPLINE CURVES (WITH BOTH INTERACTIVE GRAPH & SLIDERS) ---
   Widget _buildCurvesTab() {
     final channelColors = [Colors.white, Colors.redAccent, Colors.greenAccent, Colors.blueAccent];
     final channelNames = ['RGB Master', 'Red', 'Green', 'Blue'];
@@ -2388,7 +2584,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   label: Text(channelNames[idx]),
                   selected: isSel,
                   selectedColor: channelColors[idx].withOpacity(0.25),
-                  backgroundColor: const Color(0xFF14141A),
+                  backgroundColor: kCardDark,
                   labelStyle: TextStyle(
                     color: isSel ? channelColors[idx] : Colors.white60,
                     fontWeight: FontWeight.bold,
@@ -2401,7 +2597,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               );
             }),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           SplineCurveEditor(
             points: currentPts,
             curveColor: channelColors[_selectedCurveChannel],
@@ -2419,35 +2615,40 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               _autoSaveProject();
             },
           ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextButton.icon(
-                onPressed: () {
-                  setState(() {
-                    switch (_selectedCurveChannel) {
-                      case 1: _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0]; break;
-                      case 2: _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0]; break;
-                      case 3: _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0]; break;
-                      case 0:
-                      default: _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0]; break;
-                    }
-                  });
-                  if (_isImage) _processStaticImage();
-                  _autoSaveProject();
-                },
-                icon: const Icon(Icons.undo, color: Colors.white54, size: 14),
-                label: const Text('Linear Reset', style: TextStyle(color: Colors.white54, fontSize: 11)),
-              ),
-            ],
-          ),
+          const SizedBox(height: 12),
+          const Text('CURVE POINT SLIDERS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          // Sliders for each of the 5 curve points
+          ...List.generate(5, (pIdx) {
+            final labels = ['Blacks (P0)', 'Shadows (P1)', 'Midtones (P2)', 'Highlights (P3)', 'Whites (P4)'];
+            return _buildSliderRow(
+              labels[pIdx],
+              currentPts[pIdx],
+              0.0,
+              1.0,
+              (v) {
+                setState(() {
+                  final updated = List<double>.from(currentPts);
+                  updated[pIdx] = v;
+                  switch (_selectedCurveChannel) {
+                    case 1: _curveRed = updated; break;
+                    case 2: _curveGreen = updated; break;
+                    case 3: _curveBlue = updated; break;
+                    case 0:
+                    default: _curveMaster = updated; break;
+                  }
+                });
+                if (_isImage) _processStaticImage();
+                _autoSaveProject();
+              },
+            );
+          }),
         ],
       ),
     );
   }
 
-  // --- TAB 4: RING-FREE GAUSSIAN GLOWS ---
+  // --- TAB 4: GLOWS & LINEWORK (WITH BLACK / INK GLOW OPTION & EDGE DARKEN) ---
   Widget _buildGlowsTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2456,7 +2657,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Bloom Spread (Smoothness)', _bloomSpread, 0.1, 1.0, (v) => setState(() => _bloomSpread = v)),
         _buildSliderRow('Bright-Pass Threshold', _bloomThreshold, 0.1, 0.9, (v) => setState(() => _bloomThreshold = v)),
         const SizedBox(height: 10),
-        const Text('BLOOM TINT HARMONY', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const Text('BLOOM TINT HARMONY (INCLUDING INK BLACK GLOW)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         Wrap(
           spacing: 8,
@@ -2464,7 +2665,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ChoiceChip(
               label: const Text('Neutral'),
               selected: _edgeGlowTint == 0.0,
-              selectedColor: const Color(0xFF00E5FF),
+              selectedColor: kAquamarine,
               backgroundColor: const Color(0xFF18181E),
               onSelected: (_) => setState(() => _edgeGlowTint = 0.0),
             ),
@@ -2489,18 +2690,68 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               backgroundColor: const Color(0xFF18181E),
               onSelected: (_) => setState(() => _edgeGlowTint = 4.0),
             ),
+            ChoiceChip(
+              label: const Text('Black / Ink Shadow'),
+              selected: _edgeGlowTint == 5.0,
+              selectedColor: Colors.white54,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 5.0),
+            ),
           ],
         ),
         const SizedBox(height: 14),
+        _buildSliderRow('Edge Darken (Subtle Line-Art Shadow)', _edgeDarken, 0.0, 1.0, (v) => setState(() => _edgeDarken = v)),
+        _buildSliderRow('Sobel Ink Outlines', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
         _buildSliderRow('Anamorphic 1D Flare', _anamorphicFlare, 0.0, 1.0, (v) => setState(() => _anamorphicFlare = v)),
-        _buildSliderRow('Flare Horizontal Stretch', _flareAmount, 0.1, 1.0, (v) => setState(() => _flareAmount = v)),
+        _buildSliderRow('Flare Stretch', _flareAmount, 0.1, 1.0, (v) => setState(() => _flareAmount = v)),
         _buildSliderRow('Light Rays / God Rays', _lightRays, 0.0, 1.0, (v) => setState(() => _lightRays = v)),
         _buildSliderRow('Light Rays Decay', _lightRaysDecay, 0.70, 0.98, (v) => setState(() => _lightRaysDecay = v)),
       ],
     );
   }
 
-  // --- TAB 5: MAGIC BULLET SUITE & 3-WAY COLOR WHEELS ---
+  // --- TAB 5: SAPPHIRE & AFTER EFFECTS SUITE ---
+  Widget _buildSapphireTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        const Text('HDR TONEMAPPING OPERATOR', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('Off (Linear)'),
+              selected: _tonemapMode == 0.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 0.0),
+            ),
+            ChoiceChip(
+              label: const Text('Reinhard'),
+              selected: _tonemapMode == 1.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 1.0),
+            ),
+            ChoiceChip(
+              label: const Text('ACES Filmic'),
+              selected: _tonemapMode == 2.0,
+              selectedColor: kLavender,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 2.0),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _buildSliderRow('Sapphire Blend Mix', _sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _sapphireBlendMix = v)),
+        _buildSliderRow('FilmConvert Nitrate Stock Mix', _filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _filmConvertNitrate = v)),
+        _buildSliderRow('4-Corner Vignette Gradient Mix', _fourColorGradMix, 0.0, 1.0, (v) => setState(() => _fourColorGradMix = v)),
+      ],
+    );
+  }
+
+  // --- TAB 6: MAGIC BULLET SUITE & 3-WAY COLOR WHEELS ---
   Widget _buildMagicBulletTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2513,13 +2764,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ColoristaWheel(
               label: 'LIFT (Shadows)',
               value: _mblColoristaLift,
-              accentColor: const Color(0xFF29B6F6),
+              accentColor: kAquamarine,
               onChanged: (v) => setState(() => _mblColoristaLift = v),
             ),
             ColoristaWheel(
               label: 'GAMMA (Mids)',
               value: _mblColoristaGamma,
-              accentColor: const Color(0xFF66BB6A),
+              accentColor: kLavender,
               onChanged: (v) => setState(() => _mblColoristaGamma = v),
             ),
             ColoristaWheel(
@@ -2542,7 +2793,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
+      padding: const EdgeInsets.only(bottom: 6.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2550,17 +2801,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
-              Text(val.toStringAsFixed(2), style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontFamily: 'monospace')),
+              Text(val.toStringAsFixed(2), style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace')),
             ],
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              trackHeight: 2.5,
-              activeTrackColor: const Color(0xFF00E5FF),
+              trackHeight: 2.2,
+              activeTrackColor: kAquamarine,
               inactiveTrackColor: Colors.white12,
-              thumbColor: Colors.white,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              thumbColor: kLavenderSoft,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
             ),
             child: Slider(
               value: val.clamp(min, max),
