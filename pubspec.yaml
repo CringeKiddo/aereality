@@ -40,7 +40,3 @@ flutter:
 
   assets:
     - assets/shaders/
-    - assets/shaders/aereality_core.spv
-    - assets/shaders/aereality_core_16.spv
-    - assets/shaders/aereality_core_32.spv
-    - assets/shaders/shader.spv
