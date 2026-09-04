@@ -183,7 +183,7 @@ EXPORT_API void init_processor(const uint32_t* spirvCode, size_t spirvSize) {
 
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.queueFamilyIndex = g_ctx.computeFamily;
-    poolInfo.flags = VK_COMMAND_POOL_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     vkCreateCommandPool(g_ctx.device, &poolInfo, nullptr, &g_ctx.commandPool);
 
     createBuffer(66 * sizeof(float),
