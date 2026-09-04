@@ -1295,7 +1295,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     int targetH = (dims['height']! * gPreviewScale).round();
 
     _canvasWidth = (targetW % 2 == 0) ? targetW : targetW + 1;
-    _canvasHeight = (targetH % 2 == 0) ? targetH : targetH + 1;
+    _canvasHeight = (targetH % 2 == 0) ? targetH : targetW + 1;
   }
 
   Future<void> _loadShader() async {
@@ -2183,7 +2183,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final totalFrames = frameFiles.length;
 
       if (totalFrames == 0) {
-        final logs = await extractSession.getAllLogsAsString();
+        // Uses getLogsAsString() for ffmpeg_kit_extended_flutter
+        final logs = await extractSession.getLogsAsString();
         throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No log output"}');
       }
 
@@ -2770,7 +2771,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // SLIDER ROW: ACTIVE TRACK LINE IS NOW LAVENDER (kLavender)
+  // SLIDER ROW: ACTIVE TRACK LINE IS LAVENDER (kLavender)
   Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6.0),
