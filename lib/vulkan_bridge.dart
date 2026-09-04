@@ -1,175 +1,160 @@
+// lib/vulkan_bridge.dart
 import 'dart:ffi';
 import 'dart:typed_data';
-import 'dart:io';
 import 'package:ffi/ffi.dart';
 
-final DynamicLibrary nativeLib = Platform.isAndroid
-    ? DynamicLibrary.open('libvulkan_processor.so')
-    : DynamicLibrary.process();
+typedef InitVulkanC = Int32 Function(Pointer<Uint8> shaderBytes, Int32 length, Int32 precision);
+typedef InitVulkanDart = int Function(Pointer<Uint8> shaderBytes, int length, int precision);
 
-typedef NativeInit = Void Function(Pointer<Uint32> spirv, IntPtr size);
-typedef NativePrecision = Void Function(Int32 mode);
-
-typedef NativeProcess8 = Void Function(
-  Pointer<Uint8> input,
-  Int32 inW,
-  Int32 inH,
-  Int32 outW,
-  Int32 outH,
-  Pointer<Uint8> output,
+typedef ProcessImageC = Void Function(
+  Pointer<Uint8> inputBytes,
+  Int32 inWidth,
+  Int32 inHeight,
+  Pointer<Uint8> outputBytes,
+  Int32 outWidth,
+  Int32 outHeight,
   Pointer<Float> uniforms,
+  Int32 uniformCount,
 );
 
-typedef NativeProcess16 = Void Function(
-  Pointer<Uint16> input,
-  Int32 inW,
-  Int32 inH,
-  Int32 outW,
-  Int32 outH,
-  Pointer<Uint16> output,
-  Pointer<Float> uniforms,
-);
-
-typedef NativeCleanup = Void Function();
-
-typedef DartInit = void Function(Pointer<Uint32> spirv, int size);
-typedef DartPrecision = void Function(int mode);
-typedef DartProcess8 = void Function(
-  Pointer<Uint8> input,
-  int inW,
-  int inH,
-  int outW,
-  int outH,
-  Pointer<Uint8> output,
-  Pointer<Float> uniforms,
-);
-typedef DartProcess16 = void Function(
-  Pointer<Uint16> input,
-  int inW,
-  int inH,
-  int outW,
-  int outH,
-  Pointer<Uint16> output,
-  Pointer<Float> uniforms,
-);
-typedef DartCleanup = void Function();
-
-final initProcessor = nativeLib
-    .lookup<NativeFunction<NativeInit>>('init_processor')
-    .asFunction<DartInit>();
-
-final setPrecisionNative = nativeLib
-    .lookup<NativeFunction<NativePrecision>>('set_engine_precision')
-    .asFunction<DartPrecision>();
-
-final processFrame8 = nativeLib
-    .lookup<NativeFunction<NativeProcess8>>('process_frame')
-    .asFunction<DartProcess8>();
-
-DartProcess16? _processFrame16;
-DartProcess16 get processFrame16 {
-  _processFrame16 ??= nativeLib
-      .lookup<NativeFunction<NativeProcess16>>('process_frame_16')
-      .asFunction<DartProcess16>();
-  return _processFrame16!;
-}
-
-final cleanupProcessor = nativeLib
-    .lookup<NativeFunction<NativeCleanup>>('cleanup_processor')
-    .asFunction<DartCleanup>();
-
-bool _initialized = false;
-bool get isVulkanReady => _initialized;
-const int kUniformCount = 66;
-
-void initVulkan(Uint8List spirv, [int precision = 16]) {
-  if (_initialized) {
-    setEnginePrecision(precision);
-    return;
-  }
-  final ptr = calloc<Uint32>(spirv.length ~/ 4);
-  ptr.asTypedList(spirv.length ~/ 4).setAll(0, spirv.buffer.asUint32List());
-  initProcessor(ptr, spirv.length);
-  calloc.free(ptr);
-  _initialized = true;
-  setEnginePrecision(precision);
-}
-
-void setEnginePrecision(int bits) {
-  if (!_initialized) return;
-  setPrecisionNative(bits);
-}
-
-/// 8-bit path for preview and standard exports
-Uint8List processImage(
-  Uint8List input,
+typedef ProcessImageDart = void Function(
+  Pointer<Uint8> inputBytes,
   int inWidth,
   int inHeight,
+  Pointer<Uint8> outputBytes,
   int outWidth,
   int outHeight,
-  Float32List uniforms,
-) {
-  if (!_initialized) throw Exception('Vulkan not initialized.');
-  final inputPtr = calloc<Uint8>(input.length);
-  inputPtr.asTypedList(input.length).setAll(0, input);
+  Pointer<Float> uniforms,
+  int uniformCount,
+);
 
-  final output = Uint8List(outWidth * outHeight * 4);
-  final outputPtr = calloc<Uint8>(output.length);
+typedef ProcessImage16C = Void Function(
+  Pointer<Uint16> inputBytes,
+  Int32 inWidth,
+  Int32 inHeight,
+  Pointer<Uint16> outputBytes,
+  Int32 outWidth,
+  Int32 outHeight,
+  Pointer<Float> uniforms,
+  Int32 uniformCount,
+);
 
-  final uniformPtr = calloc<Float>(uniforms.length);
-  for (int i = 0; i < uniforms.length; i++) {
-    uniformPtr[i] = uniforms[i];
-  }
-
-  processFrame8(inputPtr, inWidth, inHeight, outWidth, outHeight, outputPtr, uniformPtr);
-  output.setAll(0, outputPtr.asTypedList(output.length));
-
-  calloc.free(inputPtr);
-  calloc.free(outputPtr);
-  calloc.free(uniformPtr);
-  return output;
-}
-
-/// Genuine 16-bit path for 10-bit and 16-bit lossless exports
-Uint16List processImage16(
-  Uint16List input,
+typedef ProcessImage16Dart = void Function(
+  Pointer<Uint16> inputBytes,
   int inWidth,
   int inHeight,
+  Pointer<Uint16> outputBytes,
   int outWidth,
   int outHeight,
-  Float32List uniforms,
-) {
-  if (!_initialized) throw Exception('Vulkan not initialized.');
-  final inputPtr = calloc<Uint16>(input.length);
-  inputPtr.asTypedList(input.length).setAll(0, input);
+  Pointer<Float> uniforms,
+  int uniformCount,
+);
 
-  final output = Uint16List(outWidth * outHeight * 4);
-  final outputPtr = calloc<Uint16>(output.length);
+DynamicLibrary? _lib;
 
-  final uniformPtr = calloc<Float>(uniforms.length);
-  for (int i = 0; i < uniforms.length; i++) {
-    uniformPtr[i] = uniforms[i];
-  }
-
+DynamicLibrary _getLib() {
+  if (_lib != null) return _lib!;
   try {
-    processFrame16(inputPtr, inWidth, inHeight, outWidth, outHeight, outputPtr, uniformPtr);
-    output.setAll(0, outputPtr.asTypedList(output.length));
+    _lib = DynamicLibrary.open('libvulkan_processor.so');
   } catch (_) {
-    // Graceful fallback to 8-bit pipeline if native library lacks 16-bit symbol
-    final in8 = Uint8List(input.length);
-    for (int i = 0; i < input.length; i++) in8[i] = input[i] >> 8;
-    final out8 = processImage(in8, inWidth, inHeight, outWidth, outHeight, uniforms);
-    for (int i = 0; i < output.length; i++) output[i] = out8[i] << 8;
-  } finally {
-    calloc.free(inputPtr);
-    calloc.free(outputPtr);
-    calloc.free(uniformPtr);
+    _lib = DynamicLibrary.process();
   }
-  return output;
+  return _lib!;
 }
 
-void cleanupVulkan() {
-  if (!_initialized) return;
-  cleanupProcessor();
-  _initialized = false;
+bool initVulkan(Uint8List shaderSpv, int precision) {
+  try {
+    final nativeLib = _getLib();
+    final InitVulkanDart initFunc = nativeLib
+        .lookup<NativeFunction<InitVulkanC>>('init_vulkan')
+        .asFunction();
+
+    final ptr = calloc<Uint8>(shaderSpv.length);
+    ptr.asTypedList(shaderSpv.length).setAll(0, shaderSpv);
+
+    final res = initFunc(ptr, shaderSpv.length, precision);
+    calloc.free(ptr);
+    return res == 1;
+  } catch (e) {
+    return false;
+  }
+}
+
+Uint8List processImage(
+  Uint8List inputRgba,
+  int inWidth,
+  int inHeight,
+  int outWidth,
+  int outHeight,
+  Float32List uniforms,
+) {
+  try {
+    final nativeLib = _getLib();
+    final ProcessImageDart procFunc = nativeLib
+        .lookup<NativeFunction<ProcessImageC>>('process_image')
+        .asFunction();
+
+    final inSize = inWidth * inHeight * 4;
+    final outSize = outWidth * outHeight * 4;
+
+    final inPtr = calloc<Uint8>(inSize);
+    inPtr.asTypedList(inSize).setAll(0, inputRgba);
+
+    final outPtr = calloc<Uint8>(outSize);
+
+    final uniPtr = calloc<Float>(uniforms.length);
+    uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
+
+    final result = Uint8List.fromList(outPtr.asTypedList(outSize));
+
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+    calloc.free(uniPtr);
+
+    return result;
+  } catch (e) {
+    // SAFE FALLBACK: Never leave the screen black or stuck in an infinite spinner
+    return inputRgba;
+  }
+}
+
+Uint16List processImage16(
+  Uint16List inputRgba16,
+  int inWidth,
+  int inHeight,
+  int outWidth,
+  int outHeight,
+  Float32List uniforms,
+) {
+  try {
+    final nativeLib = _getLib();
+    final ProcessImage16Dart procFunc = nativeLib
+        .lookup<NativeFunction<ProcessImage16C>>('process_image_16')
+        .asFunction();
+
+    final inSize = inWidth * inHeight * 4;
+    final outSize = outWidth * outHeight * 4;
+
+    final inPtr = calloc<Uint16>(inSize);
+    inPtr.asTypedList(inSize).setAll(0, inputRgba16);
+
+    final outPtr = calloc<Uint16>(outSize);
+
+    final uniPtr = calloc<Float>(uniforms.length);
+    uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
+
+    final result = Uint16List.fromList(outPtr.asTypedList(outSize));
+
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+    calloc.free(uniPtr);
+
+    return result;
+  } catch (e) {
+    return inputRgba16;
+  }
 }
