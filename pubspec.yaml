@@ -1,19 +1,29 @@
 name: aereality_studio
-description: "Vulkan Hardware-Accelerated Video Color Grading & Anime WIS Suite"
+description: "AEReality Studio - High Performance Vulkan Compute & Master Export Suite"
 publish_to: 'none'
+
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.2.0 <4.0.0'
+  flutter: ">=3.16.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  ffmpeg_kit_flutter_full_gpl: ^6.0.3
+
+  # FFmpeg Kit Extended (Modern Flutter 3+ / Android V2 embedding & NDK 26+ compatible)
+  ffmpeg_kit_extended_flutter: ^0.6.2
+
+  # Media playback and file picking
   video_player: ^2.8.2
   file_picker: ^8.0.0
   path_provider: ^2.1.2
+
+  # Frame encoding / decoding (supports 8-bit & 16-bit pipelines)
   image: ^4.1.7
+
+  # Native C++ Vulkan FFI bindings
   ffi: ^2.1.0
 
 dev_dependencies:
@@ -23,5 +33,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
   assets:
-    - assets/shaders/aereality_core.spv
+    - assets/shaders/
