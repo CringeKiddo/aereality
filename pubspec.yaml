@@ -12,7 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Modern FFmpeg Kit Extended with Android V2 embedding
+  # Modern FFmpeg Kit Extended
   ffmpeg_kit_extended_flutter: ^0.6.2
 
   # Media playback and file picking
@@ -31,9 +31,9 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^3.0.0
 
-# Instructs the build hook to download the full GPL package containing x264, x265, vid.stab, etc.
+# Instructs the build hook to download the full package containing all video & audio encoders
 ffmpeg_kit_extended_config:
-  type: full-gpl
+  type: full
 
 flutter:
   uses-material-design: true
