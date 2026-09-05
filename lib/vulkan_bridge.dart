@@ -4,126 +4,160 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
-typedef InitVulkanC = Bool Function(Pointer<Uint8> shaderCode, Int32 codeSize, Int32 precisionMode);
-typedef InitVulkanDart = bool Function(Pointer<Uint8> shaderCode, int codeSize, int precisionMode);
+typedef InitVulkanC = Int32 Function(Pointer<Uint8> shaderBytes, Int32 length, Int32 precision);
+typedef InitVulkanDart = int Function(Pointer<Uint8> shaderBytes, int length, int precision);
 
 typedef ProcessImageC = Void Function(
-    Pointer<Uint8> inputPixels,
-    Int32 inputWidth,
-    Int32 inputHeight,
-    Pointer<Uint8> outputPixels,
-    Int32 outputWidth,
-    Int32 outputHeight,
-    Pointer<Float> uniforms,
-    Int32 uniformCount);
+  Pointer<Uint8> inputBytes,
+  Int32 inWidth,
+  Int32 inHeight,
+  Pointer<Uint8> outputBytes,
+  Int32 outWidth,
+  Int32 outHeight,
+  Pointer<Float> uniforms,
+  Int32 uniformCount,
+);
 
 typedef ProcessImageDart = void Function(
-    Pointer<Uint8> inputPixels,
-    int inputWidth,
-    int inputHeight,
-    Pointer<Uint8> outputPixels,
-    int outputWidth,
-    int outputHeight,
-    Pointer<Float> uniforms,
-    int uniformCount);
+  Pointer<Uint8> inputBytes,
+  int inWidth,
+  int inHeight,
+  Pointer<Uint8> outputBytes,
+  int outWidth,
+  int outHeight,
+  Pointer<Float> uniforms,
+  int uniformCount,
+);
 
 typedef ProcessImage16C = Void Function(
-    Pointer<Uint16> inputPixels,
-    Int32 inputWidth,
-    Int32 inputHeight,
-    Pointer<Uint16> outputPixels,
-    Int32 outputWidth,
-    Int32 outputHeight,
-    Pointer<Float> uniforms,
-    Int32 uniformCount);
+  Pointer<Uint16> inputBytes,
+  Int32 inWidth,
+  Int32 inHeight,
+  Pointer<Uint16> outputBytes,
+  Int32 outWidth,
+  Int32 outHeight,
+  Pointer<Float> uniforms,
+  Int32 uniformCount,
+);
 
 typedef ProcessImage16Dart = void Function(
-    Pointer<Uint16> inputPixels,
-    int inputWidth,
-    int inputHeight,
-    Pointer<Uint16> outputPixels,
-    int outputWidth,
-    int outputHeight,
-    Pointer<Float> uniforms,
-    int uniformCount);
+  Pointer<Uint16> inputBytes,
+  int inWidth,
+  int inHeight,
+  Pointer<Uint16> outputBytes,
+  int outWidth,
+  int outHeight,
+  Pointer<Float> uniforms,
+  int uniformCount,
+);
 
-final DynamicLibrary _nativeLib = Platform.isAndroid
-    ? DynamicLibrary.open('libvulkan_processor.so')
-    : DynamicLibrary.process();
+DynamicLibrary? _lib;
 
-final InitVulkanDart _initVulkan =
-    _nativeLib.lookup<NativeFunction<InitVulkanC>>('initVulkan').asFunction();
+DynamicLibrary _getLib() {
+  if (_lib != null) return _lib!;
+  try {
+    _lib = DynamicLibrary.open('libvulkan_processor.so');
+  } catch (_) {
+    _lib = DynamicLibrary.process();
+  }
+  return _lib!;
+}
 
-final ProcessImageDart _processImage =
-    _nativeLib.lookup<NativeFunction<ProcessImageC>>('processImage').asFunction();
+// Helper to look up both snake_case and camelCase safely
+Pointer<NativeFunction<T>> _lookupSymbol<T extends Function>(DynamicLibrary lib, String snakeName, String camelName) {
+  try {
+    return lib.lookup<NativeFunction<T>>(snakeName);
+  } catch (_) {
+    return lib.lookup<NativeFunction<T>>(camelName);
+  }
+}
 
-final ProcessImage16Dart _processImage16 =
-    _nativeLib.lookup<NativeFunction<ProcessImage16C>>('processImage16').asFunction();
+bool initVulkan(Uint8List shaderSpv, int precision) {
+  try {
+    final nativeLib = _getLib();
+    final InitVulkanDart initFunc = _lookupSymbol<InitVulkanC>(nativeLib, 'init_vulkan', 'initVulkan').asFunction();
 
-bool initVulkan(Uint8List shaderSpv, int precisionMode) {
-  final Pointer<Uint8> ptr = malloc.allocate<Uint8>(shaderSpv.length);
-  final Uint8List nativeBytes = ptr.asTypedList(shaderSpv.length);
-  nativeBytes.setAll(0, shaderSpv);
+    final ptr = calloc<Uint8>(shaderSpv.length);
+    ptr.asTypedList(shaderSpv.length).setAll(0, shaderSpv);
 
-  final bool result = _initVulkan(ptr, shaderSpv.length, precisionMode);
-  malloc.free(ptr);
-  return result;
+    final res = initFunc(ptr, shaderSpv.length, precision);
+    calloc.free(ptr);
+    return res == 1;
+  } catch (e) {
+    return false;
+  }
 }
 
 Uint8List processImage(
-  Uint8List inputPixels,
+  Uint8List inputRgba,
   int inWidth,
   int inHeight,
   int outWidth,
   int outHeight,
   Float32List uniforms,
 ) {
-  final int inSize = inWidth * inHeight * 4;
-  final int outSize = outWidth * outHeight * 4;
+  try {
+    final nativeLib = _getLib();
+    final ProcessImageDart procFunc = _lookupSymbol<ProcessImageC>(nativeLib, 'process_image', 'processImage').asFunction();
 
-  final Pointer<Uint8> inPtr = malloc.allocate<Uint8>(inSize);
-  final Pointer<Uint8> outPtr = malloc.allocate<Uint8>(outSize);
-  final Pointer<Float> uniformPtr = malloc.allocate<Float>(uniforms.length * sizeOf<Float>());
+    final inSize = inWidth * inHeight * 4;
+    final outSize = outWidth * outHeight * 4;
 
-  inPtr.asTypedList(inSize).setAll(0, inputPixels);
-  uniformPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    final inPtr = calloc<Uint8>(inSize);
+    inPtr.asTypedList(inSize).setAll(0, inputRgba);
 
-  _processImage(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniformPtr, uniforms.length);
+    final outPtr = calloc<Uint8>(outSize);
 
-  final Uint8List result = Uint8List.fromList(outPtr.asTypedList(outSize));
+    final uniPtr = calloc<Float>(uniforms.length);
+    uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
 
-  malloc.free(inPtr);
-  malloc.free(outPtr);
-  malloc.free(uniformPtr);
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
 
-  return result;
+    final result = Uint8List.fromList(outPtr.asTypedList(outSize));
+
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+    calloc.free(uniPtr);
+
+    return result;
+  } catch (e) {
+    return inputRgba;
+  }
 }
 
 Uint16List processImage16(
-  Uint16List inputPixels,
+  Uint16List inputRgba16,
   int inWidth,
   int inHeight,
   int outWidth,
   int outHeight,
   Float32List uniforms,
 ) {
-  final int inPixelCount = inWidth * inHeight * 4;
-  final int outPixelCount = outWidth * outHeight * 4;
+  try {
+    final nativeLib = _getLib();
+    final ProcessImage16Dart procFunc = _lookupSymbol<ProcessImage16C>(nativeLib, 'process_image_16', 'processImage16').asFunction();
 
-  final Pointer<Uint16> inPtr = malloc.allocate<Uint16>(inPixelCount * sizeOf<Uint16>());
-  final Pointer<Uint16> outPtr = malloc.allocate<Uint16>(outPixelCount * sizeOf<Uint16>());
-  final Pointer<Float> uniformPtr = malloc.allocate<Float>(uniforms.length * sizeOf<Float>());
+    final inSize = inWidth * inHeight * 4;
+    final outSize = outWidth * outHeight * 4;
 
-  inPtr.asTypedList(inPixelCount).setAll(0, inputPixels);
-  uniformPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    final inPtr = calloc<Uint16>(inSize);
+    inPtr.asTypedList(inSize).setAll(0, inputRgba16);
 
-  _processImage16(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniformPtr, uniforms.length);
+    final outPtr = calloc<Uint16>(outSize);
 
-  final Uint16List result = Uint16List.fromList(outPtr.asTypedList(outPixelCount));
+    final uniPtr = calloc<Float>(uniforms.length);
+    uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
 
-  malloc.free(inPtr);
-  malloc.free(outPtr);
-  malloc.free(uniformPtr);
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
 
-  return result;
+    final result = Uint16List.fromList(outPtr.asTypedList(outSize));
+
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+    calloc.free(uniPtr);
+
+    return result;
+  } catch (e) {
+    return inputRgba16;
+  }
 }
