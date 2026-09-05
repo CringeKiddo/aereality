@@ -17,9 +17,10 @@ import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
 
-// Aesthetic Palette: Radiant Aquamarine, Gold Highlights, Deep Luxury Carbon
+// Aesthetic Palette: Radiant Aquamarine, Electric Cyan, Gold Highlights, Deep Luxury Carbon
 const Color kAquamarine = Color(0xFF7FFFD4);
 const Color kAquamarineDark = Color(0xFF45B39D);
+const Color kCyanAccent = Color(0xFF00FFFF);
 const Color kGold = Color(0xFFFFD700);
 const Color kLavenderSoft = Color(0xFFE6E6FA);
 const Color kSurfaceDark = Color(0xFF101015);
@@ -54,7 +55,7 @@ class AERealityApp extends StatelessWidget {
         primaryColor: kAquamarine,
         colorScheme: const ColorScheme.dark(
           primary: kAquamarine,
-          secondary: kAquamarine,
+          secondary: kCyanAccent,
           surface: kCardDark,
         ),
         appBarTheme: const AppBarTheme(
@@ -132,9 +133,7 @@ class ExportMatrix {
             ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le -profile:v main10'
             : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
       } else {
-        codecFlags = is10
-            ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le'
-            : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
+        codecFlags = is10 ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
       }
     } else if (container == 'WebM') {
       if (codec.contains('VP9')) {
@@ -142,9 +141,7 @@ class ExportMatrix {
             ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
             : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
       } else {
-        codecFlags = is10
-            ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le'
-            : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
+        codecFlags = is10 ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
       }
     } else if (container == 'MOV') {
       if (codec.contains('H.264')) {
@@ -164,9 +161,7 @@ class ExportMatrix {
           codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p';
         }
       } else if (codec.contains('H.265')) {
-        codecFlags = is10
-            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le'
-            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
+        codecFlags = is10 ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le' : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
       } else if (codec.contains('VP9')) {
         codecFlags = is10
             ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
@@ -887,7 +882,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 }
 
 // ============================================================================
-// 5. INTERACTIVE SPLINE CURVE EDITOR WIDGET
+// 5. SPLINE CURVE EDITOR & PAINTER
 // ============================================================================
 class SplineCurveEditor extends StatefulWidget {
   final List<double> points;
@@ -1063,7 +1058,7 @@ class _CurvePainter extends CustomPainter {
 }
 
 // ============================================================================
-// 6. COLORISTA WHEEL
+// 6. COLORISTA 3-WAY WHEEL
 // ============================================================================
 class ColoristaWheel extends StatelessWidget {
   final String label;
@@ -1215,10 +1210,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   late TabController _tabController;
 
   ui.Image? _processedImage;
-  Timer? _previewTimer;
-  bool _isProcessingFrame = false;
+  final GlobalKey _activeCanvasKey = GlobalKey();
 
-  // Render texture buffer dimensions
   int _renderWidth = 720;
   int _renderHeight = 900;
 
@@ -1304,7 +1297,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       targetW = (targetH * ratio).round();
     }
 
-    // Must be exact multiples of 16 for Vulkan compute workgroups
+    // 16-pixel workgroup boundary alignment
     targetW = ((targetW + 15) ~/ 16) * 16;
     targetH = ((targetH + 15) ~/ 16) * 16;
 
@@ -1313,11 +1306,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _updateDimensions(int srcW, int srcH) {
     final dims = _calculateTargetDimensions('720p', _selectedRatio);
-    int targetW = (dims['width']! * gPreviewScale).round();
-    int targetH = (dims['height']! * gPreviewScale).round();
-
-    _renderWidth = ((targetW + 15) ~/ 16) * 16;
-    _renderHeight = ((targetH + 15) ~/ 16) * 16;
+    _renderWidth = dims['width']!;
+    _renderHeight = dims['height']!;
   }
 
   Future<void> _loadShader() async {
@@ -1325,7 +1315,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       'assets/shaders/aereality_core.spv',
       'assets/shaders/shader.spv',
       'assets/shaders/aereality_core_32.spv',
-      'assets/shaders/aereality_core_16.spv',
     ];
 
     Uint8List? shaderBytes;
@@ -1346,7 +1335,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final ext = path.split('.').last.toLowerCase();
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
 
-    _previewTimer?.cancel();
     if (_controller != null) {
       await _controller!.pause();
       await _controller!.dispose();
@@ -1366,7 +1354,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (decoded != null) {
         _cachedRawImage = decoded;
         _updateDimensions(decoded.width, decoded.height);
-        _processStaticImage();
+        _applyGrade();
       }
     } else {
       _cachedRawImage = null;
@@ -1380,93 +1368,47 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _controller!.play();
           _controller!.setLooping(true);
           _isPlaying = true;
-          _startVideoExtractPreview(path);
+          _applyGrade();
         });
     }
 
     _autoSaveProject();
   }
 
-  // Pure decoupled frame sampler: Extracts the real video frame cleanly without RepaintBoundary distortion
-  void _startVideoExtractPreview(String videoPath) {
-    _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 66), (timer) async {
-      if (_isImage || _controller == null || !_controller!.value.isInitialized || _isProcessingFrame) return;
-      _isProcessingFrame = true;
-
-      try {
-        final posSec = _controller!.value.position.inMilliseconds / 1000.0;
-        final dir = await getTemporaryDirectory();
-        final thumbFile = File('${dir.path}/preview_thumb.bmp');
-
-        // Fast zero-encode BMP frame extract
-        await FFmpegKit.execute(
-          '-ss $posSec -i "$videoPath" -vframes 1 -s ${_renderWidth}x${_renderHeight} -pix_fmt rgba -y "${thumbFile.path}"',
-        );
-
-        if (await thumbFile.exists()) {
-          final bytes = await thumbFile.readAsBytes();
-          final decoded = img.decodeBmp(bytes);
-          if (decoded != null) {
-            final uniforms = _packUniforms();
-            final rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
-            final outBytes = processImage(
-              rawBytes,
-              _renderWidth,
-              _renderHeight,
-              _renderWidth,
-              _renderHeight,
-              uniforms,
-            );
-
-            final completer = Completer<ui.Image>();
-            ui.decodeImageFromPixels(
-              outBytes,
-              _renderWidth,
-              _renderHeight,
-              ui.PixelFormat.rgba8888,
-              (img) => completer.complete(img),
-            );
-            final uiImage = await completer.future;
-            if (mounted) setState(() => _processedImage = uiImage);
-          }
-        }
-      } catch (_) {}
-
-      _isProcessingFrame = false;
-    });
-  }
-
-  Future<void> _processStaticImage() async {
-    if (_cachedRawImage == null) return;
+  Future<void> _applyGrade() async {
     try {
-      final resized = img.copyResize(
-        _cachedRawImage!,
-        width: _renderWidth,
-        height: _renderHeight,
-      );
+      Uint8List? rawBytes;
+      int w = _renderWidth;
+      int h = _renderHeight;
+
+      if (_isImage && _cachedRawImage != null) {
+        final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
+        rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+      } else {
+        final boundary = _activeCanvasKey.currentContext?.findRenderObject();
+        if (boundary is RenderRepaintBoundary) {
+          final image = await boundary.toImage(pixelRatio: 1.0);
+          final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+          if (byteData != null) {
+            w = image.width;
+            h = image.height;
+            w = ((w + 15) ~/ 16) * 16;
+            h = ((h + 15) ~/ 16) * 16;
+            rawBytes = byteData.buffer.asUint8List();
+          }
+          image.dispose();
+        }
+      }
+
+      if (rawBytes == null) return;
 
       final uniforms = _packUniforms();
-      final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
-
-      final outputBytes = processImage(
-        rawBytes,
-        _renderWidth,
-        _renderHeight,
-        _renderWidth,
-        _renderHeight,
-        uniforms,
-      );
+      final outBytes = processImage(rawBytes, w, h, w, h, uniforms);
 
       final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(
-        outputBytes,
-        _renderWidth,
-        _renderHeight,
-        ui.PixelFormat.rgba8888,
-        (img) => completer.complete(img),
-      );
+      ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (img) => completer.complete(img));
       final res = await completer.future;
+
       if (mounted) setState(() => _processedImage = res);
     } catch (_) {}
   }
@@ -1676,7 +1618,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
     });
-    if (_isImage) _processStaticImage();
+    _applyGrade();
     _autoSaveProject();
   }
 
@@ -1870,7 +1812,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           break;
       }
     });
-    if (_isImage) _processStaticImage();
+    _applyGrade();
     _autoSaveProject();
   }
 
@@ -1934,7 +1876,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 16),
 
-                    const Text('CONTAINER', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const Text('CONTAINER', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -1956,7 +1898,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    Text('CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    Text('CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -1973,7 +1915,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Row(
                       children: [
@@ -2021,7 +1963,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -2038,7 +1980,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -2055,7 +1997,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -2101,7 +2043,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // Reliable destination resolver for Android 11+
   Future<String> _getSafeMovieDirectory() async {
     final moviesDir = Directory('/storage/emulated/0/Movies');
     if (await moviesDir.exists()) {
@@ -2185,7 +2126,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final bool is10Bit = bitDepth == '10-bit';
 
     final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>('Extracting pristine frames...');
+    final statusNotifier = ValueNotifier<String>('Extracting pristine frames: 0%');
 
     showDialog(
       context: context,
@@ -2193,18 +2134,30 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (ctx) {
         return AlertDialog(
           backgroundColor: const Color(0xFF101014),
-          title: Text('Exporting $outW x $outH Master ($bitDepth)', style: const TextStyle(color: Colors.white, fontSize: 15)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Exporting $outW x $outH Master ($bitDepth)', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ValueListenableBuilder<double>(
                 valueListenable: progressNotifier,
-                builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: kAquamarine, backgroundColor: Colors.white12),
+                builder: (_, progress, __) => ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    color: kCyanAccent, // Vibrant Cyan Progress Bar
+                    backgroundColor: Colors.white12,
+                  ),
+                ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               ValueListenableBuilder<String>(
                 valueListenable: statusNotifier,
-                builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                builder: (_, status, __) => Text(
+                  status,
+                  style: const TextStyle(color: kCyanAccent, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                ),
               ),
             ],
           ),
@@ -2228,7 +2181,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (await oldAudio.exists()) await oldAudio.delete();
       await FFmpegKit.execute('-i "$videoPath" -vn -c:a aac -y "$audioPath"');
 
-      // Extract raw scaled PNG frames directly
+      statusNotifier.value = 'Extracting pristine frames...';
       final extractSession = await FFmpegKit.execute(
         '-i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
       );
@@ -2281,8 +2234,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
         await outputFile.writeAsBytes(pngBytes);
 
+        final percent = (((i + 1) / totalFrames) * 100).toInt();
         progressNotifier.value = (i + 1) / totalFrames;
-        statusNotifier.value = 'Grading frame ${i + 1} / $totalFrames ($bitDepth)...';
+        statusNotifier.value = 'Grading frames: $percent% (${i + 1}/$totalFrames)';
       }
 
       statusNotifier.value = 'Assembling final $container master...';
@@ -2372,7 +2326,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // 1. Stage / Canvas Display Area
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Center(
@@ -2389,15 +2342,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Video baseline
                       if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                        VideoPlayer(_controller!),
+                        RepaintBoundary(
+                          key: _activeCanvasKey,
+                          child: VideoPlayer(_controller!),
+                        ),
 
-                      // Real-time Vulkan Processed Image Overlay (Direct live response to all sliders)
                       if (_processedImage != null)
                         RawImage(image: _processedImage, fit: BoxFit.contain),
 
-                      // Canvas Controls
                       Positioned(
                         bottom: 10,
                         left: 10,
@@ -2501,7 +2454,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 1: PRESETS ---
   Widget _buildPresetsTab() {
     final presets = [
       {'name': 'adevob+junho', 'desc': 'Warm golden speculars, crisp ink outlines, clean contrast', 'color': 0xFFFFB300},
@@ -2563,7 +2515,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 2: PRIMARY GRADING ---
   Widget _buildGradingTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2590,7 +2541,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 3: CURVES ---
   Widget _buildCurvesTab() {
     final channelColors = [Colors.white, Colors.redAccent, Colors.greenAccent, Colors.blueAccent];
     final channelNames = ['RGB Master', 'Red', 'Green', 'Blue'];
@@ -2645,8 +2595,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   default: _curveMaster = newPts; break;
                 }
               });
-              if (_isImage) _processStaticImage();
-              _autoSaveProject();
+              _applyGrade();
             },
           ),
           const SizedBox(height: 12),
@@ -2671,8 +2620,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     default: _curveMaster = updated; break;
                   }
                 });
-                if (_isImage) _processStaticImage();
-                _autoSaveProject();
+                _applyGrade();
               },
             );
           }),
@@ -2681,7 +2629,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 4: GLOWS & LINE ART SHADOW ---
   Widget _buildGlowsTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2700,35 +2647,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               selected: _edgeGlowTint == 0.0,
               selectedColor: kAquamarine,
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _edgeGlowTint = 0.0),
+              onSelected: (_) { setState(() => _edgeGlowTint = 0.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('Gold / Warm'),
               selected: _edgeGlowTint == 1.0,
               selectedColor: const Color(0xFFFFB300),
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _edgeGlowTint = 1.0),
+              onSelected: (_) { setState(() => _edgeGlowTint = 1.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('Quincy Cyan'),
               selected: _edgeGlowTint == 2.0,
               selectedColor: const Color(0xFF00E5FF),
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _edgeGlowTint = 2.0),
+              onSelected: (_) { setState(() => _edgeGlowTint = 2.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('Crimson'),
               selected: _edgeGlowTint == 4.0,
               selectedColor: const Color(0xFFE53935),
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _edgeGlowTint = 4.0),
+              onSelected: (_) { setState(() => _edgeGlowTint = 4.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('Black / Ink Shadow'),
               selected: _edgeGlowTint == 5.0,
               selectedColor: Colors.white54,
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _edgeGlowTint = 5.0),
+              onSelected: (_) { setState(() => _edgeGlowTint = 5.0); _applyGrade(); },
             ),
           ],
         ),
@@ -2743,7 +2690,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 5: SAPPHIRE / AE ---
   Widget _buildSapphireTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2758,21 +2704,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               selected: _tonemapMode == 0.0,
               selectedColor: kAquamarine,
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _tonemapMode = 0.0),
+              onSelected: (_) { setState(() => _tonemapMode = 0.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('Reinhard'),
               selected: _tonemapMode == 1.0,
               selectedColor: kAquamarine,
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _tonemapMode = 1.0),
+              onSelected: (_) { setState(() => _tonemapMode = 1.0); _applyGrade(); },
             ),
             ChoiceChip(
               label: const Text('ACES Filmic'),
               selected: _tonemapMode == 2.0,
               selectedColor: kAquamarine,
               backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) => setState(() => _tonemapMode = 2.0),
+              onSelected: (_) { setState(() => _tonemapMode = 2.0); _applyGrade(); },
             ),
           ],
         ),
@@ -2784,7 +2730,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // --- TAB 6: MAGIC BULLET ---
   Widget _buildMagicBulletTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2798,19 +2743,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               label: 'LIFT (Shadows)',
               value: _mblColoristaLift,
               accentColor: kAquamarine,
-              onChanged: (v) => setState(() => _mblColoristaLift = v),
+              onChanged: (v) { setState(() => _mblColoristaLift = v); _applyGrade(); },
             ),
             ColoristaWheel(
               label: 'GAMMA (Mids)',
               value: _mblColoristaGamma,
               accentColor: kAquamarine,
-              onChanged: (v) => setState(() => _mblColoristaGamma = v),
+              onChanged: (v) { setState(() => _mblColoristaGamma = v); _applyGrade(); },
             ),
             ColoristaWheel(
               label: 'GAIN (Highs)',
               value: _mblColoristaGain,
               accentColor: const Color(0xFFFF7043),
-              onChanged: (v) => setState(() => _mblColoristaGain = v),
+              onChanged: (v) { setState(() => _mblColoristaGain = v); _applyGrade(); },
             ),
           ],
         ),
@@ -2852,7 +2797,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               max: max,
               onChanged: (v) {
                 onChanged(v);
-                if (_isImage) _processStaticImage();
+                _applyGrade();
               },
               onChangeEnd: (_) {
                 _autoSaveProject();
@@ -2866,7 +2811,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   @override
   void dispose() {
-    _previewTimer?.cancel();
     if (_controller != null) {
       _controller!.dispose();
     }
