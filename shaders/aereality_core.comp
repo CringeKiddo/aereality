@@ -10,56 +10,57 @@ layout(std430, binding = 1) writeonly buffer OutputBuffer {
     uint out_pixels[];
 };
 
-// 66 Packed IEEE Floating-Point Uniforms
+// 66 Packed IEEE Floating-Point Uniforms matching Dart _packUniforms()
 layout(binding = 2) uniform UniformBlock {
-    float u_time;              // [0]
-    float u_brightness;        // [1]
-    float u_saturation;        // [2]
-    float u_contrast;          // [3]
-    float u_sharpness;         // [4]
-    float u_gamma;             // [5]
-    float u_hue;               // [6]
-    float u_temperature;       // [7]
+    float u_time;                 // [0]
+    float u_brightness;           // [1]
+    float u_saturation;           // [2]
+    float u_contrast;             // [3]
+    float u_sharpness;            // [4]
+    float u_gamma;                // [5]
+    float u_hue;                  // [6]
+    float u_temperature;          // [7]
 
-    float u_bloomIntensity;    // [8]
-    float u_bloomSpread;       // [9]
-    float u_bloomThreshold;    // [10]
-    float u_bloomRadius;       // [11]
-    float u_edgeGlowTint;      // [12] (0=Neutral, 1=Gold, 2=Cyan, 4=Crimson, 5=Ink Black)
-    float u_anamorphicFlare;   // [13]
-    float u_flareAmount;       // [14]
-    float u_lightRays;         // [15]
-    float u_lightRaysDecay;    // [16]
+    float u_bloomIntensity;       // [8]
+    float u_bloomSpread;          // [9]
+    float u_bloomThreshold;       // [10]
+    float u_bloomRadius;          // [11]
+    float u_edgeGlowTint;         // [12] (0=Neutral, 1=Gold, 2=Cyan, 4=Crimson, 5=Ink Black)
+    float u_anamorphicFlare;      // [13]
+    float u_flareAmount;          // [14]
+    float u_lightRays;            // [15]
+    float u_lightRaysDecay;       // [16]
 
-    float u_shadows;           // [17]
-    float u_highlights;        // [18]
-    float u_darkOutlines;      // [19]
-    float u_edgeDarken;        // [20] Subtle line art shadow
-    float u_vignette;          // [21]
-    float u_splitToning;       // [22]
-    float u_denoise;           // [23]
-    float u_blackCrush;        // [24]
-    float u_flickerIntensity;  // [25]
-    float u_flickerSpeed;      // [26]
-    float u_depthOfField;      // [27]
-    float u_dofFocus;          // [28]
-    float u_dofAngle;          // [29]
-    float u_mathOpsMode;       // [30]
-    float u_sapphireBlendMix;  // [31]
-    float u_filmConvertNitrate;// [32]
-    float u_fourColorGradMix;  // [33]
+    float u_shadows;              // [17]
+    float u_highlights;           // [18]
+    float u_darkOutlines;         // [19]
+    float u_edgeDarken;           // [20] Subtle line art soft contact shadow
+    float u_vignette;             // [21] Radial Vignette
+    float u_splitToning;          // [22]
+    float u_denoise;              // [23]
+    float u_blackCrush;           // [24]
+    float u_flickerIntensity;     // [25]
+    float u_flickerSpeed;         // [26]
+    float u_depthOfField;         // [27]
+    float u_dofFocus;             // [28]
+    float u_dofAngle;             // [29]
+    float u_mathOpsMode;          // [30]
+    float u_sapphireBlendMix;     // [31]
+    float u_filmConvertNitrate;   // [32]
+    float u_fourColorGradMix;     // [33]
 
     // Catmull-Rom Spline Curve Master
     float u_curveM0; float u_curveM1; float u_curveM2; float u_curveM3; float u_curveM4; // [34..38]
-    float u_filmGrain;         // [39]
-    float u_tonemapMode;       // [40] (0=Off, 1=Reinhard, 2=ACES)
+    float u_filmGrain;            // [39]
+    float u_tonemapMode;          // [40] (0=Off, 1=Reinhard, 2=ACES)
+    float u_chromaticAberration;  // [41] Prism lens fringe
 
     // Red Curve
-    float pad0;
     float u_curveR0; float u_curveR1; float u_curveR2; float u_curveR3; float u_curveR4; // [42..46]
+    float u_vignetteBoxed;        // [47] Boxed / Letterbox Vignette
 
     // Green Curve
-    float pad1; float pad2; float pad3;
+    float pad1; float pad2;
     float u_curveG0; float u_curveG1; float u_curveG2; float u_curveG3; float u_curveG4; // [50..54]
 
     // Blue Curve
@@ -164,6 +165,24 @@ void main() {
     vec4 col = unpackRGBA(in_pixels[pixelIndex]);
 
     // -------------------------------------------------------------
+    // 0. Chromatic Aberration (Prism Lens Fringe)
+    // -------------------------------------------------------------
+    if (u_chromaticAberration > 0.001) {
+        vec2 uv = (vec2(coord) / vec2(size)) - 0.5;
+        float dist = length(uv);
+        ivec2 shift = ivec2(uv * u_chromaticAberration * 24.0 * dist);
+
+        ivec2 rCoord = clamp(coord + shift, ivec2(0), size - ivec2(1));
+        ivec2 bCoord = clamp(coord - shift, ivec2(0), size - ivec2(1));
+
+        vec4 rPixel = unpackRGBA(in_pixels[rCoord.y * size.x + rCoord.x]);
+        vec4 bPixel = unpackRGBA(in_pixels[bCoord.y * size.x + bCoord.x]);
+
+        col.r = rPixel.r;
+        col.b = bPixel.b;
+    }
+
+    // -------------------------------------------------------------
     // 1. Denoise (Bilateral approximation)
     // -------------------------------------------------------------
     if (u_denoise > 0.01) {
@@ -198,7 +217,7 @@ void main() {
     }
 
     // -------------------------------------------------------------
-    // 3. Sobel Edge Detection, Dark Outlines, & Edge Darken
+    // 3. Sobel Edge Detection, Dark Outlines, & Soft EdgeDarken
     // -------------------------------------------------------------
     float gx = 0.0;
     float gy = 0.0;
@@ -215,14 +234,17 @@ void main() {
     }
     float edge = sqrt(gx * gx + gy * gy);
 
+    // Sobel hard ink line
     if (u_darkOutlines > 0.01) {
         col.rgb = mix(col.rgb, vec3(0.0), clamp(edge * u_darkOutlines * 1.5, 0.0, 1.0));
     }
 
+    // Weak / fade line-art contact shadow (NOT Sobel comic stroke)
     if (u_edgeDarken > 0.01) {
-        // Subtle line-art edge shadow that preserves the line's integrity
-        float edgeShadow = smoothstep(0.12, 0.45, edge) * u_edgeDarken * 0.45;
-        col.rgb *= (1.0 - edgeShadow);
+        // Soft gradient falloff that gently deepens character borders
+        float softEdge = smoothstep(0.08, 0.38, edge);
+        float fadeShadow = softEdge * u_edgeDarken * 0.35;
+        col.rgb = mix(col.rgb, col.rgb * 0.45, fadeShadow);
     }
 
     // -------------------------------------------------------------
@@ -314,7 +336,6 @@ void main() {
         vec3 finalBloom = (bloomAcc.rgb / max(totalWeight, 0.001)) * u_bloomIntensity;
 
         if (u_edgeGlowTint == 5.0) {
-            // Ink Black glow deepens the bloom regions
             col.rgb = mix(col.rgb, vec3(0.0), length(finalBloom) * 0.7);
         } else {
             col.rgb += finalBloom * bloomTint;
@@ -411,13 +432,20 @@ void main() {
     }
 
     // -------------------------------------------------------------
-    // 15. Vignette
+    // 15. Vignette (Radial & Boxed / Letterbox Shape)
     // -------------------------------------------------------------
     if (u_vignette > 0.01) {
         vec2 uv = (vec2(coord) / vec2(size)) - 0.5;
         float dist = length(uv);
         float vig = smoothstep(0.7, 0.2, dist * (1.0 + u_vignette * 1.5));
         col.rgb *= vig;
+    }
+
+    if (u_vignetteBoxed > 0.01) {
+        vec2 uv = abs((vec2(coord) / vec2(size)) - 0.5) * 2.0;
+        float boxDist = max(uv.x, uv.y); // Square / rectangular contour
+        float boxVig = smoothstep(1.0, 0.3, boxDist * (0.8 + u_vignetteBoxed * 0.8));
+        col.rgb *= boxVig;
     }
 
     // -------------------------------------------------------------
