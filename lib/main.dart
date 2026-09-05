@@ -17,10 +17,11 @@ import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
 
-// Modern Palette: Aquamarine Accents & Elegant Lavender Slider Tracks
+// Palette: Luminous Aquamarine & Polished Studio Accents
 const Color kAquamarine = Color(0xFF7FFFD4);
 const Color kAquamarineDark = Color(0xFF45B39D);
-const Color kLavender = Color(0xFFC8B6FF);      // Lavender slider line
+const Color kAquamarineGlow = Color(0x337FFFD4);
+const Color kGold = Color(0xFFFFD700);
 const Color kLavenderSoft = Color(0xFFE6E6FA);
 const Color kSurfaceDark = Color(0xFF101015);
 const Color kCardDark = Color(0xFF15151C);
@@ -36,7 +37,7 @@ Future<void> main() async {
   try {
     await FFmpegKitExtended.initialize();
   } catch (e) {
-    debugPrint('FFmpegKitExtended initialization warning: $e');
+    debugPrint('FFmpegKitExtended startup message: $e');
   }
 
   runApp(const AERealityApp());
@@ -54,7 +55,7 @@ class AERealityApp extends StatelessWidget {
         primaryColor: kAquamarine,
         colorScheme: const ColorScheme.dark(
           primary: kAquamarine,
-          secondary: kLavender,
+          secondary: kAquamarine,
           surface: kCardDark,
         ),
         appBarTheme: const AppBarTheme(
@@ -126,29 +127,34 @@ class ExportMatrix {
 
     if (container == 'MP4') {
       if (codec.contains('H.264')) {
-        codecFlags = '-c:v libx264 -preset fast -pix_fmt yuv420p';
+        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
       } else if (codec.contains('H.265')) {
         codecFlags = is10
-            ? '-c:v libx265 -preset fast -pix_fmt yuv420p10le'
-            : '-c:v libx265 -preset fast -pix_fmt yuv420p';
+            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le -profile:v main10'
+            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
       } else {
-        codecFlags = is10 ? '-c:v libaom-av1 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -pix_fmt yuv420p';
+        codecFlags = is10
+            ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le'
+            : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
       }
     } else if (container == 'WebM') {
       if (codec.contains('VP9')) {
+        // +0.3 unsharp filter for extra visual snap
         codecFlags = is10
-            ? '-c:v libvpx-vp9 -pix_fmt yuv420p10le'
-            : '-c:v libvpx-vp9 -pix_fmt yuv420p';
+            ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
+            : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
       } else {
-        codecFlags = is10 ? '-c:v libaom-av1 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -pix_fmt yuv420p';
+        codecFlags = is10
+            ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le'
+            : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
       }
     } else if (container == 'MOV') {
       if (codec.contains('H.264')) {
-        codecFlags = '-c:v libx264 -preset fast -pix_fmt yuv420p';
+        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
       } else {
         codecFlags = is10
-            ? '-c:v libx265 -preset fast -pix_fmt yuv420p10le'
-            : '-c:v libx265 -preset fast -pix_fmt yuv420p';
+            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le -profile:v main10'
+            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
       }
     } else {
       if (codec.startsWith('FFV1')) {
@@ -160,9 +166,15 @@ class ExportMatrix {
           codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p';
         }
       } else if (codec.contains('H.265')) {
-        codecFlags = is10 ? '-c:v libx265 -preset fast -pix_fmt yuv420p10le' : '-c:v libx265 -preset fast -pix_fmt yuv420p';
+        codecFlags = is10
+            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le'
+            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
+      } else if (codec.contains('VP9')) {
+        codecFlags = is10
+            ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
+            : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
       } else {
-        codecFlags = '-c:v libx264 -preset fast -pix_fmt yuv420p';
+        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
       }
     }
 
@@ -199,6 +211,7 @@ class ProjectData {
   double highlights;
   double darkOutlines;
   double vignette;
+  double vignetteBoxed;
   double splitToning;
   double denoise;
   double blackCrush;
@@ -208,13 +221,13 @@ class ProjectData {
   double depthOfField;
   double dofFocus;
   double dofAngle;
+  double chromaticAberration;
 
   double sapphireBlendMix;
   double mathOpsMode;
   double filmConvertNitrate;
   double fourColorGradMix;
   double tonemapMode;
-  double chromaticAberration;
 
   double mblCosmoSkin;
   double mblRenoirHalation;
@@ -254,6 +267,7 @@ class ProjectData {
     this.highlights = 0.0,
     this.darkOutlines = 0.0,
     this.vignette = 0.0,
+    this.vignetteBoxed = 0.0,
     this.splitToning = 0.0,
     this.denoise = 0.0,
     this.blackCrush = 0.0,
@@ -263,12 +277,12 @@ class ProjectData {
     this.depthOfField = 0.0,
     this.dofFocus = 0.5,
     this.dofAngle = 0.0,
+    this.chromaticAberration = 0.0,
     this.sapphireBlendMix = 0.0,
     this.mathOpsMode = 0.0,
     this.filmConvertNitrate = 0.0,
     this.fourColorGradMix = 0.0,
     this.tonemapMode = 1.0,
-    this.chromaticAberration = 0.0,
     this.mblCosmoSkin = 0.0,
     this.mblRenoirHalation = 0.0,
     this.mblColoristaLift = 0.0,
@@ -309,6 +323,7 @@ class ProjectData {
         'highlights': highlights,
         'darkOutlines': darkOutlines,
         'vignette': vignette,
+        'vignetteBoxed': vignetteBoxed,
         'splitToning': splitToning,
         'denoise': denoise,
         'blackCrush': blackCrush,
@@ -318,12 +333,12 @@ class ProjectData {
         'depthOfField': depthOfField,
         'dofFocus': dofFocus,
         'dofAngle': dofAngle,
+        'chromaticAberration': chromaticAberration,
         'sapphireBlendMix': sapphireBlendMix,
         'mathOpsMode': mathOpsMode,
         'filmConvertNitrate': filmConvertNitrate,
         'fourColorGradMix': fourColorGradMix,
         'tonemapMode': tonemapMode,
-        'chromaticAberration': chromaticAberration,
         'mblCosmoSkin': mblCosmoSkin,
         'mblRenoirHalation': mblRenoirHalation,
         'mblColoristaLift': mblColoristaLift,
@@ -361,6 +376,7 @@ class ProjectData {
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
+        vignetteBoxed: (json['vignetteBoxed'] ?? 0.0).toDouble(),
         splitToning: (json['splitToning'] ?? 0.0).toDouble(),
         denoise: (json['denoise'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
@@ -370,12 +386,12 @@ class ProjectData {
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
         dofFocus: (json['dofFocus'] ?? 0.5).toDouble(),
         dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
+        chromaticAberration: (json['chromaticAberration'] ?? 0.0).toDouble(),
         sapphireBlendMix: (json['sapphireBlendMix'] ?? 0.0).toDouble(),
         mathOpsMode: (json['mathOpsMode'] ?? 0.0).toDouble(),
         filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
         fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
         tonemapMode: (json['tonemapMode'] ?? 1.0).toDouble(),
-        chromaticAberration: (json['chromaticAberration'] ?? 0.0).toDouble(),
         mblCosmoSkin: (json['mblCosmoSkin'] ?? 0.0).toDouble(),
         mblRenoirHalation: (json['mblRenoirHalation'] ?? 0.0).toDouble(),
         mblColoristaLift: (json['mblColoristaLift'] ?? 0.0).toDouble(),
@@ -416,45 +432,40 @@ class StoredProject {
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
         id: json['id'],
         name: json['name'],
-        mediaPath: json['mediaPath'],
-        data: ProjectData.fromJson(json['data']),
+        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
+        data: ProjectData.fromJson(json['data'] ?? json),
         lastOpened: DateTime.parse(json['lastOpened']),
       );
 }
 
 class ProjectManager {
-  static const String _kStorageKey = 'aereality_saved_projects_v2';
+  static const String _storageKey = 'aereality_projects_v3.json';
 
-  static Future<File> _getFile() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}/$_kStorageKey.json');
-  }
-
-  static Future<List<StoredProject>> getRecentProjects() async {
+  static Future<List<StoredProject>> loadProjects() async {
     try {
-      final file = await _getFile();
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$_storageKey');
       if (!await file.exists()) return [];
-      final content = await file.readAsString();
-      final List<dynamic> list = jsonDecode(content);
-      return list.map((e) => StoredProject.fromJson(e)).toList()
-        ..sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+      final data = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(data);
+      return jsonList.map((j) => StoredProject.fromJson(j)).toList();
     } catch (_) {
       return [];
     }
   }
 
+  static Future<void> saveProjects(List<StoredProject> projects) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/$_storageKey');
+    await file.writeAsString(jsonEncode(projects.map((p) => p.toJson()).toList()));
+  }
+
   static Future<void> saveProject(StoredProject project) async {
-    try {
-      final list = await getRecentProjects();
-      final idx = list.indexWhere((p) => p.id == project.id || p.mediaPath == project.mediaPath);
-      if (idx >= 0) {
-        list[idx] = project;
-      } else {
-        list.insert(0, project);
-      }
-      final file = await _getFile();
-      await file.writeAsString(jsonEncode(list.map((e) => e.toJson()).toList()));
-    } catch (_) {}
+    final projects = await loadProjects();
+    projects.removeWhere((p) => p.id == project.id);
+    projects.insert(0, project);
+    if (projects.length > 40) projects.removeRange(40, projects.length);
+    await saveProjects(projects);
   }
 }
 
@@ -478,64 +489,102 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    final res = await ProjectManager.getRecentProjects();
-    if (mounted) setState(() => _recent = res);
+    final projs = await ProjectManager.loadProjects();
+    if (mounted) setState(() => _recent = projs);
   }
 
   void _showSettingsDialog() {
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlgState) => AlertDialog(
+        builder: (context, setModal) => AlertDialog(
           backgroundColor: kCardDark,
-          title: const Text('Render & Pipeline Settings', style: TextStyle(color: Colors.white, fontSize: 16)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.tune_rounded, color: kAquamarine, size: 20),
+              SizedBox(width: 8),
+              Text('Engine & Preview Quality', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('VULKAN ENGINE PRECISION', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Row(
+              const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
                 children: [
                   ChoiceChip(
-                    label: const Text('FP32 High-End'),
-                    selected: gEnginePrecision == 32,
+                    label: const Text('25% Draft'),
+                    selected: gPreviewScale == 0.25,
                     selectedColor: kAquamarine,
-                    backgroundColor: kSurfaceDark,
-                    labelStyle: TextStyle(color: gEnginePrecision == 32 ? Colors.black : Colors.white),
-                    onSelected: (_) => setDlgState(() => setState(() => gEnginePrecision = 32)),
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.25 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.25);
+                      setState(() {});
+                    },
                   ),
-                  const SizedBox(width: 8),
                   ChoiceChip(
-                    label: const Text('FP16 Fast Mobile'),
-                    selected: gEnginePrecision == 16,
+                    label: const Text('50% Smooth'),
+                    selected: gPreviewScale == 0.50,
                     selectedColor: kAquamarine,
-                    backgroundColor: kSurfaceDark,
-                    labelStyle: TextStyle(color: gEnginePrecision == 16 ? Colors.black : Colors.white),
-                    onSelected: (_) => setDlgState(() => setState(() => gEnginePrecision = 16)),
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.50 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.50);
+                      setState(() {});
+                    },
+                  ),
+                  ChoiceChip(
+                    label: const Text('75% High'),
+                    selected: gPreviewScale == 0.75,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 0.75 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 0.75);
+                      setState(() {});
+                    },
+                  ),
+                  ChoiceChip(
+                    label: const Text('100% Native'),
+                    selected: gPreviewScale == 1.0,
+                    selectedColor: kAquamarine,
+                    backgroundColor: const Color(0xFF1E1E28),
+                    labelStyle: TextStyle(color: gPreviewScale == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                    onSelected: (_) {
+                      setModal(() => gPreviewScale = 1.0);
+                      setState(() {});
+                    },
                   ),
                 ],
               ),
               const SizedBox(height: 16),
-              const Text('TIMELINE DRAFT RESOLUTION', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                children: [0.25, 0.5, 0.75, 1.0].map((s) => ChoiceChip(
-                  label: Text('${(s * 100).toInt()}%'),
-                  selected: gPreviewScale == s,
-                  selectedColor: kAquamarine,
-                  backgroundColor: kSurfaceDark,
-                  labelStyle: TextStyle(color: gPreviewScale == s ? Colors.black : Colors.white),
-                  onSelected: (_) => setDlgState(() => setState(() => gPreviewScale = s)),
-                )).toList(),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
+                child: const Row(
+                  children: [
+                    Icon(Icons.memory_rounded, color: kAquamarine, size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Grading Engine: IEEE FP32 Floating-Point Compute Shader Pipeline.',
+                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('DONE', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold)),
+              child: const Text('Save & Apply', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -550,20 +599,21 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Row(
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: kAquamarine.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
-              child: const Text(
-                'AEREALITY',
-                style: TextStyle(color: kAquamarine, fontWeight: FontWeight.w900, letterSpacing: 1.5, fontSize: 13),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: kAquamarine.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: kAquamarine.withOpacity(0.3)),
               ),
+              child: const Text('AE', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
-            const SizedBox(width: 8),
-            const Text('PRO STUDIO', style: TextStyle(color: Colors.white70, fontSize: 13, letterSpacing: 1)),
+            const SizedBox(width: 10),
+            const Text('AEReality Studio Pro'),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.tune_rounded, color: kLavender),
+            icon: const Icon(Icons.tune_rounded, color: kAquamarine),
             tooltip: 'Settings',
             onPressed: _showSettingsDialog,
           ),
@@ -583,10 +633,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: kLavender.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                  decoration: BoxDecoration(color: kAquamarine.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
                   child: const Text(
                     'FP32 ENGINE',
-                    style: TextStyle(color: kLavenderSoft, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                    style: TextStyle(color: kAquamarine, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -628,10 +678,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved presets/sessions yet.')));
                       }
                     },
-                    icon: const Icon(Icons.bookmarks_rounded, color: kLavender, size: 18),
-                    label: const Text('SAVED', style: TextStyle(color: kLavenderSoft, fontWeight: FontWeight.w700, fontSize: 12)),
+                    icon: const Icon(Icons.bookmarks_rounded, color: kAquamarine, size: 18),
+                    label: const Text('SAVED', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.w700, fontSize: 12)),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: kLavender, width: 1.2),
+                      side: const BorderSide(color: kAquamarine, width: 1.2),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
@@ -1063,9 +1113,9 @@ class ColoristaWheel extends StatelessWidget {
           child: SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 2.2,
-              activeTrackColor: kLavender,
+              activeTrackColor: kAquamarine,
               inactiveTrackColor: Colors.white12,
-              thumbColor: kLavenderSoft,
+              thumbColor: kAquamarine,
             ),
             child: Slider(
               value: value.clamp(-0.3, 0.3),
@@ -1113,9 +1163,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _highlights = 0.0;
   double _blackCrush = 0.0;
   double _vignette = 0.0;
+  double _vignetteBoxed = 0.0; // Boxed vignette sub-slider
   double _splitToning = 0.0;
   double _denoise = 0.0;
   double _filmGrain = 0.0;
+  double _chromaticAberration = 0.0; // Chromatic aberration effect
 
   // Glow & Linework
   double _bloomIntensity = 0.0;
@@ -1123,7 +1175,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _bloomThreshold = 0.45;
   double _bloomRadius = 1.0;
   double _edgeGlowTint = 0.0;
-  double _edgeDarken = 0.0;
+  double _edgeDarken = 0.0; // Weak/fade edge glow that softly deepens line art edges
   double _darkOutlines = 0.0;
   double _anamorphicFlare = 0.0;
   double _flareAmount = 0.50;
@@ -1145,7 +1197,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _filmConvertNitrate = 0.0;
   double _fourColorGradMix = 0.0;
   double _tonemapMode = 1.0;
-  double _chromaticAberration = 0.0;
 
   // Magic Bullet Suite
   double _mblCosmoSkin = 0.0;
@@ -1171,10 +1222,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isProcessingFrame = false;
   final GlobalKey _activeCanvasKey = GlobalKey();
 
-  int _canvasWidth = 720;
-  int _canvasHeight = 900;
-  int _srcWidth = 720;
-  int _srcHeight = 900;
+  int _canvasWidth = 864;
+  int _canvasHeight = 1088;
 
   @override
   void initState() {
@@ -1206,6 +1255,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _highlights = p.highlights;
       _darkOutlines = p.darkOutlines;
       _vignette = p.vignette;
+      _vignetteBoxed = p.vignetteBoxed;
       _splitToning = p.splitToning;
       _denoise = p.denoise;
       _blackCrush = p.blackCrush;
@@ -1215,12 +1265,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _depthOfField = p.depthOfField;
       _dofFocus = p.dofFocus;
       _dofAngle = p.dofAngle;
+      _chromaticAberration = p.chromaticAberration;
       _sapphireBlendMix = p.sapphireBlendMix;
       _mathOpsMode = p.mathOpsMode;
       _filmConvertNitrate = p.filmConvertNitrate;
       _fourColorGradMix = p.fourColorGradMix;
       _tonemapMode = p.tonemapMode;
-      _chromaticAberration = p.chromaticAberration;
       _mblCosmoSkin = p.mblCosmoSkin;
       _mblRenoirHalation = p.mblRenoirHalation;
       _mblColoristaLift = p.mblColoristaLift;
@@ -1257,21 +1307,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       targetW = (targetH * ratio).round();
     }
 
-    targetW = (targetW % 2 == 0) ? targetW : targetW + 1;
-    targetH = (targetH % 2 == 0) ? targetH : targetH + 1;
+    // Align to 16-pixel boundaries to prevent static scanlines
+    targetW = ((targetW + 15) ~/ 16) * 16;
+    targetH = ((targetH + 15) ~/ 16) * 16;
 
     return {'width': targetW, 'height': targetH};
   }
 
   void _updateCanvasSize(int srcW, int srcH) {
-    _srcWidth = srcW;
-    _srcHeight = srcH;
     final dims = _calculateTargetDimensions('1080p', _selectedRatio);
     int targetW = (dims['width']! * gPreviewScale).round();
     int targetH = (dims['height']! * gPreviewScale).round();
 
-    _canvasWidth = (targetW % 2 == 0) ? targetW : targetW + 1;
-    _canvasHeight = (targetH % 2 == 0) ? targetH : targetH + 1;
+    _canvasWidth = ((targetW + 15) ~/ 16) * 16;
+    _canvasHeight = ((targetH + 15) ~/ 16) * 16;
   }
 
   Future<void> _loadShader() async {
@@ -1379,6 +1428,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       highlights: _highlights,
       darkOutlines: _darkOutlines,
       vignette: _vignette,
+      vignetteBoxed: _vignetteBoxed,
       splitToning: _splitToning,
       denoise: _denoise,
       blackCrush: _blackCrush,
@@ -1388,12 +1438,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       depthOfField: _depthOfField,
       dofFocus: _dofFocus,
       dofAngle: _dofAngle,
+      chromaticAberration: _chromaticAberration,
       sapphireBlendMix: _sapphireBlendMix,
       mathOpsMode: _mathOpsMode,
       filmConvertNitrate: _filmConvertNitrate,
       fourColorGradMix: _fourColorGradMix,
       tonemapMode: _tonemapMode,
-      chromaticAberration: _chromaticAberration,
       mblCosmoSkin: _mblCosmoSkin,
       mblRenoirHalation: _mblRenoirHalation,
       mblColoristaLift: _mblColoristaLift,
@@ -1407,64 +1457,87 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       curveBlue: List.from(_curveBlue),
     );
   }
+
+  Future<void> _processStaticImage() async {
+    if (_loadedRawImage == null) return;
+    try {
+      final processed = await _processFrameWithVulkan(_loadedRawImage!);
+      if (mounted) setState(() => _processedImage = processed);
+    } catch (_) {}
+  }
+
+  // ACTIVE LIVE-VIEW SAMPLER
+  void _startTimelinePreview() {
+    _previewTimer?.cancel();
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
+      if (_isImage) return;
+      if (_controller == null || !_controller!.value.isInitialized || _isProcessingFrame) return;
+      _isProcessingFrame = true;
+      try {
+        final renderObject = _activeCanvasKey.currentContext?.findRenderObject();
+        if (renderObject is RenderRepaintBoundary) {
+          final frame = await renderObject.toImage();
+          final processed = await _processFrameWithVulkan(frame);
+          if (mounted) setState(() => _processedImage = processed);
+          frame.dispose();
+        }
+      } catch (_) {}
+      _isProcessingFrame = false;
+    });
+  }
+
   Float32List _packUniforms() {
-    final uniforms = Float32List(128);
+    final uniforms = Float32List(66);
+    final timeSeconds = (_controller != null && _controller!.value.isInitialized)
+        ? _controller!.value.position.inMilliseconds / 1000.0
+        : 0.0;
 
-    uniforms[0] = _brightness;
-    uniforms[1] = _contrast;
+    uniforms[0] = timeSeconds;
+    uniforms[1] = _brightness;
     uniforms[2] = _saturation;
-    uniforms[3] = _sharpness;
-    uniforms[4] = _gamma;
-    uniforms[5] = _hue;
-    uniforms[6] = _temperature;
+    uniforms[3] = _contrast;
+    uniforms[4] = _sharpness;
+    uniforms[5] = _gamma;
+    uniforms[6] = _hue;
+    uniforms[7] = _temperature;
 
-    uniforms[7] = _bloomIntensity;
-    uniforms[8] = _bloomSpread;
-    uniforms[9] = _bloomThreshold;
-    uniforms[10] = _bloomRadius;
-
-    uniforms[11] = _edgeGlowTint;
-    uniforms[12] = _edgeDarken;
+    uniforms[8] = _bloomIntensity;
+    uniforms[9] = _bloomSpread;
+    uniforms[10] = _bloomThreshold;
+    uniforms[11] = _bloomRadius;
+    uniforms[12] = _edgeGlowTint;
     uniforms[13] = _anamorphicFlare;
     uniforms[14] = _flareAmount;
     uniforms[15] = _lightRays;
     uniforms[16] = _lightRaysDecay;
 
-    uniforms[17] = _shadows;
-    uniforms[18] = _highlights;
+    uniforms[17] = _shadows + _mblColoristaLift;
+    uniforms[18] = _highlights + _mblColoristaGain;
     uniforms[19] = _darkOutlines;
-    uniforms[20] = _vignette;
-    uniforms[21] = _splitToning;
-    uniforms[22] = _denoise;
-    uniforms[23] = _blackCrush;
-
-    uniforms[24] = _flickerIntensity;
-    uniforms[25] = _flickerSpeed;
-
-    double timeSec = 0.0;
-    if (_controller != null && _controller!.value.isInitialized) {
-      timeSec = _controller!.value.position.inMilliseconds / 1000.0;
-    }
-    uniforms[26] = timeSec;
-
+    uniforms[20] = _edgeDarken; // Soft fade edge glow line-art shadow
+    uniforms[21] = _vignette;
+    uniforms[22] = _splitToning + _mblMojoTealOrange;
+    uniforms[23] = _denoise + _mblCosmoSkin;
+    uniforms[24] = _blackCrush;
+    uniforms[25] = _flickerIntensity;
+    uniforms[26] = _flickerSpeed;
     uniforms[27] = _depthOfField;
     uniforms[28] = _dofFocus;
     uniforms[29] = _dofAngle;
+    uniforms[30] = _mathOpsMode;
+    uniforms[31] = _sapphireBlendMix;
+    uniforms[32] = _filmConvertNitrate + _mblRenoirHalation;
+    uniforms[33] = _fourColorGradMix;
 
-    uniforms[30] = _mblCosmoSkin;
-    uniforms[31] = _mblRenoirHalation;
-    uniforms[32] = _mblColoristaLift;
-    uniforms[33] = _mblColoristaGamma;
-    uniforms[34] = _mblColoristaGain;
-    uniforms[35] = _mblMojoTealOrange;
-
-    uniforms[36] = _sapphireBlendMix;
-    uniforms[37] = _mathOpsMode;
-    uniforms[38] = _filmConvertNitrate;
+    uniforms[34] = _curveMaster[0];
+    uniforms[35] = _curveMaster[1];
+    uniforms[36] = _curveMaster[2];
+    uniforms[37] = _curveMaster[3];
+    uniforms[38] = _curveMaster[4];
 
     uniforms[39] = _filmGrain;
     uniforms[40] = _tonemapMode;
-    uniforms[41] = _chromaticAberration;
+    uniforms[41] = _chromaticAberration; // Chromatic aberration slot
 
     uniforms[42] = _curveRed[0];
     uniforms[43] = _curveRed[1];
@@ -1472,113 +1545,61 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[45] = _curveRed[3];
     uniforms[46] = _curveRed[4];
 
-    uniforms[47] = _curveGreen[0];
-    uniforms[48] = _curveGreen[1];
-    uniforms[49] = _curveGreen[2];
-    uniforms[50] = _curveGreen[3];
-    uniforms[51] = _curveGreen[4];
+    uniforms[47] = _vignetteBoxed; // Boxed vignette parameter
 
-    uniforms[52] = _curveBlue[0];
-    uniforms[53] = _curveBlue[1];
-    uniforms[54] = _curveBlue[2];
-    uniforms[55] = _curveBlue[3];
-    uniforms[56] = _curveBlue[4];
+    uniforms[50] = _curveGreen[0];
+    uniforms[51] = _curveGreen[1];
+    uniforms[52] = _curveGreen[2];
+    uniforms[53] = _curveGreen[3];
+    uniforms[54] = _curveGreen[4];
 
-    uniforms[57] = _curveMaster[0];
-    uniforms[58] = _curveMaster[1];
-    uniforms[59] = _curveMaster[2];
-    uniforms[60] = _curveMaster[3];
-    uniforms[61] = _curveMaster[4];
-
-    uniforms[62] = _fourColorGradMix;
+    uniforms[58] = _curveBlue[0];
+    uniforms[59] = _curveBlue[1];
+    uniforms[60] = _curveBlue[2];
+    uniforms[61] = _curveBlue[3];
+    uniforms[62] = _curveBlue[4];
 
     return uniforms;
   }
 
-  void _startTimelinePreview() {
-    _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
-      if (!mounted || _isProcessingFrame || !_isPlaying || _controller == null) return;
-      if (!_controller!.value.isPlaying) return;
+  Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
+    final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final inputBytes = byteData!.buffer.asUint8List();
 
-      _isProcessingFrame = true;
-      try {
-        await _processActiveFrame();
-      } catch (_) {
-      } finally {
-        _isProcessingFrame = false;
-      }
-    });
-  }
+    final uniforms = _packUniforms();
+    final outputBytes = processImage(
+      inputBytes,
+      input.width,
+      input.height,
+      _canvasWidth,
+      _canvasHeight,
+      uniforms,
+    );
 
-  Future<void> _processActiveFrame() async {
-    try {
-      final boundary = _activeCanvasKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (boundary == null) return;
-
-      final image = await boundary.toImage(pixelRatio: 1.0);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) return;
-
-      final inputBytes = byteData.buffer.asUint8List();
-      final uniforms = _packUniforms();
-
-      final outBytes = await computeShaderPass(
-        inputBytes: inputBytes,
-        width: image.width,
-        height: image.height,
-        precision: gEnginePrecision,
-        uniforms: uniforms,
-      );
-
-      final compImage = await _rawRgbaToUiImage(outBytes, image.width, image.height);
-      if (mounted) {
-        setState(() {
-          _processedImage = compImage;
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _processStaticImage() async {
-    if (_loadedRawImage == null) return;
-    try {
-      final byteData = await _loadedRawImage!.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) return;
-
-      final inputBytes = byteData.buffer.asUint8List();
-      final uniforms = _packUniforms();
-
-      final outBytes = await computeShaderPass(
-        inputBytes: inputBytes,
-        width: _loadedRawImage!.width,
-        height: _loadedRawImage!.height,
-        precision: gEnginePrecision,
-        uniforms: uniforms,
-      );
-
-      final compImage = await _rawRgbaToUiImage(outBytes, _loadedRawImage!.width, _loadedRawImage!.height);
-      if (mounted) {
-        setState(() {
-          _processedImage = compImage;
-        });
-      }
-    } catch (_) {}
-  }
-
-  Future<ui.Image> _rawRgbaToUiImage(Uint8List rawBytes, int width, int height) {
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
-      rawBytes,
-      width,
-      height,
+      outputBytes,
+      _canvasWidth,
+      _canvasHeight,
       ui.PixelFormat.rgba8888,
       (img) => completer.complete(img),
     );
     return completer.future;
   }
 
-  void _resetParameters() {
+  double _getAspectRatioValue(String ratio) {
+    switch (ratio) {
+      case "4:5": return 4 / 5;
+      case "16:9": return 16 / 9;
+      case "9:16": return 9 / 16;
+      case "1:1": return 1 / 1;
+      case "3:4": return 3 / 4;
+      case "21:9": return 21 / 9;
+      default: return 4 / 5;
+    }
+  }
+
+  void _resetAllEffects() {
     setState(() {
       _brightness = 0.0;
       _saturation = 1.0;
@@ -1587,24 +1608,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _gamma = 1.0;
       _hue = 0.0;
       _temperature = 6500.0;
+      _shadows = 0.0;
+      _highlights = 0.0;
       _bloomIntensity = 0.0;
       _bloomSpread = 0.40;
       _bloomThreshold = 0.45;
       _bloomRadius = 1.0;
       _edgeGlowTint = 0.0;
       _edgeDarken = 0.0;
+      _darkOutlines = 0.0;
       _anamorphicFlare = 0.0;
       _flareAmount = 0.50;
       _lightRays = 0.0;
       _lightRaysDecay = 0.90;
-      _shadows = 0.0;
-      _highlights = 0.0;
-      _darkOutlines = 0.0;
       _vignette = 0.0;
+      _vignetteBoxed = 0.0;
       _splitToning = 0.0;
       _denoise = 0.0;
       _blackCrush = 0.0;
       _filmGrain = 0.0;
+      _chromaticAberration = 0.0;
       _flickerIntensity = 0.0;
       _flickerSpeed = 3.0;
       _depthOfField = 0.0;
@@ -1615,7 +1638,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _filmConvertNitrate = 0.0;
       _fourColorGradMix = 0.0;
       _tonemapMode = 1.0;
-      _chromaticAberration = 0.0;
       _mblCosmoSkin = 0.0;
       _mblRenoirHalation = 0.0;
       _mblColoristaLift = 0.0;
@@ -1627,330 +1649,1209 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
       _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
     });
-    _autoSaveProject();
     if (_isImage) _processStaticImage();
+    _autoSaveProject();
   }
 
   void _applyPreset(String name) {
     setState(() {
-      _resetParameters();
+      _resetAllEffects();
       switch (name) {
-        case 'Anime WIS Master':
-          _contrast = 1.35;
-          _saturation = 1.40;
+        case 'vintage cc':
+          _brightness = -0.02;
+          _saturation = 0.82;
+          _contrast = 1.38;
           _sharpness = 0.35;
-          _bloomIntensity = 0.55;
+          _gamma = 0.95;
+          _temperature = 6000.0;
+          _bloomIntensity = 0.38;
           _bloomSpread = 0.45;
-          _bloomThreshold = 0.38;
-          _bloomRadius = 1.2;
+          _bloomThreshold = 0.42;
+          _blackCrush = 0.28;
           _darkOutlines = 0.35;
           _vignette = 0.28;
           _filmGrain = 0.20;
-          _chromaticAberration = 0.15;
           _curveMaster = [0.0, 0.22, 0.50, 0.78, 1.0];
           break;
 
-        case 'Kyoto Glow & Warmth':
-          _contrast = 1.15;
+        case 'adevob+junho':
+          _brightness = 0.01;
           _saturation = 1.25;
-          _temperature = 5600.0;
-          _bloomIntensity = 0.70;
-          _bloomSpread = 0.55;
-          _bloomThreshold = 0.30;
-          _edgeGlowTint = 0.35;
-          _anamorphicFlare = 0.25;
-          _highlights = 0.20;
-          _vignette = 0.20;
-          break;
-
-        case 'Makoto Shinkai Sky':
-          _contrast = 1.25;
-          _saturation = 1.50;
-          _sharpness = 0.40;
+          _contrast = 1.48;
+          _sharpness = 0.65;
+          _gamma = 0.92;
+          _temperature = 6300.0;
           _bloomIntensity = 0.45;
-          _lightRays = 0.40;
-          _highlights = 0.25;
-          _curveBlue = [0.0, 0.28, 0.55, 0.80, 1.0];
-          _curveRed = [0.0, 0.20, 0.46, 0.72, 1.0];
+          _bloomSpread = 0.40;
+          _bloomThreshold = 0.42;
+          _edgeGlowTint = 1.0;
+          _darkOutlines = 0.52;
+          _edgeDarken = 0.25;
+          _blackCrush = 0.30;
+          _vignette = 0.16;
+          _curveMaster = [0.0, 0.20, 0.50, 0.82, 1.0];
           break;
 
-        case 'Cyberpunk Neon Drift':
-          _contrast = 1.45;
-          _saturation = 1.65;
-          _darkOutlines = 0.50;
-          _anamorphicFlare = 0.60;
-          _splitToning = 0.45;
-          _bloomIntensity = 0.65;
-          _mblMojoTealOrange = 0.55;
-          _vignette = 0.40;
+        case 'adevobfiller':
+          _brightness = 0.0;
+          _saturation = 1.20;
+          _contrast = 1.38;
+          _sharpness = 0.55;
+          _gamma = 0.96;
+          _temperature = 6400.0;
+          _bloomIntensity = 0.36;
+          _bloomSpread = 0.42;
+          _bloomThreshold = 0.44;
+          _blackCrush = 0.20;
+          _darkOutlines = 0.38;
+          _vignette = 0.12;
+          _curveMaster = [0.0, 0.22, 0.50, 0.80, 1.0];
           break;
 
-        case 'Moffun Classic 90s Cel':
-          _contrast = 1.20;
-          _saturation = 1.10;
+        case 'uryu vs ichigo':
+          _brightness = -0.01;
+          _saturation = 1.15;
+          _contrast = 1.46;
+          _sharpness = 0.68;
+          _gamma = 0.94;
+          _temperature = 7500.0;
+          _bloomIntensity = 0.48;
+          _bloomSpread = 0.38;
+          _bloomThreshold = 0.40;
+          _edgeGlowTint = 2.0;
+          _darkOutlines = 0.48;
+          _edgeDarken = 0.30;
+          _blackCrush = 0.26;
+          _vignette = 0.18;
+          _curveMaster = [0.0, 0.18, 0.48, 0.82, 1.0];
+          break;
+
+        case 'saber vs Rin':
+          _brightness = 0.02;
+          _saturation = 1.28;
+          _contrast = 1.42;
+          _sharpness = 0.62;
+          _gamma = 0.92;
+          _temperature = 6600.0;
+          _bloomIntensity = 0.50;
+          _bloomSpread = 0.48;
+          _bloomThreshold = 0.40;
+          _anamorphicFlare = 0.30;
+          _flareAmount = 0.45;
+          _darkOutlines = 0.35;
+          _blackCrush = 0.22;
+          _vignette = 0.15;
+          _curveMaster = [0.0, 0.22, 0.52, 0.84, 1.0];
+          break;
+
+        case 'Dantae cc':
+          _brightness = -0.02;
+          _saturation = 1.18;
+          _contrast = 1.52;
+          _sharpness = 0.76;
+          _gamma = 0.88;
+          _temperature = 6700.0;
+          _bloomIntensity = 0.38;
+          _bloomSpread = 0.35;
+          _bloomThreshold = 0.44;
           _darkOutlines = 0.60;
-          _filmGrain = 0.45;
-          _flickerIntensity = 0.15;
-          _flickerSpeed = 4.0;
-          _vignette = 0.35;
+          _edgeDarken = 0.40;
+          _blackCrush = 0.36;
+          _vignette = 0.20;
+          _curveMaster = [0.0, 0.16, 0.48, 0.86, 1.0];
+          break;
+
+        case 'solargotcarried':
+          _brightness = 0.02;
+          _saturation = 1.30;
+          _contrast = 1.55;
+          _sharpness = 0.70;
+          _gamma = 0.90;
+          _temperature = 6100.0;
+          _bloomIntensity = 0.52;
+          _bloomSpread = 0.42;
+          _bloomThreshold = 0.38;
+          _edgeGlowTint = 1.0;
+          _blackCrush = 0.32;
+          _darkOutlines = 0.50;
+          _vignette = 0.22;
+          _curveMaster = [0.0, 0.18, 0.50, 0.86, 1.0];
+          break;
+
+        case 'alucard cc':
+          _brightness = -0.03;
+          _saturation = 0.90;
+          _contrast = 1.58;
+          _sharpness = 0.72;
+          _gamma = 0.86;
+          _temperature = 6000.0;
+          _bloomIntensity = 0.32;
+          _bloomSpread = 0.32;
+          _bloomThreshold = 0.46;
+          _darkOutlines = 0.65;
+          _edgeDarken = 0.50;
+          _blackCrush = 0.42;
+          _vignette = 0.30;
+          _curveMaster = [0.0, 0.14, 0.45, 0.85, 1.0];
+          break;
+
+        case 'mb-mojo':
+          _contrast = 1.35;
+          _saturation = 1.15;
+          _mblMojoTealOrange = 0.65;
+          _mblColoristaLift = -0.05;
+          _mblColoristaGain = 0.08;
+          _bloomIntensity = 0.30;
+          _bloomSpread = 0.40;
+          _bloomThreshold = 0.45;
+          _blackCrush = 0.18;
+          _curveMaster = [0.0, 0.22, 0.50, 0.80, 1.0];
+          break;
+
+        case 'mb-cosmo':
+          _contrast = 1.25;
+          _saturation = 1.10;
+          _mblCosmoSkin = 0.60;
+          _sharpness = 0.35;
+          _darkOutlines = 0.30;
+          _bloomIntensity = 0.35;
+          _bloomSpread = 0.45;
+          _bloomThreshold = 0.42;
+          break;
+
+        case 'mb-renoir':
+          _contrast = 1.30;
+          _saturation = 1.05;
+          _mblRenoirHalation = 0.55;
+          _bloomIntensity = 0.40;
+          _bloomSpread = 0.50;
+          _bloomThreshold = 0.38;
+          _edgeGlowTint = 1.0;
+          _blackCrush = 0.15;
+          _vignette = 0.15;
+          break;
+
+        case 'mb-colorista':
+          _contrast = 1.32;
+          _saturation = 1.12;
+          _mblColoristaLift = 0.04;
+          _mblColoristaGamma = 0.02;
+          _mblColoristaGain = -0.04;
+          _sharpness = 0.40;
+          _darkOutlines = 0.25;
+          _blackCrush = 0.20;
           break;
       }
     });
-    _autoSaveProject();
     if (_isImage) _processStaticImage();
+    _autoSaveProject();
   }
 
-  void _showPresetPicker() {
+  void _showExportSheet() {
+    if (_isImage) {
+      _exportStaticImage();
+      return;
+    }
+
+    String selectedContainer = 'MP4';
+    String selectedCodec = 'H.265 (HEVC)';
+    String selectedBitDepth = '10-bit';
+    String selectedRes = '1080p';
+    String selectedFps = '60fps';
+    String selectedBitrate = '35 Mbps';
+
+    final containers = ['MP4', 'WebM', 'MOV', 'MKV'];
+    final resolutions = ['720p', '1080p', '2K', '4K'];
+    final fpsOptions = ['24fps', '30fps', '60fps', '90fps'];
+    final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps', '80 Mbps', '120 Mbps'];
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: kCardDark,
+      backgroundColor: const Color(0xFF0F0F14),
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('VULKAN PRESET VAULT', style: TextStyle(color: kAquamarine, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-            const SizedBox(height: 12),
-            ...['Anime WIS Master', 'Kyoto Glow & Warmth', 'Makoto Shinkai Sky', 'Cyberpunk Neon Drift', 'Moffun Classic 90s Cel'].map((preset) => ListTile(
-              title: Text(preset, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-              trailing: const Icon(Icons.bolt_rounded, color: kAquamarine, size: 18),
-              onTap: () {
-                Navigator.pop(ctx);
-                _applyPreset(preset);
-              },
-            )),
-          ],
-        ),
-      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateModal) {
+            final targetDims = _calculateTargetDimensions(selectedRes, _selectedRatio);
+            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (AVC)'];
+
+            if (!availableCodecs.contains(selectedCodec)) {
+              selectedCodec = availableCodecs.first;
+            }
+
+            if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
+              selectedBitDepth = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '10-bit') ? '10-bit' : '8-bit';
+            }
+
+            final is10Supported = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '10-bit');
+            final is16Supported = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '16-bit');
+
+            return Padding(
+              padding: const EdgeInsets.all(20),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Master Render Pipeline', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(context)),
+                      ],
+                    ),
+                    Text(
+                      '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • Engine: Vulkan FP32',
+                      style: const TextStyle(color: kAquamarine, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+
+                    const Text('CONTAINER', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: containers.map((c) => ChoiceChip(
+                        label: Text(c),
+                        selected: selectedContainer == c,
+                        selectedColor: kAquamarine,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) {
+                            setStateModal(() {
+                              selectedContainer = c;
+                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (AVC)']).first;
+                            });
+                          }
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    Text('CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: availableCodecs.map((codec) => ChoiceChip(
+                        label: Text(codec),
+                        selected: selectedCodec == codec,
+                        selectedColor: kAquamarine,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedCodec = codec);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Text('8-bit'),
+                            selected: selectedBitDepth == '8-bit',
+                            selectedColor: kAquamarine,
+                            backgroundColor: const Color(0xFF18181E),
+                            labelStyle: TextStyle(color: selectedBitDepth == '8-bit' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (_) => setStateModal(() => selectedBitDepth = '8-bit'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Text('10-bit'),
+                            selected: selectedBitDepth == '10-bit',
+                            selectedColor: kAquamarine,
+                            disabledColor: const Color(0xFF121215),
+                            backgroundColor: const Color(0xFF18181E),
+                            labelStyle: TextStyle(
+                              color: !is10Supported ? Colors.white24 : (selectedBitDepth == '10-bit' ? Colors.black : Colors.white),
+                              fontWeight: FontWeight.bold,
+                            ),
+                            onSelected: is10Supported ? (_) => setStateModal(() => selectedBitDepth = '10-bit') : null,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Text('16-bit (MKV)'),
+                            selected: selectedBitDepth == '16-bit',
+                            selectedColor: kAquamarine,
+                            disabledColor: const Color(0xFF121215),
+                            backgroundColor: const Color(0xFF18181E),
+                            labelStyle: TextStyle(
+                              color: !is16Supported ? Colors.white24 : (selectedBitDepth == '16-bit' ? Colors.black : Colors.white),
+                              fontWeight: FontWeight.bold,
+                            ),
+                            onSelected: is16Supported ? (_) => setStateModal(() => selectedBitDepth = '16-bit') : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: resolutions.map((res) => ChoiceChip(
+                        label: Text(res),
+                        selected: selectedRes == res,
+                        selectedColor: kAquamarine,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedRes = res);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: fpsOptions.map((fps) => ChoiceChip(
+                        label: Text(fps),
+                        selected: selectedFps == fps,
+                        selectedColor: kAquamarine,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedFps = fps);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: bitrateOptions.map((bit) => ChoiceChip(
+                        label: Text(bit),
+                        selected: selectedBitrate == bit,
+                        selectedColor: kAquamarine,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedBitrate == bit ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedBitrate = bit);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 20),
+
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _exportVideo(selectedRes, selectedFps, selectedBitrate, selectedContainer, selectedCodec, selectedBitDepth);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: kAquamarine,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: Text(
+                          'RENDER $selectedContainer (${selectedCodec.split(' ').first} • $selectedBitDepth)',
+                          style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  double _getAspectRatioValue(String ratio) {
-    switch (ratio) {
-      case "9:16": return 9.0 / 16.0;
-      case "16:9": return 16.0 / 9.0;
-      case "1:1":  return 1.0;
-      case "3:4":  return 3.0 / 4.0;
-      case "21:9": return 21.0 / 9.0;
-      case "4:5":
-      default:     return 4.0 / 5.0;
+  Future<void> _exportStaticImage() async {
+    if (_loadedRawImage == null || _currentMediaPath == null) return;
+    try {
+      final uniforms = _packUniforms();
+      final byteData = await _loadedRawImage!.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final rawInput = byteData!.buffer.asUint8List();
+
+      final dims = _calculateTargetDimensions('1080p', _selectedRatio);
+      final exportWidth = dims['width']!;
+      final exportHeight = dims['height']!;
+
+      final outputRaw = processImage(
+        rawInput,
+        _loadedRawImage!.width,
+        _loadedRawImage!.height,
+        exportWidth,
+        exportHeight,
+        uniforms,
+      );
+
+      final gradedImg = img.Image.fromBytes(
+        width: exportWidth,
+        height: exportHeight,
+        bytes: outputRaw.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+
+      final pngBytes = img.encodePng(gradedImg);
+
+      // Dedicated Movies directory export
+      Directory exportDir = Directory('/storage/emulated/0/Movies/AEReality');
+      if (!await exportDir.exists()) {
+        try {
+          await exportDir.create(recursive: true);
+        } catch (_) {
+          final extDir = await getExternalStorageDirectory();
+          exportDir = extDir ?? await getApplicationDocumentsDirectory();
+        }
+      }
+
+      final fileName = 'AEReality_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
+      final destFile = File('${exportDir.path}/$fileName');
+      await destFile.writeAsBytes(pngBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Graded Image Saved: ${destFile.path}'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image Export Error: $e'), backgroundColor: Colors.red));
+      }
     }
   }
 
-  // ============================================================================
-  // EXPORT PIPELINE
-  // ============================================================================
-  void _openExportModal() {
-    String selectedContainer = 'MP4';
-    String selectedCodec = 'H.265 (HEVC)';
-    String selectedRes = '1080p';
-    String selectedBitDepth = '8-bit';
-    int bitrateMbps = 35;
-    int fps = 60;
+  // ROBUST FRAME EXTRACTION WITH MOVIES DESTINATION & VP9 SNAP
+  Future<void> _exportVideo(
+    String resolution,
+    String fps,
+    String bitrate,
+    String container,
+    String codec,
+    String bitDepth,
+  ) async {
+    if (_controller == null || !_controller!.value.isInitialized || _currentMediaPath == null) return;
 
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: kCardDark,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) {
-          final codecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (AVC)'];
-          if (!codecs.contains(selectedCodec)) {
-            selectedCodec = codecs.first;
-          }
+    final uniforms = _packUniforms();
+    final targetDims = _calculateTargetDimensions(resolution, _selectedRatio);
+    final int outW = targetDims['width']!;
+    final int outH = targetDims['height']!;
 
-          return Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('MASTER EXPORT SETTINGS', style: TextStyle(color: kAquamarine, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
-                      IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('CONTAINER', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: ['MP4', 'MKV', 'WebM', 'MOV'].map((c) => ChoiceChip(
-                      label: Text(c),
-                      selected: selectedContainer == c,
-                      selectedColor: kAquamarine,
-                      backgroundColor: kSurfaceDark,
-                      labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                      onSelected: (_) => setModalState(() {
-                        selectedContainer = c;
-                        selectedCodec = ExportMatrix.containerCodecs[c]!.first;
-                        if (!ExportMatrix.isBitDepthValid(c, selectedCodec, selectedBitDepth)) {
-                          selectedBitDepth = '8-bit';
-                        }
-                      }),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('ENCODE CODEC', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: codecs.map((codec) => ChoiceChip(
-                      label: Text(codec),
-                      selected: selectedCodec == codec,
-                      selectedColor: kLavender,
-                      backgroundColor: kSurfaceDark,
-                      labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                      onSelected: (_) => setModalState(() {
-                        selectedCodec = codec;
-                        if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
-                          selectedBitDepth = '8-bit';
-                        }
-                      }),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('COLOR BIT DEPTH', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: ['8-bit', '10-bit', '16-bit'].map((bd) {
-                      final valid = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, bd);
-                      return ChoiceChip(
-                        label: Text(bd),
-                        selected: selectedBitDepth == bd,
-                        selectedColor: kAquamarine,
-                        backgroundColor: valid ? kSurfaceDark : Colors.white10,
-                        labelStyle: TextStyle(color: !valid ? Colors.white24 : (selectedBitDepth == bd ? Colors.black : Colors.white)),
-                        onSelected: valid ? (_) => setModalState(() => selectedBitDepth = bd) : null,
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('TARGET RESOLUTION', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: ['720p', '1080p', '2K', '4K'].map((res) => ChoiceChip(
-                      label: Text(res),
-                      selected: selectedRes == res,
-                      selectedColor: kAquamarine,
-                      backgroundColor: kSurfaceDark,
-                      labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                      onSelected: (_) => setModalState(() => selectedRes = res),
-                    )).toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('TARGET BITRATE', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                      Text('${bitrateMbps} Mbps', style: const TextStyle(color: kAquamarine, fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2.5,
-                      activeTrackColor: kLavender,
-                      inactiveTrackColor: Colors.white12,
-                      thumbColor: kLavenderSoft,
-                    ),
-                    child: Slider(
-                      value: bitrateMbps.toDouble(),
-                      min: 5.0,
-                      max: 100.0,
-                      divisions: 95,
-                      onChanged: (v) => setModalState(() => bitrateMbps = v.round()),
-                    ),
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('EXPORT FPS', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-                      Text('$fps fps', style: const TextStyle(color: kAquamarine, fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2.5,
-                      activeTrackColor: kLavender,
-                      inactiveTrackColor: Colors.white12,
-                      thumbColor: kLavenderSoft,
-                    ),
-                    child: Slider(
-                      value: fps.toDouble(),
-                      min: 24.0,
-                      max: 60.0,
-                      divisions: 36,
-                      onChanged: (v) => setModalState(() => fps = v.round()),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _startExportProcess(
-                          container: selectedContainer,
-                          codec: selectedCodec,
-                          bitDepth: selectedBitDepth,
-                          resolution: selectedRes,
-                          bitrateKbps: bitrateMbps * 1000,
-                          fps: fps,
-                        );
-                      },
-                      icon: const Icon(Icons.rocket_launch_rounded, color: Colors.black, size: 18),
-                      label: const Text('START COMPUTE RENDER', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: kAquamarine,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
+    int bitrateKbps = 35000;
+    if (bitrate.contains('15')) bitrateKbps = 15000;
+    else if (bitrate.contains('50')) bitrateKbps = 50000;
+    else if (bitrate.contains('80')) bitrateKbps = 80000;
+    else if (bitrate.contains('120')) bitrateKbps = 120000;
 
-  Future<void> _startExportProcess({
-    required String container,
-    required String codec,
-    required String bitDepth,
-    required String resolution,
-    required int bitrateKbps,
-    required int fps,
-  }) async {
-    final dims = _calculateTargetDimensions(resolution, _selectedRatio);
-    final int outW = dims['width']!;
-    final int outH = dims['height']!;
+    int targetFps = int.parse(fps.replaceAll('fps', ''));
+    String containerExt = container.toLowerCase();
+
+    final bool is16Bit = bitDepth == '16-bit';
+    final bool is10Bit = bitDepth == '10-bit';
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Extracting pristine frames...');
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => _RenderExportDialog(
-        mediaPath: _currentMediaPath!,
-        isImage: _isImage,
-        width: outW,
-        height: outH,
-        fps: fps,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF101014),
+          title: Text('Exporting $outW x $outH Master ($bitDepth)', style: const TextStyle(color: Colors.white, fontSize: 15)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<double>(
+                valueListenable: progressNotifier,
+                builder: (_, progress, __) => LinearProgressIndicator(value: progress, color: kAquamarine, backgroundColor: Colors.white12),
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(status, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final videoPath = _currentMediaPath!;
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create(recursive: true);
+      await processedDir.create(recursive: true);
+
+      final audioPath = '${dir.path}/current_audio.aac';
+      final oldAudio = File(audioPath);
+      if (await oldAudio.exists()) await oldAudio.delete();
+      await FFmpegKit.execute('-i "$videoPath" -vn -c:a aac -y "$audioPath"');
+
+      // Robust extraction format that works cleanly across all Android builds
+      final extractSession = await FFmpegKit.execute(
+        '-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.png"',
+      );
+
+      var frameFiles = await framesDir.list().toList();
+      if (frameFiles.isEmpty) {
+        await FFmpegKit.execute('-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.bmp"');
+        frameFiles = await framesDir.list().toList();
+      }
+
+      frameFiles.sort((a, b) => a.path.compareTo(b.path));
+      final totalFrames = frameFiles.length;
+
+      if (totalFrames == 0) {
+        final logs = await extractSession.getLogsAsString();
+        throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No log output"}');
+      }
+
+      for (int i = 0; i < totalFrames; i++) {
+        final file = frameFiles[i];
+        if (file is! File) continue;
+        final bytes = await file.readAsBytes();
+        final decoded = img.decodeImage(bytes);
+        if (decoded == null) continue;
+
+        uniforms[0] = i / targetFps.toDouble();
+
+        img.Image gradedImg;
+        if (is10Bit || is16Bit) {
+          final rawInput16 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final u16In = rawInput16.buffer.asUint16List();
+          final outputRaw16 = processImage16(u16In, decoded.width, decoded.height, outW, outH, uniforms);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw16.buffer,
+            numChannels: 4,
+            format: img.Format.uint16,
+            order: img.ChannelOrder.rgba,
+          );
+        } else {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final outputRaw8 = processImage(rawInput8, decoded.width, decoded.height, outW, outH, uniforms);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw8.buffer,
+            numChannels: 4,
+            order: img.ChannelOrder.rgba,
+          );
+        }
+
+        final pngBytes = img.encodePng(gradedImg);
+        final paddedIndex = (i + 1).toString().padLeft(5, '0');
+        final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
+        await outputFile.writeAsBytes(pngBytes);
+
+        progressNotifier.value = (i + 1) / totalFrames;
+        statusNotifier.value = 'Grading frame ${i + 1} / $totalFrames ($bitDepth)...';
+      }
+
+      statusNotifier.value = 'Assembling final $container master...';
+      final silentOutputPath = '${dir.path}/silent_video.$containerExt';
+      final silentFile = File(silentOutputPath);
+      if (await silentFile.exists()) await silentFile.delete();
+
+      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
+        fps: targetFps,
+        framePattern: '${processedDir.path}/frame_%05d.png',
         container: container,
         codec: codec,
         bitDepth: bitDepth,
         bitrateKbps: bitrateKbps,
-        uniforms: _packUniforms(),
+        outputPath: silentOutputPath,
+      );
+      await FFmpegKit.execute(encodeCmd);
+
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
+
+      // Primary Export Target: /storage/emulated/0/Movies/AEReality
+      Directory exportDir = Directory('/storage/emulated/0/Movies/AEReality');
+      if (!await exportDir.exists()) {
+        try {
+          await exportDir.create(recursive: true);
+        } catch (_) {
+          final extDir = await getExternalStorageDirectory();
+          exportDir = extDir ?? await getApplicationDocumentsDirectory();
+        }
+      }
+
+      final cleanCodec = codec.split(' ').first;
+      final fileName = 'AEReality_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final finalOutputFile = File('${exportDir.path}/$fileName');
+
+      if (hasAudio) {
+        final audioCodec = ExportMatrix.getAudioCodec(container);
+        await FFmpegKit.execute('-i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+      } else {
+        await File(silentOutputPath).copy(finalOutputFile.path);
+      }
+
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('✅ Master Video Exported:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+      );
+    } catch (e) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.projectName ?? 'AEReality Editor'),
+        actions: [
+          // File Picker Button in Pure Gold
+          IconButton(
+            icon: const Icon(Icons.folder_open_rounded, color: kGold),
+            tooltip: 'Import New Footage/Art',
+            onPressed: () async {
+              final result = await FilePicker.platform.pickFiles(
+                type: FileType.custom,
+                allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
+              );
+              if (result != null && result.files.single.path != null) {
+                _loadMedia(result.files.single.path!);
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.save_rounded, color: Colors.white70),
+            tooltip: 'Save Session',
+            onPressed: () async {
+              await _autoSaveProject();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project saved successfully!'), backgroundColor: Colors.teal));
+              }
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+            tooltip: 'Reset Grading',
+            onPressed: _resetAllEffects,
+          ),
+          IconButton(
+            icon: const Icon(Icons.movie_creation_outlined, color: kAquamarine),
+            tooltip: 'Master Render Pipeline',
+            onPressed: _showExportSheet,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // 1. Stage / Canvas with Active Repaint Boundary (Fixes static lines & diagonal skew)
+          Expanded(
+            flex: _isFullScreen ? 10 : 5,
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: _getAspectRatioValue(_selectedRatio),
+                child: Container(
+                  margin: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Active video layer
+                      if (!_isImage && _controller != null && _controller!.value.isInitialized)
+                        RepaintBoundary(
+                          key: _activeCanvasKey,
+                          child: VideoPlayer(_controller!),
+                        ),
+
+                      // Real-time Vulkan Processed Image Overlay
+                      if (_processedImage != null)
+                        RawImage(image: _processedImage, fit: BoxFit.contain),
+
+                      // Canvas Controls
+                      Positioned(
+                        bottom: 10,
+                        left: 10,
+                        child: Row(
+                          children: [
+                            if (!_isImage && _controller != null)
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    if (_controller!.value.isPlaying) {
+                                      _controller!.pause();
+                                      _isPlaying = false;
+                                    } else {
+                                      _controller!.play();
+                                      _isPlaying = true;
+                                    }
+                                  });
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: Icon(
+                                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () => setState(() => _isFullScreen = !_isFullScreen),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                                child: Icon(
+                                  _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          if (!_isFullScreen) ...[
+            Container(
+              color: kSurfaceDark,
+              child: TabBar(
+                controller: _tabController,
+                indicatorColor: kAquamarine,
+                labelColor: kAquamarine,
+                unselectedLabelColor: Colors.white38,
+                isScrollable: true,
+                labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                tabs: const [
+                  Tab(text: 'PRESETS'),
+                  Tab(text: 'GRADE'),
+                  Tab(text: 'CURVES'),
+                  Tab(text: 'GLOWS'),
+                  Tab(text: 'SAPPHIRE/AE'),
+                  Tab(text: 'MAGIC BULLET'),
+                ],
+              ),
+            ),
+
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: kBackgroundDark,
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildPresetsTab(),
+                    _buildGradingTab(),
+                    _buildCurvesTab(),
+                    _buildGlowsTab(),
+                    _buildSapphireTab(),
+                    _buildMagicBulletTab(),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // --- TAB 1: PRESETS ---
+  Widget _buildPresetsTab() {
+    final presets = [
+      {'name': 'adevob+junho', 'desc': 'Warm golden speculars, crisp ink outlines, clean contrast', 'color': 0xFFFFB300},
+      {'name': 'vintage cc', 'desc': 'Deep crushed blacks, authentic film contrast, desaturated tones', 'color': 0xFF9E9E9E},
+      {'name': 'adevobfiller', 'desc': 'Balanced midtones, micro-sharp linework, controlled bloom', 'color': 0xFF29B6F6},
+      {'name': 'uryu vs ichigo', 'desc': 'Quincy icy cyan specular bloom, deep shadows, high micro-contrast', 'color': 0xFF00E5FF},
+      {'name': 'saber vs Rin', 'desc': 'Ufotable cinema style with anamorphic flare and deep blacks', 'color': 0xFFFF4081},
+      {'name': 'Dantae cc', 'desc': 'Heavy ink isolation, cold palette, high-contrast dynamic range', 'color': 0xFF7C4DFF},
+      {'name': 'solargotcarried', 'desc': 'High-contrast solarized grade calibrated to the 0:28 mark', 'color': 0xFFFFAB00},
+      {'name': 'alucard cc', 'desc': 'Hellsing gothic dark grade with cold blacks and natural desaturation', 'color': 0xFFE53935},
+      {'name': 'mb-mojo', 'desc': 'Teal shadows and warm specular skin highlights', 'color': 0xFF00ACC1},
+      {'name': 'mb-cosmo', 'desc': 'Facial and line-preserving bilateral skin smoothing', 'color': 0xFFEC407A},
+      {'name': 'mb-renoir', 'desc': 'Authentic 35mm warm specular halation on high-contrast edges', 'color': 0xFFFF7043},
+      {'name': 'mb-colorista', 'desc': 'Balanced 3-way color wheel master grade', 'color': 0xFFAB47BC},
+    ];
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: presets.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, i) {
+        final item = presets[i];
+        return GestureDetector(
+          onTap: () => _applyPreset(item['name'] as String),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: kCardDark,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Color(item['color'] as int),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(item['name'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      const SizedBox(height: 2),
+                      Text(item['desc'] as String, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // --- TAB 2: PRIMARY GRADING ---
+  Widget _buildGradingTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        _buildSliderRow('Contrast (0.18 Mid-Gray Pivot)', _contrast, 0.5, 2.5, (v) => setState(() => _contrast = v)),
+        _buildSliderRow('Highlights', _highlights, -1.0, 1.0, (v) => setState(() => _highlights = v)),
+        _buildSliderRow('Shadows', _shadows, -1.0, 1.0, (v) => setState(() => _shadows = v)),
+        _buildSliderRow('Black Crush', _blackCrush, 0.0, 1.0, (v) => setState(() => _blackCrush = v)),
+        _buildSliderRow('Gamma Curve', _gamma, 0.4, 2.0, (v) => setState(() => _gamma = v)),
+        _buildSliderRow('Saturation (Headroom-Safe)', _saturation, 0.0, 2.5, (v) => setState(() => _saturation = v)),
+        _buildSliderRow('Hue Shift', _hue, -0.5, 0.5, (v) => setState(() => _hue = v)),
+        _buildSliderRow('Exposure / Brightness', _brightness, -1.0, 1.0, (v) => setState(() => _brightness = v)),
+        _buildSliderRow('Micro-Sharpness (With Edge Halo)', _sharpness, 0.0, 1.5, (v) => setState(() => _sharpness = v)),
+        _buildSliderRow('Chromatic Aberration (Prism Fringe)', _chromaticAberration, 0.0, 1.0, (v) => setState(() => _chromaticAberration = v)),
+        _buildSliderRow('Split Toning (Subtle Push)', _splitToning, 0.0, 1.0, (v) => setState(() => _splitToning = v)),
+        _buildSliderRow('Denoise (Bilateral Filter)', _denoise, 0.0, 1.0, (v) => setState(() => _denoise = v)),
+        _buildSliderRow('Film Grain & Micro-Texture', _filmGrain, 0.0, 1.0, (v) => setState(() => _filmGrain = v)),
+        _buildSliderRow('Consistent Flicker Intensity', _flickerIntensity, 0.0, 1.0, (v) => setState(() => _flickerIntensity = v)),
+        _buildSliderRow('Consistent Flicker Speed', _flickerSpeed, 1.0, 10.0, (v) => setState(() => _flickerSpeed = v)),
+        _buildSliderRow('Vignette (Radial)', _vignette, 0.0, 1.0, (v) => setState(() => _vignette = v)),
+        _buildSliderRow('Vignette (Boxed / Letterbox Shape)', _vignetteBoxed, 0.0, 1.0, (v) => setState(() => _vignetteBoxed = v)),
+        _buildSliderRow('Color Temperature (K)', _temperature, 3000.0, 9500.0, (v) => setState(() => _temperature = v)),
+      ],
+    );
+  }
+
+  // --- TAB 3: CURVES ---
+  Widget _buildCurvesTab() {
+    final channelColors = [Colors.white, Colors.redAccent, Colors.greenAccent, Colors.blueAccent];
+    final channelNames = ['RGB Master', 'Red', 'Green', 'Blue'];
+
+    List<double> currentPts;
+    switch (_selectedCurveChannel) {
+      case 1: currentPts = _curveRed; break;
+      case 2: currentPts = _curveGreen; break;
+      case 3: currentPts = _curveBlue; break;
+      case 0:
+      default: currentPts = _curveMaster; break;
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(4, (idx) {
+              final isSel = _selectedCurveChannel == idx;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: ChoiceChip(
+                  label: Text(channelNames[idx]),
+                  selected: isSel,
+                  selectedColor: channelColors[idx].withOpacity(0.25),
+                  backgroundColor: kCardDark,
+                  labelStyle: TextStyle(
+                    color: isSel ? channelColors[idx] : Colors.white60,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                  ),
+                  onSelected: (val) {
+                    if (val) setState(() => _selectedCurveChannel = idx);
+                  },
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 10),
+          SplineCurveEditor(
+            points: currentPts,
+            curveColor: channelColors[_selectedCurveChannel],
+            onChanged: (newPts) {
+              setState(() {
+                switch (_selectedCurveChannel) {
+                  case 1: _curveRed = newPts; break;
+                  case 2: _curveGreen = newPts; break;
+                  case 3: _curveBlue = newPts; break;
+                  case 0:
+                  default: _curveMaster = newPts; break;
+                }
+              });
+              if (_isImage) _processStaticImage();
+              _autoSaveProject();
+            },
+          ),
+          const SizedBox(height: 12),
+          const Text('CURVE POINT SLIDERS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          ...List.generate(5, (pIdx) {
+            final labels = ['Blacks (P0)', 'Shadows (P1)', 'Midtones (P2)', 'Highlights (P3)', 'Whites (P4)'];
+            return _buildSliderRow(
+              labels[pIdx],
+              currentPts[pIdx],
+              0.0,
+              1.0,
+              (v) {
+                setState(() {
+                  final updated = List<double>.from(currentPts);
+                  updated[pIdx] = v;
+                  switch (_selectedCurveChannel) {
+                    case 1: _curveRed = updated; break;
+                    case 2: _curveGreen = updated; break;
+                    case 3: _curveBlue = updated; break;
+                    case 0:
+                    default: _curveMaster = updated; break;
+                  }
+                });
+                if (_isImage) _processStaticImage();
+                _autoSaveProject();
+              },
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  // --- TAB 4: GLOWS & LINE ART SHADOW ---
+  Widget _buildGlowsTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        _buildSliderRow('Gaussian Bloom Intensity', _bloomIntensity, 0.0, 1.5, (v) => setState(() => _bloomIntensity = v)),
+        _buildSliderRow('Bloom Spread (Smoothness)', _bloomSpread, 0.1, 1.0, (v) => setState(() => _bloomSpread = v)),
+        _buildSliderRow('Bright-Pass Threshold', _bloomThreshold, 0.1, 0.9, (v) => setState(() => _bloomThreshold = v)),
+        const SizedBox(height: 10),
+        const Text('BLOOM TINT HARMONY (INCLUDING INK BLACK GLOW)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('Neutral'),
+              selected: _edgeGlowTint == 0.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 0.0),
+            ),
+            ChoiceChip(
+              label: const Text('Gold / Warm'),
+              selected: _edgeGlowTint == 1.0,
+              selectedColor: const Color(0xFFFFB300),
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 1.0),
+            ),
+            ChoiceChip(
+              label: const Text('Quincy Cyan'),
+              selected: _edgeGlowTint == 2.0,
+              selectedColor: const Color(0xFF00E5FF),
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 2.0),
+            ),
+            ChoiceChip(
+              label: const Text('Crimson'),
+              selected: _edgeGlowTint == 4.0,
+              selectedColor: const Color(0xFFE53935),
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 4.0),
+            ),
+            ChoiceChip(
+              label: const Text('Black / Ink Shadow'),
+              selected: _edgeGlowTint == 5.0,
+              selectedColor: Colors.white54,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _edgeGlowTint = 5.0),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        // Targets line art and only darkens the edges slightly with a weak/fade glow
+        _buildSliderRow('Edge Darken (Weak/Fade Line-Art Glow Shadow)', _edgeDarken, 0.0, 1.0, (v) => setState(() => _edgeDarken = v)),
+        _buildSliderRow('Sobel Ink Outlines', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
+        _buildSliderRow('Anamorphic 1D Flare', _anamorphicFlare, 0.0, 1.0, (v) => setState(() => _anamorphicFlare = v)),
+        _buildSliderRow('Flare Stretch', _flareAmount, 0.1, 1.0, (v) => setState(() => _flareAmount = v)),
+        _buildSliderRow('Light Rays / God Rays', _lightRays, 0.0, 1.0, (v) => setState(() => _lightRays = v)),
+        _buildSliderRow('Light Rays Decay', _lightRaysDecay, 0.70, 0.98, (v) => setState(() => _lightRaysDecay = v)),
+      ],
+    );
+  }
+
+  // --- TAB 5: SAPPHIRE / AE ---
+  Widget _buildSapphireTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        const Text('HDR TONEMAPPING OPERATOR', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('Off (Linear)'),
+              selected: _tonemapMode == 0.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 0.0),
+            ),
+            ChoiceChip(
+              label: const Text('Reinhard'),
+              selected: _tonemapMode == 1.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 1.0),
+            ),
+            ChoiceChip(
+              label: const Text('ACES Filmic'),
+              selected: _tonemapMode == 2.0,
+              selectedColor: kAquamarine,
+              backgroundColor: const Color(0xFF18181E),
+              onSelected: (_) => setState(() => _tonemapMode = 2.0),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _buildSliderRow('Sapphire Blend Mix', _sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _sapphireBlendMix = v)),
+        _buildSliderRow('FilmConvert Nitrate Stock Mix', _filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _filmConvertNitrate = v)),
+        _buildSliderRow('4-Corner Vignette Gradient Mix', _fourColorGradMix, 0.0, 1.0, (v) => setState(() => _fourColorGradMix = v)),
+      ],
+    );
+  }
+
+  // --- TAB 6: MAGIC BULLET ---
+  Widget _buildMagicBulletTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        const Text('3-WAY COLORISTA WHEELS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            ColoristaWheel(
+              label: 'LIFT (Shadows)',
+              value: _mblColoristaLift,
+              accentColor: kAquamarine,
+              onChanged: (v) => setState(() => _mblColoristaLift = v),
+            ),
+            ColoristaWheel(
+              label: 'GAMMA (Mids)',
+              value: _mblColoristaGamma,
+              accentColor: kAquamarine,
+              onChanged: (v) => setState(() => _mblColoristaGamma = v),
+            ),
+            ColoristaWheel(
+              label: 'GAIN (Highs)',
+              value: _mblColoristaGain,
+              accentColor: const Color(0xFFFF7043),
+              onChanged: (v) => setState(() => _mblColoristaGain = v),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _buildSliderRow('Cosmo II (Bilateral Skin Smooth)', _mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _mblCosmoSkin = v)),
+        _buildSliderRow('Mojo II (Teal / Orange Contrast)', _mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _mblMojoTealOrange = v)),
+        _buildSliderRow('Renoir (35mm Edge Halation)', _mblRenoirHalation, 0.0, 1.0, (v) => setState(() => _mblRenoirHalation = v)),
+        _buildSliderRow('Depth of Field (Tilt-Shift)', _depthOfField, 0.0, 1.0, (v) => setState(() => _depthOfField = v)),
+        _buildSliderRow('Focal Plane Position', _dofFocus, 0.0, 1.0, (v) => setState(() => _dofFocus = v)),
+      ],
+    );
+  }
+
+  // SLIDER ROW: LUMINOUS AQUAMARINE TRACK & THUMB
+  Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+              Text(val.toStringAsFixed(2), style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace')),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2.2,
+              activeTrackColor: kAquamarine,
+              inactiveTrackColor: Colors.white12,
+              thumbColor: kAquamarine,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+            ),
+            child: Slider(
+              value: val.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: (v) {
+                onChanged(v);
+                if (_isImage) _processStaticImage();
+              },
+              onChangeEnd: (_) {
+                _autoSaveProject(); // Debounced save: only writes to storage on touch release
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1964,641 +2865,5 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
     _tabController.dispose();
     super.dispose();
-  }
-
-  // ============================================================================
-  // UI BUILD
-  // ============================================================================
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(widget.projectName ?? 'AEReality Studio Pro'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.auto_awesome_rounded, color: kAquamarine),
-            tooltip: 'Presets',
-            onPressed: _showPresetPicker,
-          ),
-          IconButton(
-            icon: const Icon(Icons.replay_rounded, color: Colors.white70),
-            tooltip: 'Reset',
-            onPressed: _resetParameters,
-          ),
-          IconButton(
-            icon: const Icon(Icons.file_upload_outlined, color: kAquamarine),
-            tooltip: 'Export',
-            onPressed: _openExportModal,
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Preview Canvas Stage
-            Expanded(
-              flex: _isFullScreen ? 10 : 5,
-              child: Container(
-                color: Colors.black,
-                width: double.infinity,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    AspectRatio(
-                      aspectRatio: _getAspectRatioValue(_selectedRatio),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0A0A0E),
-                          border: Border.all(color: Colors.white.withOpacity(0.08)),
-                        ),
-                        child: ClipRect(
-                          child: RepaintBoundary(
-                            key: _activeCanvasKey,
-                            child: _processedImage != null
-                                ? RawImage(image: _processedImage, fit: BoxFit.contain)
-                                : (_isImage
-                                    ? (_loadedRawImage != null ? RawImage(image: _loadedRawImage, fit: BoxFit.contain) : const Center(child: CircularProgressIndicator()))
-                                    : (_controller != null && _controller!.value.isInitialized
-                                        ? VideoPlayer(_controller!)
-                                        : const Center(child: CircularProgressIndicator(color: kAquamarine)))),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 10,
-                      left: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                        child: Text(
-                          '${_canvasWidth}x$_canvasHeight • $_selectedRatio',
-                          style: const TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace'),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 10,
-                      right: 10,
-                      child: IconButton(
-                        icon: Icon(_isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white70),
-                        onPressed: () => setState(() => _isFullScreen = !_isFullScreen),
-                      ),
-                    ),
-                    if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                      Positioned(
-                        bottom: 10,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(20)),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: kAquamarine),
-                                onPressed: () {
-                                  setState(() {
-                                    if (_isPlaying) {
-                                      _controller!.pause();
-                                      _isPlaying = false;
-                                    } else {
-                                      _controller!.play();
-                                      _isPlaying = true;
-                                    }
-                                  });
-                                },
-                              ),
-                              SizedBox(
-                                width: 140,
-                                child: VideoProgressIndicator(
-                                  _controller!,
-                                  allowScrubbing: true,
-                                  colors: const VideoProgressColors(
-                                    playedColor: kAquamarine,
-                                    bufferedColor: Colors.white24,
-                                    backgroundColor: Colors.white10,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Controls Tabs
-            if (!_isFullScreen) ...[
-              Container(
-                color: kCardDark,
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  indicatorColor: kAquamarine,
-                  labelColor: kAquamarine,
-                  unselectedLabelColor: Colors.white54,
-                  tabs: const [
-                    Tab(text: 'Basic Grade'),
-                    Tab(text: 'Glow & Rays'),
-                    Tab(text: 'Curves'),
-                    Tab(text: 'Colorista'),
-                    Tab(text: 'Sapphire & AE'),
-                    Tab(text: 'Atmosphere'),
-                  ],
-                ),
-              ),
-              Expanded(
-                flex: 6,
-                child: Container(
-                  color: kSurfaceDark,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildBasicGradeTab(),
-                      _buildGlowRaysTab(),
-                      _buildCurvesTab(),
-                      _buildColoristaTab(),
-                      _buildSapphireTab(),
-                      _buildAtmosphereTab(),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ============================================================================
-  // PARAMETER SLIDER BUILDER
-  // Lavender Slider Active Track: 0xFFC8B6FF
-  // ============================================================================
-  Widget _buildSlider(String label, double value, double min, double max, ValueChanged<double> onChanged, {String unit = ''}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
-          ),
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 2.2,
-                activeTrackColor: kLavender,       // Lavender active line
-                inactiveTrackColor: Colors.white12,
-                thumbColor: kLavenderSoft,        // Soft lavender thumb
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-              ),
-              child: Slider(
-                value: value.clamp(min, max),
-                min: min,
-                max: max,
-                onChanged: (v) {
-                  onChanged(v);
-                  _autoSaveProject();
-                  if (_isImage) _processStaticImage();
-                },
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 48,
-            child: Text(
-              '${value.toStringAsFixed(2)}$unit',
-              textAlign: TextAlign.right,
-              style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ============================================================================
-  // TAB IMPLEMENTATIONS
-  // ============================================================================
-  Widget _buildBasicGradeTab() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      children: [
-        _buildSlider('Brightness', _brightness, -1.0, 1.0, (v) => setState(() => _brightness = v)),
-        _buildSlider('Contrast', _contrast, 0.0, 2.5, (v) => setState(() => _contrast = v)),
-        _buildSlider('Saturation', _saturation, 0.0, 2.5, (v) => setState(() => _saturation = v)),
-        _buildSlider('Sharpness (Unsharp)', _sharpness, 0.0, 1.0, (v) => setState(() => _sharpness = v)),
-        _buildSlider('Gamma Exponent', _gamma, 0.2, 2.5, (v) => setState(() => _gamma = v)),
-        _buildSlider('Hue Offset', _hue, -3.1415, 3.1415, (v) => setState(() => _hue = v)),
-        _buildSlider('Color Temp (Kelvin)', _temperature, 2000.0, 12000.0, (v) => setState(() => _temperature = v), unit: 'K'),
-        _buildSlider('Shadows Lift', _shadows, -1.0, 1.0, (v) => setState(() => _shadows = v)),
-        _buildSlider('Highlights Gain', _highlights, -1.0, 1.0, (v) => setState(() => _highlights = v)),
-        _buildSlider('Black Crush (Toe)', _blackCrush, 0.0, 0.5, (v) => setState(() => _blackCrush = v)),
-        _buildSlider('Denoise Bilateral', _denoise, 0.0, 1.0, (v) => setState(() => _denoise = v)),
-      ],
-    );
-  }
-
-  Widget _buildGlowRaysTab() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      children: [
-        _buildSlider('Gaussian Bloom', _bloomIntensity, 0.0, 2.0, (v) => setState(() => _bloomIntensity = v)),
-        _buildSlider('Bloom Spread', _bloomSpread, 0.05, 1.5, (v) => setState(() => _bloomSpread = v)),
-        _buildSlider('Bloom Luma Cutoff', _bloomThreshold, 0.0, 1.0, (v) => setState(() => _bloomThreshold = v)),
-        _buildSlider('Bloom Radius Scale', _bloomRadius, 0.2, 3.0, (v) => setState(() => _bloomRadius = v)),
-        _buildSlider('Warm Edge Glow Tint', _edgeGlowTint, 0.0, 1.0, (v) => setState(() => _edgeGlowTint = v)),
-        _buildSlider('Vignette Falloff', _vignette, 0.0, 1.0, (v) => setState(() => _vignette = v)),
-        _buildSlider('Edge Darken', _edgeDarken, 0.0, 1.0, (v) => setState(() => _edgeDarken = v)),
-        _buildSlider('Anamorphic Blue Streak', _anamorphicFlare, 0.0, 1.0, (v) => setState(() => _anamorphicFlare = v)),
-        _buildSlider('Flare Width', _flareAmount, 0.1, 1.0, (v) => setState(() => _flareAmount = v)),
-        _buildSlider('Radial God Rays', _lightRays, 0.0, 1.0, (v) => setState(() => _lightRays = v)),
-        _buildSlider('Rays Decay Length', _lightRaysDecay, 0.5, 0.98, (v) => setState(() => _lightRaysDecay = v)),
-      ],
-    );
-  }
-
-  Widget _buildCurvesTab() {
-    Color activeColor;
-    List<double> activeList;
-    switch (_selectedCurveChannel) {
-      case 1:  activeColor = const Color(0xFFFF5252); activeList = _curveRed; break;
-      case 2:  activeColor = const Color(0xFF69F0AE); activeList = _curveGreen; break;
-      case 3:  activeColor = const Color(0xFF448AFF); activeList = _curveBlue; break;
-      case 0:
-      default: activeColor = Colors.white; activeList = _curveMaster; break;
-    }
-
-    return Column(
-      children: [
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildCurveChip('Master', 0, Colors.white),
-            const SizedBox(width: 8),
-            _buildCurveChip('Red', 1, const Color(0xFFFF5252)),
-            const SizedBox(width: 8),
-            _buildCurveChip('Green', 2, const Color(0xFF69F0AE)),
-            const SizedBox(width: 8),
-            _buildCurveChip('Blue', 3, const Color(0xFF448AFF)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: SplineCurveEditor(
-            points: activeList,
-            curveColor: activeColor,
-            onChanged: (newPts) {
-              setState(() {
-                if (_selectedCurveChannel == 0) _curveMaster = newPts;
-                if (_selectedCurveChannel == 1) _curveRed = newPts;
-                if (_selectedCurveChannel == 2) _curveGreen = newPts;
-                if (_selectedCurveChannel == 3) _curveBlue = newPts;
-              });
-              _autoSaveProject();
-              if (_isImage) _processStaticImage();
-            },
-          ),
-        ),
-        const SizedBox(height: 8),
-        TextButton.icon(
-          onPressed: () {
-            setState(() {
-              if (_selectedCurveChannel == 0) _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
-              if (_selectedCurveChannel == 1) _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
-              if (_selectedCurveChannel == 2) _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
-              if (_selectedCurveChannel == 3) _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
-            });
-            _autoSaveProject();
-            if (_isImage) _processStaticImage();
-          },
-          icon: const Icon(Icons.refresh, size: 14, color: Colors.white54),
-          label: const Text('Reset Channel Curve', style: TextStyle(color: Colors.white54, fontSize: 11)),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCurveChip(String label, int index, Color col) {
-    final sel = _selectedCurveChannel == index;
-    return ChoiceChip(
-      label: Text(label),
-      selected: sel,
-      selectedColor: col.withOpacity(0.25),
-      backgroundColor: kCardDark,
-      labelStyle: TextStyle(color: sel ? col : Colors.white60, fontWeight: FontWeight.bold, fontSize: 12),
-      side: BorderSide(color: sel ? col : Colors.transparent),
-      onSelected: (_) => setState(() => _selectedCurveChannel = index),
-    );
-  }
-
-  Widget _buildColoristaTab() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Text('3-WAY COLOR WHEELS (LIFT / GAMMA / GAIN)', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            ColoristaWheel(label: 'LIFT (Shadows)', value: _mblColoristaLift, accentColor: const Color(0xFF64B5F6), onChanged: (v) => setState(() => _mblColoristaLift = v)),
-            ColoristaWheel(label: 'GAMMA (Mids)', value: _mblColoristaGamma, accentColor: const Color(0xFF81C784), onChanged: (v) => setState(() => _mblColoristaGamma = v)),
-            ColoristaWheel(label: 'GAIN (Highlights)', value: _mblColoristaGain, accentColor: const Color(0xFFFFB74D), onChanged: (v) => setState(() => _mblColoristaGain = v)),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _buildSlider('Cosmo Skin Smoothing', _mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _mblCosmoSkin = v)),
-        _buildSlider('Renoir Warm Halation', _mblRenoirHalation, 0.0, 1.0, (v) => setState(() => _mblRenoirHalation = v)),
-        _buildSlider('Mojo II Teal & Orange', _mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _mblMojoTealOrange = v)),
-        _buildSlider('Split Toning Balance', _splitToning, 0.0, 1.0, (v) => setState(() => _splitToning = v)),
-      ],
-    );
-  }
-
-  Widget _buildSapphireTab() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      children: [
-        _buildSlider('S_MathOps Transfer Mix', _sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _sapphireBlendMix = v)),
-        _buildSlider('Anime Dark Linework (Cel)', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
-        _buildSlider('Retro Cel Flicker Intensity', _flickerIntensity, 0.0, 0.5, (v) => setState(() => _flickerIntensity = v)),
-        _buildSlider('Flicker Frequency', _flickerSpeed, 1.0, 10.0, (v) => setState(() => _flickerSpeed = v)),
-        _buildSlider('Film Grain Texture', _filmGrain, 0.0, 1.0, (v) => setState(() => _filmGrain = v)),
-        _buildSlider('FilmConvert Nitrate Halation', _filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _filmConvertNitrate = v)),
-        _buildSlider('Chromatic Aberration (RGB Split)', _chromaticAberration, 0.0, 1.0, (v) => setState(() => _chromaticAberration = v)),
-        _buildSlider('Tilt-Shift Depth of Field', _depthOfField, 0.0, 1.0, (v) => setState(() => _depthOfField = v)),
-        _buildSlider('DoF Focus Center', _dofFocus, 0.0, 1.0, (v) => setState(() => _dofFocus = v)),
-        _buildSlider('4-Corner Vignette Gradient', _fourColorGradMix, 0.0, 1.0, (v) => setState(() => _fourColorGradMix = v)),
-      ],
-    );
-  }
-
-  Widget _buildAtmosphereTab() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-      children: [
-        const Text('ACES TONEMAPPING OPERATOR', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: [
-            ChoiceChip(
-              label: const Text('ACES Filmic Curve'),
-              selected: _tonemapMode == 1.0,
-              selectedColor: kAquamarine,
-              backgroundColor: kCardDark,
-              labelStyle: TextStyle(color: _tonemapMode == 1.0 ? Colors.black : Colors.white70),
-              onSelected: (_) => setState(() => _tonemapMode = 1.0),
-            ),
-            ChoiceChip(
-              label: const Text('Reinhard Classic'),
-              selected: _tonemapMode == 2.0,
-              selectedColor: kAquamarine,
-              backgroundColor: kCardDark,
-              labelStyle: TextStyle(color: _tonemapMode == 2.0 ? Colors.black : Colors.white70),
-              onSelected: (_) => setState(() => _tonemapMode = 2.0),
-            ),
-            ChoiceChip(
-              label: const Text('Linear Pass-through'),
-              selected: _tonemapMode == 0.0,
-              selectedColor: kAquamarine,
-              backgroundColor: kCardDark,
-              labelStyle: TextStyle(color: _tonemapMode == 0.0 ? Colors.black : Colors.white70),
-              onSelected: (_) => setState(() => _tonemapMode = 0.0),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        const Text('ASPECT RATIO CROP & LETTERBOX', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: ['4:5', '9:16', '16:9', '1:1', '3:4', '21:9'].map((r) => ChoiceChip(
-            label: Text(r),
-            selected: _selectedRatio == r,
-            selectedColor: kLavender,
-            backgroundColor: kCardDark,
-            labelStyle: TextStyle(color: _selectedRatio == r ? Colors.black : Colors.white70),
-            onSelected: (_) {
-              setState(() => _selectedRatio = r);
-              if (_controller != null && _controller!.value.isInitialized) {
-                _updateCanvasSize(_controller!.value.size.width.toInt(), _controller!.value.size.height.toInt());
-              }
-              _autoSaveProject();
-            },
-          )).toList(),
-        ),
-      ],
-    );
-  }
-}
-
-// ============================================================================
-// 8. RENDER EXPORT PROGRESS DIALOG
-// ============================================================================
-class _RenderExportDialog extends StatefulWidget {
-  final String mediaPath;
-  final bool isImage;
-  final int width;
-  final int height;
-  final int fps;
-  final String container;
-  final String codec;
-  final String bitDepth;
-  final int bitrateKbps;
-  final Float32List uniforms;
-
-  const _RenderExportDialog({
-    required this.mediaPath,
-    required this.isImage,
-    required this.width,
-    required this.height,
-    required this.fps,
-    required this.container,
-    required this.codec,
-    required this.bitDepth,
-    required this.bitrateKbps,
-    required this.uniforms,
-  });
-
-  @override
-  State<_RenderExportDialog> createState() => _RenderExportDialogState();
-}
-
-class _RenderExportDialogState extends State<_RenderExportDialog> {
-  double _progress = 0.0;
-  String _status = 'Initializing Vulkan Compute Master Pipeline...';
-  bool _done = false;
-  String? _outputPath;
-
-  @override
-  void initState() {
-    super.initState();
-    _startWork();
-  }
-
-  Future<void> _startWork() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      final outDir = await getApplicationDocumentsDirectory();
-      final stamp = DateTime.now().millisecondsSinceEpoch;
-
-      if (widget.isImage) {
-        setState(() => _status = 'Grading high-res still image in FP32...');
-        final fileBytes = await File(widget.mediaPath).readAsBytes();
-        final rawImg = img.decodeImage(fileBytes);
-        if (rawImg == null) throw Exception('Failed to decode source image');
-
-        final resized = img.copyResize(rawImg, width: widget.width, height: widget.height);
-        final inBytes = resized.toUint8List();
-
-        final outBytes = await computeShaderPass(
-          inputBytes: inBytes,
-          width: widget.width,
-          height: widget.height,
-          precision: gEnginePrecision,
-          uniforms: widget.uniforms,
-        );
-
-        final resultImg = img.Image.fromBytes(
-          width: widget.width,
-          height: widget.height,
-          bytes: outBytes.buffer,
-          order: img.ChannelOrder.rgba,
-        );
-
-        final outPath = '${outDir.path}/aereality_$stamp.png';
-        await File(outPath).writeAsBytes(img.encodePng(resultImg));
-
-        setState(() {
-          _progress = 1.0;
-          _status = 'Export finished successfully!';
-          _done = true;
-          _outputPath = outPath;
-        });
-      } else {
-        setState(() => _status = 'Extracting video frames via FFmpeg...');
-        final framesDir = Directory('${tempDir.path}/frames_$stamp');
-        await framesDir.create(recursive: true);
-
-        final extractCmd = '-i "${widget.mediaPath}" -r ${widget.fps} "${framesDir.path}/frame_%05d.png"';
-        await FFmpegKitExtended.execute(extractCmd);
-
-        final frameFiles = framesDir.listSync().whereType<File>().toList()
-          ..sort((a, b) => a.path.compareTo(b.path));
-
-        final totalFrames = frameFiles.length;
-        if (totalFrames == 0) throw Exception('No frames extracted from source');
-
-        final processedDir = Directory('${tempDir.path}/proc_$stamp');
-        await processedDir.create(recursive: true);
-
-        for (int i = 0; i < totalFrames; i++) {
-          final file = frameFiles[i];
-          final fBytes = await file.readAsBytes();
-          final raw = img.decodeImage(fBytes);
-          if (raw != null) {
-            final resized = img.copyResize(raw, width: widget.width, height: widget.height);
-            final graded = await computeShaderPass(
-              inputBytes: resized.toUint8List(),
-              width: widget.width,
-              height: widget.height,
-              precision: gEnginePrecision,
-              uniforms: widget.uniforms,
-            );
-            final outImg = img.Image.fromBytes(
-              width: widget.width,
-              height: widget.height,
-              bytes: graded.buffer,
-              order: img.ChannelOrder.rgba,
-            );
-            final targetPath = '${processedDir.path}/frame_${(i + 1).toString().padLeft(5, '0')}.png';
-            await File(targetPath).writeAsBytes(img.encodePng(outImg));
-          }
-
-          setState(() {
-            _progress = (i + 1) / totalFrames;
-            _status = 'Grading frame ${i + 1} of $totalFrames in Vulkan...';
-          });
-        }
-
-        setState(() => _status = 'Muxing Master Container (${widget.container} / ${widget.codec})...');
-        final outExt = widget.container.toLowerCase();
-        final finalVideoPath = '${outDir.path}/aereality_master_$stamp.$outExt';
-
-        final muxCmd = ExportMatrix.buildFFmpegEncodeCommand(
-          fps: widget.fps,
-          framePattern: '${processedDir.path}/frame_%05d.png',
-          container: widget.container,
-          codec: widget.codec,
-          bitDepth: widget.bitDepth,
-          bitrateKbps: widget.bitrateKbps,
-          outputPath: finalVideoPath,
-        );
-
-        await FFmpegKitExtended.execute(muxCmd);
-
-        // Clean up temp directories
-        try {
-          await framesDir.delete(recursive: true);
-          await processedDir.delete(recursive: true);
-        } catch (_) {}
-
-        setState(() {
-          _progress = 1.0;
-          _status = 'Render complete!';
-          _done = true;
-          _outputPath = finalVideoPath;
-        });
-      }
-    } catch (err) {
-      setState(() {
-        _status = 'Render failed: $err';
-        _done = true;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: kCardDark,
-      title: const Text('Exporting Master Render', style: TextStyle(color: Colors.white, fontSize: 16)),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          LinearProgressIndicator(
-            value: _progress > 0.0 ? _progress : null,
-            color: kAquamarine,
-            backgroundColor: Colors.white12,
-          ),
-          const SizedBox(height: 14),
-          Text(_status, style: const TextStyle(color: Colors.white70, fontSize: 12), textAlign: TextAlign.center),
-          if (_outputPath != null) ...[
-            const SizedBox(height: 10),
-            Text('Saved to:\n$_outputPath', style: const TextStyle(color: kLavender, fontSize: 10, fontFamily: 'monospace'), textAlign: TextAlign.center),
-          ],
-        ],
-      ),
-      actions: [
-        if (_done)
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('CLOSE', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold)),
-          ),
-      ],
-    );
   }
 }
