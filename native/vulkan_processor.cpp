@@ -10,6 +10,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+#define EXPORT_FN __attribute__((visibility("default")))
+
 static VkInstance gInstance = VK_NULL_HANDLE;
 static VkPhysicalDevice gPhysicalDevice = VK_NULL_HANDLE;
 static VkDevice gDevice = VK_NULL_HANDLE;
@@ -70,7 +72,7 @@ static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPr
 
 extern "C" {
 
-int init_vulkan(const uint8_t* shaderBytes, int length, int precision) {
+static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precision) {
     if (gInitialized) return 1;
 
     // 1. Create Vulkan Instance
@@ -143,7 +145,7 @@ int init_vulkan(const uint8_t* shaderBytes, int length, int precision) {
 
     vkGetDeviceQueue(gDevice, gComputeQueueFamilyIndex, 0, &gComputeQueue);
 
-    // 5. Create Command Pool (WITH EXACT KHRONOS SPEC FIX)
+    // 5. Create Command Pool
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -167,19 +169,16 @@ int init_vulkan(const uint8_t* shaderBytes, int length, int precision) {
 
     // 7. Descriptor Set Layout (Binding 0: In, Binding 1: Out, Binding 2: Uniforms)
     VkDescriptorSetLayoutBinding bindings[3]{};
-    // Input Buffer
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Output Buffer
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Uniforms Buffer
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[2].descriptorCount = 1;
@@ -225,7 +224,15 @@ int init_vulkan(const uint8_t* shaderBytes, int length, int precision) {
     return 1;
 }
 
-void process_image(
+EXPORT_FN int init_vulkan(const uint8_t* shaderBytes, int length, int precision) {
+    return init_vulkan_core(shaderBytes, length, precision);
+}
+
+EXPORT_FN int initVulkan(const uint8_t* shaderBytes, int length, int precision) {
+    return init_vulkan_core(shaderBytes, length, precision);
+}
+
+static void process_image_core(
     const uint8_t* inputBytes,
     int inWidth,
     int inHeight,
@@ -351,10 +358,19 @@ void process_image(
     submitInfo.pCommandBuffers = &cmd;
 
     vkQueueSubmit(gComputeQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    
+    // Complete GPU Wait Idle & Memory Barrier to prevent black screens on Adreno/Mali
     vkQueueWaitIdle(gComputeQueue);
+    vkDeviceWaitIdle(gDevice);
 
     // Read back output
     vkMapMemory(gDevice, outMem, 0, outSize, 0, &data);
+    VkMappedMemoryRange range{};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = outMem;
+    range.offset = 0;
+    range.size = outSize;
+    vkInvalidateMappedMemoryRanges(gDevice, 1, &range);
     std::memcpy(outputBytes, data, outSize);
     vkUnmapMemory(gDevice, outMem);
 
@@ -369,7 +385,33 @@ void process_image(
     vkFreeMemory(gDevice, uMem, nullptr);
 }
 
-void process_image_16(
+EXPORT_FN void process_image(
+    const uint8_t* inputBytes,
+    int inWidth,
+    int inHeight,
+    uint8_t* outputBytes,
+    int outWidth,
+    int outHeight,
+    const float* uniforms,
+    int uniformCount
+) {
+    process_image_core(inputBytes, inWidth, inHeight, outputBytes, outWidth, outHeight, uniforms, uniformCount);
+}
+
+EXPORT_FN void processImage(
+    const uint8_t* inputBytes,
+    int inWidth,
+    int inHeight,
+    uint8_t* outputBytes,
+    int outWidth,
+    int outHeight,
+    const float* uniforms,
+    int uniformCount
+) {
+    process_image_core(inputBytes, inWidth, inHeight, outputBytes, outWidth, outHeight, uniforms, uniformCount);
+}
+
+static void process_image_16_core(
     const uint16_t* inputBytes,
     int inWidth,
     int inHeight,
@@ -493,8 +535,15 @@ void process_image_16(
 
     vkQueueSubmit(gComputeQueue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(gComputeQueue);
+    vkDeviceWaitIdle(gDevice);
 
     vkMapMemory(gDevice, outMem, 0, outSize, 0, &data);
+    VkMappedMemoryRange range{};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = outMem;
+    range.offset = 0;
+    range.size = outSize;
+    vkInvalidateMappedMemoryRanges(gDevice, 1, &range);
     std::memcpy(outputBytes, data, outSize);
     vkUnmapMemory(gDevice, outMem);
 
@@ -506,6 +555,32 @@ void process_image_16(
     vkFreeMemory(gDevice, outMem, nullptr);
     vkDestroyBuffer(gDevice, uBuffer, nullptr);
     vkFreeMemory(gDevice, uMem, nullptr);
+}
+
+EXPORT_FN void process_image_16(
+    const uint16_t* inputBytes,
+    int inWidth,
+    int inHeight,
+    uint16_t* outputBytes,
+    int outWidth,
+    int outHeight,
+    const float* uniforms,
+    int uniformCount
+) {
+    process_image_16_core(inputBytes, inWidth, inHeight, outputBytes, outWidth, outHeight, uniforms, uniformCount);
+}
+
+EXPORT_FN void processImage16(
+    const uint16_t* inputBytes,
+    int inWidth,
+    int inHeight,
+    uint16_t* outputBytes,
+    int outWidth,
+    int outHeight,
+    const float* uniforms,
+    int uniformCount
+) {
+    process_image_16_core(inputBytes, inWidth, inHeight, outputBytes, outWidth, outHeight, uniforms, uniformCount);
 }
 
 } // extern "C"
