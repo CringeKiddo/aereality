@@ -17,10 +17,9 @@ import 'package:image/image.dart' as img;
 
 import 'vulkan_bridge.dart';
 
-// Palette: Luminous Aquamarine & Polished Studio Accents
+// Aesthetic Palette: Radiant Aquamarine, Gold Highlights, Deep Luxury Carbon
 const Color kAquamarine = Color(0xFF7FFFD4);
 const Color kAquamarineDark = Color(0xFF45B39D);
-const Color kAquamarineGlow = Color(0x337FFFD4);
 const Color kGold = Color(0xFFFFD700);
 const Color kLavenderSoft = Color(0xFFE6E6FA);
 const Color kSurfaceDark = Color(0xFF101015);
@@ -139,7 +138,6 @@ class ExportMatrix {
       }
     } else if (container == 'WebM') {
       if (codec.contains('VP9')) {
-        // +0.3 unsharp filter for extra visual snap
         codecFlags = is10
             ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
             : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
@@ -1148,7 +1146,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _isPlaying = false;
   String? _currentMediaPath;
   bool _isImage = false;
-  ui.Image? _loadedRawImage;
+  img.Image? _cachedRawImage;
   bool _isFullScreen = false;
 
   // Primary Grading
@@ -1163,11 +1161,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _highlights = 0.0;
   double _blackCrush = 0.0;
   double _vignette = 0.0;
-  double _vignetteBoxed = 0.0; // Boxed vignette sub-slider
+  double _vignetteBoxed = 0.0;
   double _splitToning = 0.0;
   double _denoise = 0.0;
   double _filmGrain = 0.0;
-  double _chromaticAberration = 0.0; // Chromatic aberration effect
+  double _chromaticAberration = 0.0;
 
   // Glow & Linework
   double _bloomIntensity = 0.0;
@@ -1175,7 +1173,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double _bloomThreshold = 0.45;
   double _bloomRadius = 1.0;
   double _edgeGlowTint = 0.0;
-  double _edgeDarken = 0.0; // Weak/fade edge glow that softly deepens line art edges
+  double _edgeDarken = 0.0;
   double _darkOutlines = 0.0;
   double _anamorphicFlare = 0.0;
   double _flareAmount = 0.50;
@@ -1215,15 +1213,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   String _selectedRatio = "4:5";
   late TabController _tabController;
-  VoidCallback _listener = () {};
 
   ui.Image? _processedImage;
   Timer? _previewTimer;
   bool _isProcessingFrame = false;
-  final GlobalKey _activeCanvasKey = GlobalKey();
 
-  int _canvasWidth = 864;
-  int _canvasHeight = 1088;
+  // Render texture buffer dimensions
+  int _renderWidth = 720;
+  int _renderHeight = 900;
 
   @override
   void initState() {
@@ -1307,20 +1304,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       targetW = (targetH * ratio).round();
     }
 
-    // Align to 16-pixel boundaries to prevent static scanlines
+    // Must be exact multiples of 16 for Vulkan compute workgroups
     targetW = ((targetW + 15) ~/ 16) * 16;
     targetH = ((targetH + 15) ~/ 16) * 16;
 
     return {'width': targetW, 'height': targetH};
   }
 
-  void _updateCanvasSize(int srcW, int srcH) {
-    final dims = _calculateTargetDimensions('1080p', _selectedRatio);
+  void _updateDimensions(int srcW, int srcH) {
+    final dims = _calculateTargetDimensions('720p', _selectedRatio);
     int targetW = (dims['width']! * gPreviewScale).round();
     int targetH = (dims['height']! * gPreviewScale).round();
 
-    _canvasWidth = ((targetW + 15) ~/ 16) * 16;
-    _canvasHeight = ((targetH + 15) ~/ 16) * 16;
+    _renderWidth = ((targetW + 15) ~/ 16) * 16;
+    _renderHeight = ((targetH + 15) ~/ 16) * 16;
   }
 
   Future<void> _loadShader() async {
@@ -1351,7 +1348,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     _previewTimer?.cancel();
     if (_controller != null) {
-      _controller!.removeListener(_listener);
       await _controller!.pause();
       await _controller!.dispose();
       _controller = null;
@@ -1366,29 +1362,113 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     if (isImg) {
       final fileBytes = await File(path).readAsBytes();
-      final codec = await ui.instantiateImageCodec(fileBytes);
-      final frame = await codec.getNextFrame();
-      _loadedRawImage = frame.image;
-      _updateCanvasSize(_loadedRawImage!.width, _loadedRawImage!.height);
-      _processStaticImage();
+      final decoded = img.decodeImage(fileBytes);
+      if (decoded != null) {
+        _cachedRawImage = decoded;
+        _updateDimensions(decoded.width, decoded.height);
+        _processStaticImage();
+      }
     } else {
-      _loadedRawImage = null;
+      _cachedRawImage = null;
       _controller = VideoPlayerController.file(File(path))
         ..initialize().then((_) {
           if (!mounted) return;
           final vw = _controller!.value.size.width.toInt();
           final vh = _controller!.value.size.height.toInt();
-          _updateCanvasSize(vw, vh);
+          _updateDimensions(vw, vh);
           setState(() {});
-          _listener = () { if (mounted) setState(() {}); };
-          _controller!.addListener(_listener);
           _controller!.play();
+          _controller!.setLooping(true);
           _isPlaying = true;
-          _startTimelinePreview();
+          _startVideoExtractPreview(path);
         });
     }
 
     _autoSaveProject();
+  }
+
+  // Pure decoupled frame sampler: Extracts the real video frame cleanly without RepaintBoundary distortion
+  void _startVideoExtractPreview(String videoPath) {
+    _previewTimer?.cancel();
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 66), (timer) async {
+      if (_isImage || _controller == null || !_controller!.value.isInitialized || _isProcessingFrame) return;
+      _isProcessingFrame = true;
+
+      try {
+        final posSec = _controller!.value.position.inMilliseconds / 1000.0;
+        final dir = await getTemporaryDirectory();
+        final thumbFile = File('${dir.path}/preview_thumb.bmp');
+
+        // Fast zero-encode BMP frame extract
+        await FFmpegKit.execute(
+          '-ss $posSec -i "$videoPath" -vframes 1 -s ${_renderWidth}x${_renderHeight} -pix_fmt rgba -y "${thumbFile.path}"',
+        );
+
+        if (await thumbFile.exists()) {
+          final bytes = await thumbFile.readAsBytes();
+          final decoded = img.decodeBmp(bytes);
+          if (decoded != null) {
+            final uniforms = _packUniforms();
+            final rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
+            final outBytes = processImage(
+              rawBytes,
+              _renderWidth,
+              _renderHeight,
+              _renderWidth,
+              _renderHeight,
+              uniforms,
+            );
+
+            final completer = Completer<ui.Image>();
+            ui.decodeImageFromPixels(
+              outBytes,
+              _renderWidth,
+              _renderHeight,
+              ui.PixelFormat.rgba8888,
+              (img) => completer.complete(img),
+            );
+            final uiImage = await completer.future;
+            if (mounted) setState(() => _processedImage = uiImage);
+          }
+        }
+      } catch (_) {}
+
+      _isProcessingFrame = false;
+    });
+  }
+
+  Future<void> _processStaticImage() async {
+    if (_cachedRawImage == null) return;
+    try {
+      final resized = img.copyResize(
+        _cachedRawImage!,
+        width: _renderWidth,
+        height: _renderHeight,
+      );
+
+      final uniforms = _packUniforms();
+      final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+
+      final outputBytes = processImage(
+        rawBytes,
+        _renderWidth,
+        _renderHeight,
+        _renderWidth,
+        _renderHeight,
+        uniforms,
+      );
+
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        outputBytes,
+        _renderWidth,
+        _renderHeight,
+        ui.PixelFormat.rgba8888,
+        (img) => completer.complete(img),
+      );
+      final res = await completer.future;
+      if (mounted) setState(() => _processedImage = res);
+    } catch (_) {}
   }
 
   Future<void> _autoSaveProject() async {
@@ -1458,34 +1538,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  Future<void> _processStaticImage() async {
-    if (_loadedRawImage == null) return;
-    try {
-      final processed = await _processFrameWithVulkan(_loadedRawImage!);
-      if (mounted) setState(() => _processedImage = processed);
-    } catch (_) {}
-  }
-
-  // ACTIVE LIVE-VIEW SAMPLER
-  void _startTimelinePreview() {
-    _previewTimer?.cancel();
-    _previewTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
-      if (_isImage) return;
-      if (_controller == null || !_controller!.value.isInitialized || _isProcessingFrame) return;
-      _isProcessingFrame = true;
-      try {
-        final renderObject = _activeCanvasKey.currentContext?.findRenderObject();
-        if (renderObject is RenderRepaintBoundary) {
-          final frame = await renderObject.toImage();
-          final processed = await _processFrameWithVulkan(frame);
-          if (mounted) setState(() => _processedImage = processed);
-          frame.dispose();
-        }
-      } catch (_) {}
-      _isProcessingFrame = false;
-    });
-  }
-
   Float32List _packUniforms() {
     final uniforms = Float32List(66);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
@@ -1514,7 +1566,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[17] = _shadows + _mblColoristaLift;
     uniforms[18] = _highlights + _mblColoristaGain;
     uniforms[19] = _darkOutlines;
-    uniforms[20] = _edgeDarken; // Soft fade edge glow line-art shadow
+    uniforms[20] = _edgeDarken;
     uniforms[21] = _vignette;
     uniforms[22] = _splitToning + _mblMojoTealOrange;
     uniforms[23] = _denoise + _mblCosmoSkin;
@@ -1537,7 +1589,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     uniforms[39] = _filmGrain;
     uniforms[40] = _tonemapMode;
-    uniforms[41] = _chromaticAberration; // Chromatic aberration slot
+    uniforms[41] = _chromaticAberration;
 
     uniforms[42] = _curveRed[0];
     uniforms[43] = _curveRed[1];
@@ -1545,7 +1597,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[45] = _curveRed[3];
     uniforms[46] = _curveRed[4];
 
-    uniforms[47] = _vignetteBoxed; // Boxed vignette parameter
+    uniforms[47] = _vignetteBoxed;
 
     uniforms[50] = _curveGreen[0];
     uniforms[51] = _curveGreen[1];
@@ -1560,31 +1612,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[62] = _curveBlue[4];
 
     return uniforms;
-  }
-
-  Future<ui.Image> _processFrameWithVulkan(ui.Image input) async {
-    final byteData = await input.toByteData(format: ui.ImageByteFormat.rawRgba);
-    final inputBytes = byteData!.buffer.asUint8List();
-
-    final uniforms = _packUniforms();
-    final outputBytes = processImage(
-      inputBytes,
-      input.width,
-      input.height,
-      _canvasWidth,
-      _canvasHeight,
-      uniforms,
-    );
-
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-      outputBytes,
-      _canvasWidth,
-      _canvasHeight,
-      ui.PixelFormat.rgba8888,
-      (img) => completer.complete(img),
-    );
-    return completer.future;
   }
 
   double _getAspectRatioValue(String ratio) {
@@ -2074,21 +2101,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  Future<void> _exportStaticImage() async {
-    if (_loadedRawImage == null || _currentMediaPath == null) return;
-    try {
-      final uniforms = _packUniforms();
-      final byteData = await _loadedRawImage!.toByteData(format: ui.ImageByteFormat.rawRgba);
-      final rawInput = byteData!.buffer.asUint8List();
+  // Reliable destination resolver for Android 11+
+  Future<String> _getSafeMovieDirectory() async {
+    final moviesDir = Directory('/storage/emulated/0/Movies');
+    if (await moviesDir.exists()) {
+      return moviesDir.path;
+    }
+    final extDir = await getExternalStorageDirectory();
+    return extDir?.path ?? (await getApplicationDocumentsDirectory()).path;
+  }
 
+  Future<void> _exportStaticImage() async {
+    if (_cachedRawImage == null || _currentMediaPath == null) return;
+    try {
       final dims = _calculateTargetDimensions('1080p', _selectedRatio);
       final exportWidth = dims['width']!;
       final exportHeight = dims['height']!;
 
+      final resized = img.copyResize(_cachedRawImage!, width: exportWidth, height: exportHeight);
+      final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
+      final uniforms = _packUniforms();
+
       final outputRaw = processImage(
         rawInput,
-        _loadedRawImage!.width,
-        _loadedRawImage!.height,
+        exportWidth,
+        exportHeight,
         exportWidth,
         exportHeight,
         uniforms,
@@ -2103,20 +2140,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
 
       final pngBytes = img.encodePng(gradedImg);
-
-      // Dedicated Movies directory export
-      Directory exportDir = Directory('/storage/emulated/0/Movies/AEReality');
-      if (!await exportDir.exists()) {
-        try {
-          await exportDir.create(recursive: true);
-        } catch (_) {
-          final extDir = await getExternalStorageDirectory();
-          exportDir = extDir ?? await getApplicationDocumentsDirectory();
-        }
-      }
-
+      final folderPath = await _getSafeMovieDirectory();
       final fileName = 'AEReality_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
-      final destFile = File('${exportDir.path}/$fileName');
+      final destFile = File('$folderPath/$fileName');
       await destFile.writeAsBytes(pngBytes);
 
       if (mounted) {
@@ -2131,7 +2157,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ROBUST FRAME EXTRACTION WITH MOVIES DESTINATION & VP9 SNAP
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -2203,30 +2228,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (await oldAudio.exists()) await oldAudio.delete();
       await FFmpegKit.execute('-i "$videoPath" -vn -c:a aac -y "$audioPath"');
 
-      // Robust extraction format that works cleanly across all Android builds
+      // Extract raw scaled PNG frames directly
       final extractSession = await FFmpegKit.execute(
-        '-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.png"',
+        '-i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
       );
 
       var frameFiles = await framesDir.list().toList();
-      if (frameFiles.isEmpty) {
-        await FFmpegKit.execute('-i "$videoPath" -r $targetFps -y "${framesDir.path}/frame_%05d.bmp"');
-        frameFiles = await framesDir.list().toList();
-      }
-
       frameFiles.sort((a, b) => a.path.compareTo(b.path));
       final totalFrames = frameFiles.length;
 
       if (totalFrames == 0) {
         final logs = await extractSession.getLogsAsString();
-        throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No log output"}');
+        throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No logs"}');
       }
 
       for (int i = 0; i < totalFrames; i++) {
         final file = frameFiles[i];
         if (file is! File) continue;
         final bytes = await file.readAsBytes();
-        final decoded = img.decodeImage(bytes);
+        final decoded = img.decodePng(bytes);
         if (decoded == null) continue;
 
         uniforms[0] = i / targetFps.toDouble();
@@ -2235,7 +2255,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         if (is10Bit || is16Bit) {
           final rawInput16 = decoded.getBytes(order: img.ChannelOrder.rgba);
           final u16In = rawInput16.buffer.asUint16List();
-          final outputRaw16 = processImage16(u16In, decoded.width, decoded.height, outW, outH, uniforms);
+          final outputRaw16 = processImage16(u16In, outW, outH, outW, outH, uniforms);
           gradedImg = img.Image.fromBytes(
             width: outW,
             height: outH,
@@ -2246,7 +2266,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           );
         } else {
           final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
-          final outputRaw8 = processImage(rawInput8, decoded.width, decoded.height, outW, outH, uniforms);
+          final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms);
           gradedImg = img.Image.fromBytes(
             width: outW,
             height: outH,
@@ -2279,24 +2299,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         bitrateKbps: bitrateKbps,
         outputPath: silentOutputPath,
       );
-      await FFmpegKit.execute(encodeCmd);
+      final encodeSession = await FFmpegKit.execute(encodeCmd);
 
-      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
-
-      // Primary Export Target: /storage/emulated/0/Movies/AEReality
-      Directory exportDir = Directory('/storage/emulated/0/Movies/AEReality');
-      if (!await exportDir.exists()) {
-        try {
-          await exportDir.create(recursive: true);
-        } catch (_) {
-          final extDir = await getExternalStorageDirectory();
-          exportDir = extDir ?? await getApplicationDocumentsDirectory();
-        }
+      if (!await silentFile.exists()) {
+        final logs = await encodeSession.getLogsAsString();
+        throw Exception('Encoder failed to generate video. Logs: ${logs ?? "No logs"}');
       }
 
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
+      final moviesDir = await _getSafeMovieDirectory();
       final cleanCodec = codec.split(' ').first;
       final fileName = 'AEReality_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final finalOutputFile = File('${exportDir.path}/$fileName');
+      final finalOutputFile = File('$moviesDir/$fileName');
 
       if (hasAudio) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
@@ -2321,7 +2335,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       appBar: AppBar(
         title: Text(widget.projectName ?? 'AEReality Editor'),
         actions: [
-          // File Picker Button in Pure Gold
           IconButton(
             icon: const Icon(Icons.folder_open_rounded, color: kGold),
             tooltip: 'Import New Footage/Art',
@@ -2359,7 +2372,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       ),
       body: Column(
         children: [
-          // 1. Stage / Canvas with Active Repaint Boundary (Fixes static lines & diagonal skew)
+          // 1. Stage / Canvas Display Area
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Center(
@@ -2376,14 +2389,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Active video layer
+                      // Video baseline
                       if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                        RepaintBoundary(
-                          key: _activeCanvasKey,
-                          child: VideoPlayer(_controller!),
-                        ),
+                        VideoPlayer(_controller!),
 
-                      // Real-time Vulkan Processed Image Overlay
+                      // Real-time Vulkan Processed Image Overlay (Direct live response to all sliders)
                       if (_processedImage != null)
                         RawImage(image: _processedImage, fit: BoxFit.contain),
 
@@ -2723,7 +2733,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ],
         ),
         const SizedBox(height: 14),
-        // Targets line art and only darkens the edges slightly with a weak/fade glow
         _buildSliderRow('Edge Darken (Weak/Fade Line-Art Glow Shadow)', _edgeDarken, 0.0, 1.0, (v) => setState(() => _edgeDarken = v)),
         _buildSliderRow('Sobel Ink Outlines', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
         _buildSliderRow('Anamorphic 1D Flare', _anamorphicFlare, 0.0, 1.0, (v) => setState(() => _anamorphicFlare = v)),
@@ -2815,7 +2824,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // SLIDER ROW: LUMINOUS AQUAMARINE TRACK & THUMB
   Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6.0),
@@ -2847,7 +2855,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 if (_isImage) _processStaticImage();
               },
               onChangeEnd: (_) {
-                _autoSaveProject(); // Debounced save: only writes to storage on touch release
+                _autoSaveProject();
               },
             ),
           ),
@@ -2860,7 +2868,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void dispose() {
     _previewTimer?.cancel();
     if (_controller != null) {
-      _controller!.removeListener(_listener);
       _controller!.dispose();
     }
     _tabController.dispose();
