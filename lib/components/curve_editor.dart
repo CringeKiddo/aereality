@@ -1,4 +1,3 @@
-// lib/components/curve_editor.dart
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../constants.dart';
