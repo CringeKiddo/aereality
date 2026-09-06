@@ -30,23 +30,36 @@ class AdjustmentLayer {
   double highlights;
   double blackCrush;
 
+  // Magic Bullet Looks Suite
+  double mblMojoTealOrange;
+  double mblColoristaLift;
+  double mblColoristaGamma;
+  double mblColoristaGain;
+
   // Unsharp Mask Sub-Sliders
   double unsharpRadius;
   double unsharpAmount;
   double unsharpThreshold;
 
-  // Glows & Flares
+  // Glows & Anamorphic Flares
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
-  double edgeGlowTint; // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Crimson, 5:Violet
+  double edgeGlowTint; // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Deep Blood Crimson, 5:Violet
   double thinStreakIntensity;
   double thinStreakWidth;
+  double thinStreakOpacity; // Dedicated White Flare Opacity
   double lineChromaStrength;
   double volRaysLength;
   double volRaysDecay;
   double sapphireGlowWidth;
   double sapphireGlowThreshold;
+
+  // BSLA Atmospheric Fog & God Rays
+  double bslaGodRays;
+  double bslaFogDensity;
+  double bslaFogDepth;
+  double bslaBloomHaze;
 
   // Halation & Vignette
   double halationRadius;
@@ -60,10 +73,10 @@ class AdjustmentLayer {
   double flickerIntensity;
   double flickerSpeed;
 
-  // Depth of Field & Focus Isolation
+  // Depth of Field (Directional Blur & Focus)
   double depthOfField;
   double dofFocus;
-  double backgroundBlur;
+  double dofAngle;
 
   // Spline Curves
   List<double> curveMaster;
@@ -87,20 +100,29 @@ class AdjustmentLayer {
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.blackCrush = 0.0,
-    this.unsharpRadius = 0.0,
+    this.mblMojoTealOrange = 0.0,
+    this.mblColoristaLift = 0.0,
+    this.mblColoristaGamma = 0.0,
+    this.mblColoristaGain = 0.0,
+    this.unsharpRadius = 1.5,
     this.unsharpAmount = 0.0,
-    this.unsharpThreshold = 0.0,
+    this.unsharpThreshold = 0.02,
     this.deepGlowIntensity = 0.0,
     this.deepGlowRadius = 0.50,
     this.deepGlowThreshold = 0.45,
     this.edgeGlowTint = 0.0,
     this.thinStreakIntensity = 0.0,
-    this.thinStreakWidth = 0.50,
+    this.thinStreakWidth = 0.45,
+    this.thinStreakOpacity = 1.0,
     this.lineChromaStrength = 0.0,
     this.volRaysLength = 0.0,
     this.volRaysDecay = 0.92,
     this.sapphireGlowWidth = 0.0,
-    this.sapphireGlowThreshold = 0.50,
+    this.sapphireGlowThreshold = 0.25,
+    this.bslaGodRays = 0.0,
+    this.bslaFogDensity = 0.0,
+    this.bslaFogDepth = 0.5,
+    this.bslaBloomHaze = 0.0,
     this.halationRadius = 0.0,
     this.halationWarmth = 0.50,
     this.vignette = 0.0,
@@ -113,7 +135,7 @@ class AdjustmentLayer {
     this.flickerSpeed = 3.0,
     this.depthOfField = 0.0,
     this.dofFocus = 0.50,
-    this.backgroundBlur = 0.0,
+    this.dofAngle = 0.0,
     List<double>? curveMaster,
     List<double>? curveRed,
     List<double>? curveGreen,
@@ -122,6 +144,10 @@ class AdjustmentLayer {
         curveRed = curveRed ?? [0.0, 0.25, 0.5, 0.75, 1.0],
         curveGreen = curveGreen ?? [0.0, 0.25, 0.5, 0.75, 1.0],
         curveBlue = curveBlue ?? [0.0, 0.25, 0.5, 0.75, 1.0];
+
+  AdjustmentLayer clone() {
+    return AdjustmentLayer.fromJson(toJson());
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -139,6 +165,10 @@ class AdjustmentLayer {
         'shadows': shadows,
         'highlights': highlights,
         'blackCrush': blackCrush,
+        'mblMojoTealOrange': mblMojoTealOrange,
+        'mblColoristaLift': mblColoristaLift,
+        'mblColoristaGamma': mblColoristaGamma,
+        'mblColoristaGain': mblColoristaGain,
         'unsharpRadius': unsharpRadius,
         'unsharpAmount': unsharpAmount,
         'unsharpThreshold': unsharpThreshold,
@@ -148,11 +178,16 @@ class AdjustmentLayer {
         'edgeGlowTint': edgeGlowTint,
         'thinStreakIntensity': thinStreakIntensity,
         'thinStreakWidth': thinStreakWidth,
+        'thinStreakOpacity': thinStreakOpacity,
         'lineChromaStrength': lineChromaStrength,
         'volRaysLength': volRaysLength,
         'volRaysDecay': volRaysDecay,
         'sapphireGlowWidth': sapphireGlowWidth,
         'sapphireGlowThreshold': sapphireGlowThreshold,
+        'bslaGodRays': bslaGodRays,
+        'bslaFogDensity': bslaFogDensity,
+        'bslaFogDepth': bslaFogDepth,
+        'bslaBloomHaze': bslaBloomHaze,
         'halationRadius': halationRadius,
         'halationWarmth': halationWarmth,
         'vignette': vignette,
@@ -165,7 +200,7 @@ class AdjustmentLayer {
         'flickerSpeed': flickerSpeed,
         'depthOfField': depthOfField,
         'dofFocus': dofFocus,
-        'backgroundBlur': backgroundBlur,
+        'dofAngle': dofAngle,
         'curveMaster': curveMaster,
         'curveRed': curveRed,
         'curveGreen': curveGreen,
@@ -188,20 +223,29 @@ class AdjustmentLayer {
         shadows: (json['shadows'] ?? 0.0).toDouble(),
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
-        unsharpRadius: (json['unsharpRadius'] ?? 0.0).toDouble(),
+        mblMojoTealOrange: (json['mblMojoTealOrange'] ?? 0.0).toDouble(),
+        mblColoristaLift: (json['mblColoristaLift'] ?? 0.0).toDouble(),
+        mblColoristaGamma: (json['mblColoristaGamma'] ?? 0.0).toDouble(),
+        mblColoristaGain: (json['mblColoristaGain'] ?? 0.0).toDouble(),
+        unsharpRadius: (json['unsharpRadius'] ?? 1.5).toDouble(),
         unsharpAmount: (json['unsharpAmount'] ?? 0.0).toDouble(),
-        unsharpThreshold: (json['unsharpThreshold'] ?? 0.0).toDouble(),
+        unsharpThreshold: (json['unsharpThreshold'] ?? 0.02).toDouble(),
         deepGlowIntensity: (json['deepGlowIntensity'] ?? 0.0).toDouble(),
         deepGlowRadius: (json['deepGlowRadius'] ?? 0.50).toDouble(),
         deepGlowThreshold: (json['deepGlowThreshold'] ?? 0.45).toDouble(),
         edgeGlowTint: (json['edgeGlowTint'] ?? 0.0).toDouble(),
         thinStreakIntensity: (json['thinStreakIntensity'] ?? 0.0).toDouble(),
-        thinStreakWidth: (json['thinStreakWidth'] ?? 0.50).toDouble(),
+        thinStreakWidth: (json['thinStreakWidth'] ?? 0.45).toDouble(),
+        thinStreakOpacity: (json['thinStreakOpacity'] ?? 1.0).toDouble(),
         lineChromaStrength: (json['lineChromaStrength'] ?? 0.0).toDouble(),
         volRaysLength: (json['volRaysLength'] ?? 0.0).toDouble(),
         volRaysDecay: (json['volRaysDecay'] ?? 0.92).toDouble(),
         sapphireGlowWidth: (json['sapphireGlowWidth'] ?? 0.0).toDouble(),
-        sapphireGlowThreshold: (json['sapphireGlowThreshold'] ?? 0.50).toDouble(),
+        sapphireGlowThreshold: (json['sapphireGlowThreshold'] ?? 0.25).toDouble(),
+        bslaGodRays: (json['bslaGodRays'] ?? 0.0).toDouble(),
+        bslaFogDensity: (json['bslaFogDensity'] ?? 0.0).toDouble(),
+        bslaFogDepth: (json['bslaFogDepth'] ?? 0.5).toDouble(),
+        bslaBloomHaze: (json['bslaBloomHaze'] ?? 0.0).toDouble(),
         halationRadius: (json['halationRadius'] ?? 0.0).toDouble(),
         halationWarmth: (json['halationWarmth'] ?? 0.50).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
@@ -214,7 +258,7 @@ class AdjustmentLayer {
         flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
         dofFocus: (json['dofFocus'] ?? 0.50).toDouble(),
-        backgroundBlur: (json['backgroundBlur'] ?? 0.0).toDouble(),
+        dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
         curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveGreen: (json['curveGreen'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
@@ -238,12 +282,23 @@ class ProjectData {
     List<AdjustmentLayer>? layers,
     this.activeLayerIndex = 0,
   }) : layers = layers ?? [
-          AdjustmentLayer(id: 'layer_base', name: 'Base Grade', blendMode: LayerBlendMode.normal),
+          AdjustmentLayer(id: 'layer_clean_base', name: 'Base Grade', blendMode: LayerBlendMode.normal),
         ];
 
-  AdjustmentLayer get currentLayer => layers.isNotEmpty 
+  AdjustmentLayer get currentLayer => layers.isNotEmpty
       ? layers[activeLayerIndex.clamp(0, layers.length - 1)]
       : AdjustmentLayer(id: 'empty', name: 'Passthrough', isEnabled: false);
+
+  ProjectData clone() {
+    return ProjectData(
+      mediaPath: mediaPath,
+      isImage: isImage,
+      aspectRatio: aspectRatio,
+      tonemapMode: tonemapMode,
+      layers: layers.map((l) => l.clone()).toList(),
+      activeLayerIndex: activeLayerIndex,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'mediaPath': mediaPath,
@@ -262,8 +317,47 @@ class ProjectData {
         layers: (json['layers'] as List<dynamic>?)
                 ?.map((l) => AdjustmentLayer.fromJson(l as Map<String, dynamic>))
                 .toList() ??
-            [AdjustmentLayer(id: 'layer_base', name: 'Base Grade')],
+            [AdjustmentLayer(id: 'layer_clean_base', name: 'Base Grade')],
         activeLayerIndex: (json['activeLayerIndex'] ?? 0) as int,
+      );
+}
+
+class CustomPresetItem {
+  final String name;
+  final String description;
+  final int accentColor;
+  final bool isBuiltIn;
+  final List<AdjustmentLayer> layers;
+  final double tonemapMode;
+
+  CustomPresetItem({
+    required this.name,
+    required this.description,
+    required this.accentColor,
+    required this.isBuiltIn,
+    required this.layers,
+    this.tonemapMode = 0.0,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'description': description,
+        'accentColor': accentColor,
+        'isBuiltIn': isBuiltIn,
+        'layers': layers.map((l) => l.toJson()).toList(),
+        'tonemapMode': tonemapMode,
+      };
+
+  factory CustomPresetItem.fromJson(Map<String, dynamic> json) => CustomPresetItem(
+        name: json['name'] ?? 'Custom Preset',
+        description: json['description'] ?? 'User-saved CC preset',
+        accentColor: (json['accentColor'] ?? 0xFF7FFFD4) as int,
+        isBuiltIn: json['isBuiltIn'] ?? false,
+        layers: (json['layers'] as List<dynamic>?)
+                ?.map((l) => AdjustmentLayer.fromJson(l as Map<String, dynamic>))
+                .toList() ??
+            [],
+        tonemapMode: (json['tonemapMode'] ?? 0.0).toDouble(),
       );
 }
 
@@ -300,7 +394,8 @@ class StoredProject {
 }
 
 class ProjectManager {
-  static const String _storageKey = 'shadely_projects_v1.json';
+  static const String _storageKey = 'shadely_projects_v2.json';
+  static const String _presetsKey = 'shadely_custom_presets_v2.json';
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
@@ -327,5 +422,24 @@ class ProjectManager {
     projects.insert(0, project);
     if (projects.length > 40) projects.removeRange(40, projects.length);
     await saveProjects(projects);
+  }
+
+  static Future<List<CustomPresetItem>> loadCustomPresets() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$_presetsKey');
+      if (!await file.exists()) return [];
+      final data = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(data);
+      return jsonList.map((j) => CustomPresetItem.fromJson(j)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> saveCustomPresets(List<CustomPresetItem> presets) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/$_presetsKey');
+    await file.writeAsString(jsonEncode(presets.map((p) => p.toJson()).toList()));
   }
 }
