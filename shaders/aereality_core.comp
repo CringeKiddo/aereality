@@ -32,8 +32,8 @@ layout(binding = 2) uniform UniformBlock {
     float u_shadows;              // [17]
     float u_highlights;           // [18]
     float u_darkOutlines;         // [19]
-    float u_edgeDarken;           // [20] Subtle line art soft contact shadow
-    float u_vignette;             // [21] Radial Vignette
+    float u_edgeDarken;           // [20]
+    float u_vignette;             // [21]
     float u_splitToning;          // [22]
     float u_denoise;              // [23]
     float u_blackCrush;           // [24]
@@ -51,7 +51,7 @@ layout(binding = 2) uniform UniformBlock {
     float u_curveM0; float u_curveM1; float u_curveM2; float u_curveM3; float u_curveM4; // [34..38]
     float u_filmGrain;            // [39]
     float u_tonemapMode;          // [40] (0=Off, 1=Reinhard, 2=ACES)
-    float u_chromaticAberration;  // [41] Prism lens fringe
+    float u_chromaticAberration;  // [41] Edge-targeted dispersion
 
     // Red Curve
     float u_curveR0; float u_curveR1; float u_curveR2; float u_curveR3; float u_curveR4; // [42..46]
@@ -123,6 +123,11 @@ vec3 tonemapACES(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+vec3 tonemapReinhardExtended(vec3 x) {
+    float maxWhite = 3.0;
+    return (x * (1.0 + (x / (maxWhite * maxWhite)))) / (1.0 + x);
+}
+
 vec3 colorTempToRGB(float kelvin) {
     float temp = kelvin / 100.0;
     float red, green, blue;
@@ -156,53 +161,7 @@ void main() {
     int pixelIndex = coord.y * size.x + coord.x;
     vec4 col = unpackRGBA(in_pixels[pixelIndex]);
 
-    // Chromatic Aberration
-    if (u_chromaticAberration > 0.001) {
-        vec2 uv = (vec2(coord) / vec2(size)) - 0.5;
-        float dist = length(uv);
-        ivec2 shift = ivec2(uv * u_chromaticAberration * 24.0 * dist);
-
-        ivec2 rCoord = clamp(coord + shift, ivec2(0), size - ivec2(1));
-        ivec2 bCoord = clamp(coord - shift, ivec2(0), size - ivec2(1));
-
-        vec4 rPixel = unpackRGBA(in_pixels[rCoord.y * size.x + rCoord.x]);
-        vec4 bPixel = unpackRGBA(in_pixels[bCoord.y * size.x + bCoord.x]);
-
-        col.r = rPixel.r;
-        col.b = bPixel.b;
-    }
-
-    // Denoise
-    if (u_denoise > 0.01) {
-        vec4 avgCol = col;
-        int count = 1;
-        ivec2 offsets[4] = ivec2[](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
-        for (int i = 0; i < 4; i++) {
-            ivec2 c = coord + offsets[i];
-            if (c.x >= 0 && c.x < size.x && c.y >= 0 && c.y < size.y) {
-                vec4 nCol = unpackRGBA(in_pixels[c.y * size.x + c.x]);
-                if (distance(col.rgb, nCol.rgb) < 0.18) {
-                    avgCol += nCol;
-                    count++;
-                }
-            }
-        }
-        col = mix(col, avgCol / float(count), u_denoise * 0.85);
-    }
-
-    // Micro-Sharpness
-    if (u_sharpness > 0.01) {
-        vec4 blur = vec4(0.0);
-        blur += unpackRGBA(in_pixels[clamp(coord.y - 1, 0, size.y - 1) * size.x + coord.x]);
-        blur += unpackRGBA(in_pixels[clamp(coord.y + 1, 0, size.y - 1) * size.x + coord.x]);
-        blur += unpackRGBA(in_pixels[coord.y * size.x + clamp(coord.x - 1, 0, size.x - 1)]);
-        blur += unpackRGBA(in_pixels[coord.y * size.x + clamp(coord.x + 1, 0, size.x - 1)]);
-        blur *= 0.25;
-        vec4 detail = col - blur;
-        col.rgb += detail.rgb * u_sharpness * 2.2;
-    }
-
-    // Sobel & Weak Line-Art Shadow
+    // 1. Sobel Line-Art Detection
     float gx = 0.0;
     float gy = 0.0;
     for (int y = -1; y <= 1; y++) {
@@ -218,36 +177,84 @@ void main() {
     }
     float edge = sqrt(gx * gx + gy * gy);
 
+    // 2. Line-Targeted Chromatic Aberration
+    if (u_chromaticAberration > 0.001) {
+        float edgeFactor = smoothstep(0.04, 0.30, edge);
+        vec2 uv = (vec2(coord) / vec2(size)) - 0.5;
+        float dist = length(uv);
+        ivec2 shift = ivec2(uv * u_chromaticAberration * 12.0 * (0.3 + dist) * edgeFactor);
+
+        ivec2 rCoord = clamp(coord + shift, ivec2(0), size - ivec2(1));
+        ivec2 bCoord = clamp(coord - shift, ivec2(0), size - ivec2(1));
+
+        vec4 rPixel = unpackRGBA(in_pixels[rCoord.y * size.x + rCoord.x]);
+        vec4 bPixel = unpackRGBA(in_pixels[bCoord.y * size.x + bCoord.x]);
+
+        col.r = mix(col.r, rPixel.r, edgeFactor);
+        col.b = mix(col.b, bPixel.b, edgeFactor);
+    }
+
+    // 3. Bilateral Denoise
+    if (u_denoise > 0.01) {
+        vec4 avgCol = col;
+        int count = 1;
+        ivec2 offsets[4] = ivec2[](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+        for (int i = 0; i < 4; i++) {
+            ivec2 c = coord + offsets[i];
+            if (c.x >= 0 && c.x < size.x && c.y >= 0 && c.y < size.y) {
+                vec4 nCol = unpackRGBA(in_pixels[c.y * size.x + c.x]);
+                if (distance(col.rgb, nCol.rgb) < 0.15) {
+                    avgCol += nCol;
+                    count++;
+                }
+            }
+        }
+        col = mix(col, avgCol / float(count), u_denoise * 0.85);
+    }
+
+    // 4. Micro-Sharpness
+    if (u_sharpness > 0.01) {
+        vec4 blur = vec4(0.0);
+        blur += unpackRGBA(in_pixels[clamp(coord.y - 1, 0, size.y - 1) * size.x + coord.x]);
+        blur += unpackRGBA(in_pixels[clamp(coord.y + 1, 0, size.y - 1) * size.x + coord.x]);
+        blur += unpackRGBA(in_pixels[coord.y * size.x + clamp(coord.x - 1, 0, size.x - 1)]);
+        blur += unpackRGBA(in_pixels[coord.y * size.x + clamp(coord.x + 1, 0, size.x - 1)]);
+        blur *= 0.25;
+        vec4 detail = col - blur;
+        col.rgb += detail.rgb * u_sharpness * 1.8;
+    }
+
+    // 5. Line Art Darkening
     if (u_darkOutlines > 0.01) {
-        col.rgb = mix(col.rgb, vec3(0.0), clamp(edge * u_darkOutlines * 1.5, 0.0, 1.0));
+        col.rgb = mix(col.rgb, vec3(0.0), clamp(edge * u_darkOutlines * 0.8, 0.0, 1.0));
     }
 
     if (u_edgeDarken > 0.01) {
-        float softEdge = smoothstep(0.08, 0.38, edge);
-        float fadeShadow = softEdge * u_edgeDarken * 0.35;
-        col.rgb = mix(col.rgb, col.rgb * 0.45, fadeShadow);
+        float softEdge = smoothstep(0.08, 0.35, edge);
+        float fadeShadow = softEdge * u_edgeDarken * 0.25;
+        col.rgb = mix(col.rgb, col.rgb * 0.65, fadeShadow);
     }
 
-    // Temperature
+    // 6. White Balance & Temperature
     if (abs(u_temperature - 6500.0) > 50.0) {
         vec3 tempColor = colorTempToRGB(u_temperature);
         col.rgb *= tempColor / colorTempToRGB(6500.0);
     }
 
-    // Exposure, Contrast, Shadows, Highlights
+    // 7. Base Exposure, Contrast, Shadows, Highlights
     col.rgb += vec3(u_brightness);
     col.rgb = (col.rgb - 0.18) * u_contrast + 0.18;
 
     if (u_blackCrush > 0.01) {
-        col.rgb = smoothstep(vec3(u_blackCrush * 0.25), vec3(1.0), col.rgb);
+        col.rgb = smoothstep(vec3(u_blackCrush * 0.15), vec3(1.0), col.rgb);
     }
 
     float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
-    col.rgb += vec3(u_shadows * (1.0 - luma) * 0.4);
-    col.rgb += vec3(u_highlights * luma * 0.4);
+    col.rgb += vec3(u_shadows * (1.0 - luma) * 0.35);
+    col.rgb += vec3(u_highlights * luma * 0.35);
     col.rgb = pow(max(col.rgb, vec3(0.0)), vec3(1.0 / max(u_gamma, 0.001)));
 
-    // Spline Curves
+    // 8. Spline Curves
     col.r = evalCatmullRom(col.r, u_curveR0, u_curveR1, u_curveR2, u_curveR3, u_curveR4);
     col.g = evalCatmullRom(col.g, u_curveG0, u_curveG1, u_curveG2, u_curveG3, u_curveG4);
     col.b = evalCatmullRom(col.b, u_curveB0, u_curveB1, u_curveB2, u_curveB3, u_curveB4);
@@ -256,7 +263,7 @@ void main() {
     col.g = evalCatmullRom(col.g, u_curveM0, u_curveM1, u_curveM2, u_curveM3, u_curveM4);
     col.b = evalCatmullRom(col.b, u_curveM0, u_curveM1, u_curveM2, u_curveM3, u_curveM4);
 
-    // Saturation, Hue, Split Toning
+    // 9. Saturation & Subtractive Density
     luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
     col.rgb = mix(vec3(luma), col.rgb, u_saturation);
 
@@ -273,85 +280,93 @@ void main() {
     }
 
     if (u_splitToning > 0.01) {
-        vec3 shadowTint = vec3(0.0, 0.04, 0.10) * (1.0 - luma);
-        vec3 highlightTint = vec3(0.10, 0.05, 0.0) * luma;
+        vec3 shadowTint = vec3(0.0, 0.03, 0.08) * (1.0 - luma);
+        vec3 highlightTint = vec3(0.08, 0.04, 0.0) * luma;
         col.rgb += (shadowTint + highlightTint) * u_splitToning;
     }
 
-    // Bloom & Ink Black Glow
+    // 10. Physical Inverse-Square Glow (No rings, continuous diffusion)
     if (u_bloomIntensity > 0.01) {
         vec3 bloomTint = vec3(1.0);
-        if (u_edgeGlowTint == 1.0) bloomTint = vec3(1.2, 0.95, 0.6);
-        else if (u_edgeGlowTint == 2.0) bloomTint = vec3(0.5, 1.1, 1.3);
-        else if (u_edgeGlowTint == 4.0) bloomTint = vec3(1.3, 0.4, 0.4);
+        if (u_edgeGlowTint == 1.0) bloomTint = vec3(1.25, 1.02, 0.65);
+        else if (u_edgeGlowTint == 2.0) bloomTint = vec3(0.55, 1.15, 1.35);
+        else if (u_edgeGlowTint == 4.0) bloomTint = vec3(1.35, 0.45, 0.45);
 
-        vec4 bloomAcc = vec4(0.0);
+        vec3 bloomAcc = vec3(0.0);
         float totalWeight = 0.0;
-        int rad = int(max(1.0, u_bloomRadius * 4.0));
-        for (int dy = -rad; dy <= rad; dy += 2) {
-            for (int dx = -rad; dx <= rad; dx += 2) {
+        int maxRadius = int(max(2.0, u_bloomRadius * 8.0));
+        float decayRate = max(0.05, (1.0 - u_bloomSpread) * 0.4);
+
+        for (int dy = -maxRadius; dy <= maxRadius; dy += 2) {
+            for (int dx = -maxRadius; dx <= maxRadius; dx += 2) {
                 ivec2 sampleCoord = clamp(coord + ivec2(dx, dy), ivec2(0), size - ivec2(1));
                 vec4 sCol = unpackRGBA(in_pixels[sampleCoord.y * size.x + sampleCoord.x]);
                 float sLum = dot(sCol.rgb, vec3(0.299, 0.587, 0.114));
-                float pass = smoothstep(u_bloomThreshold, 1.0, sLum);
-                float distSq = float(dx * dx + dy * dy);
-                float weight = exp(-distSq / (2.0 * max(0.1, u_bloomSpread * 10.0)));
-                bloomAcc += sCol * pass * weight;
+
+                // Soft-Knee Threshold (Continuous curve, zero harsh clamping)
+                float knee = 0.2;
+                float softPass = smoothstep(u_bloomThreshold - knee, u_bloomThreshold + knee, sLum);
+
+                float dist = length(vec2(dx, dy));
+                float weight = 1.0 / pow(1.0 + dist * decayRate, 2.0);
+
+                bloomAcc += sCol.rgb * softPass * weight;
                 totalWeight += weight;
             }
         }
-        vec3 finalBloom = (bloomAcc.rgb / max(totalWeight, 0.001)) * u_bloomIntensity;
+        vec3 finalBloom = (bloomAcc / max(totalWeight, 0.0001)) * u_bloomIntensity;
 
         if (u_edgeGlowTint == 5.0) {
-            col.rgb = mix(col.rgb, vec3(0.0), length(finalBloom) * 0.7);
+            col.rgb = mix(col.rgb, vec3(0.0), length(finalBloom) * 0.6);
         } else {
-            col.rgb += finalBloom * bloomTint;
+            // Screen Blend Mode for bloom
+            col.rgb = 1.0 - (1.0 - col.rgb) * (1.0 - clamp(finalBloom * bloomTint, 0.0, 0.95));
         }
     }
 
-    // Anamorphic Flare
+    // 11. Thin Anamorphic 1D Streak Flare
     if (u_anamorphicFlare > 0.01) {
         vec3 flareAcc = vec3(0.0);
-        int flareSpan = int(size.x * u_flareAmount * 0.15);
-        for (int dx = -flareSpan; dx <= flareSpan; dx += 4) {
+        int flareSpan = int(size.x * u_flareAmount * 0.12);
+        for (int dx = -flareSpan; dx <= flareSpan; dx += 3) {
             ivec2 fc = clamp(ivec2(coord.x + dx, coord.y), ivec2(0), size - ivec2(1));
             vec4 fp = unpackRGBA(in_pixels[fc.y * size.x + fc.x]);
             float fLum = dot(fp.rgb, vec3(0.299, 0.587, 0.114));
-            if (fLum > 0.8) {
-                flareAcc += fp.rgb * (1.0 - abs(float(dx)) / float(flareSpan));
+            if (fLum > 0.82) {
+                float falloff = 1.0 - (abs(float(dx)) / float(flareSpan));
+                flareAcc += fp.rgb * pow(falloff, 2.5);
             }
         }
-        col.rgb += flareAcc * vec3(0.4, 0.7, 1.2) * u_anamorphicFlare * 0.05;
+        col.rgb += flareAcc * vec3(0.35, 0.75, 1.3) * u_anamorphicFlare * 0.08;
     }
 
-    // Light Rays
+    // 12. Occluded Volumetric Light Rays
     if (u_lightRays > 0.01) {
         vec2 center = vec2(size) * 0.5;
-        vec2 delta = (center - vec2(coord)) * 0.02;
+        vec2 delta = (center - vec2(coord)) * 0.018;
         vec3 rayAcc = vec3(0.0);
         vec2 curCoord = vec2(coord);
         float decay = 1.0;
-        for (int s = 0; s < 8; s++) {
+        for (int s = 0; s < 10; s++) {
             curCoord += delta;
             ivec2 sc = clamp(ivec2(curCoord), ivec2(0), size - ivec2(1));
             vec4 sp = unpackRGBA(in_pixels[sc.y * size.x + sc.x]);
             float lum = dot(sp.rgb, vec3(0.299, 0.587, 0.114));
-            if (lum > 0.75) {
-                rayAcc += sp.rgb * decay;
-            }
+            float pass = smoothstep(0.70, 1.0, lum);
+            rayAcc += sp.rgb * pass * decay;
             decay *= u_lightRaysDecay;
         }
-        col.rgb += rayAcc * u_lightRays * 0.12;
+        col.rgb = 1.0 - (1.0 - col.rgb) * (1.0 - clamp(rayAcc * u_lightRays * 0.12, 0.0, 0.95));
     }
 
-    // Depth of Field
+    // 13. Depth of Field Blur
     if (u_depthOfField > 0.01) {
         float normY = float(coord.y) / float(size.y);
         float dofDist = abs(normY - u_dofFocus);
         if (dofDist > 0.15) {
-            float blurAmount = (dofDist - 0.15) * u_depthOfField * 4.0;
+            float blurAmount = (dofDist - 0.15) * u_depthOfField * 3.5;
             vec4 blurAcc = col;
-            int bRad = int(clamp(blurAmount, 1.0, 4.0));
+            int bRad = int(clamp(blurAmount, 1.0, 3.0));
             for (int by = -bRad; by <= bRad; by += 2) {
                 for (int bx = -bRad; bx <= bRad; bx += 2) {
                     ivec2 bc = clamp(coord + ivec2(bx, by), ivec2(0), size - ivec2(1));
@@ -362,48 +377,37 @@ void main() {
         }
     }
 
-    // Sinusoidal Flicker
+    // 14. Flicker
     if (u_flickerIntensity > 0.01) {
         float fWave = sin(u_time * u_flickerSpeed * 6.28318) * 0.5 + 0.5;
-        col.rgb *= (1.0 + (fWave - 0.5) * u_flickerIntensity * 0.35);
+        col.rgb *= (1.0 + (fWave - 0.5) * u_flickerIntensity * 0.25);
     }
 
-    // Film Grain
+    // 15. Film Grain
     if (u_filmGrain > 0.01 || u_filmConvertNitrate > 0.01) {
         float noise = (hash12(vec2(coord) + vec2(u_time * 13.37, u_time * 29.11)) - 0.5);
-        float grainAmount = u_filmGrain * 0.25 + u_filmConvertNitrate * 0.18;
+        float grainAmount = u_filmGrain * 0.20 + u_filmConvertNitrate * 0.14;
         col.rgb += vec3(noise * grainAmount);
     }
 
-    // 4-Corner Gradient
-    if (u_fourColorGradMix > 0.01) {
-        vec2 uv = vec2(coord) / vec2(size);
-        vec3 cTL = vec3(0.8, 0.9, 1.0);
-        vec3 cTR = vec3(1.0, 0.8, 0.9);
-        vec3 cBL = vec3(0.9, 1.0, 0.8);
-        vec3 cBR = vec3(1.0, 0.9, 0.8);
-        vec3 grad = mix(mix(cTL, cTR, uv.x), mix(cBL, cBR, uv.x), uv.y);
-        col.rgb = mix(col.rgb, col.rgb * grad, u_fourColorGradMix);
-    }
-
-    // Vignette (Radial & Boxed)
+    // 16. Subtle 4-Corner Vignette
     if (u_vignette > 0.01) {
         vec2 uv = (vec2(coord) / vec2(size)) - 0.5;
         float dist = length(uv);
-        float vig = smoothstep(0.7, 0.2, dist * (1.0 + u_vignette * 1.5));
+        float vig = smoothstep(0.75, 0.35, dist * (1.0 + u_vignette * 0.9));
         col.rgb *= vig;
     }
 
     if (u_vignetteBoxed > 0.01) {
         vec2 uv = abs((vec2(coord) / vec2(size)) - 0.5) * 2.0;
         float boxDist = max(uv.x, uv.y);
-        float boxVig = smoothstep(1.0, 0.3, boxDist * (0.8 + u_vignetteBoxed * 0.8));
+        float boxVig = smoothstep(1.0, 0.45, boxDist * (0.8 + u_vignetteBoxed * 0.5));
         col.rgb *= boxVig;
     }
 
-    // HDR Tonemapping
+    // 17. Master Tonemapping (0: Off, 1: Reinhard Extended, 2: ACES Filmic)
     if (u_tonemapMode == 1.0) {
-        col.rgb = col.rgb / (col.rgb + vec3(1.0));
+        col.rgb = tonemapReinhardExtended(col.rgb);
     } else if (u_tonemapMode == 2.0) {
         col.rgb = tonemapACES(col.rgb);
     }
