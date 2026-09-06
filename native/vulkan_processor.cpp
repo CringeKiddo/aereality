@@ -26,7 +26,7 @@ static VkPipeline gComputePipeline = VK_NULL_HANDLE;
 
 static bool gInitialized = false;
 
-// Helper to find memory types
+// Helper to find compatible memory types
 static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(gPhysicalDevice, &memProperties);
@@ -39,7 +39,7 @@ static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags proper
     return 0;
 }
 
-// Create a GPU buffer
+// Helper to allocate GPU buffers with host visibility
 static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
                          VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo{};
@@ -220,7 +220,7 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
     }
 
     gInitialized = true;
-    LOGI("Vulkan Compute Pipeline successfully initialized (FP32 precision)");
+    LOGI("Vulkan Compute Pipeline initialized successfully (IEEE FP32 Engine)");
     return 1;
 }
 
@@ -266,17 +266,29 @@ static void process_image_core(
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  uBuffer, uMem);
 
-    // Map input and uniforms
+    // Map input and uniforms with explicit cache flush
     void* data;
     vkMapMemory(gDevice, inMem, 0, inSize, 0, &data);
     std::memcpy(data, inputBytes, inSize);
+    VkMappedMemoryRange inRange{};
+    inRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    inRange.memory = inMem;
+    inRange.offset = 0;
+    inRange.size = inSize;
+    vkFlushMappedMemoryRanges(gDevice, 1, &inRange);
     vkUnmapMemory(gDevice, inMem);
 
     vkMapMemory(gDevice, uMem, 0, uniformSize, 0, &data);
     std::memcpy(data, uniforms, uniformSize);
+    VkMappedMemoryRange uRange{};
+    uRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    uRange.memory = uMem;
+    uRange.offset = 0;
+    uRange.size = uniformSize;
+    vkFlushMappedMemoryRanges(gDevice, 1, &uRange);
     vkUnmapMemory(gDevice, uMem);
 
-    // Descriptor Pool & Set
+    // Allocate Descriptor Set
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 2;
@@ -329,7 +341,7 @@ static void process_image_core(
 
     vkUpdateDescriptorSets(gDevice, 3, writes, 0, nullptr);
 
-    // Command Buffer Execution
+    // Record and Execute Command Buffer
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdAllocInfo.commandPool = gCommandPool;
@@ -359,11 +371,11 @@ static void process_image_core(
 
     vkQueueSubmit(gComputeQueue, 1, &submitInfo, VK_NULL_HANDLE);
     
-    // Complete GPU Wait Idle & Memory Barrier to prevent black screens on Adreno/Mali
+    // Complete GPU Wait Idle to ensure all compute writes finish before CPU reads
     vkQueueWaitIdle(gComputeQueue);
     vkDeviceWaitIdle(gDevice);
 
-    // Read back output
+    // Read back output with explicit cache invalidate
     vkMapMemory(gDevice, outMem, 0, outSize, 0, &data);
     VkMappedMemoryRange range{};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -374,7 +386,7 @@ static void process_image_core(
     std::memcpy(outputBytes, data, outSize);
     vkUnmapMemory(gDevice, outMem);
 
-    // Cleanup resources
+    // Cleanup per-frame GPU resources
     vkFreeCommandBuffers(gDevice, gCommandPool, 1, &cmd);
     vkDestroyDescriptorPool(gDevice, descPool, nullptr);
     vkDestroyBuffer(gDevice, inBuffer, nullptr);
@@ -448,10 +460,22 @@ static void process_image_16_core(
     void* data;
     vkMapMemory(gDevice, inMem, 0, inSize, 0, &data);
     std::memcpy(data, inputBytes, inSize);
+    VkMappedMemoryRange inRange{};
+    inRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    inRange.memory = inMem;
+    inRange.offset = 0;
+    inRange.size = inSize;
+    vkFlushMappedMemoryRanges(gDevice, 1, &inRange);
     vkUnmapMemory(gDevice, inMem);
 
     vkMapMemory(gDevice, uMem, 0, uniformSize, 0, &data);
     std::memcpy(data, uniforms, uniformSize);
+    VkMappedMemoryRange uRange{};
+    uRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    uRange.memory = uMem;
+    uRange.offset = 0;
+    uRange.size = uniformSize;
+    vkFlushMappedMemoryRanges(gDevice, 1, &uRange);
     vkUnmapMemory(gDevice, uMem);
 
     VkDescriptorPoolSize poolSizes[2]{};
