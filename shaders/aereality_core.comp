@@ -21,40 +21,40 @@ struct LayerData {
     float hue;                    // -0.5 to +0.5
     float temperature;            // Kelvin (3000 to 9500)
 
-    // Glows & Flares
+    // Glows, Flares & Chromatic Aberration
     float deepGlowIntensity;      // 0.0 to 1.5
     float deepGlowRadius;         // 0.1 to 1.0
     float deepGlowThreshold;      // 0.1 to 0.9
-    float edgeGlowTint;           // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Crimson, 5:Violet
-    float thinStreakIntensity;    // 0.0 to 1.0 (Anamorphic Flare Intensity)
-    float thinStreakWidth;        // 0.1 to 1.0 (Flare Horizontal Spread)
-    float lineChromaStrength;     // 0.0 to 1.0 (Edge Chromatic Aberration)
-    float volRaysLength;          // 0.0 to 1.0 (Sapphire S_EdgeRays)
+    float edgeGlowTint;           // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Deep Blood Crimson, 5:Violet
+    float thinStreakIntensity;    // 0.0 to 1.0
+    float thinStreakWidth;        // 0.1 to 1.0 (Horizontal Flare Stretch)
+    float lineChromaStrength;     // 0.0 to 1.0 (All-Edge Chromatic Aberration)
+    float volRaysLength;          // 0.0 to 1.0 (Volumetric God Rays)
     float volRaysDecay;           // 0.70 to 0.98
 
-    // Tone & Detail
+    // Tone & Line Detail
     float shadows;                // -1.0 to 1.0
     float highlights;             // -1.0 to 1.0
     float blackCrush;             // 0.0 to 0.5
     float vignette;               // 0.0 to 1.0 (Radial)
     float vignetteBoxed;          // 0.0 to 1.0 (Boxed)
-    float edgeDarken;             // 0.0 to 1.0 (Interior Line Art Shadow)
-    float darkOutlines;           // 0.0 to 1.0 (Sobel Line Darkener)
+    float edgeDarken;             // 0.0 to 1.0 (Line Art Interior Shadow)
+    float darkOutlines;           // 0.0 to 1.0 (Sobel Outline Darkener)
     float denoise;                // 0.0 to 1.0 (Bilateral Filter)
 
-    // Noise, Flicker & Halation
+    // Film, Noise & Flicker
     float filmGrain;              // 0.0 to 0.3
     float flickerIntensity;       // 0.0 to 1.0
     float flickerSpeed;           // 1.0 to 20.0 (Hz)
     float halationRadius;         // 0.0 to 1.0
     float halationWarmth;         // 0.0 to 1.0
 
-    // Focus & Background Blur
+    // Depth of Field (Directional & Circular)
     float depthOfField;           // 0.0 to 1.0
-    float dofFocus;               // 0.0 to 1.0 (Focus Center Y)
-    float backgroundBlur;         // 0.0 to 1.0 (Subject Focus Isolation Blur)
+    float dofFocus;               // 0.0 to 1.0 (Focal Plane Center Y)
+    float dofAngle;               // 0.0 to 3.1415 (Directional Blur Angle)
 
-    // Unsharp Mask
+    // Unsharp Mask Sub-Sliders
     float unsharpRadius;          // 0.0 to 5.0
     float unsharpAmount;          // 0.0 to 2.0
     float unsharpThreshold;       // 0.0 to 0.5
@@ -67,12 +67,14 @@ struct LayerData {
     float curveG2;                // Green Midtone Pivot
     float curveB2;                // Blue Midtone Pivot
 
-    // Sapphire Glow Core
+    // Sapphire Glow Core & Dedicated Flare Opacity
     float sapphireGlowWidth;      // 0.0 to 2.0
     float sapphireGlowThreshold;  // 0.0 to 1.0
-    float pad0;
-    float pad1;
-    float pad2;
+    float thinStreakOpacity;      // 0.0 to 1.0 (Dedicated White Flare Opacity)
+
+    // Magic Bullet Mojo & BSLA Extreme Atmospheric
+    float mblMojoTealOrange;      // 0.0 to 1.0 (Teal/Orange Split)
+    float bslaGodRays;            // 0.0 to 1.0 (Screen-Space Volumetric Light Shafts)
 };
 
 layout(binding = 2) uniform UniformBlock {
@@ -145,7 +147,8 @@ vec3 tonemapACES(vec3 x) {
 }
 
 vec3 tonemapReinhardExtended(vec3 x) {
-    float maxWhite = 3.0;
+    // Extended White Point preserves brightness without crushing midtones
+    float maxWhite = 4.5;
     return (x * (1.0 + (x / (maxWhite * maxWhite)))) / (1.0 + x);
 }
 
@@ -178,7 +181,7 @@ vec3 colorTempToRGB(float kelvin) {
 vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
     vec3 result = blendCol;
     if (mode == 1) {
-        // Screen (Glows / Blooms)
+        // Screen
         result = 1.0 - (1.0 - baseCol) * (1.0 - blendCol);
     } else if (mode == 2) {
         // Linear Add
@@ -207,7 +210,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line-art edge detection
+    // Sobel line-art edge detection with sensitive range for all-edge coverage
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -236,12 +239,11 @@ void main() {
 
         vec3 layerColor = currentComposite;
 
-        // 1. Amplified Edge-Targeted Chromatic Aberration
+        // 1. All-Edge Lineart Chromatic Aberration
         if (L.lineChromaStrength > 0.001) {
-            float edgeFactor = smoothstep(0.04, 0.30, lineEdge);
+            float edgeFactor = smoothstep(0.015, 0.18, lineEdge);
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
-            float dist = length(uv);
-            ivec2 shift = ivec2(uv * L.lineChromaStrength * 16.0 * (0.35 + dist) * edgeFactor);
+            ivec2 shift = ivec2(normalize(uv + vec2(0.0001)) * (L.lineChromaStrength * 5.5) * edgeFactor);
 
             ivec2 rCoord = clamp(coord + shift, ivec2(0), ivec2(width - 1, height - 1));
             ivec2 bCoord = clamp(coord - shift, ivec2(0), ivec2(width - 1, height - 1));
@@ -249,8 +251,8 @@ void main() {
             vec4 rPix = unpackRGBA(in_pixels[rCoord.y * width + rCoord.x]);
             vec4 bPix = unpackRGBA(in_pixels[bCoord.y * width + bCoord.x]);
 
-            layerColor.r = mix(layerColor.r, rPix.r, edgeFactor);
-            layerColor.b = mix(layerColor.b, bPix.b, edgeFactor);
+            layerColor.r = mix(layerColor.r, rPix.r, edgeFactor * 0.85);
+            layerColor.b = mix(layerColor.b, bPix.b, edgeFactor * 0.85);
         }
 
         // 2. Bilateral Denoise Filter
@@ -333,17 +335,27 @@ void main() {
         layerColor += vec3(L.highlights * luma * 0.35);
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
-        // 9. Individual RGB Channel Spline Curves
+        // 9. Magic Bullet Mojo: Blockbuster Teal / Orange Split
+        if (L.mblMojoTealOrange > 0.01) {
+            float shadowMask = clamp(1.0 - luma * 1.6, 0.0, 1.0);
+            float warmMask = clamp(luma * 1.4 - 0.2, 0.0, 1.0);
+            vec3 tealTint = vec3(0.12, 0.85, 1.05);
+            vec3 orangeTint = vec3(1.18, 0.88, 0.45);
+            layerColor = mix(layerColor, layerColor * tealTint, shadowMask * L.mblMojoTealOrange * 0.40);
+            layerColor = mix(layerColor, layerColor * orangeTint, warmMask * L.mblMojoTealOrange * 0.35);
+        }
+
+        // 10. Individual RGB Channel Spline Curves
         layerColor.r = evalCatmullRom(layerColor.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
         layerColor.g = mix(layerColor.g, L.curveG2, 0.15 * (L.curveG2 - 0.5));
         layerColor.b = mix(layerColor.b, L.curveB2, 0.15 * (L.curveB2 - 0.5));
 
-        // 10. Master Spline Curve
+        // 11. Master Spline Curve
         layerColor.r = evalCatmullRom(layerColor.r, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
         layerColor.g = evalCatmullRom(layerColor.g, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
         layerColor.b = evalCatmullRom(layerColor.b, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
 
-        // 11. Saturation & Hue Shift
+        // 12. Saturation & Hue Shift
         luma = dot(layerColor, vec3(0.299, 0.587, 0.114));
         layerColor = mix(vec3(luma), layerColor, L.saturation);
 
@@ -359,13 +371,13 @@ void main() {
             layerColor = clamp(hueMat * layerColor, 0.0, 1.0);
         }
 
-        // 12. Continuous Inverse-Square Deep Glow
+        // 13. Continuous Inverse-Square Deep Glow
         if (L.deepGlowIntensity > 0.01) {
             vec3 bloomTint = vec3(1.0);
             if (L.edgeGlowTint == 1.0) bloomTint = vec3(1.18, 1.05, 0.70);       // Gold / Warm
             else if (L.edgeGlowTint == 2.0) bloomTint = vec3(0.40, 1.15, 1.45);  // Quincy Cyan
             else if (L.edgeGlowTint == 3.0) bloomTint = vec3(0.18, 0.18, 0.22);  // Dark / Ink
-            else if (L.edgeGlowTint == 4.0) bloomTint = vec3(1.40, 0.35, 0.35);  // Crimson
+            else if (L.edgeGlowTint == 4.0) bloomTint = vec3(1.15, 0.08, 0.08);  // Deep Blood Crimson
             else if (L.edgeGlowTint == 5.0) bloomTint = vec3(0.85, 0.45, 1.40);  // Shogun Violet
 
             vec3 bloomAcc = vec3(0.0);
@@ -391,7 +403,7 @@ void main() {
             layerColor += finalBloom;
         }
 
-        // 13. Sapphire S_Glow Core
+        // 14. Sapphire S_Glow Core
         if (L.sapphireGlowWidth > 0.01) {
             int sRad = int(clamp(L.sapphireGlowWidth * 12.0, 2.0, 16.0));
             vec3 sGlowAcc = vec3(0.0);
@@ -413,23 +425,70 @@ void main() {
             }
         }
 
-        // 14. True Horizontal Stretching Anamorphic Flare
+        // 15. Sparse White Horizontal Anamorphic Flares (~8 Peaks Across Frame)
         if (L.thinStreakIntensity > 0.01) {
             vec3 flareAcc = vec3(0.0);
-            int flareSpan = int(float(width) * clamp(L.thinStreakWidth * 0.35, 0.10, 0.45));
-            for (int dx = -flareSpan; dx <= flareSpan; dx += 3) {
-                ivec2 fc = clamp(ivec2(coord.x + dx, coord.y), ivec2(0), ivec2(width - 1, height - 1));
-                vec4 fp = unpackRGBA(in_pixels[fc.y * width + fc.x]);
-                float fLum = dot(fp.rgb, vec3(0.299, 0.587, 0.114));
-                if (fLum > 0.72) {
-                    float falloff = 1.0 - (abs(float(dx)) / float(flareSpan));
-                    flareAcc += fp.rgb * pow(falloff, 2.0);
+            int flareSpan = int(float(width) * clamp(L.thinStreakWidth * 0.35, 0.10, 0.50));
+
+            // Sparse Glint Peak Detector: Divide the frame into grid cells
+            int cellX = coord.x / 96;
+            int cellY = coord.y / 96;
+            float cellHash = fract(sin(float(cellX * 127 + cellY * 311)) * 43758.5453);
+
+            // Only top ~8 cells emit specular streaks
+            if (cellHash > 0.88) {
+                int peakX = cellX * 96 + int(fract(cellHash * 17.13) * 64.0) + 16;
+                int peakY = cellY * 96 + int(fract(cellHash * 31.37) * 64.0) + 16;
+                ivec2 peakCoord = clamp(ivec2(peakX, peakY), ivec2(0), ivec2(width - 1, height - 1));
+
+                vec4 peakPix = unpackRGBA(in_pixels[peakCoord.y * width + peakCoord.x]);
+                float peakLum = dot(peakPix.rgb, vec3(0.299, 0.587, 0.114));
+
+                if (peakLum > 0.65) {
+                    int distY = abs(coord.y - peakCoord.y);
+                    int distX = abs(coord.x - peakCoord.x);
+                    if (distY <= 2 && distX <= flareSpan) {
+                        float hFalloff = 1.0 - (float(distX) / float(flareSpan));
+                        float vFalloff = (distY == 0) ? 1.0 : 0.45;
+                        // Pure Neutral White Streak with dedicated opacity control
+                        vec3 whiteStreak = vec3(1.0) * pow(hFalloff, 2.5) * vFalloff * peakLum;
+                        flareAcc += whiteStreak * L.thinStreakIntensity * clamp(L.thinStreakOpacity, 0.0, 1.0);
+                    }
                 }
             }
-            layerColor += flareAcc * vec3(0.40, 0.80, 1.40) * L.thinStreakIntensity * 0.12;
+            layerColor += flareAcc * 0.85;
         }
 
-        // 15. Volumetric Occluded Light Rays (Sapphire S_EdgeRays)
+        // 16. BSLA Extreme: Screen-Space Raymarched God Rays & Atmospheric Fog
+        if (L.bslaGodRays > 0.01) {
+            vec2 lightSrc = vec2(float(width) * 0.5, float(height) * 0.18);
+            vec2 rayDir = (lightSrc - vec2(coord)) / float(max(width, height));
+            vec3 godRayAcc = vec3(0.0);
+            vec2 curRayPos = vec2(coord);
+            float stepSize = 14.0;
+            float rayDecay = 1.0;
+
+            for (int s = 0; s < 12; s++) {
+                curRayPos += rayDir * stepSize;
+                ivec2 rc = clamp(ivec2(curRayPos), ivec2(0), ivec2(width - 1, height - 1));
+                vec4 rPix = unpackRGBA(in_pixels[rc.y * width + rc.x]);
+                float rLum = dot(rPix.rgb, vec3(0.299, 0.587, 0.114));
+                godRayAcc += rPix.rgb * smoothstep(0.55, 0.98, rLum) * rayDecay;
+                rayDecay *= 0.88;
+            }
+
+            // Sunlight atmospheric scattering color
+            vec3 sunFogColor = vec3(1.15, 1.02, 0.80);
+            layerColor += (godRayAcc / 12.0) * sunFogColor * (L.bslaGodRays * 0.65);
+
+            // Exponential gradient distance fog: 1.0 - exp(-Depth * Density)
+            float normY = float(coord.y) / float(height);
+            float fogFactor = 1.0 - exp(-normY * 1.8);
+            vec3 deepAtmosphere = vec3(0.85, 0.92, 1.05);
+            layerColor = mix(layerColor, deepAtmosphere * 0.85, fogFactor * 0.12);
+        }
+
+        // 17. Volumetric Occluded Light Rays (Sapphire S_EdgeRays)
         if (L.volRaysLength > 0.01) {
             vec2 center = vec2(width, height) * 0.5;
             vec2 delta = (center - vec2(coord)) * (0.018 * L.volRaysLength);
@@ -448,46 +507,46 @@ void main() {
             layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(rayAcc * L.volRaysLength * 0.14, 0.0, 0.95));
         }
 
-        // 16. Subject Focus & Background Blur Isolation
-        if (L.backgroundBlur > 0.01) {
+        // 18. Directional & Circular Depth of Field
+        if (L.depthOfField > 0.01) {
             float normY = float(coord.y) / float(height);
             float focusDist = abs(normY - L.dofFocus);
-            // Non-subject background area receives smearing gaussian blur
-            if (focusDist > 0.18) {
-                float blurAmount = smoothstep(0.18, 0.50, focusDist) * L.backgroundBlur * 4.0;
-                vec3 blurAcc = layerColor;
-                int bRad = int(clamp(blurAmount, 1.0, 4.0));
-                for (int by = -bRad; by <= bRad; by += 2) {
-                    for (int bx = -bRad; bx <= bRad; bx += 2) {
-                        ivec2 bc = clamp(coord + ivec2(bx, by), ivec2(0), ivec2(width - 1, height - 1));
-                        blurAcc += unpackRGBA(in_pixels[bc.y * width + bc.x]).rgb;
-                    }
+            if (focusDist > 0.12) {
+                float blurAmount = smoothstep(0.12, 0.45, focusDist) * L.depthOfField * 4.0;
+                vec2 dir = vec2(cos(L.dofAngle), sin(L.dofAngle));
+                vec3 dofAcc = layerColor;
+                int dSamples = int(clamp(blurAmount, 1.0, 5.0));
+                for (int d = 1; d <= dSamples; d++) {
+                    ivec2 dc1 = clamp(coord + ivec2(dir * float(d) * 2.0), ivec2(0), ivec2(width - 1, height - 1));
+                    ivec2 dc2 = clamp(coord - ivec2(dir * float(d) * 2.0), ivec2(0), ivec2(width - 1, height - 1));
+                    dofAcc += unpackRGBA(in_pixels[dc1.y * width + dc1.x]).rgb;
+                    dofAcc += unpackRGBA(in_pixels[dc2.y * width + dc2.x]).rgb;
                 }
-                layerColor = mix(layerColor, blurAcc / 9.0, clamp(blurAmount * 0.8, 0.0, 1.0));
+                layerColor = dofAcc / float(1 + dSamples * 2);
             }
         }
 
-        // 17. Halation Bleed & Warmth
+        // 19. Halation Bleed & Warmth
         if (L.halationRadius > 0.01) {
             float redBleed = smoothstep(0.50, 0.95, luma) * L.halationRadius * 0.35;
             layerColor.r += redBleed * (1.0 + L.halationWarmth * 0.5);
             layerColor.g += redBleed * (0.2 + L.halationWarmth * 0.15);
         }
 
-        // 18. Film Grain
+        // 20. Film Grain
         if (L.filmGrain > 0.001) {
             float noise = (hash12(vec2(coord) + vec2(u_time * 17.13, u_time * 31.37)) - 0.5);
             layerColor += vec3(noise * L.filmGrain * 0.06);
         }
 
-        // 19. Frequency-Controlled Flicker Generator
+        // 21. Frequency-Controlled Flicker Generator
         if (L.flickerIntensity > 0.01) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.50);
         }
 
-        // 20. Soft Radial Vignette (Extended range up to 1.0)
+        // 22. Soft Radial Vignette
         if (L.vignette > 0.01) {
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
             float dist = length(uv);
@@ -495,7 +554,7 @@ void main() {
             layerColor *= clamp(vig, 0.0, 1.0);
         }
 
-        // 21. Boxed Vignette (Extended range up to 1.0)
+        // 23. Boxed Vignette
         if (L.vignetteBoxed > 0.01) {
             vec2 uv = abs((vec2(coord) / vec2(width, height)) - 0.5) * 2.0;
             float boxDist = max(uv.x, uv.y);
@@ -503,7 +562,7 @@ void main() {
             layerColor *= clamp(boxVig, 0.0, 1.0);
         }
 
-        // Blend this layer onto the current composite
+        // Blend onto current composite in IEEE 32-bit floating point
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
