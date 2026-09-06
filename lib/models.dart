@@ -1,7 +1,6 @@
 // lib/models.dart
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 enum LayerBlendMode {
@@ -20,7 +19,7 @@ class AdjustmentLayer {
   double opacity; // 0.0 to 1.0
   LayerBlendMode blendMode;
 
-  // Layer Specific Grading Parameters
+  // Grade Parameters (Strictly 0.0 defaults, 1.0 for neutral multipliers)
   double brightness;
   double saturation;
   double contrast;
@@ -32,7 +31,7 @@ class AdjustmentLayer {
   double highlights;
   double blackCrush;
 
-  // AE Knockoffs & Glows on this layer
+  // AE Knockoffs & Glow Suite (Strictly 0.0 defaults)
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
@@ -44,7 +43,7 @@ class AdjustmentLayer {
   double halationRadius;
   double halationWarmth;
 
-  // Sapphire / MBL Suite on this layer
+  // Sapphire / MBL Suite (Strictly 0.0 defaults)
   double sapphireBlendMix;
   double filmConvertNitrate;
   double mblCosmoSkin;
@@ -53,9 +52,21 @@ class AdjustmentLayer {
   double mblColoristaGamma;
   double mblColoristaGain;
   double vignette;
+  double vignetteBoxed;
+  double edgeDarken;
+  double darkOutlines;
+  double denoise;
   double filmGrain;
+  double flickerIntensity;
+  double flickerSpeed;
+  double depthOfField;
+  double dofFocus;
+  double dofAngle;
+  double anamorphicFlare;
+  double flareAmount;
+  double fourColorGradMix;
 
-  // Spline Curves on this layer
+  // Spline Curves for this layer
   List<double> curveMaster;
   List<double> curveRed;
   List<double> curveGreen;
@@ -78,7 +89,7 @@ class AdjustmentLayer {
     this.highlights = 0.0,
     this.blackCrush = 0.0,
     this.deepGlowIntensity = 0.0,
-    this.deepGlowRadius = 0.5,
+    this.deepGlowRadius = 0.50,
     this.deepGlowThreshold = 0.45,
     this.edgeGlowTint = 0.0,
     this.thinStreakIntensity = 0.0,
@@ -86,7 +97,7 @@ class AdjustmentLayer {
     this.volRaysLength = 0.0,
     this.volRaysDecay = 0.92,
     this.halationRadius = 0.0,
-    this.halationWarmth = 0.5,
+    this.halationWarmth = 0.50,
     this.sapphireBlendMix = 0.0,
     this.filmConvertNitrate = 0.0,
     this.mblCosmoSkin = 0.0,
@@ -95,7 +106,19 @@ class AdjustmentLayer {
     this.mblColoristaGamma = 0.0,
     this.mblColoristaGain = 0.0,
     this.vignette = 0.0,
+    this.vignetteBoxed = 0.0,
+    this.edgeDarken = 0.0,
+    this.darkOutlines = 0.0,
+    this.denoise = 0.0,
     this.filmGrain = 0.0,
+    this.flickerIntensity = 0.0,
+    this.flickerSpeed = 3.0,
+    this.depthOfField = 0.0,
+    this.dofFocus = 0.50,
+    this.dofAngle = 0.0,
+    this.anamorphicFlare = 0.0,
+    this.flareAmount = 0.50,
+    this.fourColorGradMix = 0.0,
     List<double>? curveMaster,
     List<double>? curveRed,
     List<double>? curveGreen,
@@ -105,7 +128,12 @@ class AdjustmentLayer {
         curveGreen = curveGreen ?? [0.0, 0.25, 0.5, 0.75, 1.0],
         curveBlue = curveBlue ?? [0.0, 0.25, 0.5, 0.75, 1.0];
 
-  AdjustmentLayer copyWith({String? name, bool? isEnabled, double? opacity, LayerBlendMode? blendMode}) {
+  AdjustmentLayer copyWith({
+    String? name,
+    bool? isEnabled,
+    double? opacity,
+    LayerBlendMode? blendMode,
+  }) {
     return AdjustmentLayer(
       id: id,
       name: name ?? this.name,
@@ -140,7 +168,19 @@ class AdjustmentLayer {
       mblColoristaGamma: mblColoristaGamma,
       mblColoristaGain: mblColoristaGain,
       vignette: vignette,
+      vignetteBoxed: vignetteBoxed,
+      edgeDarken: edgeDarken,
+      darkOutlines: darkOutlines,
+      denoise: denoise,
       filmGrain: filmGrain,
+      flickerIntensity: flickerIntensity,
+      flickerSpeed: flickerSpeed,
+      depthOfField: depthOfField,
+      dofFocus: dofFocus,
+      dofAngle: dofAngle,
+      anamorphicFlare: anamorphicFlare,
+      flareAmount: flareAmount,
+      fourColorGradMix: fourColorGradMix,
       curveMaster: List.from(curveMaster),
       curveRed: List.from(curveRed),
       curveGreen: List.from(curveGreen),
@@ -182,7 +222,19 @@ class AdjustmentLayer {
         'mblColoristaGamma': mblColoristaGamma,
         'mblColoristaGain': mblColoristaGain,
         'vignette': vignette,
+        'vignetteBoxed': vignetteBoxed,
+        'edgeDarken': edgeDarken,
+        'darkOutlines': darkOutlines,
+        'denoise': denoise,
         'filmGrain': filmGrain,
+        'flickerIntensity': flickerIntensity,
+        'flickerSpeed': flickerSpeed,
+        'depthOfField': depthOfField,
+        'dofFocus': dofFocus,
+        'dofAngle': dofAngle,
+        'anamorphicFlare': anamorphicFlare,
+        'flareAmount': flareAmount,
+        'fourColorGradMix': fourColorGradMix,
         'curveMaster': curveMaster,
         'curveRed': curveRed,
         'curveGreen': curveGreen,
@@ -206,7 +258,7 @@ class AdjustmentLayer {
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
         deepGlowIntensity: (json['deepGlowIntensity'] ?? 0.0).toDouble(),
-        deepGlowRadius: (json['deepGlowRadius'] ?? 0.5).toDouble(),
+        deepGlowRadius: (json['deepGlowRadius'] ?? 0.50).toDouble(),
         deepGlowThreshold: (json['deepGlowThreshold'] ?? 0.45).toDouble(),
         edgeGlowTint: (json['edgeGlowTint'] ?? 0.0).toDouble(),
         thinStreakIntensity: (json['thinStreakIntensity'] ?? 0.0).toDouble(),
@@ -214,7 +266,7 @@ class AdjustmentLayer {
         volRaysLength: (json['volRaysLength'] ?? 0.0).toDouble(),
         volRaysDecay: (json['volRaysDecay'] ?? 0.92).toDouble(),
         halationRadius: (json['halationRadius'] ?? 0.0).toDouble(),
-        halationWarmth: (json['halationWarmth'] ?? 0.5).toDouble(),
+        halationWarmth: (json['halationWarmth'] ?? 0.50).toDouble(),
         sapphireBlendMix: (json['sapphireBlendMix'] ?? 0.0).toDouble(),
         filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
         mblCosmoSkin: (json['mblCosmoSkin'] ?? 0.0).toDouble(),
@@ -223,7 +275,19 @@ class AdjustmentLayer {
         mblColoristaGamma: (json['mblColoristaGamma'] ?? 0.0).toDouble(),
         mblColoristaGain: (json['mblColoristaGain'] ?? 0.0).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
+        vignetteBoxed: (json['vignetteBoxed'] ?? 0.0).toDouble(),
+        edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
+        darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
+        denoise: (json['denoise'] ?? 0.0).toDouble(),
         filmGrain: (json['filmGrain'] ?? 0.0).toDouble(),
+        flickerIntensity: (json['flickerIntensity'] ?? 0.0).toDouble(),
+        flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
+        depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
+        dofFocus: (json['dofFocus'] ?? 0.50).toDouble(),
+        dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
+        anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
+        flareAmount: (json['flareAmount'] ?? 0.50).toDouble(),
+        fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
         curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveGreen: (json['curveGreen'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
@@ -236,8 +300,6 @@ class ProjectData {
   bool isImage;
   String aspectRatio;
   double tonemapMode; // 0: Off (Linear default), 1: Reinhard, 2: ACES Filmic
-
-  // The Multi-Layer Pipeline (Max 4 Layers)
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
 
@@ -250,7 +312,7 @@ class ProjectData {
     this.activeLayerIndex = 0,
   }) : layers = layers ?? [
           AdjustmentLayer(id: 'layer_base', name: 'Base Grade', blendMode: LayerBlendMode.normal),
-          AdjustmentLayer(id: 'layer_glow', name: 'Deep Glow & Rays', blendMode: LayerBlendMode.screen, deepGlowIntensity: 0.0),
+          AdjustmentLayer(id: 'layer_glow', name: 'Deep Glow', blendMode: LayerBlendMode.screen),
         ];
 
   AdjustmentLayer get currentLayer => layers[activeLayerIndex.clamp(0, layers.length - 1)];
@@ -269,7 +331,9 @@ class ProjectData {
         isImage: json['isImage'] ?? false,
         aspectRatio: json['aspectRatio'] ?? "4:5",
         tonemapMode: (json['tonemapMode'] ?? 0.0).toDouble(),
-        layers: (json['layers'] as List<dynamic>?)?.map((l) => AdjustmentLayer.fromJson(l as Map<String, dynamic>)).toList() ??
+        layers: (json['layers'] as List<dynamic>?)
+                ?.map((l) => AdjustmentLayer.fromJson(l as Map<String, dynamic>))
+                .toList() ??
             [AdjustmentLayer(id: 'layer_base', name: 'Base Grade')],
         activeLayerIndex: (json['activeLayerIndex'] ?? 0) as int,
       );
@@ -308,7 +372,7 @@ class StoredProject {
 }
 
 class ProjectManager {
-  static const String _storageKey = 'aereality_layers_v5.json';
+  static const String _storageKey = 'aereality_layers_v7.json';
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
