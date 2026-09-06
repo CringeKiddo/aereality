@@ -12,7 +12,7 @@ const Color kBackgroundDark = Color(0xFF08080B);
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kAquamarine);
 
 int gEnginePrecision = 32;
-double gPreviewScale = 0.5;
+double gPreviewScale = 0.50; // Dynamic scale for timeline preview lag reduction
 
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
@@ -39,14 +39,28 @@ class ExportMatrix {
     ],
   };
 
+  static bool isCodecSupported(String container, String codec) {
+    final list = containerCodecs[container];
+    if (list == null) return false;
+    return list.contains(codec);
+  }
+
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
       return container == 'MKV' && (codec.contains('FFV1') || codec.contains('ProRes'));
     }
     if (bitDepth == '10-bit') {
-      return codec.contains('H.265') || codec.contains('HEVC') || codec.contains('VP9') || codec.contains('FFV1');
+      return codec.contains('H.265') || codec.contains('HEVC') || codec.contains('VP9') || codec.contains('FFV1') || codec.contains('ProRes');
     }
-    return true;
+    return true; // 8-bit supported across the board
+  }
+
+  static bool isBitrateValid(String codec, String bitrate) {
+    // Lossless codecs ignore target bitrates
+    if (codec.contains('FFV1') || codec.contains('ProRes')) {
+      return bitrate == 'Lossless Variable';
+    }
+    return bitrate != 'Lossless Variable';
   }
 
   static String getAudioCodec(String container) {
