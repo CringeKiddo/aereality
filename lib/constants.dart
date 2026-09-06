@@ -1,10 +1,7 @@
 // lib/constants.dart
 import 'package:flutter/material.dart';
 
-// Dynamic App Theme Color Notifier (Customizable via Settings)
-final ValueNotifier<Color> gAppColor = ValueNotifier<Color>(const Color(0xFF7FFFD4));
-
-Color get kAquamarine => gAppColor.value;
+const Color kAquamarine = Color(0xFF7FFFD4);
 const Color kAquamarineDark = Color(0xFF45B39D);
 const Color kCyanAccent = Color(0xFF00FFFF);
 const Color kGold = Color(0xFFFFD700);
@@ -12,6 +9,9 @@ const Color kLavenderSoft = Color(0xFFE6E6FA);
 const Color kSurfaceDark = Color(0xFF101015);
 const Color kCardDark = Color(0xFF15151C);
 const Color kBackgroundDark = Color(0xFF08080B);
+
+// Dynamic accent color notifier for user-selected custom UI themes
+final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kAquamarine);
 
 int gEnginePrecision = 32;
 double gPreviewScale = 0.5;
@@ -74,7 +74,6 @@ class ExportMatrix {
     required int bitrateKbps,
     required String outputPath,
   }) {
-    final bool is10 = bitDepth == '10-bit';
     final bool is16 = bitDepth == '16-bit';
     String codecFlags;
 
