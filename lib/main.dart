@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -99,14 +98,14 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModal) {
           final List<Color> palette = [
-            const Color(0xFF7FFFD4), // Aquamarine
-            const Color(0xFF00E5FF), // Cyan
-            const Color(0xFFFFD700), // Gold
-            const Color(0xFF7C4DFF), // Purple
-            const Color(0xFFFF5252), // Crimson
-            const Color(0xFF69F0AE), // Emerald
-            const Color(0xFFFF4081), // Pink
-            const Color(0xFFFFFFFF), // Pure White
+            const Color(0xFF7FFFD4),
+            const Color(0xFF00E5FF),
+            const Color(0xFFFFD700),
+            const Color(0xFF7C4DFF),
+            const Color(0xFFFF5252),
+            const Color(0xFF69F0AE),
+            const Color(0xFFFF4081),
+            const Color(0xFFFFFFFF),
           ];
 
           return AlertDialog(
@@ -575,6 +574,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _controller?.pause();
     _controller?.dispose();
     _controller = null;
+    _processedImage?.dispose();
     super.dispose();
   }
 
@@ -613,9 +613,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Future<void> _loadShader() async {
     final candidateNames = [
-      'shaders/aereality_core.spv',
       'assets/shaders/aereality_core.spv',
-      'assets/shaders/shader.spv',
+      'shaders/aereality_core.spv',
     ];
 
     Uint8List? shaderBytes;
@@ -646,6 +645,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     setState(() {
       _project.mediaPath = path;
       _project.isImage = isImg;
+      _processedImage?.dispose();
       _processedImage = null;
       _isPlaying = false;
     });
@@ -705,14 +705,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (rawBytes == null) return;
 
-      final uniforms = _packMultiLayerUniforms();
+      final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
       final outBytes = processImage(rawBytes, w, h, w, h, uniforms);
 
       final completer = Completer<ui.Image>();
       ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (img) => completer.complete(img));
       final res = await completer.future;
 
-      if (mounted) setState(() => _processedImage = res);
+      if (mounted) {
+        setState(() {
+          _processedImage?.dispose();
+          _processedImage = res;
+        });
+      }
     } catch (_) {}
   }
 
@@ -728,8 +733,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
-  Float32List _packMultiLayerUniforms() {
-    final uniforms = Float32List(128);
+  Float32List _packMultiLayerUniforms(double imgW, double imgH) {
+    // 8 global floats + (4 layers * 51 floats) = 212 floats
+    final uniforms = Float32List(256);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
@@ -737,10 +743,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[0] = timeSeconds;
     uniforms[1] = _project.layers.length.toDouble();
     uniforms[2] = _project.tonemapMode;
+    uniforms[3] = imgW;
+    uniforms[4] = imgH;
+    uniforms[5] = 0.0;
+    uniforms[6] = 0.0;
+    uniforms[7] = 0.0;
 
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
-      final offset = 4 + (l * 30);
+      final offset = 8 + (l * 51);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -752,6 +763,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 7] = layer.gamma;
       uniforms[offset + 8] = layer.hue;
       uniforms[offset + 9] = layer.temperature;
+
       uniforms[offset + 10] = layer.deepGlowIntensity;
       uniforms[offset + 11] = layer.deepGlowRadius;
       uniforms[offset + 12] = layer.deepGlowThreshold;
@@ -760,18 +772,48 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 15] = layer.lineChromaStrength * 0.35;
       uniforms[offset + 16] = layer.volRaysLength;
       uniforms[offset + 17] = layer.volRaysDecay;
+
       uniforms[offset + 18] = layer.shadows + layer.mblColoristaLift;
       uniforms[offset + 19] = layer.highlights + layer.mblColoristaGain;
       uniforms[offset + 20] = layer.blackCrush;
       uniforms[offset + 21] = layer.vignette;
-      uniforms[offset + 22] = layer.mblMojoTealOrange;
-      uniforms[offset + 23] = layer.mblCosmoSkin;
-      uniforms[offset + 24] = layer.filmConvertNitrate + layer.halationRadius;
-      uniforms[offset + 25] = layer.filmGrain;
-      uniforms[offset + 26] = layer.curveMaster[1];
-      uniforms[offset + 27] = layer.curveMaster[2];
-      uniforms[offset + 28] = layer.curveMaster[3];
-      uniforms[offset + 29] = layer.curveMaster[4];
+      uniforms[offset + 22] = layer.vignetteBoxed;
+      uniforms[offset + 23] = layer.edgeDarken;
+      uniforms[offset + 24] = layer.darkOutlines;
+      uniforms[offset + 25] = layer.denoise;
+      uniforms[offset + 26] = layer.filmGrain;
+      uniforms[offset + 27] = layer.flickerIntensity;
+      uniforms[offset + 28] = layer.flickerSpeed;
+      uniforms[offset + 29] = layer.halationRadius;
+      uniforms[offset + 30] = layer.halationWarmth;
+      uniforms[offset + 31] = layer.depthOfField;
+      uniforms[offset + 32] = layer.dofFocus;
+      uniforms[offset + 33] = layer.mblMojoTealOrange;
+      uniforms[offset + 34] = layer.fourColorGradMix;
+
+      // Master curve P0..P4
+      uniforms[offset + 35] = layer.curveMaster[0];
+      uniforms[offset + 36] = layer.curveMaster[1];
+      uniforms[offset + 37] = layer.curveMaster[2];
+      uniforms[offset + 38] = layer.curveMaster[3];
+      uniforms[offset + 39] = layer.curveMaster[4];
+
+      // Red curve P0..P4
+      uniforms[offset + 40] = layer.curveRed[0];
+      uniforms[offset + 41] = layer.curveRed[1];
+      uniforms[offset + 42] = layer.curveRed[2];
+      uniforms[offset + 43] = layer.curveRed[3];
+      uniforms[offset + 44] = layer.curveRed[4];
+
+      // Green curve P0..P4
+      uniforms[offset + 45] = layer.curveGreen[0];
+      uniforms[offset + 46] = layer.curveGreen[1];
+      uniforms[offset + 47] = layer.curveGreen[2];
+      uniforms[offset + 48] = layer.curveGreen[3];
+      uniforms[offset + 49] = layer.curveGreen[4];
+
+      // Blue curve (first anchor)
+      uniforms[offset + 50] = layer.curveBlue[2];
     }
 
     return uniforms;
@@ -832,7 +874,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Authentic 9 Presets with ZERO Vignette and Clean Physical Bloom
+  // 13 Full Anime WIS CC Presets (Strictly calibrated without blackouts)
   void _applyPreset(String name) {
     setState(() {
       _project.layers.clear();
@@ -842,14 +884,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'gojo_base',
             name: 'Base Grade',
-            contrast: 1.15,
-            saturation: 1.08,
+            contrast: 1.16,
+            saturation: 1.06,
             brightness: 0.01,
-            temperature: 7200.0,
-            sharpness: 0.25,
+            temperature: 7100.0,
+            sharpness: 0.28,
             shadows: -0.05,
-            vignette: 0.0,
-            filmGrain: 0.0,
+            edgeDarken: 0.20,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.22, 0.50, 0.80, 1.0],
           ));
@@ -858,12 +899,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             name: 'Infinity Cyan Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.85,
-            deepGlowIntensity: 0.65,
-            deepGlowRadius: 0.70,
-            deepGlowThreshold: 0.40,
+            deepGlowIntensity: 0.55,
+            deepGlowRadius: 0.65,
+            deepGlowThreshold: 0.42,
             edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.20,
-            vignette: 0.0,
+            thinStreakIntensity: 0.15,
           ));
           break;
 
@@ -872,53 +912,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'raiden_base',
             name: 'Shogun Contrast',
             contrast: 1.20,
-            saturation: 1.14,
+            saturation: 1.12,
             temperature: 6800.0,
             sharpness: 0.30,
-            shadows: -0.08,
+            shadows: -0.06,
             blendMode: LayerBlendMode.normal,
-            mblMojoTealOrange: 0.20,
-            vignette: 0.0,
-            curveMaster: [0.0, 0.20, 0.49, 0.82, 1.0],
+            curveMaster: [0.0, 0.21, 0.49, 0.82, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'raiden_glow',
             name: 'Electro Violet Glow',
             blendMode: LayerBlendMode.screen,
             opacity: 0.80,
-            deepGlowIntensity: 0.60,
+            deepGlowIntensity: 0.55,
             deepGlowRadius: 0.60,
-            deepGlowThreshold: 0.38,
-            edgeGlowTint: 2.0,
-            halationRadius: 0.15,
-            vignette: 0.0,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 5.0,
+            halationRadius: 0.12,
           ));
           break;
 
-        case 'sad':
+        case 'bina':
           _project.layers.add(AdjustmentLayer(
-            id: 'sad_base',
-            name: 'Melancholic Tone',
+            id: 'bina_base',
+            name: 'Dreamcore Base',
             contrast: 1.10,
-            saturation: 0.78,
-            brightness: -0.01,
-            gamma: 1.05,
-            temperature: 5800.0,
-            filmGrain: 0.04,
-            shadows: 0.04,
-            vignette: 0.0,
+            saturation: 1.08,
+            brightness: 0.02,
+            gamma: 0.98,
             blendMode: LayerBlendMode.normal,
-            curveMaster: [0.03, 0.26, 0.50, 0.76, 0.98],
+            curveMaster: [0.02, 0.26, 0.52, 0.84, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
-            id: 'sad_soft',
-            name: 'Soft Highlights',
-            blendMode: LayerBlendMode.softLight,
-            opacity: 0.60,
-            deepGlowIntensity: 0.30,
-            deepGlowRadius: 0.70,
-            deepGlowThreshold: 0.45,
-            vignette: 0.0,
+            id: 'bina_glow',
+            name: 'Radiant Pastel Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.75,
+            deepGlowIntensity: 0.50,
+            deepGlowRadius: 0.75,
+            deepGlowThreshold: 0.35,
+            edgeGlowTint: 0.0,
           ));
           break;
 
@@ -927,11 +960,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'pot_base',
             name: 'Shadows & Ink',
             contrast: 1.22,
-            saturation: 1.05,
+            saturation: 1.04,
             temperature: 6400.0,
-            sharpness: 0.38,
-            shadows: -0.10,
-            vignette: 0.0,
+            sharpness: 0.35,
+            shadows: -0.08,
+            edgeDarken: 0.25,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.21, 0.50, 0.81, 1.0],
           ));
@@ -939,11 +972,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'pot_glow',
             name: 'Specular Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.75,
+            opacity: 0.70,
             deepGlowIntensity: 0.40,
             deepGlowRadius: 0.50,
             deepGlowThreshold: 0.48,
-            vignette: 0.0,
           ));
           break;
 
@@ -951,11 +983,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'pot2_base',
             name: 'Wheel Contrast',
-            contrast: 1.26,
-            saturation: 1.16,
+            contrast: 1.24,
+            saturation: 1.15,
             temperature: 6600.0,
-            sharpness: 0.32,
-            vignette: 0.0,
+            sharpness: 0.30,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.20, 0.50, 0.84, 1.0],
           ));
@@ -963,13 +994,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'pot2_rays',
             name: 'Mahoraga Rays & Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.90,
-            deepGlowIntensity: 0.65,
-            deepGlowRadius: 0.75,
-            deepGlowThreshold: 0.36,
+            opacity: 0.85,
+            deepGlowIntensity: 0.55,
+            deepGlowRadius: 0.70,
+            deepGlowThreshold: 0.38,
             edgeGlowTint: 1.0,
-            volRaysLength: 0.20,
-            vignette: 0.0,
+            volRaysLength: 0.22,
           ));
           break;
 
@@ -977,12 +1007,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'maki_base',
             name: 'Cursed Steel Clarity',
-            contrast: 1.24,
-            saturation: 1.06,
+            contrast: 1.22,
+            saturation: 1.05,
             temperature: 6200.0,
-            sharpness: 0.40,
-            shadows: -0.06,
-            vignette: 0.0,
+            sharpness: 0.38,
+            shadows: -0.05,
+            edgeDarken: 0.30,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.22, 0.50, 0.82, 1.0],
           ));
@@ -991,91 +1021,188 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             name: 'Blade Flare & Glow',
             blendMode: LayerBlendMode.screen,
             opacity: 0.75,
-            deepGlowIntensity: 0.40,
-            deepGlowRadius: 0.55,
-            deepGlowThreshold: 0.40,
+            deepGlowIntensity: 0.38,
+            deepGlowRadius: 0.52,
+            deepGlowThreshold: 0.42,
             thinStreakIntensity: 0.25,
-            vignette: 0.0,
+          ));
+          break;
+
+        case 'yuta':
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_base',
+            name: 'Rika Cursed Aura',
+            contrast: 1.24,
+            saturation: 1.08,
+            temperature: 7000.0,
+            sharpness: 0.32,
+            shadows: -0.07,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_glow',
+            name: 'Cold Specular Bleed',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.80,
+            deepGlowIntensity: 0.48,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 2.0,
+          ));
+          break;
+
+        case 'uryu':
+          _project.layers.add(AdjustmentLayer(
+            id: 'uryu_base',
+            name: 'Heilig Bogen Precision',
+            contrast: 1.26,
+            saturation: 1.10,
+            temperature: 7400.0,
+            sharpness: 0.40,
+            shadows: -0.08,
+            edgeDarken: 0.22,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.21, 0.51, 0.83, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'uryu_rays',
+            name: 'Quincy Arrow Rays',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.85,
+            deepGlowIntensity: 0.60,
+            deepGlowRadius: 0.68,
+            deepGlowThreshold: 0.36,
+            edgeGlowTint: 2.0,
+            volRaysLength: 0.25,
+            thinStreakIntensity: 0.20,
+          ));
+          break;
+
+        case 'saber':
+          _project.layers.add(AdjustmentLayer(
+            id: 'saber_base',
+            name: 'Excalibur Radiant Steel',
+            contrast: 1.20,
+            saturation: 1.14,
+            temperature: 6600.0,
+            sharpness: 0.32,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.50, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'saber_glow',
+            name: 'Golden Divine Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.85,
+            deepGlowIntensity: 0.58,
+            deepGlowRadius: 0.72,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 1.0,
+            thinStreakIntensity: 0.18,
           ));
           break;
 
         case 'sukuna':
           _project.layers.add(AdjustmentLayer(
             id: 'sukuna_base',
-            name: 'Malevolent Grade',
-            contrast: 1.30,
-            saturation: 1.18,
-            temperature: 6000.0,
-            shadows: -0.12,
-            sharpness: 0.35,
-            vignette: 0.0,
+            name: 'Malevolent Shrine',
+            contrast: 1.28,
+            saturation: 1.16,
+            temperature: 6100.0,
+            shadows: -0.10,
+            sharpness: 0.34,
+            edgeDarken: 0.25,
             blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.18, 0.48, 0.84, 1.0],
+            curveMaster: [0.0, 0.19, 0.49, 0.83, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'sukuna_crimson',
-            name: 'Crimson Halation & Bloom',
+            name: 'Crimson Halation Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.85,
-            deepGlowIntensity: 0.55,
-            deepGlowRadius: 0.58,
+            deepGlowIntensity: 0.50,
+            deepGlowRadius: 0.55,
             deepGlowThreshold: 0.40,
             edgeGlowTint: 4.0,
-            halationRadius: 0.25,
-            halationWarmth: 0.80,
-            vignette: 0.0,
+            halationRadius: 0.22,
+            halationWarmth: 0.75,
           ));
           break;
 
-        case 'bina':
+        case 'sasuke':
           _project.layers.add(AdjustmentLayer(
-            id: 'bina_base',
-            name: 'Dreamcore Base',
-            contrast: 1.12,
-            saturation: 1.10,
-            brightness: 0.03,
-            gamma: 0.96,
-            mblCosmoSkin: 0.35,
-            vignette: 0.0,
+            id: 'sasuke_base',
+            name: 'Chidori Steel Midtones',
+            contrast: 1.25,
+            saturation: 1.06,
+            temperature: 6900.0,
+            sharpness: 0.38,
+            shadows: -0.09,
+            edgeDarken: 0.28,
             blendMode: LayerBlendMode.normal,
-            curveMaster: [0.02, 0.26, 0.52, 0.84, 1.0],
+            curveMaster: [0.0, 0.20, 0.50, 0.81, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
-            id: 'bina_glow',
-            name: 'Radiant Soft Bloom',
+            id: 'sasuke_flare',
+            name: 'Lightning Streak Flare',
             blendMode: LayerBlendMode.screen,
             opacity: 0.80,
-            deepGlowIntensity: 0.65,
-            deepGlowRadius: 0.80,
-            deepGlowThreshold: 0.32,
-            edgeGlowTint: 0.0,
-            vignette: 0.0,
+            deepGlowIntensity: 0.52,
+            deepGlowRadius: 0.58,
+            deepGlowThreshold: 0.42,
+            edgeGlowTint: 2.0,
+            thinStreakIntensity: 0.35,
           ));
           break;
 
-        case 'vintage cc':
+        case 'toji':
           _project.layers.add(AdjustmentLayer(
-            id: 'vintage_base',
-            name: '35mm Film Emulsion',
-            contrast: 1.18,
-            saturation: 0.88,
-            temperature: 5900.0,
-            filmGrain: 0.05,
-            filmConvertNitrate: 0.25,
-            shadows: 0.02,
-            vignette: 0.0,
+            id: 'toji_base',
+            name: 'Heavenly Restriction Ink',
+            contrast: 1.30,
+            saturation: 1.02,
+            temperature: 6200.0,
+            sharpness: 0.42,
+            shadows: -0.12,
+            edgeDarken: 0.35,
             blendMode: LayerBlendMode.normal,
-            curveMaster: [0.04, 0.25, 0.50, 0.78, 0.98],
+            curveMaster: [0.0, 0.18, 0.48, 0.80, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
-            id: 'vintage_glow',
-            name: 'Warm Halation Softness',
-            blendMode: LayerBlendMode.softLight,
-            opacity: 0.60,
-            deepGlowIntensity: 0.25,
+            id: 'toji_spec',
+            name: 'Inverted Spear Specular',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.70,
+            deepGlowIntensity: 0.35,
+            deepGlowRadius: 0.45,
+            deepGlowThreshold: 0.50,
+          ));
+          break;
+
+        case 'shiki':
+          _project.layers.add(AdjustmentLayer(
+            id: 'shiki_base',
+            name: 'Mystic Eyes Clarity',
+            contrast: 1.26,
+            saturation: 1.12,
+            temperature: 6700.0,
+            sharpness: 0.40,
+            shadows: -0.08,
+            edgeDarken: 0.30,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'shiki_glow',
+            name: 'Death Perception Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.80,
+            deepGlowIntensity: 0.52,
             deepGlowRadius: 0.60,
-            deepGlowThreshold: 0.45,
-            vignette: 0.0,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 2.0,
+            thinStreakIntensity: 0.22,
           ));
           break;
       }
@@ -1301,12 +1428,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // Strictly route exports to /storage/emulated/0/Download
   Future<String> _getSafeMovieDirectory() async {
-    final extDir = await getExternalStorageDirectory();
-    if (extDir != null) {
-      final moviesDir = Directory('${extDir.path}/ExportedMovies');
-      if (!await moviesDir.exists()) await moviesDir.create(recursive: true);
-      return moviesDir.path;
+    final directDownload = Directory('/storage/emulated/0/Download');
+    if (await directDownload.exists()) {
+      return directDownload.path;
     }
     final docDir = await getApplicationDocumentsDirectory();
     return docDir.path;
@@ -1321,7 +1447,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       final resized = img.copyResize(_cachedRawImage!, width: exportWidth, height: exportHeight);
       final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
-      final uniforms = _packMultiLayerUniforms();
+      final uniforms = _packMultiLayerUniforms(exportWidth.toDouble(), exportHeight.toDouble());
 
       final outputRaw = processImage(
         rawInput,
@@ -1348,7 +1474,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Graded Image Saved:\n${destFile.path}'), backgroundColor: Colors.green),
+          SnackBar(content: Text('✅ Graded Image Saved to Downloads:\n${destFile.path}'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -1368,10 +1494,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   ) async {
     if (_project.mediaPath.isEmpty) return;
 
-    final uniforms = _packMultiLayerUniforms();
     final targetDims = _calculateTargetDimensions(resolution, _project.aspectRatio);
     final int outW = targetDims['width']!;
     final int outH = targetDims['height']!;
+    final uniforms = _packMultiLayerUniforms(outW.toDouble(), outH.toDouble());
 
     int bitrateKbps = 35000;
     if (bitrate.contains('15')) bitrateKbps = 15000;
@@ -1465,10 +1591,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         uniforms[0] = i / targetFps.toDouble();
 
         img.Image gradedImg;
-        if (is10Bit || is16Bit) {
-          final rawInput16 = decoded.getBytes(order: img.ChannelOrder.rgba);
-          final u16In = rawInput16.buffer.asUint16List();
-          final outputRaw16 = processImage16(u16In, outW, outH, outW, outH, uniforms);
+        if (is16Bit) {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final rawInput16 = Uint16List(outW * outH * 4);
+          for (int px = 0; px < rawInput8.length; px++) {
+            rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
+          }
+          final outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms);
           gradedImg = img.Image.fromBytes(
             width: outW,
             height: outH,
@@ -1535,7 +1664,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Master Video Exported:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+        SnackBar(content: Text('✅ Master Video Exported to Downloads:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
       );
     } catch (e) {
       Navigator.pop(context);
@@ -1918,15 +2047,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Widget _buildPresetsTab() {
     final presets = [
-      {'name': 'Gojo', 'desc': 'Cold deep shadows, infinity cyan specular bloom, clean line contrast', 'color': 0xFF00E5FF},
-      {'name': 'Raiden', 'desc': 'Electro violet & cyan split, soft light wrap, protected skin tones', 'color': 0xFF7C4DFF},
-      {'name': 'sad', 'desc': 'Melancholic desaturated film, lifted soft blacks, muted greens', 'color': 0xFF9E9E9E},
-      {'name': 'potential, man.', 'desc': 'High midtone clarity, deep ink shadows, neutral speculars', 'color': 0xFF3F51B5},
-      {'name': 'potential 2.0', 'desc': 'Mahoraga wheel radiance, golden-white celestial bloom, warm highlight bleed', 'color': 0xFFFFB300},
-      {'name': 'maki', 'desc': 'High-acutance micro-contrast, steel cyan tones, crisp line-art', 'color': 0xFF00B0FF},
-      {'name': 'sukuna', 'desc': 'Malevolent crimson shadows, stark bone speculars, warm edge halation', 'color': 0xFFE53935},
-      {'name': 'bina', 'desc': 'Radiant dreamcore soft glow, gentle pastel lift, silky skin', 'color': 0xFFF48FB1},
-      {'name': 'vintage cc', 'desc': 'Fixed authentic 35mm film curve, subtle amber push, fine grain', 'color': 0xFFFFCC80},
+      {'name': 'Gojo', 'desc': 'Infinity cyan specular bloom & clean line contrast', 'color': 0xFF00E5FF},
+      {'name': 'Raiden', 'desc': 'Electro violet & cyan split, protected skin tones', 'color': 0xFF7C4DFF},
+      {'name': 'bina', 'desc': 'Radiant dreamcore soft glow, gentle pastel lift', 'color': 0xFFF48FB1},
+      {'name': 'potential, man.', 'desc': 'High midtone clarity, deep ink shadows', 'color': 0xFF3F51B5},
+      {'name': 'potential 2.0', 'desc': 'Mahoraga wheel radiance, golden-white bloom', 'color': 0xFFFFB300},
+      {'name': 'maki', 'desc': 'High-acutance micro-contrast, crisp blade flare', 'color': 0xFF00B0FF},
+      {'name': 'yuta', 'desc': 'Rika cursed energy cold specular aura', 'color': 0xFF40C4FF},
+      {'name': 'uryu', 'desc': 'Quincy arrow volumetric light shafts & streak', 'color': 0xFF00E5FF},
+      {'name': 'saber', 'desc': 'Excalibur radiant steel & golden divine bloom', 'color': 0xFFFFD700},
+      {'name': 'sukuna', 'desc': 'Malevolent crimson halation & bone speculars', 'color': 0xFFE53935},
+      {'name': 'sasuke', 'desc': 'Chidori electrical streak flare & steel midtones', 'color': 0xFF00B0FF},
+      {'name': 'toji', 'desc': 'Heavenly restriction high-contrast ink shadow', 'color': 0xFF78909C},
+      {'name': 'shiki', 'desc': 'Mystic eyes of death perception cyan bloom', 'color': 0xFF00E676},
     ];
 
     return ListView.separated(
@@ -1987,6 +2120,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Soft Knee Threshold', _cur.deepGlowThreshold, 0.1, 0.9, (v) => setState(() => _cur.deepGlowThreshold = v)),
 
         const SizedBox(height: 14),
+        Text('LINE ART INTERIOR EDGE DARKEN & SOBEL', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Interior Edge Shadow (Depth)', _cur.edgeDarken, 0.0, 1.0, (v) => setState(() => _cur.edgeDarken = v)),
+        _buildSliderRow('Sobel Outline Sharpness', _cur.darkOutlines, 0.0, 1.0, (v) => setState(() => _cur.darkOutlines = v)),
+
+        const SizedBox(height: 14),
         Text('EDGE-TARGETED CHROMATIC ABERRATION', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Line-Art Dispersion Strength', _cur.lineChromaStrength, 0.0, 1.0, (v) => setState(() => _cur.lineChromaStrength = v)),
@@ -2005,7 +2144,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         const SizedBox(height: 14),
         Text('FILM HALATION & SUBTRACTIVE DENSITY', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
-        _buildSliderRow('Edge Red/Peach Halation Bleed', _cur.halationRadius, 0.0, 1.0, (v) => setState(() => _cur.halationRadius = v)),
+        _buildSliderRow('Edge Red Halation Bleed', _cur.halationRadius, 0.0, 1.0, (v) => setState(() => _cur.halationRadius = v)),
         _buildSliderRow('Halation Warmth', _cur.halationWarmth, 0.0, 1.0, (v) => setState(() => _cur.halationWarmth = v)),
       ],
     );
@@ -2024,9 +2163,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Hue Shift', _cur.hue, -0.5, 0.5, (v) => setState(() => _cur.hue = v)),
         _buildSliderRow('Exposure / Brightness', _cur.brightness, -0.5, 0.5, (v) => setState(() => _cur.brightness = v)),
         _buildSliderRow('Micro-Sharpness', _cur.sharpness, 0.0, 1.0, (v) => setState(() => _cur.sharpness = v)),
-        _buildSliderRow('Vignette (Radial)', _cur.vignette, 0.0, 0.5, (v) => setState(() => _cur.vignette = v)),
+        _buildSliderRow('Soft Radial Vignette', _cur.vignette, 0.0, 0.5, (v) => setState(() => _cur.vignette = v)),
+        _buildSliderRow('Boxed Vignette', _cur.vignetteBoxed, 0.0, 0.5, (v) => setState(() => _cur.vignetteBoxed = v)),
         _buildSliderRow('Film Grain', _cur.filmGrain, 0.0, 0.3, (v) => setState(() => _cur.filmGrain = v)),
         _buildSliderRow('Color Temperature (K)', _cur.temperature, 3000.0, 9500.0, (v) => setState(() => _cur.temperature = v)),
+        _buildSliderRow('Sinusoidal Flicker', _cur.flickerIntensity, 0.0, 1.0, (v) => setState(() => _cur.flickerIntensity = v)),
       ],
     );
   }
@@ -2129,8 +2270,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             _buildTintChip('Neutral', 0.0),
             _buildTintChip('Gold / Warm', 1.0),
             _buildTintChip('Quincy Cyan', 2.0),
+            _buildTintChip('Black / Ink', 3.0),
             _buildTintChip('Crimson', 4.0),
-            _buildTintChip('Black / Ink Shadow', 5.0),
+            _buildTintChip('Shogun Violet', 5.0),
           ],
         ),
         const SizedBox(height: 14),
@@ -2216,8 +2358,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ],
         ),
         const SizedBox(height: 14),
-        _buildSliderRow('Sapphire Blend Mix', _cur.sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _cur.sapphireBlendMix = v)),
-        _buildSliderRow('FilmConvert Nitrate Stock Mix', _cur.filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _cur.filmConvertNitrate = v)),
+        _buildSliderRow('Bilateral Denoise', _cur.denoise, 0.0, 1.0, (v) => setState(() => _cur.denoise = v)),
+        _buildSliderRow('Tilt-Shift Depth of Field', _cur.depthOfField, 0.0, 1.0, (v) => setState(() => _cur.depthOfField = v)),
+        _buildSliderRow('DOF Focus Plane', _cur.dofFocus, 0.0, 1.0, (v) => setState(() => _cur.dofFocus = v)),
+        _buildSliderRow('4-Corner Vignette Gradient', _cur.fourColorGradMix, 0.0, 1.0, (v) => setState(() => _cur.fourColorGradMix = v)),
       ],
     );
   }
@@ -2230,7 +2374,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       children: [
         Text('MAGIC BULLET SUITE MODULES', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        _buildSliderRow('MB Cosmo (Skin & Line Smoothing)', _cur.mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _cur.mblCosmoSkin = v)),
         _buildSliderRow('MB Mojo (Teal Shadows & Orange Highlights)', _cur.mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _cur.mblMojoTealOrange = v)),
         const SizedBox(height: 16),
         const Text('MB COLORISTA 3-WAY WHEELS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
