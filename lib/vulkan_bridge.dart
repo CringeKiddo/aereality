@@ -1,6 +1,5 @@
 // lib/vulkan_bridge.dart
 import 'dart:ffi';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
@@ -63,7 +62,6 @@ DynamicLibrary _getLib() {
   return _lib!;
 }
 
-// Helper to look up both snake_case and camelCase safely
 Pointer<NativeFunction<T>> _lookupSymbol<T extends Function>(DynamicLibrary lib, String snakeName, String camelName) {
   try {
     return lib.lookup<NativeFunction<T>>(snakeName);
