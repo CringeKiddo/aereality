@@ -1,4 +1,3 @@
-// lib/constants.dart
 import 'package:flutter/material.dart';
 
 const Color kAquamarine = Color(0xFF7FFFD4);
@@ -10,7 +9,6 @@ const Color kSurfaceDark = Color(0xFF101015);
 const Color kCardDark = Color(0xFF15151C);
 const Color kBackgroundDark = Color(0xFF08080B);
 
-// Dynamic accent color notifier for user-selected custom UI themes
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kAquamarine);
 
 int gEnginePrecision = 32;
@@ -21,34 +19,32 @@ class ExportMatrix {
     'MP4': [
       'H.264 (Hardware MediaCodec)',
       'H.265 (HEVC MediaCodec)',
-      'H.264 (Software libx264/Native)',
-      'H.265 (Software libx265/Native)',
-      'MPEG-4 Standard',
+      'AV1 Native',
+      'MPEG-4 Compatible',
     ],
     'WebM': [
+      'VP9 Native (+0.3 Snap)',
       'VP8 Native',
-      'VP9 Native',
     ],
     'MOV': [
       'H.264 (Hardware MediaCodec)',
       'H.265 (HEVC MediaCodec)',
-      'MPEG-4 Standard',
+      'Apple ProRes Compatible',
     ],
     'MKV': [
-      'H.264 (Hardware MediaCodec)',
-      'H.265 (HEVC MediaCodec)',
-      'Lossless Raw RGBA',
       'FFV1 Lossless 16-Bit',
-      'VP9 Native',
+      'H.265 (HEVC MediaCodec)',
+      'H.264 (Hardware MediaCodec)',
+      'VP9 Native (+0.3 Snap)',
     ],
   };
 
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
-      return container == 'MKV' && (codec.contains('FFV1') || codec.contains('Lossless'));
+      return container == 'MKV' && (codec.contains('FFV1') || codec.contains('ProRes'));
     }
     if (bitDepth == '10-bit') {
-      return codec.contains('H.265') || codec.contains('VP9') || codec.contains('FFV1');
+      return codec.contains('H.265') || codec.contains('HEVC') || codec.contains('VP9') || codec.contains('FFV1');
     }
     return true;
   }
@@ -75,49 +71,39 @@ class ExportMatrix {
     required String outputPath,
   }) {
     final bool is16 = bitDepth == '16-bit';
-    String codecFlags;
+    final bool is10 = bitDepth == '10-bit';
+    String codecFlags = '';
+    String filterFlags = '';
 
-    if (codec.contains('Hardware') || codec.contains('MediaCodec')) {
-      if (codec.contains('HEVC') || codec.contains('H.265')) {
-        codecFlags = '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
+    if (codec.contains('VP9')) {
+      filterFlags = '-vf unsharp=3:3:0.3:3:3:0.0';
+      codecFlags = is10
+          ? '$filterFlags -c:v vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le'
+          : '$filterFlags -c:v vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
+    } else if (codec.contains('VP8')) {
+      codecFlags = '-c:v vp8 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
+    } else if (codec.contains('AV1')) {
+      codecFlags = is10
+          ? '-c:v libaom-av1 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -strict -2'
+          : '-c:v libaom-av1 -b:v ${bitrateKbps}k -pix_fmt yuv420p -strict -2';
+    } else if (codec.contains('HEVC') || codec.contains('H.265')) {
+      codecFlags = is10
+          ? '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p10le'
+          : '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
+    } else if (codec.contains('FFV1')) {
+      if (is16) {
+        codecFlags = '-c:v ffv1 -level 3 -pix_fmt gbrp16le';
+      } else if (is10) {
+        codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p10le';
       } else {
-        codecFlags = '-c:v h264_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
+        codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p';
       }
-    } else if (container == 'MP4') {
-      if (codec.contains('H.264')) {
-        codecFlags = '-c:v h264_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else if (codec.contains('H.265')) {
-        codecFlags = '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else {
-        codecFlags = '-c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p';
-      }
-    } else if (container == 'WebM') {
-      if (codec.contains('VP9')) {
-        codecFlags = '-c:v vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else {
-        codecFlags = '-c:v vp8 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      }
-    } else if (container == 'MOV') {
-      if (codec.contains('HEVC') || codec.contains('H.265')) {
-        codecFlags = '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else {
-        codecFlags = '-c:v h264_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      }
+    } else if (codec.contains('ProRes')) {
+      codecFlags = '-c:v prores -profile:v 3 -pix_fmt yuv422p10le';
+    } else if (codec.contains('MPEG-4')) {
+      codecFlags = '-c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p';
     } else {
-      // MKV
-      if (codec.contains('Lossless') || codec.contains('FFV1')) {
-        if (is16) {
-          codecFlags = '-c:v ffv1 -level 3 -pix_fmt gbrp16le';
-        } else {
-          codecFlags = '-c:v rawvideo -pix_fmt rgba';
-        }
-      } else if (codec.contains('HEVC') || codec.contains('H.265')) {
-        codecFlags = '-c:v hevc_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else if (codec.contains('VP9')) {
-        codecFlags = '-c:v vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      } else {
-        codecFlags = '-c:v h264_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-      }
+      codecFlags = '-c:v h264_mediacodec -b:v ${bitrateKbps}k -pix_fmt yuv420p';
     }
 
     return '-hide_banner -framerate $fps -i "$framePattern" $codecFlags -y "$outputPath"';
