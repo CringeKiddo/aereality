@@ -1,13 +1,11 @@
 // lib/main.dart
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
@@ -15,17 +13,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:image/image.dart' as img;
 
+import 'constants.dart';
+import 'models.dart';
+import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
-
-// Aesthetic Palette: Radiant Aquamarine, Electric Cyan, Gold Highlights, Deep Luxury Carbon
-const Color kAquamarine = Color(0xFF7FFFD4);
-const Color kAquamarineDark = Color(0xFF45B39D);
-const Color kCyanAccent = Color(0xFF00FFFF);
-const Color kGold = Color(0xFFFFD700);
-const Color kLavenderSoft = Color(0xFFE6E6FA);
-const Color kSurfaceDark = Color(0xFF101015);
-const Color kCardDark = Color(0xFF15151C);
-const Color kBackgroundDark = Color(0xFF08080B);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,7 +28,7 @@ Future<void> main() async {
   try {
     await FFmpegKitExtended.initialize();
   } catch (e) {
-    debugPrint('FFmpegKitExtended startup message: $e');
+    debugPrint('FFmpeg startup message: $e');
   }
 
   runApp(const AERealityApp());
@@ -76,395 +67,6 @@ class AERealityApp extends StatelessWidget {
   }
 }
 
-int gEnginePrecision = 32;
-double gPreviewScale = 0.5;
-
-// ============================================================================
-// 1. EXPORT MATRIX & CODEC ENGINE
-// ============================================================================
-class ExportMatrix {
-  static const Map<String, List<String>> containerCodecs = {
-    'MP4': ['H.265 (HEVC)', 'H.264 (AVC)', 'AV1 (libaom)'],
-    'WebM': ['VP9 (libvpx)', 'AV1 (libaom)'],
-    'MOV': ['H.265 (HEVC)', 'H.264 (AVC)'],
-    'MKV': ['FFV1 (Lossless 16-Bit)', 'H.265 (HEVC)', 'H.264 (AVC)', 'AV1 (libaom)', 'VP9 (libvpx)'],
-  };
-
-  static bool isBitDepthValid(String container, String codec, String bitDepth) {
-    if (bitDepth == '16-bit') {
-      return container == 'MKV' && codec.startsWith('FFV1');
-    }
-    if (bitDepth == '10-bit') {
-      return !codec.contains('H.264');
-    }
-    return true;
-  }
-
-  static String getAudioCodec(String container) {
-    switch (container) {
-      case 'WebM':
-      case 'MKV':
-        return 'libopus';
-      case 'MP4':
-      case 'MOV':
-      default:
-        return 'aac';
-    }
-  }
-
-  static String buildFFmpegEncodeCommand({
-    required int fps,
-    required String framePattern,
-    required String container,
-    required String codec,
-    required String bitDepth,
-    required int bitrateKbps,
-    required String outputPath,
-  }) {
-    final bool is10 = bitDepth == '10-bit';
-    final bool is16 = bitDepth == '16-bit';
-    String codecFlags;
-
-    if (container == 'MP4') {
-      if (codec.contains('H.264')) {
-        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
-      } else if (codec.contains('H.265')) {
-        codecFlags = is10
-            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le -profile:v main10'
-            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
-      } else {
-        codecFlags = is10 ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
-      }
-    } else if (container == 'WebM') {
-      if (codec.contains('VP9')) {
-        codecFlags = is10
-            ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
-            : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
-      } else {
-        codecFlags = is10 ? '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p10le' : '-c:v libaom-av1 -crf 24 -pix_fmt yuv420p';
-      }
-    } else if (container == 'MOV') {
-      if (codec.contains('H.264')) {
-        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
-      } else {
-        codecFlags = is10
-            ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le -profile:v main10'
-            : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
-      }
-    } else {
-      if (codec.startsWith('FFV1')) {
-        if (is16) {
-          codecFlags = '-c:v ffv1 -level 3 -pix_fmt gbrp16le';
-        } else if (is10) {
-          codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p10le';
-        } else {
-          codecFlags = '-c:v ffv1 -level 3 -pix_fmt yuv420p';
-        }
-      } else if (codec.contains('H.265')) {
-        codecFlags = is10 ? '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p10le' : '-c:v libx265 -preset fast -crf 18 -pix_fmt yuv420p';
-      } else if (codec.contains('VP9')) {
-        codecFlags = is10
-            ? '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2 -vf "unsharp=5:5:0.3:5:5:0.0"'
-            : '-c:v libvpx-vp9 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p -vf "unsharp=5:5:0.3:5:5:0.0"';
-      } else {
-        codecFlags = '-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p';
-      }
-    }
-
-    return '-framerate $fps -i "$framePattern" $codecFlags -b:v ${bitrateKbps}k -y "$outputPath"';
-  }
-}
-
-// ============================================================================
-// 2. PROJECT DATA MODEL
-// ============================================================================
-class ProjectData {
-  String mediaPath;
-  bool isImage;
-  double brightness;
-  double saturation;
-  double contrast;
-  double sharpness;
-  double gamma;
-  double hue;
-  double temperature;
-
-  double bloomIntensity;
-  double bloomSpread;
-  double bloomThreshold;
-  double bloomRadius;
-  double edgeGlowTint;
-  double edgeDarken;
-  double anamorphicFlare;
-  double flareAmount;
-  double lightRays;
-  double lightRaysDecay;
-
-  double shadows;
-  double highlights;
-  double darkOutlines;
-  double vignette;
-  double vignetteBoxed;
-  double splitToning;
-  double denoise;
-  double blackCrush;
-  double filmGrain;
-  double flickerIntensity;
-  double flickerSpeed;
-  double depthOfField;
-  double dofFocus;
-  double dofAngle;
-  double chromaticAberration;
-
-  double sapphireBlendMix;
-  double mathOpsMode;
-  double filmConvertNitrate;
-  double fourColorGradMix;
-  double tonemapMode;
-
-  double mblCosmoSkin;
-  double mblRenoirHalation;
-  double mblColoristaLift;
-  double mblColoristaGamma;
-  double mblColoristaGain;
-  double mblMojoTealOrange;
-
-  String aspectRatio;
-
-  List<double> curveMaster;
-  List<double> curveRed;
-  List<double> curveGreen;
-  List<double> curveBlue;
-
-  ProjectData({
-    required this.mediaPath,
-    this.isImage = false,
-    this.brightness = 0.0,
-    this.saturation = 1.0,
-    this.contrast = 1.0,
-    this.sharpness = 0.0,
-    this.gamma = 1.0,
-    this.hue = 0.0,
-    this.temperature = 6500.0,
-    this.bloomIntensity = 0.0,
-    this.bloomSpread = 0.40,
-    this.bloomThreshold = 0.45,
-    this.bloomRadius = 1.0,
-    this.edgeGlowTint = 0.0,
-    this.edgeDarken = 0.0,
-    this.anamorphicFlare = 0.0,
-    this.flareAmount = 0.50,
-    this.lightRays = 0.0,
-    this.lightRaysDecay = 0.90,
-    this.shadows = 0.0,
-    this.highlights = 0.0,
-    this.darkOutlines = 0.0,
-    this.vignette = 0.0,
-    this.vignetteBoxed = 0.0,
-    this.splitToning = 0.0,
-    this.denoise = 0.0,
-    this.blackCrush = 0.0,
-    this.filmGrain = 0.0,
-    this.flickerIntensity = 0.0,
-    this.flickerSpeed = 3.0,
-    this.depthOfField = 0.0,
-    this.dofFocus = 0.5,
-    this.dofAngle = 0.0,
-    this.chromaticAberration = 0.0,
-    this.sapphireBlendMix = 0.0,
-    this.mathOpsMode = 0.0,
-    this.filmConvertNitrate = 0.0,
-    this.fourColorGradMix = 0.0,
-    this.tonemapMode = 1.0,
-    this.mblCosmoSkin = 0.0,
-    this.mblRenoirHalation = 0.0,
-    this.mblColoristaLift = 0.0,
-    this.mblColoristaGamma = 0.0,
-    this.mblColoristaGain = 0.0,
-    this.mblMojoTealOrange = 0.0,
-    this.aspectRatio = "4:5",
-    List<double>? curveMaster,
-    List<double>? curveRed,
-    List<double>? curveGreen,
-    List<double>? curveBlue,
-  })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.5, 0.75, 1.0],
-        curveRed = curveRed ?? [0.0, 0.25, 0.5, 0.75, 1.0],
-        curveGreen = curveGreen ?? [0.0, 0.25, 0.5, 0.75, 1.0],
-        curveBlue = curveBlue ?? [0.0, 0.25, 0.5, 0.75, 1.0];
-
-  Map<String, dynamic> toJson() => {
-        'mediaPath': mediaPath,
-        'isImage': isImage,
-        'brightness': brightness,
-        'saturation': saturation,
-        'contrast': contrast,
-        'sharpness': sharpness,
-        'gamma': gamma,
-        'hue': hue,
-        'temperature': temperature,
-        'bloomIntensity': bloomIntensity,
-        'bloomSpread': bloomSpread,
-        'bloomThreshold': bloomThreshold,
-        'bloomRadius': bloomRadius,
-        'edgeGlowTint': edgeGlowTint,
-        'edgeDarken': edgeDarken,
-        'anamorphicFlare': anamorphicFlare,
-        'flareAmount': flareAmount,
-        'lightRays': lightRays,
-        'lightRaysDecay': lightRaysDecay,
-        'shadows': shadows,
-        'highlights': highlights,
-        'darkOutlines': darkOutlines,
-        'vignette': vignette,
-        'vignetteBoxed': vignetteBoxed,
-        'splitToning': splitToning,
-        'denoise': denoise,
-        'blackCrush': blackCrush,
-        'filmGrain': filmGrain,
-        'flickerIntensity': flickerIntensity,
-        'flickerSpeed': flickerSpeed,
-        'depthOfField': depthOfField,
-        'dofFocus': dofFocus,
-        'dofAngle': dofAngle,
-        'chromaticAberration': chromaticAberration,
-        'sapphireBlendMix': sapphireBlendMix,
-        'mathOpsMode': mathOpsMode,
-        'filmConvertNitrate': filmConvertNitrate,
-        'fourColorGradMix': fourColorGradMix,
-        'tonemapMode': tonemapMode,
-        'mblCosmoSkin': mblCosmoSkin,
-        'mblRenoirHalation': mblRenoirHalation,
-        'mblColoristaLift': mblColoristaLift,
-        'mblColoristaGamma': mblColoristaGamma,
-        'mblColoristaGain': mblColoristaGain,
-        'mblMojoTealOrange': mblMojoTealOrange,
-        'aspectRatio': aspectRatio,
-        'curveMaster': curveMaster,
-        'curveRed': curveRed,
-        'curveGreen': curveGreen,
-        'curveBlue': curveBlue,
-      };
-
-  factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
-        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
-        isImage: json['isImage'] ?? false,
-        brightness: (json['brightness'] ?? 0.0).toDouble(),
-        saturation: (json['saturation'] ?? 1.0).toDouble(),
-        contrast: (json['contrast'] ?? 1.0).toDouble(),
-        sharpness: (json['sharpness'] ?? 0.0).toDouble(),
-        gamma: (json['gamma'] ?? 1.0).toDouble(),
-        hue: (json['hue'] ?? 0.0).toDouble(),
-        temperature: (json['temperature'] ?? 6500.0).toDouble(),
-        bloomIntensity: (json['bloomIntensity'] ?? 0.0).toDouble(),
-        bloomSpread: (json['bloomSpread'] ?? 0.40).toDouble(),
-        bloomThreshold: (json['bloomThreshold'] ?? 0.45).toDouble(),
-        bloomRadius: (json['bloomRadius'] ?? 1.0).toDouble(),
-        edgeGlowTint: (json['edgeGlowTint'] ?? 0.0).toDouble(),
-        edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
-        anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
-        flareAmount: (json['flareAmount'] ?? 0.50).toDouble(),
-        lightRays: (json['lightRays'] ?? 0.0).toDouble(),
-        lightRaysDecay: (json['lightRaysDecay'] ?? 0.90).toDouble(),
-        shadows: (json['shadows'] ?? 0.0).toDouble(),
-        highlights: (json['highlights'] ?? 0.0).toDouble(),
-        darkOutlines: (json['darkOutlines'] ?? 0.0).toDouble(),
-        vignette: (json['vignette'] ?? 0.0).toDouble(),
-        vignetteBoxed: (json['vignetteBoxed'] ?? 0.0).toDouble(),
-        splitToning: (json['splitToning'] ?? 0.0).toDouble(),
-        denoise: (json['denoise'] ?? 0.0).toDouble(),
-        blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
-        filmGrain: (json['filmGrain'] ?? 0.0).toDouble(),
-        flickerIntensity: (json['flickerIntensity'] ?? 0.0).toDouble(),
-        flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
-        depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
-        dofFocus: (json['dofFocus'] ?? 0.5).toDouble(),
-        dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
-        chromaticAberration: (json['chromaticAberration'] ?? 0.0).toDouble(),
-        sapphireBlendMix: (json['sapphireBlendMix'] ?? 0.0).toDouble(),
-        mathOpsMode: (json['mathOpsMode'] ?? 0.0).toDouble(),
-        filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
-        fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
-        tonemapMode: (json['tonemapMode'] ?? 1.0).toDouble(),
-        mblCosmoSkin: (json['mblCosmoSkin'] ?? 0.0).toDouble(),
-        mblRenoirHalation: (json['mblRenoirHalation'] ?? 0.0).toDouble(),
-        mblColoristaLift: (json['mblColoristaLift'] ?? 0.0).toDouble(),
-        mblColoristaGamma: (json['mblColoristaGamma'] ?? 0.0).toDouble(),
-        mblColoristaGain: (json['mblColoristaGain'] ?? 0.0).toDouble(),
-        mblMojoTealOrange: (json['mblMojoTealOrange'] ?? 0.0).toDouble(),
-        aspectRatio: json['aspectRatio'] ?? "4:5",
-        curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
-        curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
-        curveGreen: (json['curveGreen'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
-        curveBlue: (json['curveBlue'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
-      );
-}
-
-class StoredProject {
-  String id;
-  String name;
-  String mediaPath;
-  ProjectData data;
-  DateTime lastOpened;
-
-  StoredProject({
-    required this.id,
-    required this.name,
-    required this.mediaPath,
-    required this.data,
-    required this.lastOpened,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'mediaPath': mediaPath,
-        'data': data.toJson(),
-        'lastOpened': lastOpened.toIso8601String(),
-      };
-
-  factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
-        id: json['id'],
-        name: json['name'],
-        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
-        data: ProjectData.fromJson(json['data'] ?? json),
-        lastOpened: DateTime.parse(json['lastOpened']),
-      );
-}
-
-class ProjectManager {
-  static const String _storageKey = 'aereality_projects_v3.json';
-
-  static Future<List<StoredProject>> loadProjects() async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$_storageKey');
-      if (!await file.exists()) return [];
-      final data = await file.readAsString();
-      final List<dynamic> jsonList = jsonDecode(data);
-      return jsonList.map((j) => StoredProject.fromJson(j)).toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static Future<void> saveProjects(List<StoredProject> projects) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/$_storageKey');
-    await file.writeAsString(jsonEncode(projects.map((p) => p.toJson()).toList()));
-  }
-
-  static Future<void> saveProject(StoredProject project) async {
-    final projects = await loadProjects();
-    projects.removeWhere((p) => p.id == project.id);
-    projects.insert(0, project);
-    if (projects.length > 40) projects.removeRange(40, projects.length);
-    await saveProjects(projects);
-  }
-}
-
-// ============================================================================
-// 3. HOME SCREEN
-// ============================================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -561,11 +163,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
                 child: const Row(
                   children: [
-                    Icon(Icons.memory_rounded, color: kAquamarine, size: 18),
+                    Icon(Icons.layers_rounded, color: kAquamarine, size: 18),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Grading Engine: IEEE FP32 Floating-Point Compute Shader Pipeline.',
+                        'Grading Engine: Multi-Layer 32-bit Floating-Point Compositor (Max 4 Layers).',
                         style: TextStyle(color: Colors.white70, fontSize: 11),
                       ),
                     ),
@@ -621,24 +223,24 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'VULKAN COMPUTE • FP32 HDR',
+                  'ADJUSTMENT LAYER COMPOSITOR • FP32 HDR',
                   style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(color: kAquamarine.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
                   child: const Text(
-                    'FP32 ENGINE',
+                    '4-LAYER PIPELINE',
                     style: TextStyle(color: kAquamarine, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 6),
-            const Text('Anime WIS & Master Grade', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+            const Text('Anime WIS & Layer Studio', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             const Text(
-              'Continuous Ring-Free Gaussian Glows, 4K Master Pipeline, Sapphire & Magic Bullet Suite.',
+              'Adjustment Layers, Physical Inverse-Square Bloom, AE Knockoffs & 4K Master Pipeline.',
               style: TextStyle(color: Colors.white54, fontSize: 13),
             ),
             const SizedBox(height: 20),
@@ -696,7 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 child: const Column(
                   children: [
-                    Icon(Icons.video_library_outlined, color: Colors.white24, size: 36),
+                    Icon(Icons.layers_clear_outlined, color: Colors.white24, size: 36),
                     SizedBox(height: 10),
                     Text('No saved sessions found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
                     SizedBox(height: 4),
@@ -720,7 +322,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: ListTile(
                         leading: Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: kAquamarine),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.layers.length} Layers • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                         trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
                         onTap: () {
                           Navigator.push(
@@ -740,9 +342,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ============================================================================
-// 4. PROJECT SETUP SCREEN
-// ============================================================================
 class ProjectSetupScreen extends StatefulWidget {
   const ProjectSetupScreen({super.key});
 
@@ -881,251 +480,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
   }
 }
 
-// ============================================================================
-// 5. SPLINE CURVE EDITOR & PAINTER
-// ============================================================================
-class SplineCurveEditor extends StatefulWidget {
-  final List<double> points;
-  final Color curveColor;
-  final ValueChanged<List<double>> onChanged;
-
-  const SplineCurveEditor({
-    super.key,
-    required this.points,
-    required this.curveColor,
-    required this.onChanged,
-  });
-
-  @override
-  State<SplineCurveEditor> createState() => _SplineCurveEditorState();
-}
-
-class _SplineCurveEditorState extends State<SplineCurveEditor> {
-  int? _activePointIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final double size = math.min(constraints.maxWidth, 220.0);
-        return Center(
-          child: GestureDetector(
-            onPanStart: (details) {
-              final RenderBox box = context.findRenderObject() as RenderBox;
-              final localPos = box.globalToLocal(details.globalPosition);
-              final normX = (localPos.dx / size).clamp(0.0, 1.0);
-              final normY = 1.0 - (localPos.dy / size).clamp(0.0, 1.0);
-
-              int bestIdx = 0;
-              double bestDist = 9999.0;
-              for (int i = 0; i < widget.points.length; i++) {
-                final px = i / (widget.points.length - 1);
-                final py = widget.points[i];
-                final d = math.sqrt((normX - px) * (normX - px) + (normY - py) * (normY - py));
-                if (d < bestDist) {
-                  bestDist = d;
-                  bestIdx = i;
-                }
-              }
-              if (bestDist < 0.25) {
-                setState(() => _activePointIndex = bestIdx);
-              }
-            },
-            onPanUpdate: (details) {
-              if (_activePointIndex == null) return;
-              final RenderBox box = context.findRenderObject() as RenderBox;
-              final localPos = box.globalToLocal(details.globalPosition);
-              final normY = (1.0 - (localPos.dy / size)).clamp(0.0, 1.0);
-
-              final newPts = List<double>.from(widget.points);
-              newPts[_activePointIndex!] = normY;
-              widget.onChanged(newPts);
-            },
-            onPanEnd: (_) => setState(() => _activePointIndex = null),
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: const Color(0xFF0C0C10),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: CustomPaint(
-                painter: _CurvePainter(
-                  points: widget.points,
-                  color: widget.curveColor,
-                  activeIdx: _activePointIndex,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _CurvePainter extends CustomPainter {
-  final List<double> points;
-  final Color color;
-  final int? activeIdx;
-
-  _CurvePainter({required this.points, required this.color, this.activeIdx});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.06)
-      ..strokeWidth = 1.0;
-
-    for (int i = 1; i < 4; i++) {
-      final x = size.width * (i / 4.0);
-      final y = size.height * (i / 4.0);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final diagPaint = Paint()
-      ..color = Colors.white10
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(Offset(0, size.height), Offset(size.width, 0), diagPaint);
-
-    final path = Path();
-    for (int px = 0; px <= size.width.toInt(); px++) {
-      final normX = px / size.width;
-      final normY = _evalCatmullRom(normX, points);
-      final py = size.height - (normY * size.height);
-      if (px == 0) {
-        path.moveTo(0, py);
-      } else {
-        path.lineTo(px.toDouble(), py);
-      }
-    }
-
-    final curvePaint = Paint()
-      ..color = color
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
-    canvas.drawPath(path, curvePaint);
-
-    for (int i = 0; i < points.length; i++) {
-      final cx = (i / (points.length - 1)) * size.width;
-      final cy = size.height - (points[i] * size.height);
-      final isAct = activeIdx == i;
-
-      final dotPaint = Paint()
-        ..color = isAct ? Colors.white : color
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.0, dotPaint);
-
-      final ringPaint = Paint()
-        ..color = Colors.black
-        ..strokeWidth = 1.5
-        ..style = PaintingStyle.stroke;
-      canvas.drawCircle(Offset(cx, cy), isAct ? 6.0 : 4.0, ringPaint);
-    }
-  }
-
-  double _evalCatmullRom(double x, List<double> pts) {
-    x = x.clamp(0.0, 1.0);
-    double seg = x * 4.0;
-    int idx = seg.floor();
-    if (idx >= 4) return pts[4];
-    double t = seg - idx;
-
-    double p0 = pts[math.max(0, idx - 1)];
-    double p1 = pts[idx];
-    double p2 = pts[math.min(4, idx + 1)];
-    double p3 = pts[math.min(4, idx + 2)];
-
-    double m1 = 0.5 * (p2 - p0);
-    double m2 = 0.5 * (p3 - p1);
-
-    double t2 = t * t;
-    double t3 = t2 * t;
-
-    double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    double h10 = t3 - 2.0 * t2 + t;
-    double h01 = -2.0 * t3 + 3.0 * t2;
-    double h11 = t3 - t2;
-
-    return (h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2).clamp(0.0, 1.0);
-  }
-
-  @override
-  bool shouldRepaint(covariant _CurvePainter oldDelegate) => true;
-}
-
-// ============================================================================
-// 6. COLORISTA 3-WAY WHEEL
-// ============================================================================
-class ColoristaWheel extends StatelessWidget {
-  final String label;
-  final double value;
-  final Color accentColor;
-  final ValueChanged<double> onChanged;
-
-  const ColoristaWheel({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.accentColor,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: SweepGradient(
-              colors: [
-                accentColor.withOpacity(0.1),
-                accentColor.withOpacity(0.6),
-                accentColor.withOpacity(0.1),
-              ],
-            ),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: Center(
-            child: Text(
-              value.toStringAsFixed(2),
-              style: TextStyle(color: accentColor, fontWeight: FontWeight.bold, fontSize: 11, fontFamily: 'monospace'),
-            ),
-          ),
-        ),
-        SizedBox(
-          width: 84,
-          child: SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 2.2,
-              activeTrackColor: kAquamarine,
-              inactiveTrackColor: Colors.white12,
-              thumbColor: kAquamarine,
-            ),
-            child: Slider(
-              value: value.clamp(-0.3, 0.3),
-              min: -0.3,
-              max: 0.3,
-              onChanged: onChanged,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ============================================================================
-// 7. STUDIO EDITOR SCREEN
-// ============================================================================
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -1137,143 +491,29 @@ class ProjectScreen extends StatefulWidget {
 }
 
 class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
+  late ProjectData _project;
   VideoPlayerController? _controller;
   bool _isPlaying = false;
-  String? _currentMediaPath;
-  bool _isImage = false;
   img.Image? _cachedRawImage;
   bool _isFullScreen = false;
 
-  // Primary Grading
-  double _brightness = 0.0;
-  double _saturation = 1.0;
-  double _contrast = 1.0;
-  double _sharpness = 0.0;
-  double _gamma = 1.0;
-  double _hue = 0.0;
-  double _temperature = 6500.0;
-  double _shadows = 0.0;
-  double _highlights = 0.0;
-  double _blackCrush = 0.0;
-  double _vignette = 0.0;
-  double _vignetteBoxed = 0.0;
-  double _splitToning = 0.0;
-  double _denoise = 0.0;
-  double _filmGrain = 0.0;
-  double _chromaticAberration = 0.0;
-
-  // Glow & Linework
-  double _bloomIntensity = 0.0;
-  double _bloomSpread = 0.40;
-  double _bloomThreshold = 0.45;
-  double _bloomRadius = 1.0;
-  double _edgeGlowTint = 0.0;
-  double _edgeDarken = 0.0;
-  double _darkOutlines = 0.0;
-  double _anamorphicFlare = 0.0;
-  double _flareAmount = 0.50;
-  double _lightRays = 0.0;
-  double _lightRaysDecay = 0.90;
-
-  // Flicker
-  double _flickerIntensity = 0.0;
-  double _flickerSpeed = 3.0;
-
-  // Depth of Field
-  double _depthOfField = 0.0;
-  double _dofFocus = 0.5;
-  double _dofAngle = 0.0;
-
-  // AE & Sapphire Suite
-  double _sapphireBlendMix = 0.0;
-  double _mathOpsMode = 0.0;
-  double _filmConvertNitrate = 0.0;
-  double _fourColorGradMix = 0.0;
-  double _tonemapMode = 1.0;
-
-  // Magic Bullet Suite
-  double _mblCosmoSkin = 0.0;
-  double _mblRenoirHalation = 0.0;
-  double _mblColoristaLift = 0.0;
-  double _mblColoristaGamma = 0.0;
-  double _mblColoristaGain = 0.0;
-  double _mblMojoTealOrange = 0.0;
-
-  // Spline Curves
-  List<double> _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
-  List<double> _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
-  List<double> _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
-  List<double> _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
+  late TabController _tabController;
   int _selectedCurveChannel = 0;
 
-  String _selectedRatio = "4:5";
-  late TabController _tabController;
-
   ui.Image? _processedImage;
-  final GlobalKey _activeCanvasKey = GlobalKey();
-
   int _renderWidth = 720;
   int _renderHeight = 900;
+
+  AdjustmentLayer get _cur => _project.currentLayer;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
     _loadShader();
 
-    if (widget.initialProject != null) {
-      final p = widget.initialProject!;
-      _isImage = p.isImage;
-      _brightness = p.brightness;
-      _saturation = p.saturation;
-      _contrast = p.contrast;
-      _sharpness = p.sharpness;
-      _gamma = p.gamma;
-      _hue = p.hue;
-      _temperature = p.temperature;
-      _bloomIntensity = p.bloomIntensity;
-      _bloomSpread = p.bloomSpread;
-      _bloomThreshold = p.bloomThreshold;
-      _bloomRadius = p.bloomRadius;
-      _edgeGlowTint = p.edgeGlowTint;
-      _edgeDarken = p.edgeDarken;
-      _anamorphicFlare = p.anamorphicFlare;
-      _flareAmount = p.flareAmount;
-      _lightRays = p.lightRays;
-      _lightRaysDecay = p.lightRaysDecay;
-      _shadows = p.shadows;
-      _highlights = p.highlights;
-      _darkOutlines = p.darkOutlines;
-      _vignette = p.vignette;
-      _vignetteBoxed = p.vignetteBoxed;
-      _splitToning = p.splitToning;
-      _denoise = p.denoise;
-      _blackCrush = p.blackCrush;
-      _filmGrain = p.filmGrain;
-      _flickerIntensity = p.flickerIntensity;
-      _flickerSpeed = p.flickerSpeed;
-      _depthOfField = p.depthOfField;
-      _dofFocus = p.dofFocus;
-      _dofAngle = p.dofAngle;
-      _chromaticAberration = p.chromaticAberration;
-      _sapphireBlendMix = p.sapphireBlendMix;
-      _mathOpsMode = p.mathOpsMode;
-      _filmConvertNitrate = p.filmConvertNitrate;
-      _fourColorGradMix = p.fourColorGradMix;
-      _tonemapMode = p.tonemapMode;
-      _mblCosmoSkin = p.mblCosmoSkin;
-      _mblRenoirHalation = p.mblRenoirHalation;
-      _mblColoristaLift = p.mblColoristaLift;
-      _mblColoristaGamma = p.mblColoristaGamma;
-      _mblColoristaGain = p.mblColoristaGain;
-      _mblMojoTealOrange = p.mblMojoTealOrange;
-      _selectedRatio = p.aspectRatio;
-      _curveMaster = List.from(p.curveMaster);
-      _curveRed = List.from(p.curveRed);
-      _curveGreen = List.from(p.curveGreen);
-      _curveBlue = List.from(p.curveBlue);
-      _loadMedia(p.mediaPath);
-    }
+    _project = widget.initialProject ?? ProjectData(mediaPath: '');
+    _loadMedia(_project.mediaPath);
   }
 
   Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr) {
@@ -1297,7 +537,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       targetW = (targetH * ratio).round();
     }
 
-    // 16-pixel workgroup boundary alignment
     targetW = ((targetW + 15) ~/ 16) * 16;
     targetH = ((targetH + 15) ~/ 16) * 16;
 
@@ -1305,7 +544,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   void _updateDimensions(int srcW, int srcH) {
-    final dims = _calculateTargetDimensions('720p', _selectedRatio);
+    final dims = _calculateTargetDimensions('720p', _project.aspectRatio);
     _renderWidth = dims['width']!;
     _renderHeight = dims['height']!;
   }
@@ -1332,6 +571,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<void> _loadMedia(String path) async {
+    if (path.isEmpty) return;
     final ext = path.split('.').last.toLowerCase();
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
 
@@ -1342,8 +582,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     setState(() {
-      _currentMediaPath = path;
-      _isImage = isImg;
+      _project.mediaPath = path;
+      _project.isImage = isImg;
       _processedImage = null;
       _isPlaying = false;
     });
@@ -1381,28 +621,29 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       int w = _renderWidth;
       int h = _renderHeight;
 
-      if (_isImage && _cachedRawImage != null) {
+      if (_project.isImage && _cachedRawImage != null) {
         final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
         rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
-      } else {
-        final boundary = _activeCanvasKey.currentContext?.findRenderObject();
-        if (boundary is RenderRepaintBoundary) {
-          final image = await boundary.toImage(pixelRatio: 1.0);
-          final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-          if (byteData != null) {
-            w = image.width;
-            h = image.height;
-            w = ((w + 15) ~/ 16) * 16;
-            h = ((h + 15) ~/ 16) * 16;
-            rawBytes = byteData.buffer.asUint8List();
+      } else if (_project.mediaPath.isNotEmpty) {
+        final dir = await getTemporaryDirectory();
+        final previewFramePath = '${dir.path}/preview_frame.png';
+        final posSec = _controller != null ? _controller!.value.position.inMilliseconds / 1000.0 : 0.0;
+        await FFmpegKit.execute(
+          '-hide_banner -ss $posSec -i "${_project.mediaPath}" -vframes 1 -s ${w}x$h -pix_fmt rgba -y "$previewFramePath"',
+        );
+        final file = File(previewFramePath);
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          final decoded = img.decodePng(bytes);
+          if (decoded != null) {
+            rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
           }
-          image.dispose();
         }
       }
 
       if (rawBytes == null) return;
 
-      final uniforms = _packUniforms();
+      final uniforms = _packMultiLayerUniforms();
       final outBytes = processImage(rawBytes, w, h, w, h, uniforms);
 
       final completer = Completer<ui.Image>();
@@ -1414,144 +655,63 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<void> _autoSaveProject() async {
-    if (_currentMediaPath == null) return;
+    if (_project.mediaPath.isEmpty) return;
     final proj = StoredProject(
       id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
       name: widget.projectName ?? 'AEReality Session',
-      mediaPath: _currentMediaPath!,
-      data: _buildCurrentProjectData(),
+      mediaPath: _project.mediaPath,
+      data: _project,
       lastOpened: DateTime.now(),
     );
     await ProjectManager.saveProject(proj);
   }
 
-  ProjectData _buildCurrentProjectData() {
-    return ProjectData(
-      mediaPath: _currentMediaPath ?? '',
-      isImage: _isImage,
-      brightness: _brightness,
-      saturation: _saturation,
-      contrast: _contrast,
-      sharpness: _sharpness,
-      gamma: _gamma,
-      hue: _hue,
-      temperature: _temperature,
-      bloomIntensity: _bloomIntensity,
-      bloomSpread: _bloomSpread,
-      bloomThreshold: _bloomThreshold,
-      bloomRadius: _bloomRadius,
-      edgeGlowTint: _edgeGlowTint,
-      edgeDarken: _edgeDarken,
-      anamorphicFlare: _anamorphicFlare,
-      flareAmount: _flareAmount,
-      lightRays: _lightRays,
-      lightRaysDecay: _lightRaysDecay,
-      shadows: _shadows,
-      highlights: _highlights,
-      darkOutlines: _darkOutlines,
-      vignette: _vignette,
-      vignetteBoxed: _vignetteBoxed,
-      splitToning: _splitToning,
-      denoise: _denoise,
-      blackCrush: _blackCrush,
-      filmGrain: _filmGrain,
-      flickerIntensity: _flickerIntensity,
-      flickerSpeed: _flickerSpeed,
-      depthOfField: _depthOfField,
-      dofFocus: _dofFocus,
-      dofAngle: _dofAngle,
-      chromaticAberration: _chromaticAberration,
-      sapphireBlendMix: _sapphireBlendMix,
-      mathOpsMode: _mathOpsMode,
-      filmConvertNitrate: _filmConvertNitrate,
-      fourColorGradMix: _fourColorGradMix,
-      tonemapMode: _tonemapMode,
-      mblCosmoSkin: _mblCosmoSkin,
-      mblRenoirHalation: _mblRenoirHalation,
-      mblColoristaLift: _mblColoristaLift,
-      mblColoristaGamma: _mblColoristaGamma,
-      mblColoristaGain: _mblColoristaGain,
-      mblMojoTealOrange: _mblMojoTealOrange,
-      aspectRatio: _selectedRatio,
-      curveMaster: List.from(_curveMaster),
-      curveRed: List.from(_curveRed),
-      curveGreen: List.from(_curveGreen),
-      curveBlue: List.from(_curveBlue),
-    );
-  }
-
-  Float32List _packUniforms() {
-    final uniforms = Float32List(66);
+  // Packs up to 4 layers into uniform buffer for Vulkan Compute
+  Float32List _packMultiLayerUniforms() {
+    final uniforms = Float32List(128);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
 
     uniforms[0] = timeSeconds;
-    uniforms[1] = _brightness;
-    uniforms[2] = _saturation;
-    uniforms[3] = _contrast;
-    uniforms[4] = _sharpness;
-    uniforms[5] = _gamma;
-    uniforms[6] = _hue;
-    uniforms[7] = _temperature;
+    uniforms[1] = _project.layers.length.toDouble(); // Number of active layers
+    uniforms[2] = _project.tonemapMode;              // Master Tonemap (0: Off default)
 
-    uniforms[8] = _bloomIntensity;
-    uniforms[9] = _bloomSpread;
-    uniforms[10] = _bloomThreshold;
-    uniforms[11] = _bloomRadius;
-    uniforms[12] = _edgeGlowTint;
-    uniforms[13] = _anamorphicFlare;
-    uniforms[14] = _flareAmount;
-    uniforms[15] = _lightRays;
-    uniforms[16] = _lightRaysDecay;
+    for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
+      final layer = _project.layers[l];
+      final offset = 4 + (l * 30);
 
-    uniforms[17] = _shadows + _mblColoristaLift;
-    uniforms[18] = _highlights + _mblColoristaGain;
-    uniforms[19] = _darkOutlines;
-    uniforms[20] = _edgeDarken;
-    uniforms[21] = _vignette;
-    uniforms[22] = _splitToning + _mblMojoTealOrange;
-    uniforms[23] = _denoise + _mblCosmoSkin;
-    uniforms[24] = _blackCrush;
-    uniforms[25] = _flickerIntensity;
-    uniforms[26] = _flickerSpeed;
-    uniforms[27] = _depthOfField;
-    uniforms[28] = _dofFocus;
-    uniforms[29] = _dofAngle;
-    uniforms[30] = _mathOpsMode;
-    uniforms[31] = _sapphireBlendMix;
-    uniforms[32] = _filmConvertNitrate + _mblRenoirHalation;
-    uniforms[33] = _fourColorGradMix;
-
-    uniforms[34] = _curveMaster[0];
-    uniforms[35] = _curveMaster[1];
-    uniforms[36] = _curveMaster[2];
-    uniforms[37] = _curveMaster[3];
-    uniforms[38] = _curveMaster[4];
-
-    uniforms[39] = _filmGrain;
-    uniforms[40] = _tonemapMode;
-    uniforms[41] = _chromaticAberration;
-
-    uniforms[42] = _curveRed[0];
-    uniforms[43] = _curveRed[1];
-    uniforms[44] = _curveRed[2];
-    uniforms[45] = _curveRed[3];
-    uniforms[46] = _curveRed[4];
-
-    uniforms[47] = _vignetteBoxed;
-
-    uniforms[50] = _curveGreen[0];
-    uniforms[51] = _curveGreen[1];
-    uniforms[52] = _curveGreen[2];
-    uniforms[53] = _curveGreen[3];
-    uniforms[54] = _curveGreen[4];
-
-    uniforms[58] = _curveBlue[0];
-    uniforms[59] = _curveBlue[1];
-    uniforms[60] = _curveBlue[2];
-    uniforms[61] = _curveBlue[3];
-    uniforms[62] = _curveBlue[4];
+      uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
+      uniforms[offset + 1] = layer.opacity;
+      uniforms[offset + 2] = layer.blendMode.index.toDouble();
+      uniforms[offset + 3] = layer.brightness;
+      uniforms[offset + 4] = layer.saturation;
+      uniforms[offset + 5] = layer.contrast;
+      uniforms[offset + 6] = layer.sharpness;
+      uniforms[offset + 7] = layer.gamma;
+      uniforms[offset + 8] = layer.hue;
+      uniforms[offset + 9] = layer.temperature;
+      uniforms[offset + 10] = layer.deepGlowIntensity;
+      uniforms[offset + 11] = layer.deepGlowRadius;
+      uniforms[offset + 12] = layer.deepGlowThreshold;
+      uniforms[offset + 13] = layer.edgeGlowTint;
+      uniforms[offset + 14] = layer.thinStreakIntensity;
+      uniforms[offset + 15] = layer.lineChromaStrength * 0.35; // Weakened Line Chromatic Aberration
+      uniforms[offset + 16] = layer.volRaysLength;
+      uniforms[offset + 17] = layer.volRaysDecay;
+      uniforms[offset + 18] = layer.shadows + layer.mblColoristaLift;
+      uniforms[offset + 19] = layer.highlights + layer.mblColoristaGain;
+      uniforms[offset + 20] = layer.blackCrush;
+      uniforms[offset + 21] = layer.vignette;
+      uniforms[offset + 22] = layer.mblMojoTealOrange;
+      uniforms[offset + 23] = layer.mblCosmoSkin;
+      uniforms[offset + 24] = layer.filmConvertNitrate + layer.halationRadius;
+      uniforms[offset + 25] = layer.filmGrain;
+      uniforms[offset + 26] = layer.curveMaster[1]; // P1
+      uniforms[offset + 27] = layer.curveMaster[2]; // P2
+      uniforms[offset + 28] = layer.curveMaster[3]; // P3
+      uniforms[offset + 29] = layer.curveMaster[4]; // P4
+    }
 
     return uniforms;
   }
@@ -1568,256 +728,288 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  void _resetAllEffects() {
+  // Layer Management Methods
+  void _addNewAdjustmentLayer() {
+    if (_project.layers.length >= 4) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 4 Adjustment Layers allowed for FP32 performance.')));
+      return;
+    }
     setState(() {
-      _brightness = 0.0;
-      _saturation = 1.0;
-      _contrast = 1.0;
-      _sharpness = 0.0;
-      _gamma = 1.0;
-      _hue = 0.0;
-      _temperature = 6500.0;
-      _shadows = 0.0;
-      _highlights = 0.0;
-      _bloomIntensity = 0.0;
-      _bloomSpread = 0.40;
-      _bloomThreshold = 0.45;
-      _bloomRadius = 1.0;
-      _edgeGlowTint = 0.0;
-      _edgeDarken = 0.0;
-      _darkOutlines = 0.0;
-      _anamorphicFlare = 0.0;
-      _flareAmount = 0.50;
-      _lightRays = 0.0;
-      _lightRaysDecay = 0.90;
-      _vignette = 0.0;
-      _vignetteBoxed = 0.0;
-      _splitToning = 0.0;
-      _denoise = 0.0;
-      _blackCrush = 0.0;
-      _filmGrain = 0.0;
-      _chromaticAberration = 0.0;
-      _flickerIntensity = 0.0;
-      _flickerSpeed = 3.0;
-      _depthOfField = 0.0;
-      _dofFocus = 0.5;
-      _dofAngle = 0.0;
-      _sapphireBlendMix = 0.0;
-      _mathOpsMode = 0.0;
-      _filmConvertNitrate = 0.0;
-      _fourColorGradMix = 0.0;
-      _tonemapMode = 1.0;
-      _mblCosmoSkin = 0.0;
-      _mblRenoirHalation = 0.0;
-      _mblColoristaLift = 0.0;
-      _mblColoristaGamma = 0.0;
-      _mblColoristaGain = 0.0;
-      _mblMojoTealOrange = 0.0;
-      _curveMaster = [0.0, 0.25, 0.5, 0.75, 1.0];
-      _curveRed = [0.0, 0.25, 0.5, 0.75, 1.0];
-      _curveGreen = [0.0, 0.25, 0.5, 0.75, 1.0];
-      _curveBlue = [0.0, 0.25, 0.5, 0.75, 1.0];
+      final newIndex = _project.layers.length + 1;
+      _project.layers.add(AdjustmentLayer(
+        id: 'layer_${DateTime.now().millisecondsSinceEpoch}',
+        name: 'Layer $newIndex',
+        blendMode: LayerBlendMode.screen,
+      ));
+      _project.activeLayerIndex = _project.layers.length - 1;
     });
     _applyGrade();
     _autoSaveProject();
   }
 
+  void _removeCurrentLayer() {
+    if (_project.layers.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cannot delete the last remaining layer.')));
+      return;
+    }
+    setState(() {
+      _project.layers.removeAt(_project.activeLayerIndex);
+      _project.activeLayerIndex = math.max(0, _project.activeLayerIndex - 1);
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  void _resetCurrentLayer() {
+    setState(() {
+      _project.layers[_project.activeLayerIndex] = AdjustmentLayer(
+        id: _cur.id,
+        name: _cur.name,
+        blendMode: _cur.blendMode,
+      );
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  // Authentic 9 Presets with Full Multi-Layer Setup
   void _applyPreset(String name) {
     setState(() {
-      _resetAllEffects();
+      _project.layers.clear();
+
       switch (name) {
+        case 'Gojo':
+          _project.layers.add(AdjustmentLayer(
+            id: 'gojo_base',
+            name: 'Base Grade',
+            contrast: 1.15,
+            saturation: 1.08,
+            brightness: 0.01,
+            temperature: 7200.0,
+            sharpness: 0.25,
+            shadows: -0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.50, 0.80, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'gojo_bloom',
+            name: 'Infinity Cyan Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.90,
+            deepGlowIntensity: 0.65,
+            deepGlowRadius: 0.70,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 2.0, // Quincy / Infinity Cyan
+            thinStreakIntensity: 0.25,
+          ));
+          break;
+
+        case 'Raiden':
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_base',
+            name: 'Shogun Contrast',
+            contrast: 1.20,
+            saturation: 1.14,
+            temperature: 6800.0,
+            sharpness: 0.30,
+            shadows: -0.08,
+            blendMode: LayerBlendMode.normal,
+            mblMojoTealOrange: 0.25,
+            curveMaster: [0.0, 0.20, 0.49, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_glow',
+            name: 'Electro Violet Glow',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.85,
+            deepGlowIntensity: 0.60,
+            deepGlowRadius: 0.60,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 2.0,
+            halationRadius: 0.15,
+          ));
+          break;
+
+        case 'sad':
+          _project.layers.add(AdjustmentLayer(
+            id: 'sad_base',
+            name: 'Melancholic Tone',
+            contrast: 1.10,
+            saturation: 0.78,
+            brightness: -0.01,
+            gamma: 1.05,
+            temperature: 5800.0,
+            filmGrain: 0.15,
+            shadows: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.03, 0.26, 0.50, 0.76, 0.98],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'sad_soft',
+            name: 'Soft Highlights',
+            blendMode: LayerBlendMode.softLight,
+            opacity: 0.60,
+            deepGlowIntensity: 0.30,
+            deepGlowRadius: 0.70,
+            deepGlowThreshold: 0.45,
+          ));
+          break;
+
+        case 'potential, man.':
+          _project.layers.add(AdjustmentLayer(
+            id: 'pot_base',
+            name: 'Shadows & Ink',
+            contrast: 1.22,
+            saturation: 1.05,
+            temperature: 6400.0,
+            sharpness: 0.38,
+            shadows: -0.10,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.21, 0.50, 0.81, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'pot_glow',
+            name: 'Specular Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.75,
+            deepGlowIntensity: 0.40,
+            deepGlowRadius: 0.50,
+            deepGlowThreshold: 0.48,
+          ));
+          break;
+
+        case 'potential 2.0':
+          _project.layers.add(AdjustmentLayer(
+            id: 'pot2_base',
+            name: 'Wheel Contrast',
+            contrast: 1.26,
+            saturation: 1.16,
+            temperature: 6600.0,
+            sharpness: 0.32,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.20, 0.50, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'pot2_rays',
+            name: 'Mahoraga Rays & Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.95,
+            deepGlowIntensity: 0.65,
+            deepGlowRadius: 0.75,
+            deepGlowThreshold: 0.36,
+            edgeGlowTint: 1.0, // Warm Gold
+            volRaysLength: 0.25,
+          ));
+          break;
+
+        case 'maki':
+          _project.layers.add(AdjustmentLayer(
+            id: 'maki_base',
+            name: 'Cursed Steel Clarity',
+            contrast: 1.24,
+            saturation: 1.06,
+            temperature: 6200.0,
+            sharpness: 0.45,
+            shadows: -0.06,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.50, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'maki_streak',
+            name: 'Blade Flare & Glow',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.80,
+            deepGlowIntensity: 0.42,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.40,
+            thinStreakIntensity: 0.30,
+          ));
+          break;
+
+        case 'sukuna':
+          _project.layers.add(AdjustmentLayer(
+            id: 'sukuna_base',
+            name: 'Malevolent Grade',
+            contrast: 1.30,
+            saturation: 1.18,
+            temperature: 6000.0,
+            shadows: -0.12,
+            sharpness: 0.35,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.18, 0.48, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'sukuna_crimson',
+            name: 'Crimson Halation & Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.90,
+            deepGlowIntensity: 0.55,
+            deepGlowRadius: 0.58,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 4.0, // Crimson
+            halationRadius: 0.30,
+            halationWarmth: 0.80,
+          ));
+          break;
+
+        case 'bina':
+          _project.layers.add(AdjustmentLayer(
+            id: 'bina_base',
+            name: 'Dreamcore Base',
+            contrast: 1.12,
+            saturation: 1.10,
+            brightness: 0.03,
+            gamma: 0.96,
+            mblCosmoSkin: 0.35,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.02, 0.26, 0.52, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'bina_glow',
+            name: 'Radiant Soft Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.85,
+            deepGlowIntensity: 0.70,
+            deepGlowRadius: 0.80,
+            deepGlowThreshold: 0.32,
+            edgeGlowTint: 0.0,
+          ));
+          break;
+
         case 'vintage cc':
-          _brightness = -0.02;
-          _saturation = 0.82;
-          _contrast = 1.38;
-          _sharpness = 0.35;
-          _gamma = 0.95;
-          _temperature = 6000.0;
-          _bloomIntensity = 0.38;
-          _bloomSpread = 0.45;
-          _bloomThreshold = 0.42;
-          _blackCrush = 0.28;
-          _darkOutlines = 0.35;
-          _vignette = 0.28;
-          _filmGrain = 0.20;
-          _curveMaster = [0.0, 0.22, 0.50, 0.78, 1.0];
-          break;
-
-        case 'adevob+junho':
-          _brightness = 0.01;
-          _saturation = 1.25;
-          _contrast = 1.48;
-          _sharpness = 0.65;
-          _gamma = 0.92;
-          _temperature = 6300.0;
-          _bloomIntensity = 0.45;
-          _bloomSpread = 0.40;
-          _bloomThreshold = 0.42;
-          _edgeGlowTint = 1.0;
-          _darkOutlines = 0.52;
-          _edgeDarken = 0.25;
-          _blackCrush = 0.30;
-          _vignette = 0.16;
-          _curveMaster = [0.0, 0.20, 0.50, 0.82, 1.0];
-          break;
-
-        case 'adevobfiller':
-          _brightness = 0.0;
-          _saturation = 1.20;
-          _contrast = 1.38;
-          _sharpness = 0.55;
-          _gamma = 0.96;
-          _temperature = 6400.0;
-          _bloomIntensity = 0.36;
-          _bloomSpread = 0.42;
-          _bloomThreshold = 0.44;
-          _blackCrush = 0.20;
-          _darkOutlines = 0.38;
-          _vignette = 0.12;
-          _curveMaster = [0.0, 0.22, 0.50, 0.80, 1.0];
-          break;
-
-        case 'uryu vs ichigo':
-          _brightness = -0.01;
-          _saturation = 1.15;
-          _contrast = 1.46;
-          _sharpness = 0.68;
-          _gamma = 0.94;
-          _temperature = 7500.0;
-          _bloomIntensity = 0.48;
-          _bloomSpread = 0.38;
-          _bloomThreshold = 0.40;
-          _edgeGlowTint = 2.0;
-          _darkOutlines = 0.48;
-          _edgeDarken = 0.30;
-          _blackCrush = 0.26;
-          _vignette = 0.18;
-          _curveMaster = [0.0, 0.18, 0.48, 0.82, 1.0];
-          break;
-
-        case 'saber vs Rin':
-          _brightness = 0.02;
-          _saturation = 1.28;
-          _contrast = 1.42;
-          _sharpness = 0.62;
-          _gamma = 0.92;
-          _temperature = 6600.0;
-          _bloomIntensity = 0.50;
-          _bloomSpread = 0.48;
-          _bloomThreshold = 0.40;
-          _anamorphicFlare = 0.30;
-          _flareAmount = 0.45;
-          _darkOutlines = 0.35;
-          _blackCrush = 0.22;
-          _vignette = 0.15;
-          _curveMaster = [0.0, 0.22, 0.52, 0.84, 1.0];
-          break;
-
-        case 'Dantae cc':
-          _brightness = -0.02;
-          _saturation = 1.18;
-          _contrast = 1.52;
-          _sharpness = 0.76;
-          _gamma = 0.88;
-          _temperature = 6700.0;
-          _bloomIntensity = 0.38;
-          _bloomSpread = 0.35;
-          _bloomThreshold = 0.44;
-          _darkOutlines = 0.60;
-          _edgeDarken = 0.40;
-          _blackCrush = 0.36;
-          _vignette = 0.20;
-          _curveMaster = [0.0, 0.16, 0.48, 0.86, 1.0];
-          break;
-
-        case 'solargotcarried':
-          _brightness = 0.02;
-          _saturation = 1.30;
-          _contrast = 1.55;
-          _sharpness = 0.70;
-          _gamma = 0.90;
-          _temperature = 6100.0;
-          _bloomIntensity = 0.52;
-          _bloomSpread = 0.42;
-          _bloomThreshold = 0.38;
-          _edgeGlowTint = 1.0;
-          _blackCrush = 0.32;
-          _darkOutlines = 0.50;
-          _vignette = 0.22;
-          _curveMaster = [0.0, 0.18, 0.50, 0.86, 1.0];
-          break;
-
-        case 'alucard cc':
-          _brightness = -0.03;
-          _saturation = 0.90;
-          _contrast = 1.58;
-          _sharpness = 0.72;
-          _gamma = 0.86;
-          _temperature = 6000.0;
-          _bloomIntensity = 0.32;
-          _bloomSpread = 0.32;
-          _bloomThreshold = 0.46;
-          _darkOutlines = 0.65;
-          _edgeDarken = 0.50;
-          _blackCrush = 0.42;
-          _vignette = 0.30;
-          _curveMaster = [0.0, 0.14, 0.45, 0.85, 1.0];
-          break;
-
-        case 'mb-mojo':
-          _contrast = 1.35;
-          _saturation = 1.15;
-          _mblMojoTealOrange = 0.65;
-          _mblColoristaLift = -0.05;
-          _mblColoristaGain = 0.08;
-          _bloomIntensity = 0.30;
-          _bloomSpread = 0.40;
-          _bloomThreshold = 0.45;
-          _blackCrush = 0.18;
-          _curveMaster = [0.0, 0.22, 0.50, 0.80, 1.0];
-          break;
-
-        case 'mb-cosmo':
-          _contrast = 1.25;
-          _saturation = 1.10;
-          _mblCosmoSkin = 0.60;
-          _sharpness = 0.35;
-          _darkOutlines = 0.30;
-          _bloomIntensity = 0.35;
-          _bloomSpread = 0.45;
-          _bloomThreshold = 0.42;
-          break;
-
-        case 'mb-renoir':
-          _contrast = 1.30;
-          _saturation = 1.05;
-          _mblRenoirHalation = 0.55;
-          _bloomIntensity = 0.40;
-          _bloomSpread = 0.50;
-          _bloomThreshold = 0.38;
-          _edgeGlowTint = 1.0;
-          _blackCrush = 0.15;
-          _vignette = 0.15;
-          break;
-
-        case 'mb-colorista':
-          _contrast = 1.32;
-          _saturation = 1.12;
-          _mblColoristaLift = 0.04;
-          _mblColoristaGamma = 0.02;
-          _mblColoristaGain = -0.04;
-          _sharpness = 0.40;
-          _darkOutlines = 0.25;
-          _blackCrush = 0.20;
+          _project.layers.add(AdjustmentLayer(
+            id: 'vintage_base',
+            name: '35mm Film Emulsion',
+            contrast: 1.18,
+            saturation: 0.88,
+            temperature: 5900.0,
+            filmGrain: 0.20,
+            filmConvertNitrate: 0.35,
+            shadows: 0.02,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.04, 0.25, 0.50, 0.78, 0.98],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'vintage_glow',
+            name: 'Warm Halation Softness',
+            blendMode: LayerBlendMode.softLight,
+            opacity: 0.65,
+            deepGlowIntensity: 0.25,
+            deepGlowRadius: 0.60,
+            deepGlowThreshold: 0.45,
+          ));
           break;
       }
+
+      _project.activeLayerIndex = 0;
     });
+
     _applyGrade();
     _autoSaveProject();
   }
 
   void _showExportSheet() {
-    if (_isImage) {
+    if (_project.isImage) {
       _exportStaticImage();
       return;
     }
@@ -1842,7 +1034,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            final targetDims = _calculateTargetDimensions(selectedRes, _selectedRatio);
+            final targetDims = _calculateTargetDimensions(selectedRes, _project.aspectRatio);
             final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (AVC)'];
 
             if (!availableCodecs.contains(selectedCodec)) {
@@ -1871,7 +1063,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ],
                     ),
                     Text(
-                      '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • Engine: Vulkan FP32',
+                      '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • Layers: ${_project.layers.length}',
                       style: const TextStyle(color: kAquamarine, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -2044,24 +1236,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<String> _getSafeMovieDirectory() async {
-    final moviesDir = Directory('/storage/emulated/0/Movies');
-    if (await moviesDir.exists()) {
+    final extDir = await getExternalStorageDirectory();
+    if (extDir != null) {
+      final moviesDir = Directory('${extDir.path}/ExportedMovies');
+      if (!await moviesDir.exists()) await moviesDir.create(recursive: true);
       return moviesDir.path;
     }
-    final extDir = await getExternalStorageDirectory();
-    return extDir?.path ?? (await getApplicationDocumentsDirectory()).path;
+    final docDir = await getApplicationDocumentsDirectory();
+    return docDir.path;
   }
 
   Future<void> _exportStaticImage() async {
-    if (_cachedRawImage == null || _currentMediaPath == null) return;
+    if (_cachedRawImage == null || _project.mediaPath.isEmpty) return;
     try {
-      final dims = _calculateTargetDimensions('1080p', _selectedRatio);
+      final dims = _calculateTargetDimensions('1080p', _project.aspectRatio);
       final exportWidth = dims['width']!;
       final exportHeight = dims['height']!;
 
       final resized = img.copyResize(_cachedRawImage!, width: exportWidth, height: exportHeight);
       final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
-      final uniforms = _packUniforms();
+      final uniforms = _packMultiLayerUniforms();
 
       final outputRaw = processImage(
         rawInput,
@@ -2088,7 +1282,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Graded Image Saved: ${destFile.path}'), backgroundColor: Colors.green),
+          SnackBar(content: Text('✅ Graded Image Saved:\n${destFile.path}'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -2106,10 +1300,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     String codec,
     String bitDepth,
   ) async {
-    if (_controller == null || !_controller!.value.isInitialized || _currentMediaPath == null) return;
+    if (_project.mediaPath.isEmpty) return;
 
-    final uniforms = _packUniforms();
-    final targetDims = _calculateTargetDimensions(resolution, _selectedRatio);
+    final uniforms = _packMultiLayerUniforms();
+    final targetDims = _calculateTargetDimensions(resolution, _project.aspectRatio);
     final int outW = targetDims['width']!;
     final int outH = targetDims['height']!;
 
@@ -2146,7 +1340,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: LinearProgressIndicator(
                     value: progress,
                     minHeight: 8,
-                    color: kCyanAccent, // Vibrant Cyan Progress Bar
+                    color: kCyanAccent,
                     backgroundColor: Colors.white12,
                   ),
                 ),
@@ -2167,7 +1361,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     try {
       final dir = await getTemporaryDirectory();
-      final videoPath = _currentMediaPath!;
+      final videoPath = _project.mediaPath;
       final framesDir = Directory('${dir.path}/export_frames');
       final processedDir = Directory('${dir.path}/export_processed');
 
@@ -2179,11 +1373,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final audioPath = '${dir.path}/current_audio.aac';
       final oldAudio = File(audioPath);
       if (await oldAudio.exists()) await oldAudio.delete();
-      await FFmpegKit.execute('-i "$videoPath" -vn -c:a aac -y "$audioPath"');
+      await FFmpegKit.execute('-hide_banner -i "$videoPath" -vn -c:a aac -y "$audioPath"');
 
       statusNotifier.value = 'Extracting pristine frames...';
       final extractSession = await FFmpegKit.execute(
-        '-i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
+        '-hide_banner -i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
       );
 
       var frameFiles = await framesDir.list().toList();
@@ -2192,7 +1386,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (totalFrames == 0) {
         final logs = await extractSession.getLogsAsString();
-        throw Exception('FFmpeg frame extraction failed. Logs: ${logs ?? "No logs"}');
+        throw Exception('Frame extraction failed. Logs: ${logs ?? "No logs"}');
       }
 
       for (int i = 0; i < totalFrames; i++) {
@@ -2268,7 +1462,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       if (hasAudio) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+        await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
       } else {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
@@ -2281,6 +1475,179 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
     }
+  }
+
+  Widget _buildSliderRow(String title, double val, double min, double max, ValueChanged<double> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+              Text(
+                val.toStringAsFixed(2),
+                style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2.5,
+              activeTrackColor: kAquamarine,
+              inactiveTrackColor: Colors.white12,
+              thumbColor: kAquamarine,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+            ),
+            child: Slider(
+              value: val.clamp(min, max),
+              min: min,
+              max: max,
+              onChanged: (newVal) {
+                onChanged(newVal);
+                _applyGrade();
+              },
+              onChangeEnd: (_) => _autoSaveProject(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // The Visible Adjustment Layer Timeline Bar
+  Widget _buildAdjustmentLayerBar() {
+    return Container(
+      color: const Color(0xFF0D0D12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.add_box_rounded, color: kAquamarine, size: 22),
+            tooltip: 'Add Adjustment Layer (Max 4)',
+            onPressed: _addNewAdjustmentLayer,
+          ),
+          Expanded(
+            child: SizedBox(
+              height: 38,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _project.layers.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, idx) {
+                  final l = _project.layers[idx];
+                  final isSel = _project.activeLayerIndex == idx;
+                  return GestureDetector(
+                    onTap: () => setState(() => _project.activeLayerIndex = idx),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isSel ? kAquamarine.withOpacity(0.18) : kCardDark,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: isSel ? kAquamarine : Colors.white12),
+                      ),
+                      child: Row(
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              setState(() => l.isEnabled = !l.isEnabled);
+                              _applyGrade();
+                            },
+                            child: Icon(
+                              l.isEnabled ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                              color: l.isEnabled ? (isSel ? kAquamarine : Colors.white70) : Colors.white24,
+                              size: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            l.name,
+                            style: TextStyle(
+                              color: isSel ? Colors.white : Colors.white60,
+                              fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          if (_project.layers.length > 1)
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+              tooltip: 'Remove Active Layer',
+              onPressed: _removeCurrentLayer,
+            ),
+        ],
+      ),
+    );
+  }
+
+  // Active Layer Controls (Opacity & Blend Mode Header)
+  Widget _buildLayerSettingsHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: const Color(0xFF14141A),
+      child: Row(
+        children: [
+          Text(
+            _cur.name.toUpperCase(),
+            style: const TextStyle(color: kAquamarine, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.8),
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<LayerBlendMode>(
+            value: _cur.blendMode,
+            dropdownColor: kCardDark,
+            underline: const SizedBox(),
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            items: const [
+              DropdownMenuItem(value: LayerBlendMode.normal, child: Text('Normal')),
+              DropdownMenuItem(value: LayerBlendMode.screen, child: Text('Screen (Glow)')),
+              DropdownMenuItem(value: LayerBlendMode.linearAdd, child: Text('Linear Add')),
+              DropdownMenuItem(value: LayerBlendMode.overlay, child: Text('Overlay')),
+              DropdownMenuItem(value: LayerBlendMode.softLight, child: Text('Soft Light')),
+              DropdownMenuItem(value: LayerBlendMode.multiply, child: Text('Multiply')),
+            ],
+            onChanged: (mode) {
+              if (mode != null) {
+                setState(() => _cur.blendMode = mode);
+                _applyGrade();
+              }
+            },
+          ),
+          const Spacer(),
+          SizedBox(
+            width: 110,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2.0,
+                activeTrackColor: kAquamarine,
+                inactiveTrackColor: Colors.white12,
+                thumbColor: kAquamarine,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+              ),
+              child: Slider(
+                value: _cur.opacity,
+                min: 0.0,
+                max: 1.0,
+                onChanged: (v) {
+                  setState(() => _cur.opacity = v);
+                  _applyGrade();
+                },
+              ),
+            ),
+          ),
+          Text('${(_cur.opacity * 100).toInt()}%', style: const TextStyle(color: Colors.white54, fontSize: 11, fontFamily: 'monospace')),
+        ],
+      ),
+    );
   }
 
   @override
@@ -2314,8 +1681,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            tooltip: 'Reset Grading',
-            onPressed: _resetAllEffects,
+            tooltip: 'Reset Current Layer',
+            onPressed: _resetCurrentLayer,
           ),
           IconButton(
             icon: const Icon(Icons.movie_creation_outlined, color: kAquamarine),
@@ -2330,7 +1697,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             flex: _isFullScreen ? 10 : 5,
             child: Center(
               child: AspectRatio(
-                aspectRatio: _getAspectRatioValue(_selectedRatio),
+                aspectRatio: _getAspectRatioValue(_project.aspectRatio),
                 child: Container(
                   margin: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
@@ -2342,11 +1709,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      if (!_isImage && _controller != null && _controller!.value.isInitialized)
-                        RepaintBoundary(
-                          key: _activeCanvasKey,
-                          child: VideoPlayer(_controller!),
-                        ),
+                      if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
+                        VideoPlayer(_controller!),
 
                       if (_processedImage != null)
                         RawImage(image: _processedImage, fit: BoxFit.contain),
@@ -2356,7 +1720,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         left: 10,
                         child: Row(
                           children: [
-                            if (!_isImage && _controller != null)
+                            if (!_project.isImage && _controller != null)
                               GestureDetector(
                                 onTap: () {
                                   setState(() {
@@ -2411,6 +1775,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ),
 
           if (!_isFullScreen) ...[
+            _buildAdjustmentLayerBar(),
+            _buildLayerSettingsHeader(),
+
             Container(
               color: kSurfaceDark,
               child: TabBar(
@@ -2422,6 +1789,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                 tabs: const [
                   Tab(text: 'PRESETS'),
+                  Tab(text: 'AE KNOCKOFFS'),
                   Tab(text: 'GRADE'),
                   Tab(text: 'CURVES'),
                   Tab(text: 'GLOWS'),
@@ -2439,6 +1807,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   controller: _tabController,
                   children: [
                     _buildPresetsTab(),
+                    _buildAEKnockoffsTab(),
                     _buildGradingTab(),
                     _buildCurvesTab(),
                     _buildGlowsTab(),
@@ -2456,18 +1825,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Widget _buildPresetsTab() {
     final presets = [
-      {'name': 'adevob+junho', 'desc': 'Warm golden speculars, crisp ink outlines, clean contrast', 'color': 0xFFFFB300},
-      {'name': 'vintage cc', 'desc': 'Deep crushed blacks, authentic film contrast, desaturated tones', 'color': 0xFF9E9E9E},
-      {'name': 'adevobfiller', 'desc': 'Balanced midtones, micro-sharp linework, controlled bloom', 'color': 0xFF29B6F6},
-      {'name': 'uryu vs ichigo', 'desc': 'Quincy icy cyan specular bloom, deep shadows, high micro-contrast', 'color': 0xFF00E5FF},
-      {'name': 'saber vs Rin', 'desc': 'Ufotable cinema style with anamorphic flare and deep blacks', 'color': 0xFFFF4081},
-      {'name': 'Dantae cc', 'desc': 'Heavy ink isolation, cold palette, high-contrast dynamic range', 'color': 0xFF7C4DFF},
-      {'name': 'solargotcarried', 'desc': 'High-contrast solarized grade calibrated to the 0:28 mark', 'color': 0xFFFFAB00},
-      {'name': 'alucard cc', 'desc': 'Hellsing gothic dark grade with cold blacks and natural desaturation', 'color': 0xFFE53935},
-      {'name': 'mb-mojo', 'desc': 'Teal shadows and warm specular skin highlights', 'color': 0xFF00ACC1},
-      {'name': 'mb-cosmo', 'desc': 'Facial and line-preserving bilateral skin smoothing', 'color': 0xFFEC407A},
-      {'name': 'mb-renoir', 'desc': 'Authentic 35mm warm specular halation on high-contrast edges', 'color': 0xFFFF7043},
-      {'name': 'mb-colorista', 'desc': 'Balanced 3-way color wheel master grade', 'color': 0xFFAB47BC},
+      {'name': 'Gojo', 'desc': 'Cold deep shadows, infinity cyan specular bloom, clean line contrast', 'color': 0xFF00E5FF},
+      {'name': 'Raiden', 'desc': 'Electro violet & cyan split, soft light wrap, protected skin tones', 'color': 0xFF7C4DFF},
+      {'name': 'sad', 'desc': 'Melancholic desaturated film, lifted soft blacks, muted greens', 'color': 0xFF9E9E9E},
+      {'name': 'potential, man.', 'desc': 'High midtone clarity, deep ink shadows, neutral speculars', 'color': 0xFF3F51B5},
+      {'name': 'potential 2.0', 'desc': 'Mahoraga wheel radiance, golden-white celestial bloom, warm highlight bleed', 'color': 0xFFFFB300},
+      {'name': 'maki', 'desc': 'High-acutance micro-contrast, steel cyan tones, crisp line-art', 'color': 0xFF00B0FF},
+      {'name': 'sukuna', 'desc': 'Malevolent crimson shadows, stark bone speculars, warm edge halation', 'color': 0xFFE53935},
+      {'name': 'bina', 'desc': 'Radiant dreamcore soft glow, gentle pastel lift, silky skin', 'color': 0xFFF48FB1},
+      {'name': 'vintage cc', 'desc': 'Fixed authentic 35mm film curve, subtle amber push, fine grain', 'color': 0xFFFFCC80},
     ];
 
     return ListView.separated(
@@ -2515,28 +1881,57 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  Widget _buildAEKnockoffsTab() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        const Text('DEEP GLOW SUITE (INVERSE-SQUARE NO-RING BLOOM)', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 1.5, (v) => setState(() => _cur.deepGlowIntensity = v)),
+        _buildSliderRow('Deep Glow Radius (Falloff)', _cur.deepGlowRadius, 0.1, 1.0, (v) => setState(() => _cur.deepGlowRadius = v)),
+        _buildSliderRow('Soft Knee Threshold', _cur.deepGlowThreshold, 0.1, 0.9, (v) => setState(() => _cur.deepGlowThreshold = v)),
+
+        const SizedBox(height: 14),
+        const Text('EDGE-TARGETED CHROMATIC ABERRATION', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Line-Art Dispersion Strength', _cur.lineChromaStrength, 0.0, 1.0, (v) => setState(() => _cur.lineChromaStrength = v)),
+
+        const SizedBox(height: 14),
+        const Text('SAPPHIRE S_EDGERAYS (VOLUMETRIC OCCLUDED SHAFTS)', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Ray Shaft Length', _cur.volRaysLength, 0.0, 1.0, (v) => setState(() => _cur.volRaysLength = v)),
+        _buildSliderRow('Exponential Ray Decay', _cur.volRaysDecay, 0.70, 0.98, (v) => setState(() => _cur.volRaysDecay = v)),
+
+        const SizedBox(height: 14),
+        const Text('SAPPHIRE 1D ANAMORPHIC STREAK FLARE', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Thin Streak Flare Intensity', _cur.thinStreakIntensity, 0.0, 1.0, (v) => setState(() => _cur.thinStreakIntensity = v)),
+
+        const SizedBox(height: 14),
+        const Text('FILM HALATION & SUBTRACTIVE DENSITY', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        _buildSliderRow('Edge Red/Peach Halation Bleed', _cur.halationRadius, 0.0, 1.0, (v) => setState(() => _cur.halationRadius = v)),
+        _buildSliderRow('Halation Warmth', _cur.halationWarmth, 0.0, 1.0, (v) => setState(() => _cur.halationWarmth = v)),
+      ],
+    );
+  }
+
   Widget _buildGradingTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        _buildSliderRow('Contrast (0.18 Mid-Gray Pivot)', _contrast, 0.5, 2.5, (v) => setState(() => _contrast = v)),
-        _buildSliderRow('Highlights', _highlights, -1.0, 1.0, (v) => setState(() => _highlights = v)),
-        _buildSliderRow('Shadows', _shadows, -1.0, 1.0, (v) => setState(() => _shadows = v)),
-        _buildSliderRow('Black Crush', _blackCrush, 0.0, 1.0, (v) => setState(() => _blackCrush = v)),
-        _buildSliderRow('Gamma Curve', _gamma, 0.4, 2.0, (v) => setState(() => _gamma = v)),
-        _buildSliderRow('Saturation (Headroom-Safe)', _saturation, 0.0, 2.5, (v) => setState(() => _saturation = v)),
-        _buildSliderRow('Hue Shift', _hue, -0.5, 0.5, (v) => setState(() => _hue = v)),
-        _buildSliderRow('Exposure / Brightness', _brightness, -1.0, 1.0, (v) => setState(() => _brightness = v)),
-        _buildSliderRow('Micro-Sharpness (With Edge Halo)', _sharpness, 0.0, 1.5, (v) => setState(() => _sharpness = v)),
-        _buildSliderRow('Chromatic Aberration (Prism Fringe)', _chromaticAberration, 0.0, 1.0, (v) => setState(() => _chromaticAberration = v)),
-        _buildSliderRow('Split Toning (Subtle Push)', _splitToning, 0.0, 1.0, (v) => setState(() => _splitToning = v)),
-        _buildSliderRow('Denoise (Bilateral Filter)', _denoise, 0.0, 1.0, (v) => setState(() => _denoise = v)),
-        _buildSliderRow('Film Grain & Micro-Texture', _filmGrain, 0.0, 1.0, (v) => setState(() => _filmGrain = v)),
-        _buildSliderRow('Consistent Flicker Intensity', _flickerIntensity, 0.0, 1.0, (v) => setState(() => _flickerIntensity = v)),
-        _buildSliderRow('Consistent Flicker Speed', _flickerSpeed, 1.0, 10.0, (v) => setState(() => _flickerSpeed = v)),
-        _buildSliderRow('Vignette (Radial)', _vignette, 0.0, 1.0, (v) => setState(() => _vignette = v)),
-        _buildSliderRow('Vignette (Boxed / Letterbox Shape)', _vignetteBoxed, 0.0, 1.0, (v) => setState(() => _vignetteBoxed = v)),
-        _buildSliderRow('Color Temperature (K)', _temperature, 3000.0, 9500.0, (v) => setState(() => _temperature = v)),
+        _buildSliderRow('Contrast (0.18 Mid-Gray Pivot)', _cur.contrast, 0.5, 2.0, (v) => setState(() => _cur.contrast = v)),
+        _buildSliderRow('Highlights', _cur.highlights, -1.0, 1.0, (v) => setState(() => _cur.highlights = v)),
+        _buildSliderRow('Shadows', _cur.shadows, -1.0, 1.0, (v) => setState(() => _cur.shadows = v)),
+        _buildSliderRow('Black Crush', _cur.blackCrush, 0.0, 0.5, (v) => setState(() => _cur.blackCrush = v)),
+        _buildSliderRow('Gamma Curve', _cur.gamma, 0.4, 2.0, (v) => setState(() => _cur.gamma = v)),
+        _buildSliderRow('Saturation (Headroom-Safe)', _cur.saturation, 0.0, 2.0, (v) => setState(() => _cur.saturation = v)),
+        _buildSliderRow('Hue Shift', _cur.hue, -0.5, 0.5, (v) => setState(() => _cur.hue = v)),
+        _buildSliderRow('Exposure / Brightness', _cur.brightness, -0.5, 0.5, (v) => setState(() => _cur.brightness = v)),
+        _buildSliderRow('Micro-Sharpness', _cur.sharpness, 0.0, 1.0, (v) => setState(() => _cur.sharpness = v)),
+        _buildSliderRow('Vignette', _cur.vignette, 0.0, 0.5, (v) => setState(() => _cur.vignette = v)),
+        _buildSliderRow('Film Grain & Micro-Texture', _cur.filmGrain, 0.0, 1.0, (v) => setState(() => _cur.filmGrain = v)),
+        _buildSliderRow('Color Temperature (K)', _cur.temperature, 3000.0, 9500.0, (v) => setState(() => _cur.temperature = v)),
       ],
     );
   }
@@ -2547,11 +1942,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     List<double> currentPts;
     switch (_selectedCurveChannel) {
-      case 1: currentPts = _curveRed; break;
-      case 2: currentPts = _curveGreen; break;
-      case 3: currentPts = _curveBlue; break;
+      case 1: currentPts = _cur.curveRed; break;
+      case 2: currentPts = _cur.curveGreen; break;
+      case 3: currentPts = _cur.curveBlue; break;
       case 0:
-      default: currentPts = _curveMaster; break;
+      default: currentPts = _cur.curveMaster; break;
     }
 
     return SingleChildScrollView(
@@ -2570,123 +1965,100 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   selectedColor: channelColors[idx].withOpacity(0.25),
                   backgroundColor: kCardDark,
                   labelStyle: TextStyle(
-                    color: isSel ? channelColors[idx] : Colors.white60,
+                    color: isSel ? channelColors[idx] : Colors.white54,
                     fontWeight: FontWeight.bold,
                     fontSize: 11,
                   ),
-                  onSelected: (val) {
-                    if (val) setState(() => _selectedCurveChannel = idx);
-                  },
+                  onSelected: (_) => setState(() => _selectedCurveChannel = idx),
                 ),
               );
             }),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           SplineCurveEditor(
             points: currentPts,
             curveColor: channelColors[_selectedCurveChannel],
             onChanged: (newPts) {
               setState(() {
                 switch (_selectedCurveChannel) {
-                  case 1: _curveRed = newPts; break;
-                  case 2: _curveGreen = newPts; break;
-                  case 3: _curveBlue = newPts; break;
+                  case 1: _cur.curveRed = newPts; break;
+                  case 2: _cur.curveGreen = newPts; break;
+                  case 3: _cur.curveBlue = newPts; break;
                   case 0:
-                  default: _curveMaster = newPts; break;
+                  default: _cur.curveMaster = newPts; break;
                 }
               });
               _applyGrade();
             },
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           const Text('CURVE POINT SLIDERS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          ...List.generate(5, (pIdx) {
-            final labels = ['Blacks (P0)', 'Shadows (P1)', 'Midtones (P2)', 'Highlights (P3)', 'Whites (P4)'];
-            return _buildSliderRow(
-              labels[pIdx],
-              currentPts[pIdx],
-              0.0,
-              1.0,
-              (v) {
-                setState(() {
-                  final updated = List<double>.from(currentPts);
-                  updated[pIdx] = v;
-                  switch (_selectedCurveChannel) {
-                    case 1: _curveRed = updated; break;
-                    case 2: _curveGreen = updated; break;
-                    case 3: _curveBlue = updated; break;
-                    case 0:
-                    default: _curveMaster = updated; break;
-                  }
-                });
-                _applyGrade();
-              },
-            );
-          }),
+          _buildSliderRow('Blacks (P0)', currentPts[0], 0.0, 1.0, (v) => _updateCurvePt(0, v)),
+          _buildSliderRow('Shadows (P1)', currentPts[1], 0.0, 1.0, (v) => _updateCurvePt(1, v)),
+          _buildSliderRow('Midtones (P2)', currentPts[2], 0.0, 1.0, (v) => _updateCurvePt(2, v)),
+          _buildSliderRow('Highlights (P3)', currentPts[3], 0.0, 1.0, (v) => _updateCurvePt(3, v)),
+          _buildSliderRow('Whites (P4)', currentPts[4], 0.0, 1.0, (v) => _updateCurvePt(4, v)),
         ],
       ),
     );
+  }
+
+  void _updateCurvePt(int idx, double val) {
+    setState(() {
+      switch (_selectedCurveChannel) {
+        case 1: _cur.curveRed[idx] = val; break;
+        case 2: _cur.curveGreen[idx] = val; break;
+        case 3: _cur.curveBlue[idx] = val; break;
+        case 0:
+        default: _cur.curveMaster[idx] = val; break;
+      }
+    });
+    _applyGrade();
+    _autoSaveProject();
   }
 
   Widget _buildGlowsTab() {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        _buildSliderRow('Gaussian Bloom Intensity', _bloomIntensity, 0.0, 1.5, (v) => setState(() => _bloomIntensity = v)),
-        _buildSliderRow('Bloom Spread (Smoothness)', _bloomSpread, 0.1, 1.0, (v) => setState(() => _bloomSpread = v)),
-        _buildSliderRow('Bright-Pass Threshold', _bloomThreshold, 0.1, 0.9, (v) => setState(() => _bloomThreshold = v)),
+        _buildSliderRow('Gaussian Bloom Intensity', _cur.deepGlowIntensity, 0.0, 1.5, (v) => setState(() => _cur.deepGlowIntensity = v)),
+        _buildSliderRow('Bloom Spread (Smoothness)', _cur.deepGlowRadius, 0.0, 1.0, (v) => setState(() => _cur.deepGlowRadius = v)),
+        _buildSliderRow('Bright-Pass Threshold', _cur.deepGlowThreshold, 0.0, 1.0, (v) => setState(() => _cur.deepGlowThreshold = v)),
         const SizedBox(height: 10),
-        const Text('BLOOM TINT HARMONY (INCLUDING INK BLACK GLOW)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const Text('BLOOM TINT HARMONY', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         Wrap(
           spacing: 8,
           children: [
-            ChoiceChip(
-              label: const Text('Neutral'),
-              selected: _edgeGlowTint == 0.0,
-              selectedColor: kAquamarine,
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _edgeGlowTint = 0.0); _applyGrade(); },
-            ),
-            ChoiceChip(
-              label: const Text('Gold / Warm'),
-              selected: _edgeGlowTint == 1.0,
-              selectedColor: const Color(0xFFFFB300),
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _edgeGlowTint = 1.0); _applyGrade(); },
-            ),
-            ChoiceChip(
-              label: const Text('Quincy Cyan'),
-              selected: _edgeGlowTint == 2.0,
-              selectedColor: const Color(0xFF00E5FF),
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _edgeGlowTint = 2.0); _applyGrade(); },
-            ),
-            ChoiceChip(
-              label: const Text('Crimson'),
-              selected: _edgeGlowTint == 4.0,
-              selectedColor: const Color(0xFFE53935),
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _edgeGlowTint = 4.0); _applyGrade(); },
-            ),
-            ChoiceChip(
-              label: const Text('Black / Ink Shadow'),
-              selected: _edgeGlowTint == 5.0,
-              selectedColor: Colors.white54,
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _edgeGlowTint = 5.0); _applyGrade(); },
-            ),
+            _buildTintChip('Neutral', 0.0),
+            _buildTintChip('Gold / Warm', 1.0),
+            _buildTintChip('Quincy Cyan', 2.0),
+            _buildTintChip('Crimson', 4.0),
+            _buildTintChip('Black / Ink Shadow', 3.0),
           ],
         ),
         const SizedBox(height: 14),
-        _buildSliderRow('Edge Darken (Weak/Fade Line-Art Glow Shadow)', _edgeDarken, 0.0, 1.0, (v) => setState(() => _edgeDarken = v)),
-        _buildSliderRow('Sobel Ink Outlines', _darkOutlines, 0.0, 1.0, (v) => setState(() => _darkOutlines = v)),
-        _buildSliderRow('Anamorphic 1D Flare', _anamorphicFlare, 0.0, 1.0, (v) => setState(() => _anamorphicFlare = v)),
-        _buildSliderRow('Flare Stretch', _flareAmount, 0.1, 1.0, (v) => setState(() => _flareAmount = v)),
-        _buildSliderRow('Light Rays / God Rays', _lightRays, 0.0, 1.0, (v) => setState(() => _lightRays = v)),
-        _buildSliderRow('Light Rays Decay', _lightRaysDecay, 0.70, 0.98, (v) => setState(() => _lightRaysDecay = v)),
+        _buildSliderRow('Thin Anamorphic Flare', _cur.thinStreakIntensity, 0.0, 1.0, (v) => setState(() => _cur.thinStreakIntensity = v)),
+        _buildSliderRow('Light Rays / God Rays', _cur.volRaysLength, 0.0, 1.0, (v) => setState(() => _cur.volRaysLength = v)),
+        _buildSliderRow('Light Rays Decay', _cur.volRaysDecay, 0.7, 0.98, (v) => setState(() => _cur.volRaysDecay = v)),
       ],
+    );
+  }
+
+  Widget _buildTintChip(String title, double code) {
+    final isSel = _cur.edgeGlowTint == code;
+    return ChoiceChip(
+      label: Text(title),
+      selected: isSel,
+      selectedColor: kAquamarine,
+      backgroundColor: kCardDark,
+      labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 11),
+      onSelected: (_) {
+        setState(() => _cur.edgeGlowTint = code);
+        _applyGrade();
+        _autoSaveProject();
+      },
     );
   }
 
@@ -2695,37 +2067,58 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       padding: const EdgeInsets.all(14),
       children: [
         const Text('HDR TONEMAPPING OPERATOR', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
+        const SizedBox(height: 8),
+        Row(
           children: [
-            ChoiceChip(
-              label: const Text('Off (Linear)'),
-              selected: _tonemapMode == 0.0,
-              selectedColor: kAquamarine,
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _tonemapMode = 0.0); _applyGrade(); },
+            Expanded(
+              child: ChoiceChip(
+                label: const Text('Off (Linear)'),
+                selected: _project.tonemapMode == 0.0,
+                selectedColor: kAquamarine,
+                backgroundColor: kCardDark,
+                labelStyle: TextStyle(color: _project.tonemapMode == 0.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                onSelected: (_) {
+                  setState(() => _project.tonemapMode = 0.0);
+                  _applyGrade();
+                  _autoSaveProject();
+                },
+              ),
             ),
-            ChoiceChip(
-              label: const Text('Reinhard'),
-              selected: _tonemapMode == 1.0,
-              selectedColor: kAquamarine,
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _tonemapMode = 1.0); _applyGrade(); },
+            const SizedBox(width: 8),
+            Expanded(
+              child: ChoiceChip(
+                label: const Text('Reinhard'),
+                selected: _project.tonemapMode == 1.0,
+                selectedColor: kAquamarine,
+                backgroundColor: kCardDark,
+                labelStyle: TextStyle(color: _project.tonemapMode == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                onSelected: (_) {
+                  setState(() => _project.tonemapMode = 1.0);
+                  _applyGrade();
+                  _autoSaveProject();
+                },
+              ),
             ),
-            ChoiceChip(
-              label: const Text('ACES Filmic'),
-              selected: _tonemapMode == 2.0,
-              selectedColor: kAquamarine,
-              backgroundColor: const Color(0xFF18181E),
-              onSelected: (_) { setState(() => _tonemapMode = 2.0); _applyGrade(); },
+            const SizedBox(width: 8),
+            Expanded(
+              child: ChoiceChip(
+                label: const Text('ACES Filmic'),
+                selected: _project.tonemapMode == 2.0,
+                selectedColor: kAquamarine,
+                backgroundColor: kCardDark,
+                labelStyle: TextStyle(color: _project.tonemapMode == 2.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                onSelected: (_) {
+                  setState(() => _project.tonemapMode = 2.0);
+                  _applyGrade();
+                  _autoSaveProject();
+                },
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _buildSliderRow('Sapphire Blend Mix', _sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _sapphireBlendMix = v)),
-        _buildSliderRow('FilmConvert Nitrate Stock Mix', _filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _filmConvertNitrate = v)),
-        _buildSliderRow('4-Corner Vignette Gradient Mix', _fourColorGradMix, 0.0, 1.0, (v) => setState(() => _fourColorGradMix = v)),
+        const SizedBox(height: 14),
+        _buildSliderRow('Sapphire Blend Mix', _cur.sapphireBlendMix, 0.0, 1.0, (v) => setState(() => _cur.sapphireBlendMix = v)),
+        _buildSliderRow('FilmConvert Nitrate Stock Mix', _cur.filmConvertNitrate, 0.0, 1.0, (v) => setState(() => _cur.filmConvertNitrate = v)),
       ],
     );
   }
@@ -2734,87 +2127,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        const Text('3-WAY COLORISTA WHEELS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 10),
+        const Text('MAGIC BULLET SUITE MODULES', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        _buildSliderRow('MB Cosmo (Skin & Line Smoothing)', _cur.mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _cur.mblCosmoSkin = v)),
+        _buildSliderRow('MB Mojo (Teal Shadows & Orange Highlights)', _cur.mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _cur.mblMojoTealOrange = v)),
+        const SizedBox(height: 16),
+        const Text('MB COLORISTA 3-WAY WHEELS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             ColoristaWheel(
-              label: 'LIFT (Shadows)',
-              value: _mblColoristaLift,
-              accentColor: kAquamarine,
-              onChanged: (v) { setState(() => _mblColoristaLift = v); _applyGrade(); },
+              label: 'LIFT (BLACKS)',
+              value: _cur.mblColoristaLift,
+              accentColor: Colors.lightBlueAccent,
+              onChanged: (v) {
+                setState(() => _cur.mblColoristaLift = v);
+                _applyGrade();
+              },
             ),
             ColoristaWheel(
-              label: 'GAMMA (Mids)',
-              value: _mblColoristaGamma,
+              label: 'GAMMA (MIDS)',
+              value: _cur.mblColoristaGamma,
               accentColor: kAquamarine,
-              onChanged: (v) { setState(() => _mblColoristaGamma = v); _applyGrade(); },
+              onChanged: (v) {
+                setState(() => _cur.mblColoristaGamma = v);
+                _applyGrade();
+              },
             ),
             ColoristaWheel(
-              label: 'GAIN (Highs)',
-              value: _mblColoristaGain,
-              accentColor: const Color(0xFFFF7043),
-              onChanged: (v) { setState(() => _mblColoristaGain = v); _applyGrade(); },
+              label: 'GAIN (WHITES)',
+              value: _cur.mblColoristaGain,
+              accentColor: kGold,
+              onChanged: (v) {
+                setState(() => _cur.mblColoristaGain = v);
+                _applyGrade();
+              },
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _buildSliderRow('Cosmo II (Bilateral Skin Smooth)', _mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _mblCosmoSkin = v)),
-        _buildSliderRow('Mojo II (Teal / Orange Contrast)', _mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _mblMojoTealOrange = v)),
-        _buildSliderRow('Renoir (35mm Edge Halation)', _mblRenoirHalation, 0.0, 1.0, (v) => setState(() => _mblRenoirHalation = v)),
-        _buildSliderRow('Depth of Field (Tilt-Shift)', _depthOfField, 0.0, 1.0, (v) => setState(() => _depthOfField = v)),
-        _buildSliderRow('Focal Plane Position', _dofFocus, 0.0, 1.0, (v) => setState(() => _dofFocus = v)),
       ],
     );
-  }
-
-  Widget _buildSliderRow(String label, double val, double min, double max, ValueChanged<double> onChanged) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
-              Text(val.toStringAsFixed(2), style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace')),
-            ],
-          ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 2.2,
-              activeTrackColor: kAquamarine,
-              inactiveTrackColor: Colors.white12,
-              thumbColor: kAquamarine,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-            ),
-            child: Slider(
-              value: val.clamp(min, max),
-              min: min,
-              max: max,
-              onChanged: (v) {
-                onChanged(v);
-                _applyGrade();
-              },
-              onChangeEnd: (_) {
-                _autoSaveProject();
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    if (_controller != null) {
-      _controller!.dispose();
-    }
-    _tabController.dispose();
-    super.dispose();
   }
 }
