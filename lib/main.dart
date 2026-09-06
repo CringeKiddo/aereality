@@ -39,30 +39,35 @@ class AERealityApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'AEReality Studio Pro',
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: kBackgroundDark,
-        primaryColor: kAquamarine,
-        colorScheme: const ColorScheme.dark(
-          primary: kAquamarine,
-          secondary: kCyanAccent,
-          surface: kCardDark,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: kBackgroundDark,
-          elevation: 0,
-          titleTextStyle: TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
+    return ValueListenableBuilder<Color>(
+      valueListenable: gCustomAccentColor,
+      builder: (context, accentColor, _) {
+        return MaterialApp(
+          title: 'AEReality Studio Pro',
+          theme: ThemeData.dark().copyWith(
+            scaffoldBackgroundColor: kBackgroundDark,
+            primaryColor: accentColor,
+            colorScheme: ColorScheme.dark(
+              primary: accentColor,
+              secondary: kCyanAccent,
+              surface: kCardDark,
+            ),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: kBackgroundDark,
+              elevation: 0,
+              titleTextStyle: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+              iconTheme: IconThemeData(color: Colors.white),
+            ),
           ),
-          iconTheme: IconThemeData(color: Colors.white),
-        ),
-      ),
-      home: const HomeScreen(),
-      debugShowCheckedModeBanner: false,
+          home: const HomeScreen(),
+          debugShowCheckedModeBanner: false,
+        );
+      },
     );
   }
 }
@@ -92,103 +97,149 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setModal) => AlertDialog(
-          backgroundColor: kCardDark,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.tune_rounded, color: kAquamarine, size: 20),
-              SizedBox(width: 8),
-              Text('Engine & Preview Quality', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
+        builder: (context, setModal) {
+          final List<Color> palette = [
+            const Color(0xFF7FFFD4), // Aquamarine
+            const Color(0xFF00E5FF), // Cyan
+            const Color(0xFFFFD700), // Gold
+            const Color(0xFF7C4DFF), // Purple
+            const Color(0xFFFF5252), // Crimson
+            const Color(0xFF69F0AE), // Emerald
+            const Color(0xFFFF4081), // Pink
+            const Color(0xFFFFFFFF), // Pure White
+          ];
+
+          return AlertDialog(
+            backgroundColor: kCardDark,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Icon(Icons.tune_rounded, color: gCustomAccentColor.value, size: 20),
+                const SizedBox(width: 8),
+                const Text('App & Engine Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ChoiceChip(
-                    label: const Text('25% Draft'),
-                    selected: gPreviewScale == 0.25,
-                    selectedColor: kAquamarine,
-                    backgroundColor: const Color(0xFF1E1E28),
-                    labelStyle: TextStyle(color: gPreviewScale == 0.25 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                    onSelected: (_) {
-                      setModal(() => gPreviewScale = 0.25);
-                      setState(() {});
-                    },
+                  const Text('APP THEME ACCENT COLOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: palette.map((col) {
+                      final isSel = gCustomAccentColor.value.value == col.value;
+                      return GestureDetector(
+                        onTap: () {
+                          setModal(() => gCustomAccentColor.value = col);
+                          setState(() {});
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: col,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isSel ? Colors.white : Colors.transparent,
+                              width: 2.5,
+                            ),
+                          ),
+                          child: isSel ? const Icon(Icons.check, size: 16, color: Colors.black) : null,
+                        ),
+                      );
+                    }).toList(),
                   ),
-                  ChoiceChip(
-                    label: const Text('50% Smooth'),
-                    selected: gPreviewScale == 0.50,
-                    selectedColor: kAquamarine,
-                    backgroundColor: const Color(0xFF1E1E28),
-                    labelStyle: TextStyle(color: gPreviewScale == 0.50 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                    onSelected: (_) {
-                      setModal(() => gPreviewScale = 0.50);
-                      setState(() {});
-                    },
+                  const SizedBox(height: 20),
+                  const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('25% Draft'),
+                        selected: gPreviewScale == 0.25,
+                        selectedColor: gCustomAccentColor.value,
+                        backgroundColor: const Color(0xFF1E1E28),
+                        labelStyle: TextStyle(color: gPreviewScale == 0.25 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 0.25);
+                          setState(() {});
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('50% Smooth'),
+                        selected: gPreviewScale == 0.50,
+                        selectedColor: gCustomAccentColor.value,
+                        backgroundColor: const Color(0xFF1E1E28),
+                        labelStyle: TextStyle(color: gPreviewScale == 0.50 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 0.50);
+                          setState(() {});
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('75% High'),
+                        selected: gPreviewScale == 0.75,
+                        selectedColor: gCustomAccentColor.value,
+                        backgroundColor: const Color(0xFF1E1E28),
+                        labelStyle: TextStyle(color: gPreviewScale == 0.75 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 0.75);
+                          setState(() {});
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('100% Native'),
+                        selected: gPreviewScale == 1.0,
+                        selectedColor: gCustomAccentColor.value,
+                        backgroundColor: const Color(0xFF1E1E28),
+                        labelStyle: TextStyle(color: gPreviewScale == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 1.0);
+                          setState(() {});
+                        },
+                      ),
+                    ],
                   ),
-                  ChoiceChip(
-                    label: const Text('75% High'),
-                    selected: gPreviewScale == 0.75,
-                    selectedColor: kAquamarine,
-                    backgroundColor: const Color(0xFF1E1E28),
-                    labelStyle: TextStyle(color: gPreviewScale == 0.75 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                    onSelected: (_) {
-                      setModal(() => gPreviewScale = 0.75);
-                      setState(() {});
-                    },
-                  ),
-                  ChoiceChip(
-                    label: const Text('100% Native'),
-                    selected: gPreviewScale == 1.0,
-                    selectedColor: kAquamarine,
-                    backgroundColor: const Color(0xFF1E1E28),
-                    labelStyle: TextStyle(color: gPreviewScale == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                    onSelected: (_) {
-                      setModal(() => gPreviewScale = 1.0);
-                      setState(() {});
-                    },
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
+                    child: Row(
+                      children: [
+                        Icon(Icons.layers_rounded, color: gCustomAccentColor.value, size: 18),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Grading Engine: Multi-Layer 32-bit Floating-Point Compositor (Max 4 Layers).',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
-                child: const Row(
-                  children: [
-                    Icon(Icons.layers_rounded, color: kAquamarine, size: 18),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Grading Engine: Multi-Layer 32-bit Floating-Point Compositor (Max 4 Layers).',
-                        style: TextStyle(color: Colors.white70, fontSize: 11),
-                      ),
-                    ),
-                  ],
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Save & Apply', style: TextStyle(color: gCustomAccentColor.value, fontWeight: FontWeight.bold)),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Save & Apply', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -196,11 +247,11 @@ class _HomeScreenState extends State<HomeScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: kAquamarine.withOpacity(0.12),
+                color: accent.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: kAquamarine.withOpacity(0.3)),
+                border: Border.all(color: accent.withOpacity(0.3)),
               ),
-              child: const Text('AE', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.bold, fontSize: 13)),
+              child: Text('AE', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
             const SizedBox(width: 10),
             const Text('AEReality Studio Pro'),
@@ -208,7 +259,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.tune_rounded, color: kAquamarine),
+            icon: Icon(Icons.tune_rounded, color: accent),
             tooltip: 'Settings',
             onPressed: _showSettingsDialog,
           ),
@@ -222,16 +273,16 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
+                Text(
                   'ADJUSTMENT LAYER COMPOSITOR • FP32 HDR',
-                  style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                  style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: kAquamarine.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
-                  child: const Text(
+                  decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                  child: Text(
                     '4-LAYER PIPELINE',
-                    style: TextStyle(color: kAquamarine, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                    style: TextStyle(color: accent, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -253,7 +304,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: const Icon(Icons.add_rounded, color: Colors.black, size: 20),
                     label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: kAquamarine,
+                      backgroundColor: accent,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
@@ -273,10 +324,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved presets/sessions yet.')));
                       }
                     },
-                    icon: const Icon(Icons.bookmarks_rounded, color: kAquamarine, size: 18),
-                    label: const Text('SAVED', style: TextStyle(color: kAquamarine, fontWeight: FontWeight.w700, fontSize: 12)),
+                    icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
+                    label: Text('SAVED', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: kAquamarine, width: 1.2),
+                      side: BorderSide(color: accent, width: 1.2),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
@@ -320,7 +371,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         border: Border.all(color: Colors.white.withOpacity(0.06)),
                       ),
                       child: ListTile(
-                        leading: Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: kAquamarine),
+                        leading: Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: accent),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
                         subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.layers.length} Layers • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                         trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
@@ -359,6 +410,8 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Create New Session')),
       body: Padding(
@@ -386,7 +439,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               children: _aspectRatios.map((ratio) => ChoiceChip(
                 label: Text(ratio),
                 selected: _selectedAspect == ratio,
-                selectedColor: kAquamarine,
+                selectedColor: accent,
                 backgroundColor: kCardDark,
                 labelStyle: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70, fontWeight: FontWeight.bold),
                 onSelected: (_) => setState(() => _selectedAspect = ratio),
@@ -423,7 +476,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                   children: [
                     Icon(
                       _selectedFile == null ? Icons.folder_open_rounded : (_isImage ? Icons.image_rounded : Icons.movie_creation_rounded),
-                      color: kAquamarine,
+                      color: accent,
                       size: 40,
                     ),
                     const SizedBox(height: 10),
@@ -465,7 +518,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                   );
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: kAquamarine,
+                  backgroundColor: accent,
                   foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -516,6 +569,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _loadMedia(_project.mediaPath);
   }
 
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _controller?.pause();
+    _controller?.dispose();
+    _controller = null;
+    super.dispose();
+  }
+
   Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr) {
     int baseSize;
     switch (resolutionName) {
@@ -551,9 +613,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Future<void> _loadShader() async {
     final candidateNames = [
+      'shaders/aereality_core.spv',
       'assets/shaders/aereality_core.spv',
       'assets/shaders/shader.spv',
-      'assets/shaders/aereality_core_32.spv',
     ];
 
     Uint8List? shaderBytes;
@@ -666,7 +728,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
-  // Packs up to 4 layers into uniform buffer for Vulkan Compute
   Float32List _packMultiLayerUniforms() {
     final uniforms = Float32List(128);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
@@ -674,8 +735,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         : 0.0;
 
     uniforms[0] = timeSeconds;
-    uniforms[1] = _project.layers.length.toDouble(); // Number of active layers
-    uniforms[2] = _project.tonemapMode;              // Master Tonemap (0: Off default)
+    uniforms[1] = _project.layers.length.toDouble();
+    uniforms[2] = _project.tonemapMode;
 
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
@@ -696,7 +757,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 12] = layer.deepGlowThreshold;
       uniforms[offset + 13] = layer.edgeGlowTint;
       uniforms[offset + 14] = layer.thinStreakIntensity;
-      uniforms[offset + 15] = layer.lineChromaStrength * 0.35; // Weakened Line Chromatic Aberration
+      uniforms[offset + 15] = layer.lineChromaStrength * 0.35;
       uniforms[offset + 16] = layer.volRaysLength;
       uniforms[offset + 17] = layer.volRaysDecay;
       uniforms[offset + 18] = layer.shadows + layer.mblColoristaLift;
@@ -707,10 +768,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 23] = layer.mblCosmoSkin;
       uniforms[offset + 24] = layer.filmConvertNitrate + layer.halationRadius;
       uniforms[offset + 25] = layer.filmGrain;
-      uniforms[offset + 26] = layer.curveMaster[1]; // P1
-      uniforms[offset + 27] = layer.curveMaster[2]; // P2
-      uniforms[offset + 28] = layer.curveMaster[3]; // P3
-      uniforms[offset + 29] = layer.curveMaster[4]; // P4
+      uniforms[offset + 26] = layer.curveMaster[1];
+      uniforms[offset + 27] = layer.curveMaster[2];
+      uniforms[offset + 28] = layer.curveMaster[3];
+      uniforms[offset + 29] = layer.curveMaster[4];
     }
 
     return uniforms;
@@ -728,7 +789,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // Layer Management Methods
   void _addNewAdjustmentLayer() {
     if (_project.layers.length >= 4) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 4 Adjustment Layers allowed for FP32 performance.')));
@@ -772,7 +832,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Authentic 9 Presets with Full Multi-Layer Setup
+  // Authentic 9 Presets with ZERO Vignette and Clean Physical Bloom
   void _applyPreset(String name) {
     setState(() {
       _project.layers.clear();
@@ -788,6 +848,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             temperature: 7200.0,
             sharpness: 0.25,
             shadows: -0.05,
+            vignette: 0.0,
+            filmGrain: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.22, 0.50, 0.80, 1.0],
           ));
@@ -795,12 +857,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'gojo_bloom',
             name: 'Infinity Cyan Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.90,
+            opacity: 0.85,
             deepGlowIntensity: 0.65,
             deepGlowRadius: 0.70,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 2.0, // Quincy / Infinity Cyan
-            thinStreakIntensity: 0.25,
+            edgeGlowTint: 2.0,
+            thinStreakIntensity: 0.20,
+            vignette: 0.0,
           ));
           break;
 
@@ -814,19 +877,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             sharpness: 0.30,
             shadows: -0.08,
             blendMode: LayerBlendMode.normal,
-            mblMojoTealOrange: 0.25,
+            mblMojoTealOrange: 0.20,
+            vignette: 0.0,
             curveMaster: [0.0, 0.20, 0.49, 0.82, 1.0],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'raiden_glow',
             name: 'Electro Violet Glow',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
+            opacity: 0.80,
             deepGlowIntensity: 0.60,
             deepGlowRadius: 0.60,
             deepGlowThreshold: 0.38,
             edgeGlowTint: 2.0,
             halationRadius: 0.15,
+            vignette: 0.0,
           ));
           break;
 
@@ -839,8 +904,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             brightness: -0.01,
             gamma: 1.05,
             temperature: 5800.0,
-            filmGrain: 0.15,
+            filmGrain: 0.04,
             shadows: 0.04,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.03, 0.26, 0.50, 0.76, 0.98],
           ));
@@ -852,6 +918,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.30,
             deepGlowRadius: 0.70,
             deepGlowThreshold: 0.45,
+            vignette: 0.0,
           ));
           break;
 
@@ -864,6 +931,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             temperature: 6400.0,
             sharpness: 0.38,
             shadows: -0.10,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.21, 0.50, 0.81, 1.0],
           ));
@@ -875,6 +943,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.40,
             deepGlowRadius: 0.50,
             deepGlowThreshold: 0.48,
+            vignette: 0.0,
           ));
           break;
 
@@ -886,6 +955,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             saturation: 1.16,
             temperature: 6600.0,
             sharpness: 0.32,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.20, 0.50, 0.84, 1.0],
           ));
@@ -893,12 +963,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'pot2_rays',
             name: 'Mahoraga Rays & Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.95,
+            opacity: 0.90,
             deepGlowIntensity: 0.65,
             deepGlowRadius: 0.75,
             deepGlowThreshold: 0.36,
-            edgeGlowTint: 1.0, // Warm Gold
-            volRaysLength: 0.25,
+            edgeGlowTint: 1.0,
+            volRaysLength: 0.20,
+            vignette: 0.0,
           ));
           break;
 
@@ -909,8 +980,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             contrast: 1.24,
             saturation: 1.06,
             temperature: 6200.0,
-            sharpness: 0.45,
+            sharpness: 0.40,
             shadows: -0.06,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.22, 0.50, 0.82, 1.0],
           ));
@@ -918,11 +990,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'maki_streak',
             name: 'Blade Flare & Glow',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.42,
+            opacity: 0.75,
+            deepGlowIntensity: 0.40,
             deepGlowRadius: 0.55,
             deepGlowThreshold: 0.40,
-            thinStreakIntensity: 0.30,
+            thinStreakIntensity: 0.25,
+            vignette: 0.0,
           ));
           break;
 
@@ -935,6 +1008,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             temperature: 6000.0,
             shadows: -0.12,
             sharpness: 0.35,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.18, 0.48, 0.84, 1.0],
           ));
@@ -942,13 +1016,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'sukuna_crimson',
             name: 'Crimson Halation & Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.90,
+            opacity: 0.85,
             deepGlowIntensity: 0.55,
             deepGlowRadius: 0.58,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 4.0, // Crimson
-            halationRadius: 0.30,
+            edgeGlowTint: 4.0,
+            halationRadius: 0.25,
             halationWarmth: 0.80,
+            vignette: 0.0,
           ));
           break;
 
@@ -961,6 +1036,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             brightness: 0.03,
             gamma: 0.96,
             mblCosmoSkin: 0.35,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.02, 0.26, 0.52, 0.84, 1.0],
           ));
@@ -968,11 +1044,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'bina_glow',
             name: 'Radiant Soft Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.70,
+            opacity: 0.80,
+            deepGlowIntensity: 0.65,
             deepGlowRadius: 0.80,
             deepGlowThreshold: 0.32,
             edgeGlowTint: 0.0,
+            vignette: 0.0,
           ));
           break;
 
@@ -983,9 +1060,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             contrast: 1.18,
             saturation: 0.88,
             temperature: 5900.0,
-            filmGrain: 0.20,
-            filmConvertNitrate: 0.35,
+            filmGrain: 0.05,
+            filmConvertNitrate: 0.25,
             shadows: 0.02,
+            vignette: 0.0,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.04, 0.25, 0.50, 0.78, 0.98],
           ));
@@ -993,10 +1071,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'vintage_glow',
             name: 'Warm Halation Softness',
             blendMode: LayerBlendMode.softLight,
-            opacity: 0.65,
+            opacity: 0.60,
             deepGlowIntensity: 0.25,
             deepGlowRadius: 0.60,
             deepGlowThreshold: 0.45,
+            vignette: 0.0,
           ));
           break;
       }
@@ -1015,7 +1094,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     String selectedContainer = 'MP4';
-    String selectedCodec = 'H.265 (HEVC)';
+    String selectedCodec = 'H.264 (Hardware MediaCodec)';
     String selectedBitDepth = '10-bit';
     String selectedRes = '1080p';
     String selectedFps = '60fps';
@@ -1026,6 +1105,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final fpsOptions = ['24fps', '30fps', '60fps', '90fps'];
     final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps', '80 Mbps', '120 Mbps'];
 
+    final accent = gCustomAccentColor.value;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0F0F14),
@@ -1035,18 +1116,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         return StatefulBuilder(
           builder: (context, setStateModal) {
             final targetDims = _calculateTargetDimensions(selectedRes, _project.aspectRatio);
-            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (AVC)'];
+            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (Hardware MediaCodec)'];
 
             if (!availableCodecs.contains(selectedCodec)) {
               selectedCodec = availableCodecs.first;
             }
-
-            if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
-              selectedBitDepth = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '10-bit') ? '10-bit' : '8-bit';
-            }
-
-            final is10Supported = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '10-bit');
-            final is16Supported = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, '16-bit');
 
             return Padding(
               padding: const EdgeInsets.all(20),
@@ -1064,7 +1138,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     Text(
                       '${targetDims['width']} x ${targetDims['height']} • Audio: ${ExportMatrix.getAudioCodec(selectedContainer)} • Layers: ${_project.layers.length}',
-                      style: const TextStyle(color: kAquamarine, fontSize: 11, fontWeight: FontWeight.bold),
+                      style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
 
@@ -1075,14 +1149,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: containers.map((c) => ChoiceChip(
                         label: Text(c),
                         selected: selectedContainer == c,
-                        selectedColor: kAquamarine,
+                        selectedColor: accent,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
                           if (sel) {
                             setStateModal(() {
                               selectedContainer = c;
-                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (AVC)']).first;
+                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (Hardware MediaCodec)']).first;
                             });
                           }
                         },
@@ -1097,7 +1171,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: availableCodecs.map((codec) => ChoiceChip(
                         label: Text(codec),
                         selected: selectedCodec == codec,
-                        selectedColor: kAquamarine,
+                        selectedColor: accent,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1115,7 +1189,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('8-bit'),
                             selected: selectedBitDepth == '8-bit',
-                            selectedColor: kAquamarine,
+                            selectedColor: accent,
                             backgroundColor: const Color(0xFF18181E),
                             labelStyle: TextStyle(color: selectedBitDepth == '8-bit' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                             onSelected: (_) => setStateModal(() => selectedBitDepth = '8-bit'),
@@ -1126,14 +1200,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('10-bit'),
                             selected: selectedBitDepth == '10-bit',
-                            selectedColor: kAquamarine,
-                            disabledColor: const Color(0xFF121215),
+                            selectedColor: accent,
                             backgroundColor: const Color(0xFF18181E),
-                            labelStyle: TextStyle(
-                              color: !is10Supported ? Colors.white24 : (selectedBitDepth == '10-bit' ? Colors.black : Colors.white),
-                              fontWeight: FontWeight.bold,
-                            ),
-                            onSelected: is10Supported ? (_) => setStateModal(() => selectedBitDepth = '10-bit') : null,
+                            labelStyle: TextStyle(color: selectedBitDepth == '10-bit' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (_) => setStateModal(() => selectedBitDepth = '10-bit'),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1141,14 +1211,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: ChoiceChip(
                             label: const Text('16-bit (MKV)'),
                             selected: selectedBitDepth == '16-bit',
-                            selectedColor: kAquamarine,
-                            disabledColor: const Color(0xFF121215),
+                            selectedColor: accent,
                             backgroundColor: const Color(0xFF18181E),
-                            labelStyle: TextStyle(
-                              color: !is16Supported ? Colors.white24 : (selectedBitDepth == '16-bit' ? Colors.black : Colors.white),
-                              fontWeight: FontWeight.bold,
-                            ),
-                            onSelected: is16Supported ? (_) => setStateModal(() => selectedBitDepth = '16-bit') : null,
+                            labelStyle: TextStyle(color: selectedBitDepth == '16-bit' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (_) => setStateModal(() => selectedBitDepth = '16-bit'),
                           ),
                         ),
                       ],
@@ -1162,7 +1228,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: resolutions.map((res) => ChoiceChip(
                         label: Text(res),
                         selected: selectedRes == res,
-                        selectedColor: kAquamarine,
+                        selectedColor: accent,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1179,7 +1245,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: fpsOptions.map((fps) => ChoiceChip(
                         label: Text(fps),
                         selected: selectedFps == fps,
-                        selectedColor: kAquamarine,
+                        selectedColor: accent,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1196,7 +1262,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       children: bitrateOptions.map((bit) => ChoiceChip(
                         label: Text(bit),
                         selected: selectedBitrate == bit,
-                        selectedColor: kAquamarine,
+                        selectedColor: accent,
                         backgroundColor: const Color(0xFF18181E),
                         labelStyle: TextStyle(color: selectedBitrate == bit ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                         onSelected: (sel) {
@@ -1214,7 +1280,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _exportVideo(selectedRes, selectedFps, selectedBitrate, selectedContainer, selectedCodec, selectedBitDepth);
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: kAquamarine,
+                          backgroundColor: accent,
                           foregroundColor: Colors.black,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -1478,6 +1544,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Widget _buildSliderRow(String title, double val, double min, double max, ValueChanged<double> onChanged) {
+    final accent = gCustomAccentColor.value;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: Column(
@@ -1489,16 +1557,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Text(title, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
               Text(
                 val.toStringAsFixed(2),
-                style: const TextStyle(color: kAquamarine, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                style: TextStyle(color: accent, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
               ),
             ],
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 2.5,
-              activeTrackColor: kAquamarine,
+              activeTrackColor: accent,
               inactiveTrackColor: Colors.white12,
-              thumbColor: kAquamarine,
+              thumbColor: accent,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
             ),
@@ -1518,15 +1586,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // The Visible Adjustment Layer Timeline Bar
   Widget _buildAdjustmentLayerBar() {
+    final accent = gCustomAccentColor.value;
+
     return Container(
       color: const Color(0xFF0D0D12),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.add_box_rounded, color: kAquamarine, size: 22),
+            icon: Icon(Icons.add_box_rounded, color: accent, size: 22),
             tooltip: 'Add Adjustment Layer (Max 4)',
             onPressed: _addNewAdjustmentLayer,
           ),
@@ -1545,9 +1614,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isSel ? kAquamarine.withOpacity(0.18) : kCardDark,
+                        color: isSel ? accent.withOpacity(0.18) : kCardDark,
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: isSel ? kAquamarine : Colors.white12),
+                        border: Border.all(color: isSel ? accent : Colors.white12),
                       ),
                       child: Row(
                         children: [
@@ -1558,7 +1627,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             },
                             child: Icon(
                               l.isEnabled ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                              color: l.isEnabled ? (isSel ? kAquamarine : Colors.white70) : Colors.white24,
+                              color: l.isEnabled ? (isSel ? accent : Colors.white70) : Colors.white24,
                               size: 16,
                             ),
                           ),
@@ -1590,8 +1659,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // Active Layer Controls (Opacity & Blend Mode Header)
   Widget _buildLayerSettingsHeader() {
+    final accent = gCustomAccentColor.value;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       color: const Color(0xFF14141A),
@@ -1599,7 +1669,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         children: [
           Text(
             _cur.name.toUpperCase(),
-            style: const TextStyle(color: kAquamarine, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.8),
+            style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.8),
           ),
           const SizedBox(width: 12),
           DropdownButton<LayerBlendMode>(
@@ -1628,9 +1698,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 2.0,
-                activeTrackColor: kAquamarine,
+                activeTrackColor: accent,
                 inactiveTrackColor: Colors.white12,
-                thumbColor: kAquamarine,
+                thumbColor: accent,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
               ),
               child: Slider(
@@ -1652,87 +1722,126 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.projectName ?? 'AEReality Editor'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.folder_open_rounded, color: kGold),
-            tooltip: 'Import New Footage/Art',
+    final accent = gCustomAccentColor.value;
+
+    return WillPopScope(
+      onWillPop: () async {
+        if (_controller != null) {
+          await _controller!.pause();
+          await _controller!.dispose();
+          _controller = null;
+        }
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
             onPressed: () async {
-              final result = await FilePicker.platform.pickFiles(
-                type: FileType.custom,
-                allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
-              );
-              if (result != null && result.files.single.path != null) {
-                _loadMedia(result.files.single.path!);
+              if (_controller != null) {
+                await _controller!.pause();
+                await _controller!.dispose();
+                _controller = null;
               }
+              Navigator.pop(context);
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.save_rounded, color: Colors.white70),
-            tooltip: 'Save Session',
-            onPressed: () async {
-              await _autoSaveProject();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project saved successfully!'), backgroundColor: Colors.teal));
-              }
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            tooltip: 'Reset Current Layer',
-            onPressed: _resetCurrentLayer,
-          ),
-          IconButton(
-            icon: const Icon(Icons.movie_creation_outlined, color: kAquamarine),
-            tooltip: 'Master Render Pipeline',
-            onPressed: _showExportSheet,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            flex: _isFullScreen ? 10 : 5,
-            child: Center(
-              child: AspectRatio(
-                aspectRatio: _getAspectRatioValue(_project.aspectRatio),
-                child: Container(
-                  margin: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white10),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
-                        VideoPlayer(_controller!),
+          title: Text(widget.projectName ?? 'AEReality Editor'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.folder_open_rounded, color: kGold),
+              tooltip: 'Import New Footage/Art',
+              onPressed: () async {
+                final result = await FilePicker.platform.pickFiles(
+                  type: FileType.custom,
+                  allowedExtensions: ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'],
+                );
+                if (result != null && result.files.single.path != null) {
+                  _loadMedia(result.files.single.path!);
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.save_rounded, color: Colors.white70),
+              tooltip: 'Save Session',
+              onPressed: () async {
+                await _autoSaveProject();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project saved successfully!'), backgroundColor: Colors.teal));
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+              tooltip: 'Reset Current Layer',
+              onPressed: _resetCurrentLayer,
+            ),
+            IconButton(
+              icon: Icon(Icons.movie_creation_outlined, color: accent),
+              tooltip: 'Master Render Pipeline',
+              onPressed: _showExportSheet,
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              flex: _isFullScreen ? 10 : 5,
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: _getAspectRatioValue(_project.aspectRatio),
+                  child: Container(
+                    margin: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
+                          VideoPlayer(_controller!),
 
-                      if (_processedImage != null)
-                        RawImage(image: _processedImage, fit: BoxFit.contain),
+                        if (_processedImage != null)
+                          RawImage(image: _processedImage, fit: BoxFit.contain),
 
-                      Positioned(
-                        bottom: 10,
-                        left: 10,
-                        child: Row(
-                          children: [
-                            if (!_project.isImage && _controller != null)
+                        Positioned(
+                          bottom: 10,
+                          left: 10,
+                          child: Row(
+                            children: [
+                              if (!_project.isImage && _controller != null)
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      if (_controller!.value.isPlaying) {
+                                        _controller!.pause();
+                                        _isPlaying = false;
+                                      } else {
+                                        _controller!.play();
+                                        _isPlaying = true;
+                                      }
+                                    });
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black54,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.white24),
+                                    ),
+                                    child: Icon(
+                                      _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(width: 8),
                               GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    if (_controller!.value.isPlaying) {
-                                      _controller!.pause();
-                                      _isPlaying = false;
-                                    } else {
-                                      _controller!.play();
-                                      _isPlaying = true;
-                                    }
-                                  });
-                                },
+                                onTap: () => setState(() => _isFullScreen = !_isFullScreen),
                                 child: Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
@@ -1741,84 +1850,68 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     border: Border.all(color: Colors.white24),
                                   ),
                                   child: Icon(
-                                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                    _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
                                     color: Colors.white,
                                     size: 18,
                                   ),
                                 ),
                               ),
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: () => setState(() => _isFullScreen = !_isFullScreen),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.black54,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white24),
-                                ),
-                                child: Icon(
-                                  _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
 
-          if (!_isFullScreen) ...[
-            _buildAdjustmentLayerBar(),
-            _buildLayerSettingsHeader(),
+            if (!_isFullScreen) ...[
+              _buildAdjustmentLayerBar(),
+              _buildLayerSettingsHeader(),
 
-            Container(
-              color: kSurfaceDark,
-              child: TabBar(
-                controller: _tabController,
-                indicatorColor: kAquamarine,
-                labelColor: kAquamarine,
-                unselectedLabelColor: Colors.white38,
-                isScrollable: true,
-                labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                tabs: const [
-                  Tab(text: 'PRESETS'),
-                  Tab(text: 'AE KNOCKOFFS'),
-                  Tab(text: 'GRADE'),
-                  Tab(text: 'CURVES'),
-                  Tab(text: 'GLOWS'),
-                  Tab(text: 'SAPPHIRE/AE'),
-                  Tab(text: 'MAGIC BULLET'),
-                ],
-              ),
-            ),
-
-            Expanded(
-              flex: 4,
-              child: Container(
-                color: kBackgroundDark,
-                child: TabBarView(
+              Container(
+                color: kSurfaceDark,
+                child: TabBar(
                   controller: _tabController,
-                  children: [
-                    _buildPresetsTab(),
-                    _buildAEKnockoffsTab(),
-                    _buildGradingTab(),
-                    _buildCurvesTab(),
-                    _buildGlowsTab(),
-                    _buildSapphireTab(),
-                    _buildMagicBulletTab(),
+                  indicatorColor: accent,
+                  labelColor: accent,
+                  unselectedLabelColor: Colors.white38,
+                  isScrollable: true,
+                  labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                  tabs: const [
+                    Tab(text: 'PRESETS'),
+                    Tab(text: 'AE KNOCKOFFS'),
+                    Tab(text: 'GRADE'),
+                    Tab(text: 'CURVES'),
+                    Tab(text: 'GLOWS'),
+                    Tab(text: 'SAPPHIRE/AE'),
+                    Tab(text: 'MAGIC BULLET'),
                   ],
                 ),
               ),
-            ),
+
+              Expanded(
+                flex: 4,
+                child: Container(
+                  color: kBackgroundDark,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildPresetsTab(),
+                      _buildAEKnockoffsTab(),
+                      _buildGradingTab(),
+                      _buildCurvesTab(),
+                      _buildGlowsTab(),
+                      _buildSapphireTab(),
+                      _buildMagicBulletTab(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1882,33 +1975,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Widget _buildAEKnockoffsTab() {
+    final accent = gCustomAccentColor.value;
+
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        const Text('DEEP GLOW SUITE (INVERSE-SQUARE NO-RING BLOOM)', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('DEEP GLOW SUITE (INVERSE-SQUARE NO-RING BLOOM)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 1.5, (v) => setState(() => _cur.deepGlowIntensity = v)),
         _buildSliderRow('Deep Glow Radius (Falloff)', _cur.deepGlowRadius, 0.1, 1.0, (v) => setState(() => _cur.deepGlowRadius = v)),
         _buildSliderRow('Soft Knee Threshold', _cur.deepGlowThreshold, 0.1, 0.9, (v) => setState(() => _cur.deepGlowThreshold = v)),
 
         const SizedBox(height: 14),
-        const Text('EDGE-TARGETED CHROMATIC ABERRATION', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('EDGE-TARGETED CHROMATIC ABERRATION', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Line-Art Dispersion Strength', _cur.lineChromaStrength, 0.0, 1.0, (v) => setState(() => _cur.lineChromaStrength = v)),
 
         const SizedBox(height: 14),
-        const Text('SAPPHIRE S_EDGERAYS (VOLUMETRIC OCCLUDED SHAFTS)', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('SAPPHIRE S_EDGERAYS (VOLUMETRIC OCCLUDED SHAFTS)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Ray Shaft Length', _cur.volRaysLength, 0.0, 1.0, (v) => setState(() => _cur.volRaysLength = v)),
         _buildSliderRow('Exponential Ray Decay', _cur.volRaysDecay, 0.70, 0.98, (v) => setState(() => _cur.volRaysDecay = v)),
 
         const SizedBox(height: 14),
-        const Text('SAPPHIRE 1D ANAMORPHIC STREAK FLARE', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('SAPPHIRE 1D ANAMORPHIC STREAK FLARE', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Thin Streak Flare Intensity', _cur.thinStreakIntensity, 0.0, 1.0, (v) => setState(() => _cur.thinStreakIntensity = v)),
 
         const SizedBox(height: 14),
-        const Text('FILM HALATION & SUBTRACTIVE DENSITY', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('FILM HALATION & SUBTRACTIVE DENSITY', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         _buildSliderRow('Edge Red/Peach Halation Bleed', _cur.halationRadius, 0.0, 1.0, (v) => setState(() => _cur.halationRadius = v)),
         _buildSliderRow('Halation Warmth', _cur.halationWarmth, 0.0, 1.0, (v) => setState(() => _cur.halationWarmth = v)),
@@ -1929,8 +2024,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Hue Shift', _cur.hue, -0.5, 0.5, (v) => setState(() => _cur.hue = v)),
         _buildSliderRow('Exposure / Brightness', _cur.brightness, -0.5, 0.5, (v) => setState(() => _cur.brightness = v)),
         _buildSliderRow('Micro-Sharpness', _cur.sharpness, 0.0, 1.0, (v) => setState(() => _cur.sharpness = v)),
-        _buildSliderRow('Vignette', _cur.vignette, 0.0, 0.5, (v) => setState(() => _cur.vignette = v)),
-        _buildSliderRow('Film Grain & Micro-Texture', _cur.filmGrain, 0.0, 1.0, (v) => setState(() => _cur.filmGrain = v)),
+        _buildSliderRow('Vignette (Radial)', _cur.vignette, 0.0, 0.5, (v) => setState(() => _cur.vignette = v)),
+        _buildSliderRow('Film Grain', _cur.filmGrain, 0.0, 0.3, (v) => setState(() => _cur.filmGrain = v)),
         _buildSliderRow('Color Temperature (K)', _cur.temperature, 3000.0, 9500.0, (v) => setState(() => _cur.temperature = v)),
       ],
     );
@@ -2035,7 +2130,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             _buildTintChip('Gold / Warm', 1.0),
             _buildTintChip('Quincy Cyan', 2.0),
             _buildTintChip('Crimson', 4.0),
-            _buildTintChip('Black / Ink Shadow', 3.0),
+            _buildTintChip('Black / Ink Shadow', 5.0),
           ],
         ),
         const SizedBox(height: 14),
@@ -2048,10 +2143,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Widget _buildTintChip(String title, double code) {
     final isSel = _cur.edgeGlowTint == code;
+    final accent = gCustomAccentColor.value;
+
     return ChoiceChip(
       label: Text(title),
       selected: isSel,
-      selectedColor: kAquamarine,
+      selectedColor: accent,
       backgroundColor: kCardDark,
       labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 11),
       onSelected: (_) {
@@ -2063,6 +2160,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Widget _buildSapphireTab() {
+    final accent = gCustomAccentColor.value;
+
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
@@ -2074,7 +2173,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               child: ChoiceChip(
                 label: const Text('Off (Linear)'),
                 selected: _project.tonemapMode == 0.0,
-                selectedColor: kAquamarine,
+                selectedColor: accent,
                 backgroundColor: kCardDark,
                 labelStyle: TextStyle(color: _project.tonemapMode == 0.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                 onSelected: (_) {
@@ -2089,7 +2188,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               child: ChoiceChip(
                 label: const Text('Reinhard'),
                 selected: _project.tonemapMode == 1.0,
-                selectedColor: kAquamarine,
+                selectedColor: accent,
                 backgroundColor: kCardDark,
                 labelStyle: TextStyle(color: _project.tonemapMode == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                 onSelected: (_) {
@@ -2104,7 +2203,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               child: ChoiceChip(
                 label: const Text('ACES Filmic'),
                 selected: _project.tonemapMode == 2.0,
-                selectedColor: kAquamarine,
+                selectedColor: accent,
                 backgroundColor: kCardDark,
                 labelStyle: TextStyle(color: _project.tonemapMode == 2.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                 onSelected: (_) {
@@ -2124,10 +2223,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Widget _buildMagicBulletTab() {
+    final accent = gCustomAccentColor.value;
+
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        const Text('MAGIC BULLET SUITE MODULES', style: TextStyle(color: kAquamarine, fontSize: 10, fontWeight: FontWeight.bold)),
+        Text('MAGIC BULLET SUITE MODULES', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         _buildSliderRow('MB Cosmo (Skin & Line Smoothing)', _cur.mblCosmoSkin, 0.0, 1.0, (v) => setState(() => _cur.mblCosmoSkin = v)),
         _buildSliderRow('MB Mojo (Teal Shadows & Orange Highlights)', _cur.mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _cur.mblMojoTealOrange = v)),
@@ -2149,7 +2250,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ColoristaWheel(
               label: 'GAMMA (MIDS)',
               value: _cur.mblColoristaGamma,
-              accentColor: kAquamarine,
+              accentColor: accent,
               onChanged: (v) {
                 setState(() => _cur.mblColoristaGamma = v);
                 _applyGrade();
