@@ -5,7 +5,7 @@
 #include <vector>
 #include <cmath>
 
-#define LOG_TAG "VulkanProcessor"
+#define LOG_TAG "ShadelyVulkan"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
@@ -25,7 +25,7 @@ static VkPipeline gComputePipeline = VK_NULL_HANDLE;
 
 static bool gInitialized = false;
 
-// Helper to find compatible memory types
+// Helper: Query compatible memory type index with required property flags
 static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(gPhysicalDevice, &memProperties);
@@ -38,7 +38,7 @@ static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags proper
     return 0;
 }
 
-// Helper to allocate GPU buffers with host visibility and coherent caching
+// Helper: Allocate GPU buffers (SSBOs and UBOs) with host visibility and coherent caching
 static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
                          VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo{};
@@ -48,7 +48,7 @@ static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPr
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(gDevice, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        LOGE("Failed to create buffer!");
+        LOGE("Failed to create Vulkan buffer of size: %zu", (size_t)size);
         return false;
     }
 
@@ -61,7 +61,7 @@ static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPr
     allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
 
     if (vkAllocateMemory(gDevice, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        LOGE("Failed to allocate buffer memory!");
+        LOGE("Failed to allocate buffer device memory!");
         return false;
     }
 
@@ -77,9 +77,9 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
     // 1. Create Vulkan Instance
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "AEReality Studio Engine";
+    appInfo.pApplicationName = "Shadely Core Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "AEReality Compute";
+    appInfo.pEngineName = "Shadely Compute";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
@@ -120,7 +120,7 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
     }
 
     if (!foundQueue) {
-        LOGE("No compute queue found!");
+        LOGE("No dedicated compute queue found!");
         return 0;
     }
 
@@ -166,7 +166,10 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
         return 0;
     }
 
-    // 7. Descriptor Set Layout (Binding 0: In Buffer, Binding 1: Out Buffer, Binding 2: Uniform Buffer)
+    // 7. Descriptor Set Layout
+    // Binding 0: Input Image Storage Buffer (SSBO)
+    // Binding 1: Output Image Storage Buffer (SSBO)
+    // Binding 2: Layer & Engine Uniform Buffer (UBO)
     VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -219,7 +222,7 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
     }
 
     gInitialized = true;
-    LOGI("Vulkan Compute Pipeline initialized successfully (IEEE FP32 Engine)");
+    LOGI("Shadely Vulkan Pipeline Initialized Successfully (IEEE 754 FP32 Pipeline)");
     return 1;
 }
 
@@ -246,9 +249,9 @@ static void process_image_core(
         return;
     }
 
-    VkDeviceSize inSize = inWidth * inHeight * 4 * sizeof(uint8_t);
-    VkDeviceSize outSize = outWidth * outHeight * 4 * sizeof(uint8_t);
-    VkDeviceSize uniformSize = uniformCount * sizeof(float);
+    VkDeviceSize inSize = (VkDeviceSize)inWidth * inHeight * 4 * sizeof(uint8_t);
+    VkDeviceSize outSize = (VkDeviceSize)outWidth * outHeight * 4 * sizeof(uint8_t);
+    VkDeviceSize uniformSize = (VkDeviceSize)uniformCount * sizeof(float);
 
     VkBuffer inBuffer, outBuffer, uBuffer;
     VkDeviceMemory inMem, outMem, uMem;
@@ -265,8 +268,8 @@ static void process_image_core(
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  uBuffer, uMem);
 
-    // Map input and uniforms with explicit cache flush
-    void* data;
+    // Map input and uniforms with cache flushing
+    void* data = nullptr;
     vkMapMemory(gDevice, inMem, 0, inSize, 0, &data);
     std::memcpy(data, inputBytes, inSize);
     VkMappedMemoryRange inRange{};
@@ -287,7 +290,7 @@ static void process_image_core(
     vkFlushMappedMemoryRanges(gDevice, 1, &uRange);
     vkUnmapMemory(gDevice, uMem);
 
-    // Allocate Descriptor Set
+    // Descriptor Pool & Sets
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 2;
@@ -340,7 +343,7 @@ static void process_image_core(
 
     vkUpdateDescriptorSets(gDevice, 3, writes, 0, nullptr);
 
-    // Record and Execute Command Buffer
+    // Command Buffer recording and execution
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdAllocInfo.commandPool = gCommandPool;
@@ -369,12 +372,10 @@ static void process_image_core(
     submitInfo.pCommandBuffers = &cmd;
 
     vkQueueSubmit(gComputeQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    
-    // Complete GPU Wait Idle to ensure all compute writes finish before CPU reads
     vkQueueWaitIdle(gComputeQueue);
     vkDeviceWaitIdle(gDevice);
 
-    // Read back output with explicit cache invalidate
+    // Read back output with memory invalidation
     vkMapMemory(gDevice, outMem, 0, outSize, 0, &data);
     VkMappedMemoryRange range{};
     range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -385,7 +386,7 @@ static void process_image_core(
     std::memcpy(outputBytes, data, outSize);
     vkUnmapMemory(gDevice, outMem);
 
-    // Cleanup per-frame GPU resources
+    // Cleanup resources
     vkFreeCommandBuffers(gDevice, gCommandPool, 1, &cmd);
     vkDestroyDescriptorPool(gDevice, descPool, nullptr);
     vkDestroyBuffer(gDevice, inBuffer, nullptr);
@@ -433,13 +434,13 @@ static void process_image_16_core(
     int uniformCount
 ) {
     if (!gInitialized) {
-        std::memcpy(outputBytes, inputBytes, inWidth * inHeight * 4 * sizeof(uint16_t));
+        std::memcpy(outputBytes, inputBytes, (size_t)inWidth * inHeight * 4 * sizeof(uint16_t));
         return;
     }
 
-    VkDeviceSize inSize = inWidth * inHeight * 4 * sizeof(uint16_t);
-    VkDeviceSize outSize = outWidth * outHeight * 4 * sizeof(uint16_t);
-    VkDeviceSize uniformSize = uniformCount * sizeof(float);
+    VkDeviceSize inSize = (VkDeviceSize)inWidth * inHeight * 4 * sizeof(uint16_t);
+    VkDeviceSize outSize = (VkDeviceSize)outWidth * outHeight * 4 * sizeof(uint16_t);
+    VkDeviceSize uniformSize = (VkDeviceSize)uniformCount * sizeof(float);
 
     VkBuffer inBuffer, outBuffer, uBuffer;
     VkDeviceMemory inMem, outMem, uMem;
@@ -456,7 +457,7 @@ static void process_image_16_core(
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  uBuffer, uMem);
 
-    void* data;
+    void* data = nullptr;
     vkMapMemory(gDevice, inMem, 0, inSize, 0, &data);
     std::memcpy(data, inputBytes, inSize);
     VkMappedMemoryRange inRange{};
