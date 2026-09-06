@@ -1,25 +1,23 @@
-// lib/models.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 enum LayerBlendMode {
   normal,      // 0
-  screen,      // 1 (Essential for S_Glow / Deep Glow)
-  linearAdd,   // 2 (Exposure / Light wrap)
-  overlay,     // 3 (Midtone contrast)
-  softLight,   // 4 (Gentle film grade)
-  multiply,    // 5 (Deep ink shadows)
+  screen,      // 1
+  linearAdd,   // 2
+  overlay,     // 3
+  softLight,   // 4
+  multiply,    // 5
 }
 
 class AdjustmentLayer {
   String id;
   String name;
   bool isEnabled;
-  double opacity; // 0.0 to 1.0
+  double opacity;
   LayerBlendMode blendMode;
 
-  // Grade Parameters (Strictly 0.0 defaults, 1.0 for neutral multipliers)
   double brightness;
   double saturation;
   double contrast;
@@ -31,11 +29,10 @@ class AdjustmentLayer {
   double highlights;
   double blackCrush;
 
-  // AE Knockoffs & Glow Suite (Strictly 0.0 defaults)
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
-  double edgeGlowTint; // 0: Neutral, 1: Gold, 2: Cyan, 3: Dark, 4: Crimson
+  double edgeGlowTint; // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Crimson, 5:Violet
   double thinStreakIntensity;
   double lineChromaStrength;
   double volRaysLength;
@@ -43,7 +40,6 @@ class AdjustmentLayer {
   double halationRadius;
   double halationWarmth;
 
-  // Sapphire / MBL Suite (Strictly 0.0 defaults)
   double sapphireBlendMix;
   double filmConvertNitrate;
   double mblCosmoSkin;
@@ -66,7 +62,6 @@ class AdjustmentLayer {
   double flareAmount;
   double fourColorGradMix;
 
-  // Spline Curves for this layer
   List<double> curveMaster;
   List<double> curveRed;
   List<double> curveGreen;
@@ -299,7 +294,7 @@ class ProjectData {
   String mediaPath;
   bool isImage;
   String aspectRatio;
-  double tonemapMode; // 0: Off (Linear default), 1: Reinhard, 2: ACES Filmic
+  double tonemapMode;
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
 
@@ -307,7 +302,7 @@ class ProjectData {
     required this.mediaPath,
     this.isImage = false,
     this.aspectRatio = "4:5",
-    this.tonemapMode = 0.0, // Default Off
+    this.tonemapMode = 0.0,
     List<AdjustmentLayer>? layers,
     this.activeLayerIndex = 0,
   }) : layers = layers ?? [
@@ -372,7 +367,7 @@ class StoredProject {
 }
 
 class ProjectManager {
-  static const String _storageKey = 'aereality_layers_v7.json';
+  static const String _storageKey = 'aereality_layers_v8.json';
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
