@@ -1,4 +1,3 @@
-// native/vulkan_processor.cpp
 #include <vulkan/vulkan.h>
 #include <android/log.h>
 #include <cstring>
@@ -39,7 +38,7 @@ static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags proper
     return 0;
 }
 
-// Helper to allocate GPU buffers with host visibility
+// Helper to allocate GPU buffers with host visibility and coherent caching
 static bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
                          VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo{};
@@ -167,7 +166,7 @@ static int init_vulkan_core(const uint8_t* shaderBytes, int length, int precisio
         return 0;
     }
 
-    // 7. Descriptor Set Layout (Binding 0: In, Binding 1: Out, Binding 2: Uniforms)
+    // 7. Descriptor Set Layout (Binding 0: In Buffer, Binding 1: Out Buffer, Binding 2: Uniform Buffer)
     VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
