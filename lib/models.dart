@@ -18,6 +18,7 @@ class AdjustmentLayer {
   double opacity;
   LayerBlendMode blendMode;
 
+  // Grade Parameters
   double brightness;
   double saturation;
   double contrast;
@@ -29,24 +30,27 @@ class AdjustmentLayer {
   double highlights;
   double blackCrush;
 
+  // Unsharp Mask Sub-Sliders
+  double unsharpRadius;
+  double unsharpAmount;
+  double unsharpThreshold;
+
+  // Glows & Flares
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
   double edgeGlowTint; // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Crimson, 5:Violet
   double thinStreakIntensity;
+  double thinStreakWidth;
   double lineChromaStrength;
   double volRaysLength;
   double volRaysDecay;
+  double sapphireGlowWidth;
+  double sapphireGlowThreshold;
+
+  // Halation & Vignette
   double halationRadius;
   double halationWarmth;
-
-  double sapphireBlendMix;
-  double filmConvertNitrate;
-  double mblCosmoSkin;
-  double mblMojoTealOrange;
-  double mblColoristaLift;
-  double mblColoristaGamma;
-  double mblColoristaGain;
   double vignette;
   double vignetteBoxed;
   double edgeDarken;
@@ -55,13 +59,13 @@ class AdjustmentLayer {
   double filmGrain;
   double flickerIntensity;
   double flickerSpeed;
+
+  // Depth of Field & Focus Isolation
   double depthOfField;
   double dofFocus;
-  double dofAngle;
-  double anamorphicFlare;
-  double flareAmount;
-  double fourColorGradMix;
+  double backgroundBlur;
 
+  // Spline Curves
   List<double> curveMaster;
   List<double> curveRed;
   List<double> curveGreen;
@@ -83,23 +87,22 @@ class AdjustmentLayer {
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.blackCrush = 0.0,
+    this.unsharpRadius = 0.0,
+    this.unsharpAmount = 0.0,
+    this.unsharpThreshold = 0.0,
     this.deepGlowIntensity = 0.0,
     this.deepGlowRadius = 0.50,
     this.deepGlowThreshold = 0.45,
     this.edgeGlowTint = 0.0,
     this.thinStreakIntensity = 0.0,
+    this.thinStreakWidth = 0.50,
     this.lineChromaStrength = 0.0,
     this.volRaysLength = 0.0,
     this.volRaysDecay = 0.92,
+    this.sapphireGlowWidth = 0.0,
+    this.sapphireGlowThreshold = 0.50,
     this.halationRadius = 0.0,
     this.halationWarmth = 0.50,
-    this.sapphireBlendMix = 0.0,
-    this.filmConvertNitrate = 0.0,
-    this.mblCosmoSkin = 0.0,
-    this.mblMojoTealOrange = 0.0,
-    this.mblColoristaLift = 0.0,
-    this.mblColoristaGamma = 0.0,
-    this.mblColoristaGain = 0.0,
     this.vignette = 0.0,
     this.vignetteBoxed = 0.0,
     this.edgeDarken = 0.0,
@@ -110,10 +113,7 @@ class AdjustmentLayer {
     this.flickerSpeed = 3.0,
     this.depthOfField = 0.0,
     this.dofFocus = 0.50,
-    this.dofAngle = 0.0,
-    this.anamorphicFlare = 0.0,
-    this.flareAmount = 0.50,
-    this.fourColorGradMix = 0.0,
+    this.backgroundBlur = 0.0,
     List<double>? curveMaster,
     List<double>? curveRed,
     List<double>? curveGreen,
@@ -122,66 +122,6 @@ class AdjustmentLayer {
         curveRed = curveRed ?? [0.0, 0.25, 0.5, 0.75, 1.0],
         curveGreen = curveGreen ?? [0.0, 0.25, 0.5, 0.75, 1.0],
         curveBlue = curveBlue ?? [0.0, 0.25, 0.5, 0.75, 1.0];
-
-  AdjustmentLayer copyWith({
-    String? name,
-    bool? isEnabled,
-    double? opacity,
-    LayerBlendMode? blendMode,
-  }) {
-    return AdjustmentLayer(
-      id: id,
-      name: name ?? this.name,
-      isEnabled: isEnabled ?? this.isEnabled,
-      opacity: opacity ?? this.opacity,
-      blendMode: blendMode ?? this.blendMode,
-      brightness: brightness,
-      saturation: saturation,
-      contrast: contrast,
-      sharpness: sharpness,
-      gamma: gamma,
-      hue: hue,
-      temperature: temperature,
-      shadows: shadows,
-      highlights: highlights,
-      blackCrush: blackCrush,
-      deepGlowIntensity: deepGlowIntensity,
-      deepGlowRadius: deepGlowRadius,
-      deepGlowThreshold: deepGlowThreshold,
-      edgeGlowTint: edgeGlowTint,
-      thinStreakIntensity: thinStreakIntensity,
-      lineChromaStrength: lineChromaStrength,
-      volRaysLength: volRaysLength,
-      volRaysDecay: volRaysDecay,
-      halationRadius: halationRadius,
-      halationWarmth: halationWarmth,
-      sapphireBlendMix: sapphireBlendMix,
-      filmConvertNitrate: filmConvertNitrate,
-      mblCosmoSkin: mblCosmoSkin,
-      mblMojoTealOrange: mblMojoTealOrange,
-      mblColoristaLift: mblColoristaLift,
-      mblColoristaGamma: mblColoristaGamma,
-      mblColoristaGain: mblColoristaGain,
-      vignette: vignette,
-      vignetteBoxed: vignetteBoxed,
-      edgeDarken: edgeDarken,
-      darkOutlines: darkOutlines,
-      denoise: denoise,
-      filmGrain: filmGrain,
-      flickerIntensity: flickerIntensity,
-      flickerSpeed: flickerSpeed,
-      depthOfField: depthOfField,
-      dofFocus: dofFocus,
-      dofAngle: dofAngle,
-      anamorphicFlare: anamorphicFlare,
-      flareAmount: flareAmount,
-      fourColorGradMix: fourColorGradMix,
-      curveMaster: List.from(curveMaster),
-      curveRed: List.from(curveRed),
-      curveGreen: List.from(curveGreen),
-      curveBlue: List.from(curveBlue),
-    );
-  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -199,23 +139,22 @@ class AdjustmentLayer {
         'shadows': shadows,
         'highlights': highlights,
         'blackCrush': blackCrush,
+        'unsharpRadius': unsharpRadius,
+        'unsharpAmount': unsharpAmount,
+        'unsharpThreshold': unsharpThreshold,
         'deepGlowIntensity': deepGlowIntensity,
         'deepGlowRadius': deepGlowRadius,
         'deepGlowThreshold': deepGlowThreshold,
         'edgeGlowTint': edgeGlowTint,
         'thinStreakIntensity': thinStreakIntensity,
+        'thinStreakWidth': thinStreakWidth,
         'lineChromaStrength': lineChromaStrength,
         'volRaysLength': volRaysLength,
         'volRaysDecay': volRaysDecay,
+        'sapphireGlowWidth': sapphireGlowWidth,
+        'sapphireGlowThreshold': sapphireGlowThreshold,
         'halationRadius': halationRadius,
         'halationWarmth': halationWarmth,
-        'sapphireBlendMix': sapphireBlendMix,
-        'filmConvertNitrate': filmConvertNitrate,
-        'mblCosmoSkin': mblCosmoSkin,
-        'mblMojoTealOrange': mblMojoTealOrange,
-        'mblColoristaLift': mblColoristaLift,
-        'mblColoristaGamma': mblColoristaGamma,
-        'mblColoristaGain': mblColoristaGain,
         'vignette': vignette,
         'vignetteBoxed': vignetteBoxed,
         'edgeDarken': edgeDarken,
@@ -226,10 +165,7 @@ class AdjustmentLayer {
         'flickerSpeed': flickerSpeed,
         'depthOfField': depthOfField,
         'dofFocus': dofFocus,
-        'dofAngle': dofAngle,
-        'anamorphicFlare': anamorphicFlare,
-        'flareAmount': flareAmount,
-        'fourColorGradMix': fourColorGradMix,
+        'backgroundBlur': backgroundBlur,
         'curveMaster': curveMaster,
         'curveRed': curveRed,
         'curveGreen': curveGreen,
@@ -252,23 +188,22 @@ class AdjustmentLayer {
         shadows: (json['shadows'] ?? 0.0).toDouble(),
         highlights: (json['highlights'] ?? 0.0).toDouble(),
         blackCrush: (json['blackCrush'] ?? 0.0).toDouble(),
+        unsharpRadius: (json['unsharpRadius'] ?? 0.0).toDouble(),
+        unsharpAmount: (json['unsharpAmount'] ?? 0.0).toDouble(),
+        unsharpThreshold: (json['unsharpThreshold'] ?? 0.0).toDouble(),
         deepGlowIntensity: (json['deepGlowIntensity'] ?? 0.0).toDouble(),
         deepGlowRadius: (json['deepGlowRadius'] ?? 0.50).toDouble(),
         deepGlowThreshold: (json['deepGlowThreshold'] ?? 0.45).toDouble(),
         edgeGlowTint: (json['edgeGlowTint'] ?? 0.0).toDouble(),
         thinStreakIntensity: (json['thinStreakIntensity'] ?? 0.0).toDouble(),
+        thinStreakWidth: (json['thinStreakWidth'] ?? 0.50).toDouble(),
         lineChromaStrength: (json['lineChromaStrength'] ?? 0.0).toDouble(),
         volRaysLength: (json['volRaysLength'] ?? 0.0).toDouble(),
         volRaysDecay: (json['volRaysDecay'] ?? 0.92).toDouble(),
+        sapphireGlowWidth: (json['sapphireGlowWidth'] ?? 0.0).toDouble(),
+        sapphireGlowThreshold: (json['sapphireGlowThreshold'] ?? 0.50).toDouble(),
         halationRadius: (json['halationRadius'] ?? 0.0).toDouble(),
         halationWarmth: (json['halationWarmth'] ?? 0.50).toDouble(),
-        sapphireBlendMix: (json['sapphireBlendMix'] ?? 0.0).toDouble(),
-        filmConvertNitrate: (json['filmConvertNitrate'] ?? 0.0).toDouble(),
-        mblCosmoSkin: (json['mblCosmoSkin'] ?? 0.0).toDouble(),
-        mblMojoTealOrange: (json['mblMojoTealOrange'] ?? 0.0).toDouble(),
-        mblColoristaLift: (json['mblColoristaLift'] ?? 0.0).toDouble(),
-        mblColoristaGamma: (json['mblColoristaGamma'] ?? 0.0).toDouble(),
-        mblColoristaGain: (json['mblColoristaGain'] ?? 0.0).toDouble(),
         vignette: (json['vignette'] ?? 0.0).toDouble(),
         vignetteBoxed: (json['vignetteBoxed'] ?? 0.0).toDouble(),
         edgeDarken: (json['edgeDarken'] ?? 0.0).toDouble(),
@@ -279,10 +214,7 @@ class AdjustmentLayer {
         flickerSpeed: (json['flickerSpeed'] ?? 3.0).toDouble(),
         depthOfField: (json['depthOfField'] ?? 0.0).toDouble(),
         dofFocus: (json['dofFocus'] ?? 0.50).toDouble(),
-        dofAngle: (json['dofAngle'] ?? 0.0).toDouble(),
-        anamorphicFlare: (json['anamorphicFlare'] ?? 0.0).toDouble(),
-        flareAmount: (json['flareAmount'] ?? 0.50).toDouble(),
-        fourColorGradMix: (json['fourColorGradMix'] ?? 0.0).toDouble(),
+        backgroundBlur: (json['backgroundBlur'] ?? 0.0).toDouble(),
         curveMaster: (json['curveMaster'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
         curveGreen: (json['curveGreen'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
@@ -307,10 +239,11 @@ class ProjectData {
     this.activeLayerIndex = 0,
   }) : layers = layers ?? [
           AdjustmentLayer(id: 'layer_base', name: 'Base Grade', blendMode: LayerBlendMode.normal),
-          AdjustmentLayer(id: 'layer_glow', name: 'Deep Glow', blendMode: LayerBlendMode.screen),
         ];
 
-  AdjustmentLayer get currentLayer => layers[activeLayerIndex.clamp(0, layers.length - 1)];
+  AdjustmentLayer get currentLayer => layers.isNotEmpty 
+      ? layers[activeLayerIndex.clamp(0, layers.length - 1)]
+      : AdjustmentLayer(id: 'empty', name: 'Passthrough', isEnabled: false);
 
   Map<String, dynamic> toJson() => {
         'mediaPath': mediaPath,
@@ -322,7 +255,7 @@ class ProjectData {
       };
 
   factory ProjectData.fromJson(Map<String, dynamic> json) => ProjectData(
-        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
+        mediaPath: json['mediaPath'] ?? '',
         isImage: json['isImage'] ?? false,
         aspectRatio: json['aspectRatio'] ?? "4:5",
         tonemapMode: (json['tonemapMode'] ?? 0.0).toDouble(),
@@ -360,14 +293,14 @@ class StoredProject {
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
         id: json['id'],
         name: json['name'],
-        mediaPath: json['mediaPath'] ?? json['videoPath'] ?? '',
+        mediaPath: json['mediaPath'] ?? '',
         data: ProjectData.fromJson(json['data'] ?? json),
         lastOpened: DateTime.parse(json['lastOpened']),
       );
 }
 
 class ProjectManager {
-  static const String _storageKey = 'aereality_layers_v8.json';
+  static const String _storageKey = 'shadely_projects_v1.json';
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
