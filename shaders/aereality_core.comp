@@ -9,6 +9,11 @@ layout(std430, binding = 1) writeonly buffer OutputBuffer {
     uint out_pixels[];
 };
 
+// 3D LUT Table: 32 x 32 x 32 = 32,768 RGB triplets (98,304 floats)
+layout(std430, binding = 3) readonly buffer LutBuffer {
+    float lut_table[];
+};
+
 struct LayerData {
     float isEnabled;              // 0: Disabled, 1: Enabled
     float opacity;                // 0.0 to 1.0
@@ -83,8 +88,8 @@ layout(binding = 2) uniform UniformBlock {
     float u_tonemapMode;          // 0: Off, 1: Reinhard, 2: ACES
     float u_imgWidth;
     float u_imgHeight;
-    float pad0;
-    float pad1;
+    float u_hasLut;               // 1.0 if a 3D LUT is bound to buffer 3, else 0.0
+    float u_lutOpacity;           // 0.0 to 1.0
     float pad2;
     LayerData layers[4];
 };
@@ -103,6 +108,54 @@ uint packRGBA(vec4 col) {
     uint b = uint(clamp(col.b * 255.0, 0.0, 255.0));
     uint a = uint(clamp(col.a * 255.0, 0.0, 255.0));
     return (a << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
+// -------------------------------------------------------------
+// TRILINEAR 32x32x32 3D LUT SAMPLER
+// -------------------------------------------------------------
+vec3 sample3DLut(vec3 color, float opacity) {
+    if (opacity <= 0.001) return color;
+
+    // Rescale 0.0..1.0 down to grid coordinates 0.0..31.0
+    vec3 coord = clamp(color, 0.0, 1.0) * 31.0;
+    ivec3 c0 = clamp(ivec3(floor(coord)), ivec3(0), ivec3(31));
+    ivec3 c1 = clamp(c0 + ivec3(1), ivec3(0), ivec3(31));
+    vec3 f = fract(coord);
+
+    // Flat 1D index calculation: (b * 1024 + g * 32 + r) * 3
+    #define LUT_IDX(r, g, b) (((b) * 1024 + (g) * 32 + (r)) * 3)
+
+    int idx000 = LUT_IDX(c0.x, c0.y, c0.z);
+    int idx100 = LUT_IDX(c1.x, c0.y, c0.z);
+    int idx010 = LUT_IDX(c0.x, c1.y, c0.z);
+    int idx110 = LUT_IDX(c1.x, c1.y, c0.z);
+
+    int idx001 = LUT_IDX(c0.x, c0.y, c1.z);
+    int idx101 = LUT_IDX(c1.x, c0.y, c1.z);
+    int idx011 = LUT_IDX(c0.x, c1.y, c1.z);
+    int idx111 = LUT_IDX(c1.x, c1.y, c1.z);
+
+    vec3 s000 = vec3(lut_table[idx000], lut_table[idx000 + 1], lut_table[idx000 + 2]);
+    vec3 s100 = vec3(lut_table[idx100], lut_table[idx100 + 1], lut_table[idx100 + 2]);
+    vec3 s010 = vec3(lut_table[idx010], lut_table[idx010 + 1], lut_table[idx010 + 2]);
+    vec3 s110 = vec3(lut_table[idx110], lut_table[idx110 + 1], lut_table[idx110 + 2]);
+
+    vec3 s001 = vec3(lut_table[idx001], lut_table[idx001 + 1], lut_table[idx001 + 2]);
+    vec3 s101 = vec3(lut_table[idx101], lut_table[idx101 + 1], lut_table[idx101 + 2]);
+    vec3 s011 = vec3(lut_table[idx011], lut_table[idx011 + 1], lut_table[idx011 + 2]);
+    vec3 s111 = vec3(lut_table[idx111], lut_table[idx111 + 1], lut_table[idx111 + 2]);
+
+    // Trilinear interpolation
+    vec3 s00 = mix(s000, s100, f.x);
+    vec3 s01 = mix(s001, s101, f.x);
+    vec3 s10 = mix(s010, s110, f.x);
+    vec3 s11 = mix(s011, s111, f.x);
+
+    vec3 s0 = mix(s00, s10, f.y);
+    vec3 s1 = mix(s01, s11, f.y);
+
+    vec3 lutColor = mix(s0, s1, f.z);
+    return mix(color, lutColor, opacity);
 }
 
 float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) {
@@ -147,7 +200,7 @@ vec3 tonemapACES(vec3 x) {
 }
 
 vec3 tonemapReinhardExtended(vec3 x) {
-    // Extended White Point preserves brightness without crushing midtones
+    // Calibrated white point preserves SDR dynamic range without dimming
     float maxWhite = 4.5;
     return (x * (1.0 + (x / (maxWhite * maxWhite)))) / (1.0 + x);
 }
@@ -229,7 +282,10 @@ void main() {
 
     // Zero-layer raw passthrough
     if (totalLayers <= 0) {
-        out_pixels[pixelIndex] = packRGBA(basePixel);
+        if (u_hasLut > 0.5) {
+            currentComposite = sample3DLut(currentComposite, u_lutOpacity);
+        }
+        out_pixels[pixelIndex] = packRGBA(vec4(currentComposite, basePixel.a));
         return;
     }
 
@@ -430,12 +486,10 @@ void main() {
             vec3 flareAcc = vec3(0.0);
             int flareSpan = int(float(width) * clamp(L.thinStreakWidth * 0.35, 0.10, 0.50));
 
-            // Sparse Glint Peak Detector: Divide the frame into grid cells
             int cellX = coord.x / 96;
             int cellY = coord.y / 96;
             float cellHash = fract(sin(float(cellX * 127 + cellY * 311)) * 43758.5453);
 
-            // Only top ~8 cells emit specular streaks
             if (cellHash > 0.88) {
                 int peakX = cellX * 96 + int(fract(cellHash * 17.13) * 64.0) + 16;
                 int peakY = cellY * 96 + int(fract(cellHash * 31.37) * 64.0) + 16;
@@ -450,7 +504,6 @@ void main() {
                     if (distY <= 2 && distX <= flareSpan) {
                         float hFalloff = 1.0 - (float(distX) / float(flareSpan));
                         float vFalloff = (distY == 0) ? 1.0 : 0.45;
-                        // Pure Neutral White Streak with dedicated opacity control
                         vec3 whiteStreak = vec3(1.0) * pow(hFalloff, 2.5) * vFalloff * peakLum;
                         flareAcc += whiteStreak * L.thinStreakIntensity * clamp(L.thinStreakOpacity, 0.0, 1.0);
                     }
@@ -477,11 +530,9 @@ void main() {
                 rayDecay *= 0.88;
             }
 
-            // Sunlight atmospheric scattering color
             vec3 sunFogColor = vec3(1.15, 1.02, 0.80);
             layerColor += (godRayAcc / 12.0) * sunFogColor * (L.bslaGodRays * 0.65);
 
-            // Exponential gradient distance fog: 1.0 - exp(-Depth * Density)
             float normY = float(coord.y) / float(height);
             float fogFactor = 1.0 - exp(-normY * 1.8);
             vec3 deepAtmosphere = vec3(0.85, 0.92, 1.05);
@@ -564,6 +615,11 @@ void main() {
 
         // Blend onto current composite in IEEE 32-bit floating point
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
+    }
+
+    // 24. 3D LUT TRILINEAR APPLICATION (If active)
+    if (u_hasLut > 0.5) {
+        currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
     // Master Tonemapping
