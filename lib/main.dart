@@ -16,6 +16,7 @@ import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
+import 'lut_processor.dart';
 import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
 
@@ -29,7 +30,7 @@ Future<void> main() async {
   try {
     await FFmpegKitExtended.initialize();
   } catch (e) {
-    debugPrint('FFmpeg initialization: $e');
+    debugPrint('FFmpeg initialization error: $e');
   }
 
   // Ensure public /storage/emulated/0/Shadely directory exists
@@ -369,23 +370,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(8)),
-                    child: Row(
-                      children: [
-                        Icon(Icons.folder_special_rounded, color: gCustomAccentColor.value, size: 18),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'Output Folder: /storage/emulated/0/Shadely',
-                            style: TextStyle(color: Colors.white70, fontSize: 11),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -590,11 +574,11 @@ class ProjectSetupScreen extends StatefulWidget {
 
 class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
   String _projectName = 'Shadely Master';
-  String _selectedAspect = '4:5';
+  String _selectedAspect = '16:9';
   File? _selectedFile;
   bool _isImage = false;
 
-  final List<String> _aspectRatios = ['4:5', '9:16', '16:9', '1:1', '3:4', '21:9'];
+  final List<String> _aspectRatios = ['16:9', '9:16', '4:5', '1:1', '3:4', '21:9'];
 
   @override
   Widget build(BuildContext context) {
@@ -753,7 +737,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   late TabController _tabController;
   int _selectedCurveChannel = 0;
 
-  ui.Image? _processedImage;
+  ui.Image? _processedStaticImage;
   int _renderWidth = 720;
   int _renderHeight = 900;
 
@@ -763,9 +747,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Timer? _playbackTimer;
   double _currentTimelinePosition = 0.0;
   double _videoDurationSeconds = 1.0;
-  bool _isRenderingFrame = false;
 
   List<CustomPresetItem> _customPresets = [];
+  List<LutModel> _activeLuts = [];
 
   AdjustmentLayer get _cur => _project.currentLayer;
 
@@ -779,6 +763,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _pushUndoSnapshot();
 
     _loadCustomPresets();
+    _loadLuts();
     _loadMedia(_project.mediaPath);
   }
 
@@ -789,7 +774,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _controller?.pause();
     _controller?.dispose();
     _controller = null;
-    _processedImage?.dispose();
+    _processedStaticImage?.dispose();
     super.dispose();
   }
 
@@ -821,6 +806,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _loadCustomPresets() async {
     final list = await ProjectManager.loadCustomPresets();
     if (mounted) setState(() => _customPresets = list);
+  }
+
+  Future<void> _loadLuts() async {
+    final list = await ProjectManager.loadLuts();
+    if (mounted) setState(() => _activeLuts = list);
   }
 
   Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr, [double scale = 1.0]) {
@@ -892,8 +882,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     setState(() {
       _project.mediaPath = path;
       _project.isImage = isImg;
-      _processedImage?.dispose();
-      _processedImage = null;
+      _processedStaticImage?.dispose();
+      _processedStaticImage = null;
       _isPlaying = false;
       _currentTimelinePosition = 0.0;
     });
@@ -922,7 +912,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _isPlaying = true;
           _applyGrade();
 
-          _playbackTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
+          _playbackTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
             if (_controller != null && _controller!.value.isPlaying && mounted) {
               setState(() {
                 _currentTimelinePosition = _controller!.value.position.inMilliseconds / 1000.0;
@@ -935,68 +925,148 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Guaranteed unfreezing live grade engine: lock-free, safe try-finally
+  // Pure live grading: For images, runs Vulkan. For video, triggers direct GPU filter rebuild with ZERO ghost overlays!
   Future<void> _applyGrade() async {
-    if (_isRenderingFrame) return;
-    _isRenderingFrame = true;
+    if (_project.isImage && _cachedRawImage != null) {
+      try {
+        int w = _renderWidth;
+        int h = _renderHeight;
+        final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
+        final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+        final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+        final outBytes = processImage(rawBytes, w, h, w, h, uniforms);
 
-    try {
-      if (_project.layers.isEmpty) {
+        final completer = Completer<ui.Image>();
+        ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (im) => completer.complete(im));
+        final res = await completer.future;
+
         if (mounted) {
           setState(() {
-            _processedImage?.dispose();
-            _processedImage = null;
+            _processedStaticImage?.dispose();
+            _processedStaticImage = res;
           });
         }
-        return;
-      }
-
-      Uint8List? rawBytes;
-      int w = _renderWidth;
-      int h = _renderHeight;
-
-      if (_project.isImage && _cachedRawImage != null) {
-        final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
-        rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
-      } else if (_project.mediaPath.isNotEmpty) {
-        final dir = await getTemporaryDirectory();
-        final previewFramePath = '${dir.path}/live_preview_frame_${DateTime.now().millisecondsSinceEpoch}.png';
-        final posSec = _controller != null ? _controller!.value.position.inMilliseconds / 1000.0 : 0.0;
-
-        await FFmpegKit.execute(
-          '-hide_banner -ss $posSec -i "${_project.mediaPath}" -vframes 1 -s ${w}x$h -pix_fmt rgba -y "$previewFramePath"',
-        );
-        final file = File(previewFramePath);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          final decoded = img.decodePng(bytes);
-          if (decoded != null) {
-            rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
-          }
-          try { await file.delete(); } catch (_) {}
-        }
-      }
-
-      if (rawBytes == null) return;
-
-      final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
-      final outBytes = processImage(rawBytes, w, h, w, h, uniforms);
-
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (img) => completer.complete(img));
-      final res = await completer.future;
-
+      } catch (_) {}
+    } else {
       if (mounted) {
         setState(() {
-          _processedImage?.dispose();
-          _processedImage = res;
+          _processedStaticImage?.dispose();
+          _processedStaticImage = null;
         });
       }
-    } catch (_) {
-    } finally {
-      // Guaranteed release so sliders never get stuck
-      _isRenderingFrame = false;
     }
+  }
+
+  // Real-time Color Matrix computed from active adjustment layers for the live moving video
+  ColorFilter _buildLiveColorFilter() {
+    double c = 1.0;
+    double s = 1.0;
+    double b = 0.0;
+    double temp = 6500.0;
+
+    for (final l in _project.layers) {
+      if (!l.isEnabled) continue;
+      final op = l.opacity;
+      c *= (1.0 + (l.contrast - 1.0) * op);
+      s *= (1.0 + (l.saturation - 1.0) * op);
+      b += l.brightness * 255.0 * op;
+      b += (l.highlights * 25.0 * op);
+      b += (l.shadows * 25.0 * op);
+      temp += (l.temperature - 6500.0) * op;
+    }
+
+    // White balance multiplier
+    double rMult = 1.0;
+    double bMult = 1.0;
+    if (temp > 6500) {
+      rMult += (temp - 6500) / 7000.0;
+      bMult -= (temp - 6500) / 10000.0;
+    } else {
+      bMult += (6500 - temp) / 7000.0;
+      rMult -= (6500 - temp) / 10000.0;
+    }
+
+    // Saturation matrix coefficients
+    final double sr = (1 - s) * 0.2126;
+    final double sg = (1 - s) * 0.7152;
+    final double sb = (1 - s) * 0.0722;
+
+    final double t = (1.0 - c) * 128.0;
+
+    final List<double> matrix = [
+      (sr + s) * c * rMult, sg * c,           sb * c,           0, t + b,
+      sr * c,               (sg + s) * c,     sb * c,           0, t + b,
+      sr * c,               sg * c,           (sb + s) * c * bMult, 0, t + b,
+      0,                    0,                0,                1, 0,
+    ];
+
+    return ColorFilter.matrix(matrix);
+  }
+
+  // Real-time bloom / glow / atmosphere layer rendered directly on top of the live video
+  Widget _buildLiveBloomAtmosphere() {
+    double totalBloom = 0.0;
+    Color bloomTint = Colors.white;
+    double flareOpacity = 0.0;
+
+    for (final l in _project.layers) {
+      if (!l.isEnabled) continue;
+      final op = l.opacity;
+      totalBloom += (l.deepGlowIntensity * 0.4 + l.bslaBloomHaze * 0.5) * op;
+      flareOpacity += (l.thinStreakIntensity * l.thinStreakOpacity * 0.6) * op;
+
+      if (l.edgeGlowTint == 1.0) bloomTint = const Color(0xFFFFD700);
+      else if (l.edgeGlowTint == 2.0) bloomTint = const Color(0xFF00E5FF);
+      else if (l.edgeGlowTint == 4.0) bloomTint = const Color(0xFFFF1744);
+      else if (l.edgeGlowTint == 5.0) bloomTint = const Color(0xFF7C4DFF);
+    }
+
+    totalBloom = totalBloom.clamp(0.0, 0.85);
+    flareOpacity = flareOpacity.clamp(0.0, 0.90);
+
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (totalBloom > 0.02)
+            Opacity(
+              opacity: totalBloom,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.center,
+                    radius: 0.9,
+                    colors: [
+                      bloomTint.withOpacity(0.45),
+                      bloomTint.withOpacity(0.12),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (flareOpacity > 0.02)
+            Center(
+              child: Opacity(
+                opacity: flareOpacity,
+                child: Container(
+                  height: 3.5,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        Colors.white.withOpacity(0.9),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _autoSaveProject() async {
@@ -1041,7 +1111,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 8] = layer.hue;
       uniforms[offset + 9] = layer.temperature;
 
-      // Glows, Anamorphic Flares & Chromatic Aberration
       uniforms[offset + 10] = layer.deepGlowIntensity;
       uniforms[offset + 11] = layer.deepGlowRadius;
       uniforms[offset + 12] = layer.deepGlowThreshold;
@@ -1052,7 +1121,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 17] = layer.volRaysLength;
       uniforms[offset + 18] = layer.volRaysDecay;
 
-      // Tone & Line Detail
       uniforms[offset + 19] = layer.shadows;
       uniforms[offset + 20] = layer.highlights;
       uniforms[offset + 21] = layer.blackCrush;
@@ -1062,47 +1130,39 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 25] = layer.darkOutlines;
       uniforms[offset + 26] = layer.denoise;
 
-      // Film, Noise & Flicker
       uniforms[offset + 27] = layer.filmGrain;
       uniforms[offset + 28] = layer.flickerIntensity;
       uniforms[offset + 29] = layer.flickerSpeed;
       uniforms[offset + 30] = layer.halationRadius;
       uniforms[offset + 31] = layer.halationWarmth;
 
-      // Depth of Field
       uniforms[offset + 32] = layer.depthOfField;
       uniforms[offset + 33] = layer.dofFocus;
       uniforms[offset + 34] = layer.dofAngle;
 
-      // Unsharp Mask Sub-Sliders
       uniforms[offset + 35] = layer.unsharpRadius;
       uniforms[offset + 36] = layer.unsharpAmount;
       uniforms[offset + 37] = layer.unsharpThreshold;
 
-      // Master Curve P0..P4
       uniforms[offset + 38] = layer.curveMaster[0];
       uniforms[offset + 39] = layer.curveMaster[1];
       uniforms[offset + 40] = layer.curveMaster[2];
       uniforms[offset + 41] = layer.curveMaster[3];
       uniforms[offset + 42] = layer.curveMaster[4];
 
-      // Red Curve P0..P4
       uniforms[offset + 43] = layer.curveRed[0];
       uniforms[offset + 44] = layer.curveRed[1];
       uniforms[offset + 45] = layer.curveRed[2];
       uniforms[offset + 46] = layer.curveRed[3];
       uniforms[offset + 47] = layer.curveRed[4];
 
-      // Green & Blue Curves
       uniforms[offset + 48] = layer.curveGreen[2];
       uniforms[offset + 49] = layer.curveBlue[2];
 
-      // Sapphire Glow Core & Dedicated Flare Opacity
       uniforms[offset + 50] = layer.sapphireGlowWidth;
       uniforms[offset + 51] = layer.sapphireGlowThreshold;
       uniforms[offset + 52] = layer.thinStreakOpacity;
 
-      // Magic Bullet Mojo & BSLA Extreme Atmospheric Fog
       uniforms[offset + 53] = layer.mblMojoTealOrange;
       uniforms[offset + 54] = layer.bslaGodRays;
     }
@@ -1118,7 +1178,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       case "1:1": return 1 / 1;
       case "3:4": return 3 / 4;
       case "21:9": return 21 / 9;
-      default: return 4 / 5;
+      default: return 16 / 9;
     }
   }
 
@@ -1208,6 +1268,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
+
   void _applyPreset(String name) {
     _pushUndoSnapshot();
     setState(() {
@@ -1569,7 +1630,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
-
   Future<void> _saveCurrentAsPreset() async {
     final controller = TextEditingController(text: 'My Custom Grade');
     showDialog(
@@ -1685,6 +1745,58 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ],
       ),
     );
+  }
+
+  Future<void> _pickAndImportCubeLut() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['cube'],
+      );
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final lut = await LutParser.parseCubeFile(file);
+        if (lut != null) {
+          if (_activeLuts.length >= 4) {
+            _activeLuts.removeAt(0);
+          }
+          _activeLuts.add(lut);
+          await ProjectManager.saveLuts(_activeLuts);
+
+          _pushUndoSnapshot();
+          setState(() {
+            _cur.activeLutId = lut.id;
+            _cur.lutOpacity = 1.0;
+          });
+          _applyGrade();
+          _autoSaveProject();
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Imported and Applied "${lut.name}.cube" (32x32x32)'), backgroundColor: Colors.teal),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to parse .cube file: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _deleteLut(int index) async {
+    setState(() {
+      final removed = _activeLuts.removeAt(index);
+      if (_cur.activeLutId == removed.id) {
+        _cur.activeLutId = null;
+      }
+    });
+    await ProjectManager.saveLuts(_activeLuts);
+    _applyGrade();
+    _autoSaveProject();
   }
 
   void _showUnsharpMaskDrawer() {
@@ -2020,7 +2132,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ANR-proof crash-free 4K master export pipeline with explicit event-loop yielding
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -2162,7 +2273,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         progressNotifier.value = (i + 1) / totalFrames;
         statusNotifier.value = 'Grading 4K frames: $percent% (${i + 1}/$totalFrames)';
 
-        // Crucial: Yield event loop so Android system watchdog never triggers ANR
         await Future.delayed(const Duration(milliseconds: 1));
       }
 
@@ -2210,7 +2320,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // Spacious, dynamic slider row with 14px touch buffers
   Widget _buildSliderRow(String title, double val, double min, double max, ValueChanged<double> onChanged) {
     final accent = gCustomAccentColor.value;
 
@@ -2512,157 +2621,124 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildLutsTab() {
     final accent = gCustomAccentColor.value;
 
-    return WillPopScope(
-      onWillPop: () async {
-        _playbackTimer?.cancel();
-        if (_controller != null) {
-          await _controller!.pause();
-          await _controller!.dispose();
-          _controller = null;
-        }
-        return true;
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              _playbackTimer?.cancel();
-              if (_controller != null) {
-                await _controller!.pause();
-                await _controller!.dispose();
-                _controller = null;
-              }
-              Navigator.pop(context);
-            },
-          ),
-          title: Text(widget.projectName ?? 'Shadely Editor'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.save_rounded, color: Colors.white70),
-              tooltip: 'Save Session',
-              onPressed: () async {
-                await _autoSaveProject();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session saved successfully!'), backgroundColor: Colors.teal));
-                }
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-              tooltip: 'Reset Active Layer',
-              onPressed: _resetCurrentLayer,
-            ),
-            IconButton(
-              icon: Icon(Icons.movie_creation_outlined, color: accent),
-              tooltip: 'Render Master Video',
-              onPressed: _showExportSheet,
-            ),
-          ],
-        ),
-        body: Column(
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Expanded(
-              flex: _isFullScreen ? 10 : 5,
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: _getAspectRatioValue(_project.aspectRatio),
-                  child: Container(
-                    margin: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
-                          VideoPlayer(_controller!),
-
-                        if (_processedImage != null)
-                          RawImage(image: _processedImage, fit: BoxFit.contain),
-
-                        Positioned(
-                          bottom: 10,
-                          right: 10,
-                          child: GestureDetector(
-                            onTap: () => setState(() => _isFullScreen = !_isFullScreen),
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white24),
-                              ),
-                              child: Icon(
-                                _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('3D LUT SUITE (.CUBE)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                const SizedBox(height: 2),
+                const Text('Stores up to 4 .cube LUTs with trilinear sampling', style: TextStyle(color: Colors.white54, fontSize: 10)),
+              ],
             ),
-
-            if (!_isFullScreen) ...[
-              _buildTimelineScrubber(),
-              _buildAdjustmentLayerBar(),
-              _buildLayerSettingsHeader(),
-
-              Container(
-                color: kSurfaceDark,
-                child: TabBar(
-                  controller: _tabController,
-                  indicatorColor: accent,
-                  labelColor: accent,
-                  unselectedLabelColor: Colors.white38,
-                  isScrollable: true,
-                  labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                  tabs: const [
-                    Tab(text: 'PRESETS'),
-                    Tab(text: 'AE KNOCKOFFS'),
-                    Tab(text: 'MAGIC BULLET'),
-                    Tab(text: 'GRADE'),
-                    Tab(text: 'CURVES'),
-                    Tab(text: 'GLOWS'),
-                    Tab(text: 'SAPPHIRE'),
-                  ],
-                ),
-              ),
-
-              Expanded(
-                flex: 4,
-                child: Container(
-                  color: kBackgroundDark,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildPresetsTab(),
-                      _buildAEKnockoffsTab(),
-                      _buildMagicBulletTab(),
-                      _buildGradingTab(),
-                      _buildCurvesTab(),
-                      _buildGlowsTab(),
-                      _buildSapphireTab(),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+            ElevatedButton.icon(
+              onPressed: _pickAndImportCubeLut,
+              icon: const Icon(Icons.add_rounded, size: 16, color: Colors.black),
+              label: const Text('IMPORT .CUBE', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(backgroundColor: accent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+            ),
           ],
         ),
-      ),
+        const SizedBox(height: 14),
+
+        if (_cur.activeLutId != null) ...[
+          _buildSliderRow('Active LUT Opacity', _cur.lutOpacity, 0.0, 1.0, (v) => setState(() => _cur.lutOpacity = v)),
+          const SizedBox(height: 14),
+        ],
+
+        const Text('LOADED .CUBE LUTS (MAX 4)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const SizedBox(height: 8),
+
+        if (_activeLuts.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: kCardDark,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withOpacity(0.04)),
+            ),
+            child: const Center(
+              child: Text(
+                'No .cube LUTs imported yet.\nTap "IMPORT .CUBE" or the top "LUT" button to load any 32x32x32 look.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ),
+          )
+        else
+          ...List.generate(_activeLuts.length, (idx) {
+            final lut = _activeLuts[idx];
+            final isSel = _cur.activeLutId == lut.id;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isSel ? accent.withOpacity(0.16) : kCardDark,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: isSel ? accent : Colors.white10,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '3D',
+                        style: TextStyle(
+                          color: isSel ? Colors.black : Colors.white54,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        _pushUndoSnapshot();
+                        setState(() {
+                          _cur.activeLutId = isSel ? null : lut.id;
+                        });
+                        _applyGrade();
+                        _autoSaveProject();
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(lut.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text(
+                            isSel ? 'ACTIVE ON CURRENT LAYER' : 'Tap to apply to layer',
+                            style: TextStyle(color: isSel ? accent.withOpacity(0.8) : Colors.white38, fontSize: 10),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+                    tooltip: 'Delete LUT',
+                    onPressed: () => _deleteLut(idx),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
     );
   }
 
@@ -2722,7 +2798,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 14),
 
-        // BSLA EXTREME
         GestureDetector(
           onTap: _toggleBslaExtremePreset,
           child: Container(
@@ -2913,7 +2988,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
               ElevatedButton.icon(
                 onPressed: _showUnsharpMaskDrawer,
-                icon: Icon(Icons.tune_rounded, size: 14, color: Colors.black),
+                icon: const Icon(Icons.tune_rounded, size: 14, color: Colors.black),
                 label: const Text('Open Sub-Sliders', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
                 style: ElevatedButton.styleFrom(backgroundColor: accent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6))),
               ),
@@ -3219,6 +3294,189 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         const SizedBox(height: 16),
         _buildSliderRow('Bilateral Denoise', _cur.denoise, 0.0, 1.0, (v) => setState(() => _cur.denoise = v)),
       ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
+    return WillPopScope(
+      onWillPop: () async {
+        _playbackTimer?.cancel();
+        if (_controller != null) {
+          await _controller!.pause();
+          await _controller!.dispose();
+          _controller = null;
+        }
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              _playbackTimer?.cancel();
+              if (_controller != null) {
+                await _controller!.pause();
+                await _controller!.dispose();
+                _controller = null;
+              }
+              Navigator.pop(context);
+            },
+          ),
+          title: Text(widget.projectName ?? 'Shadely Editor'),
+          actions: [
+            GestureDetector(
+              onTap: _pickAndImportCubeLut,
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _cur.activeLutId != null ? accent : const Color(0xFF1E1E28),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _cur.activeLutId != null ? Colors.white : accent, width: 1.2),
+                ),
+                child: Center(
+                  child: Text(
+                    'LUT',
+                    style: TextStyle(
+                      color: _cur.activeLutId != null ? Colors.black : accent,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.save_rounded, color: Colors.white70),
+              tooltip: 'Save Session',
+              onPressed: () async {
+                await _autoSaveProject();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session saved successfully!'), backgroundColor: Colors.teal));
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+              tooltip: 'Reset Active Layer',
+              onPressed: _resetCurrentLayer,
+            ),
+            IconButton(
+              icon: Icon(Icons.movie_creation_outlined, color: accent),
+              tooltip: 'Render Master Video',
+              onPressed: _showExportSheet,
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              flex: _isFullScreen ? 10 : 5,
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: _getAspectRatioValue(_project.aspectRatio),
+                  child: Container(
+                    margin: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
+                          ColorFiltered(
+                            colorFilter: _buildLiveColorFilter(),
+                            child: VideoPlayer(_controller!),
+                          ),
+
+                        if (_project.isImage && _processedStaticImage != null)
+                          RawImage(image: _processedStaticImage, fit: BoxFit.contain),
+
+                        if (!_project.isImage)
+                          _buildLiveBloomAtmosphere(),
+
+                        Positioned(
+                          bottom: 10,
+                          right: 10,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _isFullScreen = !_isFullScreen),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: Icon(
+                                _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            if (!_isFullScreen) ...[
+              _buildTimelineScrubber(),
+              _buildAdjustmentLayerBar(),
+              _buildLayerSettingsHeader(),
+
+              Container(
+                color: kSurfaceDark,
+                child: TabBar(
+                  controller: _tabController,
+                  indicatorColor: accent,
+                  labelColor: accent,
+                  unselectedLabelColor: Colors.white38,
+                  isScrollable: true,
+                  labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                  tabs: const [
+                    Tab(text: 'PRESETS'),
+                    Tab(text: 'LUTS'),
+                    Tab(text: 'AE KNOCKOFFS'),
+                    Tab(text: 'MAGIC BULLET'),
+                    Tab(text: 'GRADE'),
+                    Tab(text: 'CURVES'),
+                    Tab(text: 'GLOWS'),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                flex: 4,
+                child: Container(
+                  color: kBackgroundDark,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildPresetsTab(),
+                      _buildLutsTab(),
+                      _buildAEKnockoffsTab(),
+                      _buildMagicBulletTab(),
+                      _buildGradingTab(),
+                      _buildCurvesTab(),
+                      _buildGlowsTab(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
