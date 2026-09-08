@@ -110,6 +110,7 @@ class AdjustmentLayer {
   double bslaFogDensity;
   double bslaFogDepth;
   double bslaBloomHaze;
+  double bslFogScatter; // Added: Volumetric mist atmosphere scattering
 
   // 3D LUT Implementation
   String? activeLutId;
@@ -171,6 +172,7 @@ class AdjustmentLayer {
     this.bslaFogDensity = 0.0,
     this.bslaFogDepth = 0.5,
     this.bslaBloomHaze = 0.0,
+    this.bslFogScatter = 0.35,
     this.activeLutId,
     this.lutOpacity = 1.0,
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.5, 0.75, 1.0],
@@ -235,6 +237,7 @@ class AdjustmentLayer {
       bslaFogDensity: bslaFogDensity,
       bslaFogDepth: bslaFogDepth,
       bslaBloomHaze: bslaBloomHaze,
+      bslFogScatter: bslFogScatter,
       activeLutId: activeLutId,
       lutOpacity: lutOpacity,
     );
@@ -296,6 +299,7 @@ class AdjustmentLayer {
     'bslaFogDensity': bslaFogDensity,
     'bslaFogDepth': bslaFogDepth,
     'bslaBloomHaze': bslaBloomHaze,
+    'bslFogScatter': bslFogScatter,
     'activeLutId': activeLutId,
     'lutOpacity': lutOpacity,
   };
@@ -356,6 +360,7 @@ class AdjustmentLayer {
     bslaFogDensity: (json['bslaFogDensity'] as num?)?.toDouble() ?? 0.0,
     bslaFogDepth: (json['bslaFogDepth'] as num?)?.toDouble() ?? 0.5,
     bslaBloomHaze: (json['bslaBloomHaze'] as num?)?.toDouble() ?? 0.0,
+    bslFogScatter: (json['bslFogScatter'] as num?)?.toDouble() ?? 0.35,
     activeLutId: json['activeLutId'],
     lutOpacity: (json['lutOpacity'] as num?)?.toDouble() ?? 1.0,
   );
