@@ -2428,12 +2428,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           onPressed: () {
                             Navigator.pop(confirmCtx);
                             _isExportCancelled = true;
-                            if (_activeExportSession != null) {
-                              FFmpegKit.cancel(_activeExportSession!);
-                            } else {
-                              FFmpegKit.cancel();
-                            }
-                            Navigator.pop(ctx);
+_activeExportSession?.cancel();
+Navigator.pop(ctx);
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(content: Text('Export cancelled by user.')),
                             );
