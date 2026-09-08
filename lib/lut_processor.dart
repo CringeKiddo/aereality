@@ -1,117 +1,175 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'models.dart';
+import 'package:flutter/foundation.dart';
+import 'package:file_picker/file_picker.dart';
 
-class LutParser {
-  static Future<LutModel?> parseCubeFile(File file) async {
+class CubeLutData {
+  final String title;
+  final int size;
+  final Float32List table; // Size: size * size * size * 3
+
+  CubeLutData({required this.title, required this.size, required this.table});
+}
+
+class LutProcessor {
+  /// Safely picks a .cube file without throwing PlatformException on Android
+  static Future<File?> pickCubeFile() async {
     try {
-      final lines = await file.readAsLines();
-      int lutSize = 0;
-      List<double> data = [];
+      // Use FileType.any to avoid Android's missing MIME-type crash
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+      );
 
-      for (var line in lines) {
-        line = line.trim();
-        if (line.isEmpty || line.startsWith('#')) continue;
-
-        if (line.startsWith('LUT_3D_SIZE')) {
-          final parts = line.split(RegExp(r'\s+'));
-          if (parts.length >= 2) {
-            lutSize = int.tryParse(parts[1]) ?? 32;
-          }
-          continue;
-        }
-
-        if (line.startsWith('TITLE') || line.startsWith('DOMAIN_MIN') || line.startsWith('DOMAIN_MAX')) {
-          continue;
-        }
-
-        final parts = line.split(RegExp(r'\s+'));
-        if (parts.length >= 3) {
-          final r = double.tryParse(parts[0]);
-          final g = double.tryParse(parts[1]);
-          final b = double.tryParse(parts[2]);
-          if (r != null && g != null && b != null) {
-            data.add(r);
-            data.add(g);
-            data.add(b);
+      if (result != null && result.files.isNotEmpty) {
+        final filePath = result.files.single.path;
+        if (filePath != null) {
+          if (filePath.toLowerCase().endsWith('.cube')) {
+            return File(filePath);
+          } else {
+            debugPrint("Selected file is not a .cube file: $filePath");
+            return null;
           }
         }
       }
+    } catch (e) {
+      debugPrint("Error picking .cube file: $e");
+    }
+    return null;
+  }
 
-      if (lutSize == 0) lutSize = 32;
+  /// Parses an Adobe/Resolve .cube file into 32x32x32 Float32List RGB table
+  static Future<CubeLutData?> parseCubeFile(File file) async {
+    try {
+      final lines = await file.readAsLines();
+      int size = 0;
+      String title = file.uri.pathSegments.last.replaceAll('.cube', '');
+      List<double> rawFloats = [];
 
-      // Resample to 32x32x32 if non-standard
-      final Float32List table = Float32List(32 * 32 * 32 * 3);
+      for (var rawLine in lines) {
+        String line = rawLine.trim();
+        if (line.isEmpty || line.startsWith('#')) continue;
 
-      if (lutSize == 32 && data.length >= 32 * 32 * 32 * 3) {
-        for (int i = 0; i < table.length; i++) {
-          table[i] = data[i];
-        }
-      } else {
-        // Uniform identity fallback
-        for (int b = 0; b < 32; b++) {
-          for (int g = 0; g < 32; g++) {
-            for (int r = 0; r < 32; r++) {
-              int idx = (b * 32 * 32 + g * 32 + r) * 3;
-              table[idx + 0] = r / 31.0;
-              table[idx + 1] = g / 31.0;
-              table[idx + 2] = b / 31.0;
+        if (line.toUpperCase().startsWith('TITLE')) {
+          final parts = line.split(RegExp(r'\s+'));
+          if (parts.length > 1) {
+            title = parts.sublist(1).join(' ').replaceAll('"', '');
+          }
+        } else if (line.toUpperCase().startsWith('LUT_3D_SIZE')) {
+          final parts = line.split(RegExp(r'\s+'));
+          if (parts.length > 1) {
+            size = int.tryParse(parts[1]) ?? 0;
+          }
+        } else if (line.toUpperCase().startsWith('DOMAIN_MIN') ||
+            line.toUpperCase().startsWith('DOMAIN_MAX')) {
+          // Domain limits ignored, assumed standard [0.0, 1.0]
+          continue;
+        } else {
+          final parts = line.split(RegExp(r'\s+'));
+          if (parts.length >= 3) {
+            final r = double.tryParse(parts[0]);
+            final g = double.tryParse(parts[1]);
+            final b = double.tryParse(parts[2]);
+            if (r != null && g != null && b != null) {
+              rawFloats.add(r.clamp(0.0, 1.0));
+              rawFloats.add(g.clamp(0.0, 1.0));
+              rawFloats.add(b.clamp(0.0, 1.0));
             }
           }
         }
       }
 
-      final fileName = file.path.split('/').last.replaceAll('.cube', '');
-      return LutModel(
-        id: 'lut_${DateTime.now().millisecondsSinceEpoch}',
-        name: fileName,
-        filePath: file.path,
-        size: 32,
-        table: table,
+      if (size <= 0) {
+        // Infer cube size if LUT_3D_SIZE was omitted
+        final totalEntries = rawFloats.length ~/ 3;
+        final cbrt = (totalEntries > 0) ? (totalEntries.toDouble()) : 0.0;
+        if (totalEntries == 32768) {
+          size = 32;
+        } else if (totalEntries == 4913) {
+          size = 17;
+        } else if (totalEntries == 262144) {
+          size = 64;
+        } else {
+          size = 32; // fallback default
+        }
+      }
+
+      // Resample to 32x32x32 if LUT size differs from 32 for GPU memory alignment
+      final targetSize = 32;
+      Float32List standardizedTable;
+
+      if (size == targetSize && rawFloats.length == targetSize * targetSize * targetSize * 3) {
+        standardizedTable = Float32List.fromList(rawFloats);
+      } else {
+        standardizedTable = _resampleTo32(rawFloats, size, targetSize);
+      }
+
+      return CubeLutData(
+        title: title,
+        size: targetSize,
+        table: standardizedTable,
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint("Failed to parse LUT file: $e");
       return null;
     }
   }
 
-  // Fast Trilinear Sample
-  static void applyLutToRgb(Float32List table, double r, double g, double b, double opacity, List<double> outRgb) {
-    r = r.clamp(0.0, 1.0) * 31.0;
-    g = g.clamp(0.0, 1.0) * 31.0;
-    b = b.clamp(0.0, 1.0) * 31.0;
+  static Float32List _resampleTo32(List<double> source, int srcSize, int dstSize) {
+    final result = Float32List(dstSize * dstSize * dstSize * 3);
+    int dstIdx = 0;
 
-    int r0 = r.floor();
-    int r1 = (r0 + 1).clamp(0, 31);
-    int g0 = g.floor();
-    int g1 = (g0 + 1).clamp(0, 31);
-    int b0 = b.floor();
-    int b1 = (b0 + 1).clamp(0, 31);
+    for (int b = 0; b < dstSize; b++) {
+      double fb = (b / (dstSize - 1)) * (srcSize - 1);
+      int b0 = fb.floor().clamp(0, srcSize - 1);
+      int b1 = (b0 + 1).clamp(0, srcSize - 1);
+      double fdb = fb - b0;
 
-    double dr = r - r0;
-    double dg = g - g0;
-    double db = b - b0;
+      for (int g = 0; g < dstSize; g++) {
+        double fg = (g / (dstSize - 1)) * (srcSize - 1);
+        int g0 = fg.floor().clamp(0, srcSize - 1);
+        int g1 = (g0 + 1).clamp(0, srcSize - 1);
+        double fdg = fg - g0;
 
-    int c000 = (b0 * 32 * 32 + g0 * 32 + r0) * 3;
-    int c100 = (b0 * 32 * 32 + g0 * 32 + r1) * 3;
-    int c010 = (b0 * 32 * 32 + g1 * 32 + r0) * 3;
-    int c110 = (b0 * 32 * 32 + g1 * 32 + r1) * 3;
-    int c001 = (b1 * 32 * 32 + g0 * 32 + r0) * 3;
-    int c101 = (b1 * 32 * 32 + g0 * 32 + r1) * 3;
-    int c011 = (b1 * 32 * 32 + g1 * 32 + r0) * 3;
-    int c111 = (b1 * 32 * 32 + g1 * 32 + r1) * 3;
+        for (int r = 0; r < dstSize; r++) {
+          double fr = (r / (dstSize - 1)) * (srcSize - 1);
+          int r0 = fr.floor().clamp(0, srcSize - 1);
+          int r1 = (r0 + 1).clamp(0, srcSize - 1);
+          double fdr = fr - r0;
 
-    for (int ch = 0; ch < 3; ch++) {
-      double c00 = table[c000 + ch] * (1 - dr) + table[c100 + ch] * dr;
-      double c01 = table[c001 + ch] * (1 - dr) + table[c101 + ch] * dr;
-      double c10 = table[c010 + ch] * (1 - dr) + table[c110 + ch] * dr;
-      double c11 = table[c011 + ch] * (1 - dr) + table[c111 + ch] * dr;
+          // Trilinear sampling from source
+          for (int c = 0; c < 3; c++) {
+            double c000 = _sampleRaw(source, srcSize, r0, g0, b0, c);
+            double c100 = _sampleRaw(source, srcSize, r1, g0, b0, c);
+            double c010 = _sampleRaw(source, srcSize, r0, g1, b0, c);
+            double c110 = _sampleRaw(source, srcSize, r1, g1, b0, c);
+            double c001 = _sampleRaw(source, srcSize, r0, g0, b1, c);
+            double c101 = _sampleRaw(source, srcSize, r1, g0, b1, c);
+            double c011 = _sampleRaw(source, srcSize, r0, g1, b1, c);
+            double c111 = _sampleRaw(source, srcSize, r1, g1, b1, c);
 
-      double c0 = c00 * (1 - dg) + c10 * dg;
-      double c1 = c01 * (1 - dg) + c11 * dg;
+            double c00 = c000 * (1 - fdr) + c100 * fdr;
+            double c10 = c010 * (1 - fdr) + c110 * fdr;
+            double c01 = c001 * (1 - fdr) + c101 * fdr;
+            double c11 = c011 * (1 - fdr) + c111 * fdr;
 
-      double lutVal = c0 * (1 - db) + c1 * db;
-      double original = (ch == 0 ? r : ch == 1 ? g : b) / 31.0;
-      outRgb[ch] = original * (1.0 - opacity) + lutVal * opacity;
+            double c0 = c00 * (1 - fdg) + c10 * fdg;
+            double c1 = c01 * (1 - fdg) + c11 * fdg;
+
+            double val = c0 * (1 - fdb) + c1 * fdb;
+            result[dstIdx++] = val.clamp(0.0, 1.0);
+          }
+        }
+      }
     }
+    return result;
+  }
+
+  static double _sampleRaw(List<double> src, int size, int r, int g, int b, int c) {
+    int index = (b * size * size + g * size + r) * 3 + c;
+    if (index >= 0 && index < src.length) {
+      return src[index];
+    }
+    return 0.0;
   }
 }
