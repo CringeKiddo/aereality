@@ -308,9 +308,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final ffmpegCmd = '-y -i "$sourcePath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos,unsharp=5:5:$modelSharpness:5:5:0.0,hqdn3d=2:1.5:$modelDenoise:$modelDenoise" -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -movflags +faststart -c:a copy "$outputPath"';
 
       _activeSession = await FFmpegKit.executeAsync(ffmpegCmd);
-      final returnCode = await _activeSession!.getReturnCode();
-
-      if (returnCode != null && returnCode.getValue() == 0) {
+      //  CORRECT
+final returnCode = await _activeSession!.getReturnCode();
+if (returnCode == 0) {
         setState(() {
           _isExporting = false;
           _exportProgress = 1.0;
