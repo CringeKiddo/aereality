@@ -37,7 +37,7 @@ struct LayerData {
     float volRaysLength;          // 0.0 to 1.0 (Volumetric God Rays)
     float volRaysDecay;           // 0.70 to 0.98
 
-    // Tone & Line Detail
+    // Tone & Line Detail (Isolated Highlights & Shadows)
     float shadows;                // -1.0 to 1.0
     float highlights;             // -1.0 to 1.0
     float blackCrush;             // 0.0 to 0.5
@@ -77,9 +77,13 @@ struct LayerData {
     float sapphireGlowThreshold;  // 0.0 to 1.0
     float thinStreakOpacity;      // 0.0 to 1.0 (Dedicated White Flare Opacity)
 
-    // Magic Bullet Mojo & BSLA Extreme Atmospheric
+    // Magic Bullet Mojo & BSLA Extreme Atmospheric Fog
     float mblMojoTealOrange;      // 0.0 to 1.0 (Teal/Orange Split)
     float bslaGodRays;            // 0.0 to 1.0 (Screen-Space Volumetric Light Shafts)
+    float bslaFogDensity;         // 0.0 to 1.0 (Atmospheric Fog Density)
+    float bslaFogDepth;           // 0.0 to 1.0 (Fog Altitude & Distance Falloff)
+    float bslaBloomHaze;          // 0.0 to 1.0 (Volumetric Atmospheric Mist Scatter)
+    float bslFogScatter;          // 0.0 to 1.0 (Liminal Atmosphere Scattering)
 };
 
 layout(binding = 2) uniform UniformBlock {
@@ -200,7 +204,6 @@ vec3 tonemapACES(vec3 x) {
 }
 
 vec3 tonemapReinhardExtended(vec3 x) {
-    // Calibrated white point preserves SDR dynamic range without dimming
     float maxWhite = 4.5;
     return (x * (1.0 + (x / (maxWhite * maxWhite)))) / (1.0 + x);
 }
@@ -234,19 +237,14 @@ vec3 colorTempToRGB(float kelvin) {
 vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
     vec3 result = blendCol;
     if (mode == 1) {
-        // Screen
         result = 1.0 - (1.0 - baseCol) * (1.0 - blendCol);
     } else if (mode == 2) {
-        // Linear Add
         result = baseCol + blendCol;
     } else if (mode == 3) {
-        // Overlay
         result = mix(2.0 * baseCol * blendCol, 1.0 - 2.0 * (1.0 - baseCol) * (1.0 - blendCol), step(vec3(0.5), baseCol));
     } else if (mode == 4) {
-        // Soft Light
         result = (1.0 - 2.0 * blendCol) * baseCol * baseCol + 2.0 * blendCol * baseCol;
     } else if (mode == 5) {
-        // Multiply
         result = baseCol * blendCol;
     }
     return clamp(mix(baseCol, result, clamp(opacity, 0.0, 1.0)), 0.0, 4.0);
@@ -280,7 +278,6 @@ void main() {
 
     int totalLayers = int(clamp(u_layerCount, 0.0, 4.0));
 
-    // Zero-layer raw passthrough
     if (totalLayers <= 0) {
         if (u_hasLut > 0.5) {
             currentComposite = sample3DLut(currentComposite, u_lutOpacity);
@@ -386,9 +383,17 @@ void main() {
             layerColor = smoothstep(vec3(L.blackCrush * 0.12), vec3(1.0), layerColor);
         }
 
-        float luma = dot(layerColor, vec3(0.299, 0.587, 0.114));
-        layerColor += vec3(L.shadows * (1.0 - luma) * 0.35);
-        layerColor += vec3(L.highlights * luma * 0.35);
+        // --- ISOLATED HIGHLIGHTS AND SHADOWS S-CURVES ---
+        float luma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
+        
+        // Strict shadow isolation: Operates exclusively on luminance 0.0..0.52 with hermite weight
+        float sWeight = 1.0 - smoothstep(0.0, 0.52, luma);
+        layerColor += layerColor * (L.shadows * sWeight * 0.50);
+
+        // Strict highlight isolation: Operates exclusively on luminance 0.48..1.0 with hermite weight
+        float hWeight = smoothstep(0.48, 1.0, luma);
+        layerColor += layerColor * (L.highlights * hWeight * 0.50);
+
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
         // 9. Magic Bullet Mojo: Blockbuster Teal / Orange Split
@@ -427,7 +432,7 @@ void main() {
             layerColor = clamp(hueMat * layerColor, 0.0, 1.0);
         }
 
-        // 13. Continuous Inverse-Square Deep Glow
+        // 13. Continuous Inverse-Square Deep Glow (With Distinct Chromatic Falloff)
         if (L.deepGlowIntensity > 0.01) {
             vec3 bloomTint = vec3(1.0);
             if (L.edgeGlowTint == 1.0) bloomTint = vec3(1.18, 1.05, 0.70);       // Gold / Warm
@@ -459,7 +464,7 @@ void main() {
             layerColor += finalBloom;
         }
 
-        // 14. Sapphire S_Glow Core
+        // 14. Sapphire S_Glow Core (High-Knee Specular Thresholding)
         if (L.sapphireGlowWidth > 0.01) {
             int sRad = int(clamp(L.sapphireGlowWidth * 12.0, 2.0, 16.0));
             vec3 sGlowAcc = vec3(0.0);
@@ -470,14 +475,15 @@ void main() {
                     vec4 sp = unpackRGBA(in_pixels[sc.y * width + sc.x]);
                     float sl = dot(sp.rgb, vec3(0.299, 0.587, 0.114));
                     if (sl > L.sapphireGlowThreshold) {
-                        float w = exp(-float(sx * sx + sy * sy) / (2.0 * float(sRad * sRad)));
+                        float dist = float(sx * sx + sy * sy);
+                        float w = exp(-dist / (2.0 * float(sRad * sRad)));
                         sGlowAcc += sp.rgb * w;
                         sWeight += w;
                     }
                 }
             }
             if (sWeight > 0.0) {
-                layerColor += (sGlowAcc / sWeight) * 0.45;
+                layerColor += (sGlowAcc / sWeight) * 0.55;
             }
         }
 
@@ -512,31 +518,44 @@ void main() {
             layerColor += flareAcc * 0.85;
         }
 
-        // 16. BSLA Extreme: Screen-Space Raymarched God Rays & Atmospheric Fog
-        if (L.bslaGodRays > 0.01) {
-            vec2 lightSrc = vec2(float(width) * 0.5, float(height) * 0.18);
-            vec2 rayDir = (lightSrc - vec2(coord)) / float(max(width, height));
-            vec3 godRayAcc = vec3(0.0);
-            vec2 curRayPos = vec2(coord);
-            float stepSize = 14.0;
-            float rayDecay = 1.0;
+        // 16. BSLA Extreme: Screen-Space Raymarched God Rays & Authentic Liminal Mist Fog
+        if (L.bslaGodRays > 0.01 || L.bslaFogDensity > 0.01) {
+            vec2 uvCoord = vec2(coord) / vec2(width, height);
+            
+            // Volumetric God Rays
+            if (L.bslaGodRays > 0.01) {
+                vec2 lightSrc = vec2(float(width) * 0.5, float(height) * 0.18);
+                vec2 rayDir = (lightSrc - vec2(coord)) / float(max(width, height));
+                vec3 godRayAcc = vec3(0.0);
+                vec2 curRayPos = vec2(coord);
+                float stepSize = 14.0;
+                float rayDecay = 1.0;
 
-            for (int s = 0; s < 12; s++) {
-                curRayPos += rayDir * stepSize;
-                ivec2 rc = clamp(ivec2(curRayPos), ivec2(0), ivec2(width - 1, height - 1));
-                vec4 rPix = unpackRGBA(in_pixels[rc.y * width + rc.x]);
-                float rLum = dot(rPix.rgb, vec3(0.299, 0.587, 0.114));
-                godRayAcc += rPix.rgb * smoothstep(0.55, 0.98, rLum) * rayDecay;
-                rayDecay *= 0.88;
+                for (int s = 0; s < 12; s++) {
+                    curRayPos += rayDir * stepSize;
+                    ivec2 rc = clamp(ivec2(curRayPos), ivec2(0), ivec2(width - 1, height - 1));
+                    vec4 rPix = unpackRGBA(in_pixels[rc.y * width + rc.x]);
+                    float rLum = dot(rPix.rgb, vec3(0.299, 0.587, 0.114));
+                    godRayAcc += rPix.rgb * smoothstep(0.55, 0.98, rLum) * rayDecay;
+                    rayDecay *= 0.88;
+                }
+
+                vec3 sunShaftTint = vec3(0.95, 0.98, 1.05); // Cool clean AE atmospheric shafts
+                layerColor += (godRayAcc / 12.0) * sunShaftTint * (L.bslaGodRays * 0.65);
             }
 
-            vec3 sunFogColor = vec3(1.15, 1.02, 0.80);
-            layerColor += (godRayAcc / 12.0) * sunFogColor * (L.bslaGodRays * 0.65);
+            // Authentic BSL Liminal Atmospheric Fog (Cool slate / rain haze, NOT yellow)
+            if (L.bslaFogDensity > 0.01) {
+                float fogAlt = smoothstep(1.0 - L.bslaFogDepth, 0.0, uvCoord.y);
+                float lumScatter = smoothstep(0.15, 0.85, luma) * L.bslaBloomHaze;
+                
+                // Liminal cool slate/rain mist palette (#8FA3B8 neutral-cool mist)
+                vec3 liminalMist = vec3(0.56, 0.64, 0.72) + vec3(0.25, 0.28, 0.32) * lumScatter;
+                float fogFactor = clamp(L.bslaFogDensity * (0.35 + 0.65 * fogAlt), 0.0, 0.85);
 
-            float normY = float(coord.y) / float(height);
-            float fogFactor = 1.0 - exp(-normY * 1.8);
-            vec3 deepAtmosphere = vec3(0.85, 0.92, 1.05);
-            layerColor = mix(layerColor, deepAtmosphere * 0.85, fogFactor * 0.12);
+                // Screen blend preserves video details without washing out
+                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - liminalMist * fogFactor);
+            }
         }
 
         // 17. Volumetric Occluded Light Rays (Sapphire S_EdgeRays)
