@@ -114,24 +114,16 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final outputPath = '${tempDir.path}/rsmb_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
       final int steps = _shutterSteps;
-      final ffmpegCmd = [
-        '-y',
-        '-i', '"$_videoPath"',
-        '-vf',
-        '"scale=trunc(iw/2)*2:trunc(ih/2)*2,tmix=frames=$steps:weights=\'1 1 1 1 1 1 1 1\',format=yuv420p"',
-        '-r', '$_detectedFps',
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '17',
-        '-c:a', 'copy',
-        '-movflags', '+faststart',
-        '"$outputPath"',
-      ].join(' ');
+      final List<String> weightsList = List.filled(steps, '1');
+      final String weightsStr = weightsList.join(' ');
+
+      // Build clean, quote-safe FFmpeg CLI arguments without nested quoting errors
+      final ffmpegCmd = '-y -i "$_videoPath" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,tmix=frames=$steps:weights=$weightsStr,format=yuv420p" -r $_detectedFps -c:v libx264 -preset veryfast -crf 17 -c:a copy -movflags +faststart "$outputPath"';
 
       final session = await FFmpegKit.execute(ffmpegCmd);
       final returnCode = await session.getReturnCode();
 
-      if (returnCode != null && returnCode == 0) {
+      if (returnCode != null && returnCode.getValue() == 0) {
         setState(() {
           _isProcessing = false;
           _statusText = 'Complete!';
