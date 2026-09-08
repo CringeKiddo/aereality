@@ -37,14 +37,14 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   bool _isPlaying = false;
   bool _isFullScreen = false;
 
-  int _scaleFactor = 2; // 2 or 4
-  int _selectedModelIndex = 0; // 0 = Anime 6B, 1 = x2plus / x4plus
+  int _scaleFactor = 2;
+  int _selectedModelIndex = 0;
 
   double _deblur = 0.20;
   double _sharpness = 0.40;
   double _denoise = 0.15;
 
-  double _splitPosition = 0.50; // Comparison slider
+  double _splitPosition = 0.50;
 
   static final List<StoredUpscaleVideo> _storedVideos = [];
 
@@ -334,7 +334,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(14),
                 children: [
-                  // Dual 2x and 4x Buttons with Glowing Perimeter
                   Row(
                     children: [
                       Expanded(
