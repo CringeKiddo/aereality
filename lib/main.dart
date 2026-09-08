@@ -491,6 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          // CLEAR CACHE BUTTON IN MAIN MENU
           IconButton(
             icon: const Icon(Icons.cleaning_services_rounded, color: Colors.white70),
             tooltip: 'Clear App Cache',
@@ -603,6 +604,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: Text('REELSMART MOTION BLUR STUDIO', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: accent.withOpacity(0.6), width: 1.2),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // RECENT SESSION OPENER
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  if (_recent.isNotEmpty) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
+                    ).then((_) => _load());
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved sessions yet.')));
+                  }
+                },
+                icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
+                label: Text('OPEN MOST RECENT SESSION', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: accent.withOpacity(0.4), width: 1.0),
                   padding: const EdgeInsets.symmetric(vertical: 13),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
@@ -1056,7 +1083,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Pure live grading: For images runs Vulkan; for video triggers direct GPU filter rebuild
+  // Pure live grading: For images runs Vulkan; for video triggers direct GPU filter rebuild with ZERO ghost overlays
   Future<void> _applyGrade() async {
     if (_project.isImage && _cachedRawImage != null) {
       try {
@@ -1105,6 +1132,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       s *= (1.0 + (l.saturation - 1.0) * op);
       b += l.brightness * 255.0 * op;
 
+      // Strictly isolated Highlights vs. Shadows
       highLift += (l.highlights * 30.0 * op);
       shadowLift += (l.shadows * 30.0 * op);
       temp += (l.temperature - 6500.0) * op;
@@ -1116,6 +1144,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
+    // White balance multiplier
     double rMult = 1.0;
     double bMult = 1.0;
     if (temp > 6500) {
@@ -1126,9 +1155,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       rMult -= (6500 - temp) / 10000.0;
     }
 
+    // Saturation matrix coefficients
     final double sr = (1 - s) * 0.2126;
     final double sg = (1 - s) * 0.7152;
     final double sb = (1 - s) * 0.0722;
+
     final double t = (1.0 - c) * 128.0;
 
     final List<double> matrix = [
@@ -1176,6 +1207,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       child: Stack(
         fit: StackFit.expand,
         children: [
+          // 1. Deep Glow & S_Glow Core
           if (totalBloom > 0.02)
             Opacity(
               opacity: totalBloom,
@@ -1193,6 +1225,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
               ),
             ),
+          // 2. Anamorphic Flare Streak
           if (flareOpacity > 0.02)
             Center(
               child: Opacity(
@@ -1212,6 +1245,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
               ),
             ),
+          // 3. Authentic BSL Volumetric Liminal Fog Overlay (Slate / Rain Mist)
           if (bslFogAmt > 0.01)
             Opacity(
               opacity: bslFogAmt,
@@ -1554,7 +1588,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     // Audio Export Settings
     String selectedAudioMode = 'Lossless Source Copy';
-    String selectedAudioBitrate = '320 kbps';
 
     final containers = ['MP4', 'WebM', 'MOV', 'MKV'];
     final resolutions = ['720p', '1080p', '2K', '4K'];
