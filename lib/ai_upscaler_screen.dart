@@ -175,10 +175,12 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Resume', style: TextStyle(color: Colors.white54))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () async {
+            onPressed: () {
               Navigator.pop(ctx);
               if (_activeSession != null) {
-                await FFmpegKit.cancel(_activeSession!.getSessionId());
+                FFmpegKit.cancel(_activeSession!);
+              } else {
+                FFmpegKit.cancel();
               }
               setState(() {
                 _isExporting = false;
@@ -214,31 +216,30 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
 
       final ffmpegCmd = '-y -i "$sourcePath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=neighbor,unsharp=5:5:${_sharpness.toStringAsFixed(2)}" -c:v libx264 -preset fast -crf 18 -c:a copy "$outputPath"';
 
-      _activeSession = await FFmpegKit.executeAsync(ffmpegCmd, (session) async {
-        final code = await session.getReturnCode();
-        if (code != null && code.isValueSuccess()) {
-          setState(() {
-            _isExporting = false;
-            _exportProgress = 1.0;
-            _exportStatus = 'Done!';
-            if (_storedVideos.length >= 3) _storedVideos.removeAt(0);
-            _storedVideos.add(
-              StoredUpscaleVideo(
-                id: DateTime.now().toString(),
-                path: outputPath,
-                name: outputPath.split('/').last,
-                scale: '${_scaleFactor}x',
-                date: DateTime.now(),
-              ),
-            );
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('✅ Upscale saved to:\n$outputPath'), backgroundColor: Colors.green),
+      _activeSession = await FFmpegKit.executeAsync(ffmpegCmd);
+      final returnCode = await _activeSession!.getReturnCode();
+      if (returnCode != null && returnCode == 0) {
+        setState(() {
+          _isExporting = false;
+          _exportProgress = 1.0;
+          _exportStatus = 'Done!';
+          if (_storedVideos.length >= 3) _storedVideos.removeAt(0);
+          _storedVideos.add(
+            StoredUpscaleVideo(
+              id: DateTime.now().toString(),
+              path: outputPath,
+              name: outputPath.split('/').last,
+              scale: '${_scaleFactor}x',
+              date: DateTime.now(),
+            ),
           );
-        } else {
-          setState(() => _isExporting = false);
-        }
-      });
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Upscale saved to:\n$outputPath'), backgroundColor: Colors.green),
+        );
+      } else {
+        setState(() => _isExporting = false);
+      }
     } catch (e) {
       setState(() => _isExporting = false);
       ScaffoldMessenger.of(context).showSnackBar(
