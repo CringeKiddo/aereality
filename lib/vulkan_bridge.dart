@@ -15,6 +15,8 @@ typedef ProcessImageC = Void Function(
   Int32 outHeight,
   Pointer<Float> uniforms,
   Int32 uniformCount,
+  Pointer<Float> lutTable,
+  Int32 lutCount,
 );
 
 typedef ProcessImageDart = void Function(
@@ -26,6 +28,8 @@ typedef ProcessImageDart = void Function(
   int outHeight,
   Pointer<Float> uniforms,
   int uniformCount,
+  Pointer<Float> lutTable,
+  int lutCount,
 );
 
 typedef ProcessImage16C = Void Function(
@@ -37,6 +41,8 @@ typedef ProcessImage16C = Void Function(
   Int32 outHeight,
   Pointer<Float> uniforms,
   Int32 uniformCount,
+  Pointer<Float> lutTable,
+  Int32 lutCount,
 );
 
 typedef ProcessImage16Dart = void Function(
@@ -48,6 +54,8 @@ typedef ProcessImage16Dart = void Function(
   int outHeight,
   Pointer<Float> uniforms,
   int uniformCount,
+  Pointer<Float> lutTable,
+  int lutCount,
 );
 
 DynamicLibrary? _lib;
@@ -92,8 +100,9 @@ Uint8List processImage(
   int inHeight,
   int outWidth,
   int outHeight,
-  Float32List uniforms,
-) {
+  Float32List uniforms, {
+  Float32List? lutTable,
+}) {
   try {
     final nativeLib = _getLib();
     final ProcessImageDart procFunc = _lookupSymbol<ProcessImageC>(nativeLib, 'process_image', 'processImage').asFunction();
@@ -109,13 +118,22 @@ Uint8List processImage(
     final uniPtr = calloc<Float>(uniforms.length);
     uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
 
-    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
+    Pointer<Float> lutPtr = nullptr;
+    int lutCount = 0;
+    if (lutTable != null && lutTable.isNotEmpty) {
+      lutCount = lutTable.length;
+      lutPtr = calloc<Float>(lutCount);
+      lutPtr.asTypedList(lutCount).setAll(0, lutTable);
+    }
+
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length, lutPtr, lutCount);
 
     final result = Uint8List.fromList(outPtr.asTypedList(outSize));
 
     calloc.free(inPtr);
     calloc.free(outPtr);
     calloc.free(uniPtr);
+    if (lutPtr != nullptr) calloc.free(lutPtr);
 
     return result;
   } catch (e) {
@@ -129,8 +147,9 @@ Uint16List processImage16(
   int inHeight,
   int outWidth,
   int outHeight,
-  Float32List uniforms,
-) {
+  Float32List uniforms, {
+  Float32List? lutTable,
+}) {
   try {
     final nativeLib = _getLib();
     final ProcessImage16Dart procFunc = _lookupSymbol<ProcessImage16C>(nativeLib, 'process_image_16', 'processImage16').asFunction();
@@ -146,13 +165,22 @@ Uint16List processImage16(
     final uniPtr = calloc<Float>(uniforms.length);
     uniPtr.asTypedList(uniforms.length).setAll(0, uniforms);
 
-    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length);
+    Pointer<Float> lutPtr = nullptr;
+    int lutCount = 0;
+    if (lutTable != null && lutTable.isNotEmpty) {
+      lutCount = lutTable.length;
+      lutPtr = calloc<Float>(lutCount);
+      lutPtr.asTypedList(lutCount).setAll(0, lutTable);
+    }
+
+    procFunc(inPtr, inWidth, inHeight, outPtr, outWidth, outHeight, uniPtr, uniforms.length, lutPtr, lutCount);
 
     final result = Uint16List.fromList(outPtr.asTypedList(outSize));
 
     calloc.free(inPtr);
     calloc.free(outPtr);
     calloc.free(uniPtr);
+    if (lutPtr != nullptr) calloc.free(lutPtr);
 
     return result;
   } catch (e) {
