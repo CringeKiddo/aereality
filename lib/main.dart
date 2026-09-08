@@ -357,18 +357,17 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 20),
                   const Text('DEVELOPER & COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   ElevatedButton.icon(
-                    onPressed: () async {
-                      final uri = Uri.parse(kMyYouTubeChannel);
-                      try {
-                        await launchUrl(uri, mode: LaunchMode.externalApplication);
-                      } catch (_) {}
+                    onPressed: () {
+                      Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('YouTube channel link copied to clipboard: @null7839'), backgroundColor: Colors.redAccent),
+                      );
                     },
                     icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
-                    label: const Text('VISIT MY YOUTUBE CHANNEL', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    label: const Text('COPY MY YOUTUBE CHANNEL LINK (@null7839)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E1418),
                       foregroundColor: Colors.white,
