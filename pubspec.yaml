@@ -15,7 +15,7 @@ dependencies:
   # Modern FFmpeg Kit Extended
   ffmpeg_kit_extended_flutter: ^0.6.2
 
-  # Media playback, file picking & URL launch
+  # Media playback, file picking & external URL link
   video_player: ^2.8.2
   file_picker: ^8.0.0
   path_provider: ^2.1.2
