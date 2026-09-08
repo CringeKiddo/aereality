@@ -1226,4 +1226,3 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       default: return 16 / 9;
     }
   }
-  
