@@ -177,11 +177,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () {
               Navigator.pop(ctx);
-              if (_activeSession != null) {
-                FFmpegKit.cancel(_activeSession!);
-              } else {
-                FFmpegKit.cancel();
-              }
+              _activeSession?.cancel();
               setState(() {
                 _isExporting = false;
                 _exportStatus = 'Cancelled';
