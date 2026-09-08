@@ -121,9 +121,9 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final ffmpegCmd = '-y -i "$_videoPath" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,tmix=frames=$steps:weights=$weightsStr,format=yuv420p" -r $_detectedFps -c:v libx264 -preset veryfast -crf 17 -c:a copy -movflags +faststart "$outputPath"';
 
       final session = await FFmpegKit.execute(ffmpegCmd);
-      final returnCode = await session.getReturnCode();
-
-      if (returnCode != null && returnCode.getValue() == 0) {
+      //  CORRECT
+final returnCode = await session.getReturnCode();
+if (returnCode == 0) {
         setState(() {
           _isProcessing = false;
           _statusText = 'Complete!';
