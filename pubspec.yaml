@@ -1,4 +1,4 @@
-name: Shaderly
+name: shaderly
 description: "Shaderly - High Performance Vulkan Compute & Master Export Suite"
 publish_to: 'none'
 
@@ -15,10 +15,11 @@ dependencies:
   # Modern FFmpeg Kit Extended
   ffmpeg_kit_extended_flutter: ^0.6.2
 
-  # Media playback and file picking
+  # Media playback, file picking & URL launch
   video_player: ^2.8.2
   file_picker: ^8.0.0
   path_provider: ^2.1.2
+  url_launcher: ^6.2.5
 
   # Frame encoding / decoding (supports 8-bit & 16-bit pipelines)
   image: ^4.1.7
@@ -31,7 +32,6 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^3.0.0
 
-# Instructs the build hook to download the full package containing all video & audio encoders
 ffmpeg_kit_extended_config:
   type: full
 
