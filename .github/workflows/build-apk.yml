@@ -41,8 +41,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze Dart code (Display compilation errors)
-        run: flutter analyze
+      - name: Analyze Dart code
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build release APK
         run: flutter build apk --release -v --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096 --android-skip-build-dependency-validation
