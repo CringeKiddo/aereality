@@ -22,9 +22,8 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'main'
+          channel: 'stable' # ✅ Using stable avoids the experimental "File modified during build" hook error
 
-      # ✅ NEW: Compile GLSL to SPIR-V
       - name: Install glslang and compile shader
         run: |
           sudo apt-get update
@@ -32,27 +31,12 @@ jobs:
           mkdir -p assets/shaders
           glslangValidator -V shaders/aereality_core.comp -o assets/shaders/aereality_core.spv
 
-      - name: Generate Android resources
-        run: |
-          flutter create --platforms=android --org com.example .
-          git checkout -- android/build.gradle android/settings.gradle android/app/build.gradle android/gradle.properties lib/ shaders/ pubspec.yaml
-
       - name: Clean Gradle cache
         run: |
           rm -rf android/.gradle
           rm -rf android/app/build
           rm -rf android/build
           rm -rf ~/.gradle/caches/
-
-      - name: Cache Flutter dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pub-cache
-            build/
-          key: ${{ runner.os }}-flutter-${{ hashFiles('pubspec.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-flutter-
 
       - name: Install dependencies
         run: flutter pub get
