@@ -1,5 +1,5 @@
-name: aereality_studio
-description: "AEReality Studio - High Performance Vulkan Compute & Master Export Suite"
+name: Shaderly
+description: "Shaderly - High Performance Vulkan Compute & Master Export Suite"
 publish_to: 'none'
 
 version: 1.0.0+1
