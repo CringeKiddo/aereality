@@ -49,7 +49,6 @@ jobs:
           mkdir -p android/app/src/main/res/mipmap-xxhdpi
           mkdir -p android/app/src/main/res/mipmap-xxxhdpi
 
-          # Create styles.xml with LaunchTheme and NormalTheme
           cat << 'EOF' > android/app/src/main/res/values/styles.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
@@ -62,7 +61,6 @@ jobs:
           </resources>
           EOF
 
-          # Create launch_background.xml
           cat << 'EOF' > android/app/src/main/res/drawable/launch_background.xml
           <?xml version="1.0" encoding="utf-8"?>
           <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
@@ -70,7 +68,6 @@ jobs:
           </layer-list>
           EOF
 
-          # Create default launcher icon
           cat << 'EOF' > android/app/src/main/res/drawable/ic_launcher.xml
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
@@ -90,23 +87,8 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096 --android-skip-build-dependency-validation
 
-      # ✅ NEW STEP: Sign APK with valid Android v2/v3 signature so Package Installer doesn't silently dismiss
-      - name: Sign APK for Device Installation
-        run: |
-          # Generate temporary release keystore
-          keytool -genkey -v -keystore release.keystore -alias aereality -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Shaderly, OU=Mobile, O=AEReality, C=US"
-
-          # Locate apksigner from Android SDK
-          APKSIGNER=$(find $ANDROID_SDK_ROOT/build-tools -name apksigner | sort | tail -n 1)
-          ZIPALIGN=$(find $ANDROID_SDK_ROOT/build-tools -name zipalign | sort | tail -n 1)
-
-          # Align and sign
-          $ZIPALIGN -f -v 4 build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-release-aligned.apk
-          $APKSIGNER sign --ks release.keystore --ks-key-alias aereality --ks-pass pass:android --key-pass pass:android --out build/app/outputs/flutter-apk/Shaderly-signed.apk build/app/outputs/flutter-apk/app-release-aligned.apk
-          $APKSIGNER verify build/app/outputs/flutter-apk/Shaderly-signed.apk
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Shaderly-signed.apk
-          path: build/app/outputs/flutter-apk/Shaderly-signed.apk
+          name: aereality-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
