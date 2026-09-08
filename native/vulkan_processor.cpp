@@ -30,8 +30,9 @@ struct VulkanContext {
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkFence computeFence = VK_NULL_HANDLE;
 
-    // Buffers: In, Out, Uniforms, 3D LUT
+    // Buffer references: Input, Output, Uniforms, 3D LUT
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
@@ -213,14 +214,97 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     vkUpdateDescriptorSets(gVk.device, 4, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Vulkan Frame & LUT Buffers Allocated for %zu pixels.", requiredPixels);
+    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels (4K Master ready).", requiredPixels);
     return true;
 }
 
+// Catmull-Rom Spline Evaluator for CPU Fallback Mode
+float evalSplineCPU(float x, float p0, float p1, float p2, float p3, float p4) {
+    x = std::max(0.0f, std::min(1.0f, x));
+    float seg = x * 4.0f;
+    int idx = static_cast<int>(std::floor(seg));
+    if (idx >= 4) return p4;
+    float t = seg - static_cast<float>(idx);
+
+    float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
+    float cp1 = (idx == 0) ? p0 : (idx == 1) ? p1 : (idx == 2) ? p2 : p3;
+    float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
+    float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
+
+    float m1 = 0.5f * (cp2 - cp0);
+    float m2 = 0.5f * (cp3 - cp1);
+
+    float t2 = t * t;
+    float t3 = t2 * t;
+
+    float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
+    float h10 = t3 - 2.0f * t2 + t;
+    float h01 = -2.0f * t3 + 3.0f * t2;
+    float h11 = t3 - t2;
+
+    return std::max(0.0f, std::min(1.0f, h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2));
+}
+
+// Trilinear 3D LUT Fallback Sampler
+void sample3DLutCPU(float& r, float& g, float& b, const float* lutTable, float opacity) {
+    if (opacity <= 0.001f || lutTable == nullptr) return;
+
+    float rCoord = std::max(0.0f, std::min(1.0f, r)) * 31.0f;
+    float gCoord = std::max(0.0f, std::min(1.0f, g)) * 31.0f;
+    float bCoord = std::max(0.0f, std::min(1.0f, b)) * 31.0f;
+
+    int r0 = static_cast<int>(std::floor(rCoord));
+    int g0 = static_cast<int>(std::floor(gCoord));
+    int b0 = static_cast<int>(std::floor(bCoord));
+
+    int r1 = std::min(31, r0 + 1);
+    int g1 = std::min(31, g0 + 1);
+    int b1 = std::min(31, b0 + 1);
+
+    float fr = rCoord - r0;
+    float fg = gCoord - g0;
+    float fb = bCoord - b0;
+
+    auto getLut = [&](int cr, int cg, int cb, int ch) -> float {
+        int index = (cb * 1024 + cg * 32 + cr) * 3 + ch;
+        return lutTable[index];
+    };
+
+    float outRGB[3] = {0.0f, 0.0f, 0.0f};
+
+    for (int ch = 0; ch < 3; ch++) {
+        float c000 = getLut(r0, g0, b0, ch);
+        float c100 = getLut(r1, g0, b0, ch);
+        float c010 = getLut(r0, g1, b0, ch);
+        float c110 = getLut(r1, g1, b0, ch);
+        float c001 = getLut(r0, g0, b1, ch);
+        float c101 = getLut(r1, g0, b1, ch);
+        float c011 = getLut(r0, g1, b1, ch);
+        float c111 = getLut(r1, g1, b1, ch);
+
+        float c00 = c000 * (1.0f - fr) + c100 * fr;
+        float c10 = c010 * (1.0f - fr) + c110 * fr;
+        float c01 = c001 * (1.0f - fr) + c101 * fr;
+        float c11 = c011 * (1.0f - fr) + c111 * fr;
+
+        float c0 = c00 * (1.0f - fg) + c10 * fg;
+        float c1 = c01 * (1.0f - fg) + c11 * fg;
+
+        outRGB[ch] = c0 * (1.0f - fb) + c1 * fb;
+    }
+
+    r = r * (1.0f - opacity) + outRGB[0] * opacity;
+    g = g * (1.0f - opacity) + outRGB[1] * opacity;
+    b = b * (1.0f - opacity) + outRGB[2] * opacity;
+}
+
 // 32-bit Floating Point CPU Fallback Grading Pipeline
-void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h, const float* ubo) {
+void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h, const float* ubo, const float* lutTable = nullptr) {
     int layerCount = static_cast<int>(ubo[1]);
-    if (layerCount <= 0) {
+    float hasLut = ubo[5];
+    float lutOpacity = ubo[6];
+
+    if (layerCount <= 0 && hasLut <= 0.001f) {
         std::memcpy(dst, src, w * h * sizeof(uint32_t));
         return;
     }
@@ -238,7 +322,7 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
 
             for (int l = 0; l < std::min(layerCount, 4); l++) {
                 int off = 8 + (l * 64);
-                if (ubo[off + 0] < 0.5f) continue;
+                if (ubo[off + 0] < 0.5f) continue; // Layer Disabled
 
                 float opacity = ubo[off + 1];
                 int mode = static_cast<int>(ubo[off + 2]);
@@ -251,19 +335,28 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
                 float lg = g + brightness;
                 float lb = b + brightness;
 
+                // 0.18 Mid-Gray Pivot Contrast
                 lr = (lr - 0.18f) * contrast + 0.18f;
                 lg = (lg - 0.18f) * contrast + 0.18f;
                 lb = (lb - 0.18f) * contrast + 0.18f;
 
+                // Master Spline Curves
+                lr = evalSplineCPU(lr, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
+                lg = evalSplineCPU(lg, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
+                lb = evalSplineCPU(lb, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
+
+                // Gamma
                 lr = std::pow(std::max(0.0f, lr), 1.0f / gamma);
                 lg = std::pow(std::max(0.0f, lg), 1.0f / gamma);
                 lb = std::pow(std::max(0.0f, lb), 1.0f / gamma);
 
+                // Saturation
                 float luma = 0.299f * lr + 0.587f * lg + 0.114f * lb;
                 lr = luma + saturation * (lr - luma);
                 lg = luma + saturation * (lg - luma);
                 lb = luma + saturation * (lb - luma);
 
+                // Blend Modes
                 if (mode == 1) { // Screen
                     r = 1.0f - (1.0f - r) * (1.0f - lr * opacity);
                     g = 1.0f - (1.0f - g) * (1.0f - lg * opacity);
@@ -277,6 +370,10 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
                     g = g * (1.0f - opacity) + lg * opacity;
                     b = b * (1.0f - opacity) + lb * opacity;
                 }
+            }
+
+            if (hasLut > 0.5f && lutTable != nullptr) {
+                sample3DLutCPU(r, g, b, lutTable, lutOpacity);
             }
 
             uint32_t ur = static_cast<uint32_t>(std::max(0.0f, std::min(255.0f, r * 255.0f)));
@@ -296,11 +393,17 @@ extern "C" {
 int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
-    if (gVk.isInitialized) return 1;
+    if (gVk.isInitialized) {
+        return 1;
+    }
 
+    // 1. Create Vulkan Instance
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "ShaderlyCore";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "ShaderlyCompute";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo createInfo{};
@@ -308,13 +411,17 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     createInfo.pApplicationInfo = &appInfo;
 
     if (vkCreateInstance(&createInfo, nullptr, &gVk.instance) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan instance.");
+        LOGE("Failed to create Vulkan instance! Falling back to 32-bit CPU pipeline.");
         return 0;
     }
 
+    // 2. Pick Physical Device with Compute Queue
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
-    if (deviceCount == 0) return 0;
+    if (deviceCount == 0) {
+        LOGE("No Vulkan physical devices found.");
+        return 0;
+    }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, devices.data());
@@ -333,8 +440,13 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
             break;
         }
     }
-    if (!foundQueue) return 0;
 
+    if (!foundQueue) {
+        LOGE("No compute queue family found on device.");
+        return 0;
+    }
+
+    // 3. Create Logical Device
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -342,27 +454,32 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
+    VkPhysicalDeviceFeatures deviceFeatures{};
     VkDeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+    deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
     if (vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device) != VK_SUCCESS) {
+        LOGE("Failed to create Vulkan logical device.");
         return 0;
     }
 
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
 
+    // 4. Create Shader Module from SPIR-V
     VkShaderModuleCreateInfo shaderModuleInfo{};
     shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     shaderModuleInfo.codeSize = length;
     shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(shaderBytes);
 
     if (vkCreateShaderModule(gVk.device, &shaderModuleInfo, nullptr, &gVk.shaderModule) != VK_SUCCESS) {
+        LOGE("Failed to create Vulkan shader module.");
         return 0;
     }
 
-    // 4 Storage Buffer Bindings: 0=Input, 1=Output, 2=Uniforms, 3=LUT
+    // 5. Create Descriptor Set Layout for 4 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT)
     VkDescriptorSetLayoutBinding bindings[4]{};
     for (int b = 0; b < 4; b++) {
         bindings[b].binding = b;
@@ -378,6 +495,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
+    // 6. Create Pipeline Layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
@@ -385,6 +503,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
 
+    // 7. Create Compute Pipeline
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = gVk.pipelineLayout;
@@ -395,6 +514,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
 
+    // 8. Create Descriptor Pool & Allocate Set
     VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 4;
@@ -415,6 +535,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkAllocateDescriptorSets(gVk.device, &setAllocInfo, &gVk.descriptorSet);
 
+    // 9. Command Pool, Command Buffer & Fence
     VkCommandPoolCreateInfo cmdPoolInfo{};
     cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cmdPoolInfo.queueFamilyIndex = gVk.computeQueueFamilyIndex;
@@ -430,8 +551,13 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkAllocateCommandBuffers(gVk.device, &cmdAllocInfo, &gVk.commandBuffer);
 
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = 0;
+    vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
+
     gVk.isInitialized = true;
-    LOGI("Shaderly 4-Slot Vulkan Compute Pipeline Initialized.");
+    LOGI("Shaderly Vulkan Compute Pipeline Initialized Successfully with 4 slots.");
     return 1;
 }
 
@@ -446,27 +572,33 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount)) {
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
                                   reinterpret_cast<uint32_t*>(outputBytes),
-                                  outWidth, outHeight, uniforms);
+                                  outWidth, outHeight, uniforms, lutTable);
         return;
     }
 
+    // 1. Copy Input Pixels to Vulkan Staging Memory
     void* mappedInput = nullptr;
     vkMapMemory(gVk.device, gVk.inMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedInput);
     std::memcpy(mappedInput, inputBytes, pixelCount * sizeof(uint32_t));
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
+    // 2. Copy Uniforms to Vulkan UBO Memory
     void* mappedUbo = nullptr;
-    vkMapMemory(gVk.device, gVk.uboMemory, 0, std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float))), 0, &mappedUbo);
-    std::memcpy(mappedUbo, uniforms, std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float))));
+    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float)));
+    vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
+    std::memcpy(mappedUbo, uniforms, uboCopyBytes);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
+    // 3. Copy 3D LUT Table if Present
     if (lutTable != nullptr && lutCount > 0) {
         void* mappedLut = nullptr;
-        vkMapMemory(gVk.device, gVk.lutMemory, 0, std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float))), 0, &mappedLut);
-        std::memcpy(mappedLut, lutTable, std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float))));
+        size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
+        vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
+        std::memcpy(mappedLut, lutTable, lutCopyBytes);
         vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
 
+    // 4. Record and Dispatch Compute Shader
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -481,14 +613,18 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkCmdDispatch(gVk.commandBuffer, groupCountX, groupCountY, 1);
     vkEndCommandBuffer(gVk.commandBuffer);
 
+    // 5. Submit with Fence Synchronization
+    vkResetFences(gVk.device, 1, &gVk.computeFence);
+
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &gVk.commandBuffer;
 
-    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(gVk.computeQueue);
+    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
+    vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
 
+    // 6. Read Back Processed Pixels
     void* mappedOutput = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedOutput);
     std::memcpy(outputBytes, mappedOutput, pixelCount * sizeof(uint32_t));
@@ -537,6 +673,10 @@ void cleanup_processor() {
 
     cleanupBuffers();
 
+    if (gVk.computeFence != VK_NULL_HANDLE) {
+        vkDestroyFence(gVk.device, gVk.computeFence, nullptr);
+        gVk.computeFence = VK_NULL_HANDLE;
+    }
     if (gVk.commandPool != VK_NULL_HANDLE) {
         vkDestroyCommandPool(gVk.device, gVk.commandPool, nullptr);
         gVk.commandPool = VK_NULL_HANDLE;
@@ -571,6 +711,60 @@ void cleanup_processor() {
     }
 
     gVk.isInitialized = false;
+    LOGI("Shaderly Vulkan Processor Destroyed Cleanly.");
+}
+
+// JNI Bridge Exports
+JNIEXPORT jboolean JNICALL
+Java_com_example_aereality_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArray shaderBytes, jint precisionMode) {
+    jsize len = env->GetArrayLength(shaderBytes);
+    jbyte* buf = env->GetByteArrayElements(shaderBytes, nullptr);
+    int32_t res = init_vulkan(reinterpret_cast<const uint8_t*>(buf), len, precisionMode);
+    env->ReleaseByteArrayElements(shaderBytes, buf, JNI_ABORT);
+    return res == 1 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_example_aereality_VulkanBridge_processImage(JNIEnv* env, jobject thiz,
+                                                     jbyteArray inputPixels,
+                                                     jint inWidth, jint inHeight,
+                                                     jint outWidth, jint outHeight,
+                                                     jfloatArray uniformData,
+                                                     jfloatArray lutData) {
+    size_t pixelCount = static_cast<size_t>(outWidth * outHeight);
+    jbyte* inPtr = env->GetByteArrayElements(inputPixels, nullptr);
+    jfloat* uboPtr = env->GetFloatArrayElements(uniformData, nullptr);
+    jsize uboLen = env->GetArrayLength(uniformData);
+
+    jfloat* lutPtr = nullptr;
+    jsize lutLen = 0;
+    if (lutData != nullptr) {
+        lutLen = env->GetArrayLength(lutData);
+        lutPtr = env->GetFloatArrayElements(lutData, nullptr);
+    }
+
+    jbyteArray resultByteArray = env->NewByteArray(pixelCount * sizeof(uint32_t));
+    std::vector<uint8_t> outBuffer(pixelCount * sizeof(uint32_t));
+
+    process_image(reinterpret_cast<const uint8_t*>(inPtr), inWidth, inHeight,
+                  outBuffer.data(), outWidth, outHeight,
+                  uboPtr, uboLen, lutPtr, lutLen);
+
+    env->SetByteArrayRegion(resultByteArray, 0, pixelCount * sizeof(uint32_t),
+                            reinterpret_cast<const jbyte*>(outBuffer.data()));
+
+    env->ReleaseByteArrayElements(inputPixels, inPtr, JNI_ABORT);
+    env->ReleaseFloatArrayElements(uniformData, uboPtr, JNI_ABORT);
+    if (lutData != nullptr) {
+        env->ReleaseFloatArrayElements(lutData, lutPtr, JNI_ABORT);
+    }
+
+    return resultByteArray;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_aereality_VulkanBridge_destroyVulkan(JNIEnv* env, jobject thiz) {
+    cleanup_processor();
 }
 
 } // extern "C"
