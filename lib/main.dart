@@ -13,7 +13,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:image/image.dart' as img;
-import 'package:url_launcher/url_launcher.dart';
 
 import 'constants.dart';
 import 'models.dart';
