@@ -115,7 +115,6 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final ext = _videoPath!.split('.').last.toLowerCase();
       final outputPath = '${tempDir.path}/rsmb_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
-      // Precise optical blur preserving line art and copying original audio losslessly (-c:a copy)
       final int steps = _shutterSteps;
       final ffmpegCmd = [
         '-y',
@@ -126,7 +125,7 @@ class _RsmbScreenState extends State<RsmbScreen> {
         '-c:v', 'libx264',
         '-preset', 'veryfast',
         '-crf', '17',
-        '-c:a', 'copy', // Zero audio desync
+        '-c:a', 'copy',
         '-movflags', '+faststart',
         '"$outputPath"',
       ].join(' ');
@@ -134,14 +133,14 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final session = await FFmpegKit.execute(ffmpegCmd);
       final returnCode = await session.getReturnCode();
 
-      if (returnCode != null && returnCode.isValueSuccess()) {
+      // In ffmpeg_kit_extended_flutter, returnCode is an int (0 == success)
+      if (returnCode != null && returnCode == 0) {
         setState(() {
           _isProcessing = false;
           _statusText = 'Complete!';
         });
 
         if (sendToTimeline && mounted) {
-          // Send directly to the grading timeline!
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
