@@ -13,12 +13,16 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:image/image.dart' as img;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
 import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
+import 'touch_particles.dart';
+import 'ai_upscaler_screen.dart';
+import 'rsmb_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,19 +37,19 @@ Future<void> main() async {
     debugPrint('FFmpeg initialization error: $e');
   }
 
-  // Ensure public /storage/emulated/0/Shadely directory exists
+  // Ensure public /storage/emulated/0/Shaderly directory exists
   try {
-    final shadelyDir = Directory('/storage/emulated/0/Shadely');
-    if (!await shadelyDir.exists()) {
-      await shadelyDir.create(recursive: true);
+    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+    if (!await shaderlyDir.exists()) {
+      await shaderlyDir.create(recursive: true);
     }
   } catch (_) {}
 
-  runApp(const ShadelyApp());
+  runApp(const ShaderlyApp());
 }
 
-class ShadelyApp extends StatelessWidget {
-  const ShadelyApp({super.key});
+class ShaderlyApp extends StatelessWidget {
+  const ShaderlyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +57,7 @@ class ShadelyApp extends StatelessWidget {
       valueListenable: gCustomAccentColor,
       builder: (context, accentColor, _) {
         return MaterialApp(
-          title: 'Shadely',
+          title: 'Shaderly',
           theme: ThemeData.dark().copyWith(
             scaffoldBackgroundColor: kBackgroundDark,
             primaryColor: accentColor,
@@ -74,7 +78,10 @@ class ShadelyApp extends StatelessWidget {
               iconTheme: IconThemeData(color: Colors.white),
             ),
           ),
-          home: const HomeScreen(),
+          // Wrapped with Cyan + Lavender touch particle emitter for smooth slides & touches
+          home: const TouchParticlesWrapper(
+            child: HomeScreen(),
+          ),
           debugShowCheckedModeBanner: false,
         );
       },
@@ -132,6 +139,39 @@ class _HomeScreenState extends State<HomeScreen> {
             if (mounted) setState(() => _thumbnails[p.id] = bytes);
           }
         } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _clearAppCache() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      int deletedBytes = 0;
+      if (await tempDir.exists()) {
+        final list = tempDir.listSync(recursive: true);
+        for (var f in list) {
+          if (f is File) {
+            try {
+              deletedBytes += f.lengthSync();
+              f.deleteSync();
+            } catch (_) {}
+          }
+        }
+      }
+      final double mbFreed = deletedBytes / (1024 * 1024);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed!'),
+            backgroundColor: Colors.teal,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error clearing cache: $e'), backgroundColor: Colors.red),
+        );
       }
     }
   }
@@ -317,6 +357,50 @@ class _HomeScreenState extends State<HomeScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
+
+                  const SizedBox(height: 20),
+                  const Text('DEVELOPER & COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final uri = Uri.parse(kMyYouTubeChannel);
+                      try {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      } catch (_) {}
+                    },
+                    icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
+                    label: const Text('VISIT MY YOUTUBE CHANNEL', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E1418),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+                  const Text('ABOUT & LICENSING', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Shaderly HDR Studio v3.5', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        SizedBox(height: 4),
+                        Text(
+                          'Powered by Vulkan FP32 compute pipelines, Real-ESRGAN neural super-resolution (BSD 3-Clause), and FFmpeg Kit multimedia engines.',
+                          style: TextStyle(color: Colors.white54, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+
                   const SizedBox(height: 20),
                   const Text('TIMELINE PREVIEW QUALITY (FPS & LAG REDUCTION)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
@@ -403,10 +487,15 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text('SH', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
             const SizedBox(width: 10),
-            const Text('Shadely'),
+            const Text('Shaderly'),
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.cleaning_services_rounded, color: Colors.white70),
+            tooltip: 'Clear App Cache',
+            onPressed: _clearAppCache,
+          ),
           IconButton(
             icon: Icon(Icons.tune_rounded, color: accent),
             tooltip: 'Settings',
@@ -430,61 +519,97 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
                   child: Text(
-                    'SHADELY CORE',
+                    'SHADERLY CORE',
                     style: TextStyle(color: accent, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 6),
-            const Text('Shadely', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+            const Text('Shaderly', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             const Text(
               'Adjustment Layers, Physical Inverse-Square Bloom, Real Anamorphic Flares & 4K Master Pipeline.',
               style: TextStyle(color: Colors.white54, fontSize: 13),
             ),
             const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: ElevatedButton.icon(
-                    onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
-                    icon: const Icon(Icons.add_rounded, color: Colors.black, size: 20),
-                    label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: accent,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
+
+            // BUTTON 1: NEW PROJECT WITH GLOWING PERIMETER EDGE
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withOpacity(0.40),
+                    blurRadius: 14,
+                    spreadRadius: 1.5,
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
+                icon: const Icon(Icons.add_rounded, color: Colors.black, size: 22),
+                label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: accent, width: 2.0),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 2,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      if (_recent.isNotEmpty) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
-                        ).then((_) => _load());
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved sessions yet.')));
-                      }
-                    },
-                    icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
-                    label: Text('OPEN RECENT', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 11)),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: accent, width: 1.2),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 26),
+
+            const SizedBox(height: 12),
+
+            // BUTTON 2: SHADERLY AI UPSCALER WITH GLOWING PERIMETER EDGE
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00E5FF).withOpacity(0.35),
+                    blurRadius: 14,
+                    spreadRadius: 1.5,
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AiUpscalerScreen())).then((_) => _load()),
+                icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black, size: 20),
+                label: const Text('SHADERLY AI UPSCALER (2X / 4X)', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00E5FF),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: Color(0xFF00E5FF), width: 2.0),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // BUTTON 3: REELSMART MOTION BLUR STUDIO
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RsmbScreen())),
+                icon: Icon(Icons.blur_linear_rounded, color: accent, size: 18),
+                label: Text('REELSMART MOTION BLUR STUDIO', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: accent.withOpacity(0.6), width: 1.2),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
             const Text('SAVED SESSIONS (WITH TIMELINE THUMBNAILS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             if (_recent.isEmpty)
@@ -573,7 +698,7 @@ class ProjectSetupScreen extends StatefulWidget {
 }
 
 class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
-  String _projectName = 'Shadely Master';
+  String _projectName = 'Shaderly Master';
   String _selectedAspect = '16:9';
   File? _selectedFile;
   bool _isImage = false;
@@ -600,7 +725,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                 fillColor: kCardDark,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
-              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shadely Master',
+              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shaderly Master',
               controller: TextEditingController(text: _projectName),
             ),
             const SizedBox(height: 20),
@@ -623,7 +748,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
             GestureDetector(
               onTap: () async {
                 final result = await FilePicker.platform.pickFiles(
-                  type: FileType.any, // Uses safe extension check to prevent Android MIME crashes
+                  type: FileType.any,
                 );
                 if (result != null && result.files.single.path != null) {
                   final p = result.files.single.path!;
@@ -716,7 +841,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
-
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -752,6 +876,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   List<CustomPresetItem> _customPresets = [];
   List<LutModel> _activeLuts = [];
+
+  // Export cancellation reference
+  FFmpegSession? _activeExportSession;
+  bool _isExportCancelled = false;
 
   AdjustmentLayer get _cur => _project.currentLayer;
 
@@ -928,7 +1056,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Pure live grading: For images runs Vulkan; for video triggers direct GPU filter rebuild with ZERO ghost overlays
+  // Pure live grading: For images runs Vulkan; for video triggers direct GPU filter rebuild
   Future<void> _applyGrade() async {
     if (_project.isImage && _cachedRawImage != null) {
       try {
@@ -977,7 +1105,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       s *= (1.0 + (l.saturation - 1.0) * op);
       b += l.brightness * 255.0 * op;
 
-      // Strictly isolated Highlights vs. Shadows
       highLift += (l.highlights * 30.0 * op);
       shadowLift += (l.shadows * 30.0 * op);
       temp += (l.temperature - 6500.0) * op;
@@ -989,7 +1116,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
 
-    // White balance multiplier
     double rMult = 1.0;
     double bMult = 1.0;
     if (temp > 6500) {
@@ -1000,11 +1126,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       rMult -= (6500 - temp) / 10000.0;
     }
 
-    // Saturation matrix coefficients
     final double sr = (1 - s) * 0.2126;
     final double sg = (1 - s) * 0.7152;
     final double sb = (1 - s) * 0.0722;
-
     final double t = (1.0 - c) * 128.0;
 
     final List<double> matrix = [
@@ -1052,7 +1176,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. Deep Glow & S_Glow Core
           if (totalBloom > 0.02)
             Opacity(
               opacity: totalBloom,
@@ -1070,7 +1193,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
               ),
             ),
-          // 2. Anamorphic Flare Streak
           if (flareOpacity > 0.02)
             Center(
               child: Opacity(
@@ -1090,7 +1212,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
               ),
             ),
-          // 3. Authentic BSL Volumetric Liminal Fog Overlay (Slate / Rain Mist)
           if (bslFogAmt > 0.01)
             Opacity(
               opacity: bslFogAmt,
@@ -1118,7 +1239,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_project.mediaPath.isEmpty) return;
     final proj = StoredProject(
       id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
-      name: widget.projectName ?? 'Shadely Session',
+      name: widget.projectName ?? 'Shaderly Session',
       mediaPath: _project.mediaPath,
       data: _project,
       lastOpened: DateTime.now(),
@@ -1226,6 +1347,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       default: return 16 / 9;
     }
   }
+
   void _addNewAdjustmentLayer() {
     if (_project.layers.length >= 4) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 4 Adjustment Layers allowed.')));
@@ -1314,523 +1436,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  void _applyPreset(String name) {
-    _pushUndoSnapshot();
-    setState(() {
-      _project.layers.clear();
-      _selectedPresetName = name;
-      _isBslaExtremeActive = false;
-
-      switch (name) {
-        case 'tealdropped (conq knockoff)':
-          _project.layers.add(AdjustmentLayer(
-            id: 'conq_base',
-            name: 'Base Grade',
-            contrast: 1.16,
-            saturation: 1.04,
-            brightness: 0.04,
-            temperature: 6800.0,
-            sharpness: 0.40,
-            shadows: 0.02,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.25, 0.52, 0.82, 1.0],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'conq_glow',
-            name: 'Teal Rim Flare',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.82,
-            deepGlowIntensity: 0.45,
-            deepGlowRadius: 0.55,
-            deepGlowThreshold: 0.44,
-            edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.22,
-            thinStreakWidth: 0.60,
-            thinStreakOpacity: 0.85,
-            lineChromaStrength: 0.35,
-          ));
-          break;
-
-        case 'vintage cc':
-          _project.layers.add(AdjustmentLayer(
-            id: 'vint_base',
-            name: 'Warm Film Stock',
-            contrast: 1.15,
-            saturation: 0.88,
-            temperature: 5600.0,
-            shadows: 0.08,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.05, 0.26, 0.50, 0.78, 0.95],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'vint_grain',
-            name: 'Halation & Soft Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.75,
-            deepGlowIntensity: 0.35,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.42,
-            edgeGlowTint: 1.0,
-            halationRadius: 0.25,
-            halationWarmth: 0.85,
-            filmGrain: 0.10,
-          ));
-          break;
-
-        case 'noir':
-          _project.layers.add(AdjustmentLayer(
-            id: 'noir_base',
-            name: 'Deep Ink & Silver',
-            contrast: 1.35,
-            saturation: 0.12,
-            temperature: 7200.0,
-            shadows: -0.15,
-            sharpness: 0.42,
-            edgeDarken: 0.30,
-            darkOutlines: 0.25,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'noir_specular',
-            name: 'Silver Specular Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.70,
-            deepGlowIntensity: 0.42,
-            deepGlowRadius: 0.50,
-            deepGlowThreshold: 0.48,
-            edgeGlowTint: 0.0,
-            thinStreakIntensity: 0.15,
-            thinStreakOpacity: 0.80,
-          ));
-          break;
-
-        case 'choso':
-          _project.layers.add(AdjustmentLayer(
-            id: 'choso_base',
-            name: 'Piercing Blood Midtones',
-            contrast: 1.25,
-            saturation: 1.15,
-            temperature: 6100.0,
-            sharpness: 0.36,
-            shadows: -0.08,
-            edgeDarken: 0.25,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'choso_blood',
-            name: 'Dark Blood Halation',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.52,
-            deepGlowRadius: 0.58,
-            deepGlowThreshold: 0.38,
-            edgeGlowTint: 4.0,
-            halationRadius: 0.28,
-            halationWarmth: 0.90,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-
-        case 'yoruichi':
-          _project.layers.add(AdjustmentLayer(
-            id: 'yoru_base',
-            name: 'Flash Step Contrast',
-            contrast: 1.24,
-            saturation: 1.12,
-            temperature: 6800.0,
-            sharpness: 0.38,
-            shadows: -0.06,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.21, 0.50, 0.83, 1.0],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'yoru_lightning',
-            name: 'Electro Violet Streak',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.58,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.36,
-            edgeGlowTint: 5.0,
-            thinStreakIntensity: 0.35,
-            thinStreakWidth: 0.70,
-            thinStreakOpacity: 0.90,
-            lineChromaStrength: 0.35,
-          ));
-          break;
-
-        case 'Gojo':
-          _project.layers.add(AdjustmentLayer(
-            id: 'gojo_base',
-            name: 'Infinity Base',
-            contrast: 1.18,
-            saturation: 1.08,
-            temperature: 7000.0,
-            sharpness: 0.30,
-            blendMode: LayerBlendMode.normal,
-            curveMaster: [0.0, 0.22, 0.50, 0.81, 1.0],
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'gojo_bloom',
-            name: 'Infinity Cyan Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.82,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.62,
-            deepGlowThreshold: 0.42,
-            edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-
-        case 'Raiden':
-          _project.layers.add(AdjustmentLayer(
-            id: 'raiden_base',
-            name: 'Base Grade',
-            contrast: 1.20,
-            saturation: 1.10,
-            temperature: 6700.0,
-            sharpness: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'raiden_glow',
-            name: 'Electro Violet Glow',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.52,
-            deepGlowRadius: 0.60,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 5.0,
-          ));
-          break;
-
-        case 'bina':
-          _project.layers.add(AdjustmentLayer(
-            id: 'bina_base',
-            name: 'Base Grade',
-            contrast: 1.10,
-            saturation: 1.06,
-            brightness: 0.02,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'bina_glow',
-            name: 'Pastel Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.75,
-            deepGlowIntensity: 0.45,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.38,
-          ));
-          break;
-
-        case 'potential, man.':
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot_base',
-            name: 'Base Grade',
-            contrast: 1.22,
-            saturation: 1.04,
-            sharpness: 0.32,
-            edgeDarken: 0.20,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot_glow',
-            name: 'Specular Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.70,
-            deepGlowIntensity: 0.36,
-            deepGlowRadius: 0.48,
-            deepGlowThreshold: 0.48,
-          ));
-          break;
-
-        case 'potential 2.0':
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot2_base',
-            name: 'Base Grade',
-            contrast: 1.24,
-            saturation: 1.12,
-            sharpness: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot2_rays',
-            name: 'Mahoraga Rays',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.50,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 1.0,
-            volRaysLength: 0.22,
-          ));
-          break;
-
-        case 'saber':
-          _project.layers.add(AdjustmentLayer(
-            id: 'saber_base',
-            name: 'Base Grade',
-            contrast: 1.20,
-            saturation: 1.12,
-            temperature: 6600.0,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'saber_glow',
-            name: 'Golden Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.82,
-            deepGlowIntensity: 0.52,
-            deepGlowRadius: 0.68,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 1.0,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-
-        case 'sasuke':
-          _project.layers.add(AdjustmentLayer(
-            id: 'sasuke_base',
-            name: 'Base Grade',
-            contrast: 1.25,
-            saturation: 1.06,
-            temperature: 6900.0,
-            sharpness: 0.36,
-            edgeDarken: 0.25,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'sasuke_flare',
-            name: 'Chidori Flare',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.55,
-            deepGlowThreshold: 0.42,
-            edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.35,
-            thinStreakWidth: 0.65,
-            thinStreakOpacity: 0.90,
-          ));
-          break;
-
-        case 'toji':
-          _project.layers.add(AdjustmentLayer(
-            id: 'toji_base',
-            name: 'Base Grade',
-            contrast: 1.30,
-            saturation: 1.00,
-            temperature: 6200.0,
-            sharpness: 0.40,
-            shadows: -0.12,
-            edgeDarken: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'toji_spec',
-            name: 'Specular Sheen',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.65,
-            deepGlowIntensity: 0.32,
-            deepGlowRadius: 0.42,
-            deepGlowThreshold: 0.50,
-          ));
-          break;
-
-        case 'shiki':
-          _project.layers.add(AdjustmentLayer(
-            id: 'shiki_base',
-            name: 'Base Grade',
-            contrast: 1.26,
-            saturation: 1.10,
-            temperature: 6700.0,
-            sharpness: 0.38,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'shiki_glow',
-            name: 'Death Perception Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.58,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-      }
-
-      _project.activeLayerIndex = 0;
-    });
-
-    _applyGrade();
-    _autoSaveProject();
-  }
-
-  Future<void> _saveCurrentAsPreset() async {
-    final controller = TextEditingController(text: 'My Custom Grade');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Save Current CC as Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: controller,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(labelText: 'Preset Name', labelStyle: TextStyle(color: Colors.white54)),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: gCustomAccentColor.value, foregroundColor: Colors.black),
-            onPressed: () async {
-              final name = controller.text.trim().isNotEmpty ? controller.text.trim() : 'My Custom Grade';
-              Navigator.pop(ctx);
-
-              final newPreset = CustomPresetItem(
-                name: name,
-                description: '${_project.layers.length} Layers • Custom Saved CC',
-                accentColor: gCustomAccentColor.value.value,
-                isBuiltIn: false,
-                layers: _project.layers.map((l) => l.clone()).toList(),
-                tonemapMode: _project.tonemapMode,
-              );
-
-              _customPresets.add(newPreset);
-              await ProjectManager.saveCustomPresets(_customPresets);
-              setState(() {});
-
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Preset "$name" saved to Presets tab!'), backgroundColor: Colors.teal),
-                );
-              }
-            },
-            child: const Text('Save Preset'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _importPresetFromFile() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-      );
-
-      if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
-        final content = await file.readAsString();
-        final Map<String, dynamic> data = jsonDecode(content);
-
-        if (data.containsKey('layers')) {
-          final List<dynamic> layerList = data['layers'];
-          _pushUndoSnapshot();
-          setState(() {
-            _project.layers.clear();
-            for (var l in layerList) {
-              _project.layers.add(AdjustmentLayer.fromJson(l));
-            }
-            if (data.containsKey('tonemapMode')) {
-              _project.tonemapMode = (data['tonemapMode'] as num).toDouble();
-            }
-            _project.activeLayerIndex = 0;
-            _selectedPresetName = data['presetName'] ?? 'Imported Preset';
-          });
-          _applyGrade();
-          _autoSaveProject();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Loaded preset "${_selectedPresetName}"!'), backgroundColor: Colors.green));
-          }
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please choose a valid JSON/XML preset file ($e)'), backgroundColor: Colors.red));
-      }
-    }
-  }
-
-  void _confirmDeleteCustomPreset(int index) {
-    final item = _customPresets[index];
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Confirm Deletion', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Text('Are you sure you want to delete preset "${item.name}"?', style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              setState(() {
-                _customPresets.removeAt(index);
-              });
-              await ProjectManager.saveCustomPresets(_customPresets);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preset deleted.')));
-              }
-            },
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _pickAndImportCubeLut() async {
     try {
-      // Uses safe extension check to eliminate PlatformException on Android devices
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-      );
-      if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
-        if (!path.toLowerCase().endsWith('.cube')) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Selected file is not a .cube LUT.'), backgroundColor: Colors.red),
-            );
-          }
-          return;
+      final file = await LutProcessor.pickCubeFile();
+      if (file == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No .cube file selected.'), backgroundColor: Colors.red),
+          );
         }
+        return;
+      }
 
-        final file = File(path);
-        final lut = await LutParser.parseCubeFile(file);
-        if (lut != null) {
-          if (_activeLuts.length >= 4) {
-            _activeLuts.removeAt(0);
-          }
-          _activeLuts.add(lut);
-          await ProjectManager.saveLuts(_activeLuts);
+      final parsed = await LutProcessor.parseCubeFile(file);
+      if (parsed != null) {
+        final lut = LutModel(
+          id: 'lut_${DateTime.now().millisecondsSinceEpoch}',
+          name: parsed.title,
+          filePath: file.path,
+          size: parsed.size,
+          table: parsed.table,
+        );
 
-          _pushUndoSnapshot();
-          setState(() {
-            _cur.activeLutId = lut.id;
-            _cur.lutOpacity = 1.0;
-          });
-          _applyGrade();
-          _autoSaveProject();
+        if (_activeLuts.length >= 4) {
+          _activeLuts.removeAt(0);
+        }
+        _activeLuts.add(lut);
+        await ProjectManager.saveLuts(_activeLuts);
 
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Imported and Applied "${lut.name}.cube" (32x32x32)'), backgroundColor: Colors.teal),
-            );
-          }
+        _pushUndoSnapshot();
+        setState(() {
+          _cur.activeLutId = lut.id;
+          _cur.lutOpacity = 1.0;
+        });
+        _applyGrade();
+        _autoSaveProject();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Imported and Applied "${lut.name}.cube" (32x32x32)'), backgroundColor: Colors.teal),
+          );
         }
       }
     } catch (e) {
@@ -1893,6 +1538,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // Master Export Sheet with Audio Settings & Cancellation
   void _showExportSheet() {
     if (_project.isImage) {
       _exportStaticImage();
@@ -1905,6 +1551,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     String selectedRes = '1080p';
     String selectedFps = '60fps';
     String selectedBitrate = '35 Mbps';
+
+    // Audio Export Settings
+    String selectedAudioMode = 'Lossless Source Copy';
+    String selectedAudioBitrate = '320 kbps';
 
     final containers = ['MP4', 'WebM', 'MOV', 'MKV'];
     final resolutions = ['720p', '1080p', '2K', '4K'];
@@ -1949,7 +1599,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ],
                     ),
                     Text(
-                      'Destination: /storage/emulated/0/Shadely • ${targetDims['width']} x ${targetDims['height']}',
+                      'Destination: /storage/emulated/0/Shaderly • ${targetDims['width']} x ${targetDims['height']}',
                       style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -2091,6 +1741,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         );
                       }).toList(),
                     ),
+                    const SizedBox(height: 14),
+
+                    // AUDIO SETTINGS
+                    const Text('AUDIO PIPELINE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Lossless Source Copy'),
+                          selected: selectedAudioMode == 'Lossless Source Copy',
+                          selectedColor: accent,
+                          backgroundColor: const Color(0xFF18181E),
+                          labelStyle: TextStyle(color: selectedAudioMode == 'Lossless Source Copy' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (_) => setStateModal(() => selectedAudioMode = 'Lossless Source Copy'),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('AAC 320 kbps Studio'),
+                          selected: selectedAudioMode == 'AAC 320 kbps Studio',
+                          selectedColor: accent,
+                          backgroundColor: const Color(0xFF18181E),
+                          labelStyle: TextStyle(color: selectedAudioMode == 'AAC 320 kbps Studio' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (_) => setStateModal(() => selectedAudioMode = 'AAC 320 kbps Studio'),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 20),
 
                     SizedBox(
@@ -2098,7 +1774,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       child: ElevatedButton(
                         onPressed: () {
                           Navigator.pop(context);
-                          _exportVideo(selectedRes, selectedFps, selectedBitrate, selectedContainer, selectedCodec, selectedBitDepth);
+                          _exportVideo(
+                            selectedRes,
+                            selectedFps,
+                            selectedBitrate,
+                            selectedContainer,
+                            selectedCodec,
+                            selectedBitDepth,
+                            selectedAudioMode,
+                          );
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accent,
@@ -2121,16 +1805,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       },
     );
   }
-
   Future<String> _getSafeMovieDirectory() async {
-    final shadelyDir = Directory('/storage/emulated/0/Shadely');
-    if (!await shadelyDir.exists()) {
+    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+    if (!await shaderlyDir.exists()) {
       try {
-        await shadelyDir.create(recursive: true);
-        return shadelyDir.path;
+        await shaderlyDir.create(recursive: true);
+        return shaderlyDir.path;
       } catch (_) {}
     } else {
-      return shadelyDir.path;
+      return shaderlyDir.path;
     }
 
     final directDownload = Directory('/storage/emulated/0/Download');
@@ -2171,7 +1854,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
       final pngBytes = img.encodePng(gradedImg);
       final folderPath = await _getSafeMovieDirectory();
-      final fileName = 'Shadely_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
+      final fileName = 'Shaderly_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
       final destFile = File('$folderPath/$fileName');
       await destFile.writeAsBytes(pngBytes);
 
@@ -2194,6 +1877,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     String container,
     String codec,
     String bitDepth,
+    String audioMode,
   ) async {
     if (_project.mediaPath.isEmpty) return;
 
@@ -2215,6 +1899,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final progressNotifier = ValueNotifier<double>(0.0);
     final statusNotifier = ValueNotifier<String>('Starting 4K Master Extraction: 0%');
 
+    _isExportCancelled = false;
+
+    // Export Dialog with "X" Cancel Button + Confirmation
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -2222,7 +1909,52 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         return AlertDialog(
           backgroundColor: const Color(0xFF101014),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Exporting $outW x $outH Master ($bitDepth)', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Exporting $outW x $outH ($bitDepth)',
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                tooltip: 'Cancel Export',
+                onPressed: () {
+                  // Confirmation dialog before cancelling
+                  showDialog(
+                    context: context,
+                    builder: (confirmCtx) => AlertDialog(
+                      backgroundColor: kCardDark,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: const Text('Cancel Video Export?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                      content: const Text('Are you sure you want to cancel the render in progress? All processed frames will be discarded.', style: TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(confirmCtx),
+                          child: const Text('Keep Rendering', style: TextStyle(color: Colors.white54)),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                          onPressed: () async {
+                            Navigator.pop(confirmCtx); // Close confirm
+                            _isExportCancelled = true;
+                            if (_activeExportSession != null) {
+                              await FFmpegKit.cancel(_activeExportSession!.getSessionId());
+                            }
+                            Navigator.pop(ctx); // Close export modal
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Export cancelled by user.')),
+                            );
+                          },
+                          child: const Text('Cancel Export', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2263,15 +1995,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       await framesDir.create(recursive: true);
       await processedDir.create(recursive: true);
 
+      // Demux audio stream
       final audioPath = '${dir.path}/current_audio.aac';
       final oldAudio = File(audioPath);
       if (await oldAudio.exists()) await oldAudio.delete();
       await FFmpegKit.execute('-hide_banner -i "$videoPath" -vn -c:a aac -y "$audioPath"');
 
+      if (_isExportCancelled) return;
+
       statusNotifier.value = 'Extracting $outW x $outH frames...';
       final extractSession = await FFmpegKit.execute(
         '-hide_banner -i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
       );
+
+      if (_isExportCancelled) return;
 
       var frameFiles = await framesDir.list().toList();
       frameFiles.sort((a, b) => a.path.compareTo(b.path));
@@ -2283,6 +2020,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
 
       for (int i = 0; i < totalFrames; i++) {
+        if (_isExportCancelled) return;
+
         final file = frameFiles[i];
         if (file is! File) continue;
         final bytes = await file.readAsBytes();
@@ -2331,12 +2070,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         await Future.delayed(const Duration(milliseconds: 1));
       }
 
+      if (_isExportCancelled) return;
+
       statusNotifier.value = 'Assembling final $container master...';
       final silentOutputPath = '${dir.path}/silent_video.$containerExt';
       final silentFile = File(silentOutputPath);
       if (await silentFile.exists()) await silentFile.delete();
 
-      // Uses bulletproof yuv420p & even dimension pipeline to prevent black screen export
       final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
         fps: targetFps,
         framePattern: '${processedDir.path}/frame_%05d.png',
@@ -2348,6 +2088,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       );
       final encodeSession = await FFmpegKit.execute(encodeCmd);
 
+      if (_isExportCancelled) return;
+
       if (!await silentFile.exists()) {
         final logs = await encodeSession.getLogsAsString();
         throw Exception('Encoder failed. Logs: ${logs ?? "No logs"}');
@@ -2356,23 +2098,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       final moviesDir = await _getSafeMovieDirectory();
       final cleanCodec = codec.split(' ').first;
-      final fileName = 'Shadely_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
       final finalOutputFile = File('$moviesDir/$fileName');
 
       if (hasAudio) {
-        final audioCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+        if (audioMode == 'Lossless Source Copy') {
+          final audioCodec = ExportMatrix.getAudioCodec(container);
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+        } else {
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a aac -b:a 320k -shortest -y "${finalOutputFile.path}"');
+        }
       } else {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
 
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Master Saved to /storage/emulated/0/Shadely:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
-      );
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('✅ Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+        );
+      }
     } catch (e) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+      }
     }
   }
 
@@ -3100,13 +2850,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildMagicBulletTab() {
+  // Renamed to "MAGIC STUFF" to avoid copyright
+  Widget _buildMagicStuffTab() {
     final accent = gCustomAccentColor.value;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('MAGIC BULLET MOJO (BLOCKBUSTER TEAL / ORANGE)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        Text('MAGIC STUFF MOJO (BLOCKBUSTER TEAL / ORANGE)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 4),
         _buildSliderRow('Mojo Teal / Orange Split', _cur.mblMojoTealOrange, 0.0, 1.0, (v) => setState(() => _cur.mblMojoTealOrange = v)),
 
@@ -3414,7 +3165,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Navigator.pop(context);
             },
           ),
-          title: Text(widget.projectName ?? 'Shadely Editor'),
+          title: Text(widget.projectName ?? 'Shaderly Editor'),
           actions: [
             GestureDetector(
               onTap: _pickAndImportCubeLut,
@@ -3536,7 +3287,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     Tab(text: 'PRESETS'),
                     Tab(text: 'LUTS'),
                     Tab(text: 'AE KNOCKOFFS'),
-                    Tab(text: 'MAGIC BULLET'),
+                    Tab(text: 'MAGIC STUFF'),
                     Tab(text: 'GRADE'),
                     Tab(text: 'CURVES'),
                     Tab(text: 'GLOWS'),
@@ -3554,7 +3305,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       _buildPresetsTab(),
                       _buildLutsTab(),
                       _buildAEKnockoffsTab(),
-                      _buildMagicBulletTab(),
+                      _buildMagicStuffTab(),
                       _buildGradingTab(),
                       _buildCurvesTab(),
                       _buildGlowsTab(),
