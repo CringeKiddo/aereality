@@ -8,7 +8,7 @@
 #include <memory>
 #include <mutex>
 
-#define LOG_TAG "ShadelyVulkan"
+#define LOG_TAG "ShaderlyVulkan"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
@@ -31,13 +31,15 @@ struct VulkanContext {
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
 
-    // Buffer references
+    // Buffers: In, Out, Uniforms, 3D LUT
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
     VkDeviceMemory outMemory = VK_NULL_HANDLE;
     VkBuffer uboBuffer = VK_NULL_HANDLE;
     VkDeviceMemory uboMemory = VK_NULL_HANDLE;
+    VkBuffer lutBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory lutMemory = VK_NULL_HANDLE;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
@@ -116,6 +118,14 @@ void cleanupBuffers() {
         vkFreeMemory(gVk.device, gVk.uboMemory, nullptr);
         gVk.uboMemory = VK_NULL_HANDLE;
     }
+    if (gVk.lutBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(gVk.device, gVk.lutBuffer, nullptr);
+        gVk.lutBuffer = VK_NULL_HANDLE;
+    }
+    if (gVk.lutMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(gVk.device, gVk.lutMemory, nullptr);
+        gVk.lutMemory = VK_NULL_HANDLE;
+    }
     gVk.allocatedPixelCapacity = 0;
 }
 
@@ -127,7 +137,8 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     cleanupBuffers();
 
     VkDeviceSize pixelBufferSize = requiredPixels * sizeof(uint32_t);
-    VkDeviceSize uboBufferSize = 256 * sizeof(float); // 1024 bytes (Matches UniformBlock exactly)
+    VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes (Matches 4x aligned LayerData structs)
+    VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 98,304 floats (393,216 bytes)
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -140,11 +151,15 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  gVk.outBuffer, gVk.outMemory);
 
     createBuffer(gVk.device, gVk.physicalDevice, uboBufferSize,
-                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.uboBuffer, gVk.uboMemory);
 
-    // Update Descriptor Sets with newly allocated buffers
+    createBuffer(gVk.device, gVk.physicalDevice, lutBufferSize,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 gVk.lutBuffer, gVk.lutMemory);
+
     VkDescriptorBufferInfo inBufferInfo{};
     inBufferInfo.buffer = gVk.inBuffer;
     inBufferInfo.offset = 0;
@@ -160,7 +175,12 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     uboBufferInfo.offset = 0;
     uboBufferInfo.range = uboBufferSize;
 
-    VkWriteDescriptorSet descriptorWrites[3]{};
+    VkDescriptorBufferInfo lutBufferInfo{};
+    lutBufferInfo.buffer = gVk.lutBuffer;
+    lutBufferInfo.offset = 0;
+    lutBufferInfo.range = lutBufferSize;
+
+    VkWriteDescriptorSet descriptorWrites[4]{};
 
     descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[0].dstSet = gVk.descriptorSet;
@@ -179,42 +199,22 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[2].dstSet = gVk.descriptorSet;
     descriptorWrites[2].dstBinding = 2;
-    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &uboBufferInfo;
 
-    vkUpdateDescriptorSets(gVk.device, 3, descriptorWrites, 0, nullptr);
+    descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[3].dstSet = gVk.descriptorSet;
+    descriptorWrites[3].dstBinding = 3;
+    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[3].descriptorCount = 1;
+    descriptorWrites[3].pBufferInfo = &lutBufferInfo;
+
+    vkUpdateDescriptorSets(gVk.device, 4, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels (up to 4K Master ready).", requiredPixels);
+    LOGI("Vulkan Frame & LUT Buffers Allocated for %zu pixels.", requiredPixels);
     return true;
-}
-
-// Catmull-Rom Spline Evaluator for CPU Fallback Mode
-float evalSplineCPU(float x, float p0, float p1, float p2, float p3, float p4) {
-    x = std::max(0.0f, std::min(1.0f, x));
-    float seg = x * 4.0f;
-    int idx = static_cast<int>(std::floor(seg));
-    if (idx >= 4) return p4;
-    float t = seg - static_cast<float>(idx);
-
-    float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
-    float cp1 = (idx == 0) ? p0 : (idx == 1) ? p1 : (idx == 2) ? p2 : p3;
-    float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
-    float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
-
-    float m1 = 0.5f * (cp2 - cp0);
-    float m2 = 0.5f * (cp3 - cp1);
-
-    float t2 = t * t;
-    float t3 = t2 * t;
-
-    float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-    float h10 = t3 - 2.0f * t2 + t;
-    float h01 = -2.0f * t3 + 3.0f * t2;
-    float h11 = t3 - t2;
-
-    return std::max(0.0f, std::min(1.0f, h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2));
 }
 
 // 32-bit Floating Point CPU Fallback Grading Pipeline
@@ -237,8 +237,8 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
             for (int l = 0; l < std::min(layerCount, 4); l++) {
-                int off = 8 + (l * 55);
-                if (ubo[off + 0] < 0.5f) continue; // Layer Disabled
+                int off = 8 + (l * 64);
+                if (ubo[off + 0] < 0.5f) continue;
 
                 float opacity = ubo[off + 1];
                 int mode = static_cast<int>(ubo[off + 2]);
@@ -251,28 +251,19 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
                 float lg = g + brightness;
                 float lb = b + brightness;
 
-                // 0.18 Mid-Gray Pivot Contrast
                 lr = (lr - 0.18f) * contrast + 0.18f;
                 lg = (lg - 0.18f) * contrast + 0.18f;
                 lb = (lb - 0.18f) * contrast + 0.18f;
 
-                // Master Spline Curves
-                lr = evalSplineCPU(lr, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-                lg = evalSplineCPU(lg, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-                lb = evalSplineCPU(lb, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-
-                // Gamma
                 lr = std::pow(std::max(0.0f, lr), 1.0f / gamma);
                 lg = std::pow(std::max(0.0f, lg), 1.0f / gamma);
                 lb = std::pow(std::max(0.0f, lb), 1.0f / gamma);
 
-                // Saturation
                 float luma = 0.299f * lr + 0.587f * lg + 0.114f * lb;
                 lr = luma + saturation * (lr - luma);
                 lg = luma + saturation * (lg - luma);
                 lb = luma + saturation * (lb - luma);
 
-                // Blend Modes
                 if (mode == 1) { // Screen
                     r = 1.0f - (1.0f - r) * (1.0f - lr * opacity);
                     g = 1.0f - (1.0f - g) * (1.0f - lg * opacity);
@@ -302,21 +293,14 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
 
 extern "C" {
 
-JNIEXPORT jboolean JNICALL
-Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArray shaderBytes, jint precisionMode) {
+int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
-    if (gVk.isInitialized) {
-        return JNI_TRUE;
-    }
+    if (gVk.isInitialized) return 1;
 
-    // 1. Create Vulkan Instance
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "ShadelyCore";
-    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "ShadelyCompute";
-    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pApplicationName = "ShaderlyCore";
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo createInfo{};
@@ -324,17 +308,13 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
     createInfo.pApplicationInfo = &appInfo;
 
     if (vkCreateInstance(&createInfo, nullptr, &gVk.instance) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan instance! Falling back to 32-bit CPU pipeline.");
-        return JNI_FALSE;
+        LOGE("Failed to create Vulkan instance.");
+        return 0;
     }
 
-    // 2. Pick Physical Device with Compute Queue
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
-    if (deviceCount == 0) {
-        LOGE("No Vulkan physical devices found.");
-        return JNI_FALSE;
-    }
+    if (deviceCount == 0) return 0;
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, devices.data());
@@ -353,13 +333,8 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
             break;
         }
     }
+    if (!foundQueue) return 0;
 
-    if (!foundQueue) {
-        LOGE("No compute queue family found on device.");
-        return JNI_FALSE;
-    }
-
-    // 3. Create Logical Device
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -367,61 +342,42 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
-    VkPhysicalDeviceFeatures deviceFeatures{};
     VkDeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
-    deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
     if (vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan logical device.");
-        return JNI_FALSE;
+        return 0;
     }
 
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
 
-    // 4. Create Shader Module from SPIR-V
-    jsize shaderLen = env->GetArrayLength(shaderBytes);
-    jbyte* shaderBuffer = env->GetByteArrayElements(shaderBytes, nullptr);
-
     VkShaderModuleCreateInfo shaderModuleInfo{};
     shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderModuleInfo.codeSize = shaderLen;
-    shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(shaderBuffer);
+    shaderModuleInfo.codeSize = length;
+    shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(shaderBytes);
 
     if (vkCreateShaderModule(gVk.device, &shaderModuleInfo, nullptr, &gVk.shaderModule) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan shader module.");
-        env->ReleaseByteArrayElements(shaderBytes, shaderBuffer, JNI_ABORT);
-        return JNI_FALSE;
+        return 0;
     }
-    env->ReleaseByteArrayElements(shaderBytes, shaderBuffer, JNI_ABORT);
 
-    // 5. Create Descriptor Set Layout
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // 4 Storage Buffer Bindings: 0=Input, 1=Output, 2=Uniforms, 3=LUT
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    for (int b = 0; b < 4; b++) {
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 3;
+    layoutInfo.bindingCount = 4;
     layoutInfo.pBindings = bindings;
 
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
-    // 6. Create Pipeline Layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
@@ -429,7 +385,6 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
 
     vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
 
-    // 7. Create Compute Pipeline
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = gVk.pipelineLayout;
@@ -440,16 +395,13 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
 
     vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
 
-    // 8. Create Descriptor Pool & Allocate Set
-    VkDescriptorPoolSize poolSizes[2]{};
+    VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 2;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 1;
+    poolSizes[0].descriptorCount = 4;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
 
@@ -463,7 +415,6 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
 
     vkAllocateDescriptorSets(gVk.device, &setAllocInfo, &gVk.descriptorSet);
 
-    // 9. Command Pool & Command Buffer
     VkCommandPoolCreateInfo cmdPoolInfo{};
     cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cmdPoolInfo.queueFamilyIndex = gVk.computeQueueFamilyIndex;
@@ -480,53 +431,42 @@ Java_com_shadely_app_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArr
     vkAllocateCommandBuffers(gVk.device, &cmdAllocInfo, &gVk.commandBuffer);
 
     gVk.isInitialized = true;
-    LOGI("Shadely Vulkan Hardware Compute Pipeline Initialized Successfully.");
-    return JNI_TRUE;
+    LOGI("Shaderly 4-Slot Vulkan Compute Pipeline Initialized.");
+    return 1;
 }
 
-JNIEXPORT jbyteArray JNICALL
-Java_com_shadely_app_VulkanBridge_processImage(JNIEnv* env, jobject thiz,
-                                               jbyteArray inputPixels,
-                                               jint inWidth, jint inHeight,
-                                               jint outWidth, jint outHeight,
-                                               jfloatArray uniformData) {
+void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
+                   uint8_t* outputBytes, int32_t outWidth, int32_t outHeight,
+                   const float* uniforms, int32_t uniformCount,
+                   const float* lutTable, int32_t lutCount) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
     size_t pixelCount = static_cast<size_t>(outWidth * outHeight);
-    jsize inputByteLength = env->GetArrayLength(inputPixels);
-    jbyte* inPtr = env->GetByteArrayElements(inputPixels, nullptr);
-
-    jsize uniformLen = env->GetArrayLength(uniformData);
-    jfloat* uboPtr = env->GetFloatArrayElements(uniformData, nullptr);
-
-    jbyteArray resultByteArray = env->NewByteArray(pixelCount * sizeof(uint32_t));
 
     if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount)) {
-        // Fallback to optimized 32-bit floating point CPU pipeline
-        std::vector<uint32_t> fallbackDst(pixelCount);
-        executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inPtr),
-                                  fallbackDst.data(), outWidth, outHeight, uboPtr);
-        env->SetByteArrayRegion(resultByteArray, 0, pixelCount * sizeof(uint32_t),
-                                reinterpret_cast<const jbyte*>(fallbackDst.data()));
-
-        env->ReleaseByteArrayElements(inputPixels, inPtr, JNI_ABORT);
-        env->ReleaseFloatArrayElements(uniformData, uboPtr, JNI_ABORT);
-        return resultByteArray;
+        executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
+                                  reinterpret_cast<uint32_t*>(outputBytes),
+                                  outWidth, outHeight, uniforms);
+        return;
     }
 
-    // Copy Input Pixels into Vulkan Input Staging Buffer
     void* mappedInput = nullptr;
     vkMapMemory(gVk.device, gVk.inMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedInput);
-    std::memcpy(mappedInput, inPtr, std::min(static_cast<size_t>(inputByteLength), pixelCount * sizeof(uint32_t)));
+    std::memcpy(mappedInput, inputBytes, pixelCount * sizeof(uint32_t));
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // Copy Uniforms into Vulkan UBO Staging Buffer
     void* mappedUbo = nullptr;
-    vkMapMemory(gVk.device, gVk.uboMemory, 0, 256 * sizeof(float), 0, &mappedUbo);
-    std::memcpy(mappedUbo, uboPtr, std::min(static_cast<size_t>(uniformLen * sizeof(float)), 256 * sizeof(float)));
+    vkMapMemory(gVk.device, gVk.uboMemory, 0, std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float))), 0, &mappedUbo);
+    std::memcpy(mappedUbo, uniforms, std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float))));
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
-    // Record Compute Command Buffer
+    if (lutTable != nullptr && lutCount > 0) {
+        void* mappedLut = nullptr;
+        vkMapMemory(gVk.device, gVk.lutMemory, 0, std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float))), 0, &mappedLut);
+        std::memcpy(mappedLut, lutTable, std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float))));
+        vkUnmapMemory(gVk.device, gVk.lutMemory);
+    }
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -541,7 +481,6 @@ Java_com_shadely_app_VulkanBridge_processImage(JNIEnv* env, jobject thiz,
     vkCmdDispatch(gVk.commandBuffer, groupCountX, groupCountY, 1);
     vkEndCommandBuffer(gVk.commandBuffer);
 
-    // Execute on GPU Compute Queue
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -550,118 +489,50 @@ Java_com_shadely_app_VulkanBridge_processImage(JNIEnv* env, jobject thiz,
     vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(gVk.computeQueue);
 
-    // Read Back Rendered Pixels
     void* mappedOutput = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedOutput);
-    env->SetByteArrayRegion(resultByteArray, 0, pixelCount * sizeof(uint32_t),
-                            reinterpret_cast<const jbyte*>(mappedOutput));
+    std::memcpy(outputBytes, mappedOutput, pixelCount * sizeof(uint32_t));
     vkUnmapMemory(gVk.device, gVk.outMemory);
-
-    env->ReleaseByteArrayElements(inputPixels, inPtr, JNI_ABORT);
-    env->ReleaseFloatArrayElements(uniformData, uboPtr, JNI_ABORT);
-
-    return resultByteArray;
 }
 
-JNIEXPORT jshortArray JNICALL
-Java_com_shadely_app_VulkanBridge_processImage16Bit(JNIEnv* env, jobject thiz,
-                                                    jshortArray inputPixels16,
-                                                    jint inWidth, jint inHeight,
-                                                    jint outWidth, jint outHeight,
-                                                    jfloatArray uniformData) {
-    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
-
+void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHeight,
+                      uint16_t* outputBytes, int32_t outWidth, int32_t outHeight,
+                      const float* uniforms, int32_t uniformCount,
+                      const float* lutTable, int32_t lutCount) {
     size_t pixelCount = static_cast<size_t>(outWidth * outHeight);
-    jshort* inPtr16 = env->GetShortArrayElements(inputPixels16, nullptr);
-    jfloat* uboPtr = env->GetFloatArrayElements(uniformData, nullptr);
-
-    // Downsample 16-bit to 8-bit for Vulkan staging
-    std::vector<uint32_t> stage8(pixelCount);
-    const uint16_t* uin16 = reinterpret_cast<const uint16_t*>(inPtr16);
+    std::vector<uint32_t> stage8In(pixelCount);
+    std::vector<uint32_t> stage8Out(pixelCount);
 
     #pragma omp parallel for
     for (size_t p = 0; p < pixelCount; p++) {
-        uint8_t r = static_cast<uint8_t>(uin16[p * 4 + 0] >> 8);
-        uint8_t g = static_cast<uint8_t>(uin16[p * 4 + 1] >> 8);
-        uint8_t b = static_cast<uint8_t>(uin16[p * 4 + 2] >> 8);
-        uint8_t a = static_cast<uint8_t>(uin16[p * 4 + 3] >> 8);
-        stage8[p] = (a << 24) | (b << 16) | (g << 8) | r;
+        uint8_t r = static_cast<uint8_t>(inputBytes[p * 4 + 0] >> 8);
+        uint8_t g = static_cast<uint8_t>(inputBytes[p * 4 + 1] >> 8);
+        uint8_t b = static_cast<uint8_t>(inputBytes[p * 4 + 2] >> 8);
+        uint8_t a = static_cast<uint8_t>(inputBytes[p * 4 + 3] >> 8);
+        stage8In[p] = (a << 24) | (b << 16) | (g << 8) | r;
     }
 
-    std::vector<uint32_t> out8(pixelCount);
-
-    if (gVk.isInitialized && ensureBuffersCapacity(pixelCount)) {
-        void* mappedInput = nullptr;
-        vkMapMemory(gVk.device, gVk.inMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedInput);
-        std::memcpy(mappedInput, stage8.data(), pixelCount * sizeof(uint32_t));
-        vkUnmapMemory(gVk.device, gVk.inMemory);
-
-        void* mappedUbo = nullptr;
-        vkMapMemory(gVk.device, gVk.uboMemory, 0, 256 * sizeof(float), 0, &mappedUbo);
-        std::memcpy(mappedUbo, uboPtr, 256 * sizeof(float));
-        vkUnmapMemory(gVk.device, gVk.uboMemory);
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo);
-        vkCmdBindPipeline(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gVk.computePipeline);
-        vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
-
-        uint32_t groupCountX = (outWidth + 15) / 16;
-        uint32_t groupCountY = (outHeight + 15) / 16;
-        vkCmdDispatch(gVk.commandBuffer, groupCountX, groupCountY, 1);
-        vkEndCommandBuffer(gVk.commandBuffer);
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &gVk.commandBuffer;
-
-        vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(gVk.computeQueue);
-
-        void* mappedOutput = nullptr;
-        vkMapMemory(gVk.device, gVk.outMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedOutput);
-        std::memcpy(out8.data(), mappedOutput, pixelCount * sizeof(uint32_t));
-        vkUnmapMemory(gVk.device, gVk.outMemory);
-    } else {
-        executeCpuFallbackGrading(stage8.data(), out8.data(), outWidth, outHeight, uboPtr);
-    }
-
-    // Reconstruct 16-bit RGBA Channels
-    jshortArray result16Array = env->NewShortArray(pixelCount * 4);
-    std::vector<uint16_t> out16(pixelCount * 4);
+    process_image(reinterpret_cast<const uint8_t*>(stage8In.data()), inWidth, inHeight,
+                  reinterpret_cast<uint8_t*>(stage8Out.data()), outWidth, outHeight,
+                  uniforms, uniformCount, lutTable, lutCount);
 
     #pragma omp parallel for
     for (size_t p = 0; p < pixelCount; p++) {
-        uint32_t pix = out8[p];
+        uint32_t pix = stage8Out[p];
         uint16_t r8 = (pix & 0xFF);
         uint16_t g8 = ((pix >> 8) & 0xFF);
         uint16_t b8 = ((pix >> 16) & 0xFF);
         uint16_t a8 = ((pix >> 24) & 0xFF);
 
-        out16[p * 4 + 0] = (r8 << 8) | r8;
-        out16[p * 4 + 1] = (g8 << 8) | g8;
-        out16[p * 4 + 2] = (b8 << 8) | b8;
-        out16[p * 4 + 3] = (a8 << 8) | a8;
+        outputBytes[p * 4 + 0] = (r8 << 8) | r8;
+        outputBytes[p * 4 + 1] = (g8 << 8) | g8;
+        outputBytes[p * 4 + 2] = (b8 << 8) | b8;
+        outputBytes[p * 4 + 3] = (a8 << 8) | a8;
     }
-
-    env->SetShortArrayRegion(result16Array, 0, pixelCount * 4,
-                             reinterpret_cast<const jshort*>(out16.data()));
-
-    env->ReleaseShortArrayElements(inputPixels16, inPtr16, JNI_ABORT);
-    env->ReleaseFloatArrayElements(uniformData, uboPtr, JNI_ABORT);
-
-    return result16Array;
 }
 
-JNIEXPORT void JNICALL
-Java_com_shadely_app_VulkanBridge_destroyVulkan(JNIEnv* env, jobject thiz) {
+void cleanup_processor() {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
-
     if (!gVk.isInitialized) return;
 
     cleanupBuffers();
@@ -700,7 +571,6 @@ Java_com_shadely_app_VulkanBridge_destroyVulkan(JNIEnv* env, jobject thiz) {
     }
 
     gVk.isInitialized = false;
-    LOGI("Shadely Vulkan Hardware Pipeline Destroyed Cleanly.");
 }
 
 } // extern "C"
