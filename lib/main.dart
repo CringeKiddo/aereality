@@ -712,6 +712,157 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+class ProjectSetupScreen extends StatefulWidget {
+  const ProjectSetupScreen({super.key});
+
+  @override
+  State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
+}
+
+class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
+  String _projectName = 'Shaderly Master';
+  String _selectedAspect = '16:9';
+  File? _selectedFile;
+  bool _isImage = false;
+
+  final List<String> _aspectRatios = ['16:9', '9:16', '4:5', '1:1', '3:4', '21:9'];
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create New Session')),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('PROJECT TITLE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: kCardDark,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              ),
+              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shaderly Master',
+              controller: TextEditingController(text: _projectName),
+            ),
+            const SizedBox(height: 20),
+            const Text('OUTPUT ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: _aspectRatios.map((ratio) => ChoiceChip(
+                label: Text(ratio),
+                selected: _selectedAspect == ratio,
+                selectedColor: accent,
+                backgroundColor: kCardDark,
+                labelStyle: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70, fontWeight: FontWeight.bold),
+                onSelected: (_) => setState(() => _selectedAspect = ratio),
+              )).toList(),
+            ),
+            const SizedBox(height: 24),
+            const Text('SOURCE FOOTAGE OR ART', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () async {
+                final result = await FilePicker.platform.pickFiles(
+                  type: FileType.any,
+                );
+                if (result != null && result.files.single.path != null) {
+                  final p = result.files.single.path!;
+                  final ext = p.split('.').last.toLowerCase();
+                  final validExts = ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'];
+                  if (validExts.contains(ext)) {
+                    final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+                    setState(() {
+                      _selectedFile = File(p);
+                      _isImage = isImg;
+                    });
+                  }
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: kCardDark,
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      _selectedFile == null ? Icons.folder_open_rounded : (_isImage ? Icons.image_rounded : Icons.movie_creation_rounded),
+                      color: accent,
+                      size: 40,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _selectedFile == null ? 'Browse video file or high-res image' : _selectedFile!.path.split('/').last,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _selectedFile == null ? 'Supports MKV, WebM, MP4, MOV, Real-ESRGAN 2K/4K' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (_selectedFile == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a media file first')));
+                    return;
+                  }
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ProjectScreen(
+                        initialProject: ProjectData(
+                          mediaPath: _selectedFile!.path,
+                          isImage: _isImage,
+                          aspectRatio: _selectedAspect,
+                          layers: [
+                            AdjustmentLayer(
+                              id: 'layer_clean_base',
+                              name: 'Base Grade',
+                              blendMode: LayerBlendMode.normal,
+                              contrast: 1.0,
+                              saturation: 1.0,
+                              brightness: 0.0,
+                            ),
+                          ],
+                        ),
+                        projectName: _projectName,
+                      ),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('OPEN STUDIO EDITOR', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
