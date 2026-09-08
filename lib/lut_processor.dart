@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'models.dart';
 
 class CubeLutData {
   final String title;
@@ -62,7 +63,6 @@ class LutProcessor {
           }
         } else if (line.toUpperCase().startsWith('DOMAIN_MIN') ||
             line.toUpperCase().startsWith('DOMAIN_MAX')) {
-          // Domain limits ignored, assumed standard [0.0, 1.0]
           continue;
         } else {
           final parts = line.split(RegExp(r'\s+'));
@@ -80,9 +80,7 @@ class LutProcessor {
       }
 
       if (size <= 0) {
-        // Infer cube size if LUT_3D_SIZE was omitted
         final totalEntries = rawFloats.length ~/ 3;
-        final cbrt = (totalEntries > 0) ? (totalEntries.toDouble()) : 0.0;
         if (totalEntries == 32768) {
           size = 32;
         } else if (totalEntries == 4913) {
@@ -90,11 +88,10 @@ class LutProcessor {
         } else if (totalEntries == 262144) {
           size = 64;
         } else {
-          size = 32; // fallback default
+          size = 32;
         }
       }
 
-      // Resample to 32x32x32 if LUT size differs from 32 for GPU memory alignment
       final targetSize = 32;
       Float32List standardizedTable;
 
@@ -137,7 +134,6 @@ class LutProcessor {
           int r1 = (r0 + 1).clamp(0, srcSize - 1);
           double fdr = fr - r0;
 
-          // Trilinear sampling from source
           for (int c = 0; c < 3; c++) {
             double c000 = _sampleRaw(source, srcSize, r0, g0, b0, c);
             double c100 = _sampleRaw(source, srcSize, r1, g0, b0, c);
@@ -171,5 +167,20 @@ class LutProcessor {
       return src[index];
     }
     return 0.0;
+  }
+}
+
+/// Fully integrated LutParser class resolving the compile error in main.dart
+class LutParser {
+  static Future<LutModel?> parseCubeFile(File file) async {
+    final parsed = await LutProcessor.parseCubeFile(file);
+    if (parsed == null) return null;
+    return LutModel(
+      id: 'lut_${DateTime.now().millisecondsSinceEpoch}',
+      name: parsed.title,
+      filePath: file.path,
+      size: parsed.size,
+      table: parsed.table,
+    );
   }
 }
