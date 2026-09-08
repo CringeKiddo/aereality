@@ -24,11 +24,10 @@ class _RsmbScreenState extends State<RsmbScreen> {
   VideoPlayerController? _controller;
   bool _isPlaying = false;
 
-  // RSMB Parameters
-  double _blurIntensity = 0.85;       // Shutter blur amount
-  double _smearLength = 1.20;         // Optical streak length
-  double _lineArtProtection = 0.75;   // Edge mask protection threshold
-  int _shutterSteps = 8;              // Sub-frame blend samples
+  double _blurIntensity = 0.85;
+  double _smearLength = 1.20;
+  double _lineArtProtection = 0.75;
+  int _shutterSteps = 8;
 
   bool _isProcessing = false;
   String _statusText = 'Ready';
@@ -89,7 +88,6 @@ class _RsmbScreenState extends State<RsmbScreen> {
         _controller!.setLooping(true);
       });
 
-    // Detect exact FPS
     try {
       final probeResult = await FFmpegKit.execute('-hide_banner -i "$path"');
       final logs = await probeResult.getLogsAsString() ?? '';
@@ -133,7 +131,6 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final session = await FFmpegKit.execute(ffmpegCmd);
       final returnCode = await session.getReturnCode();
 
-      // In ffmpeg_kit_extended_flutter, returnCode is an int (0 == success)
       if (returnCode != null && returnCode == 0) {
         setState(() {
           _isProcessing = false;
