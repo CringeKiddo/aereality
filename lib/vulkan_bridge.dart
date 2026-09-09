@@ -1,7 +1,10 @@
 // lib/vulkan_bridge.dart
+import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/services.dart';
 
 typedef InitVulkanC = Int32 Function(Pointer<Uint8> shaderBytes, Int32 length, Int32 precision);
 typedef InitVulkanDart = int Function(Pointer<Uint8> shaderBytes, int length, int precision);
@@ -185,5 +188,54 @@ Uint16List processImage16(
     return result;
   } catch (e) {
     return inputRgba16;
+  }
+}
+
+/// VulkanBridge: High-level platform channel interface for Real-ESRGAN NCNN Vulkan
+class VulkanBridge {
+  static const MethodChannel _channel = MethodChannel('com.example.aereality/vulkan');
+
+  /// Initializes Real-ESRGAN model on Android Vulkan GPU
+  /// Supports native 2x (realesr-animevideov3-x2) and 4x (realesrgan-x4plus-anime)
+  static Future<bool> initRealEsrgan({
+    required String paramPath,
+    required String binPath,
+    required int scaleFactor,
+  }) async {
+    try {
+      final bool? success = await _channel.invokeMethod<bool>('initRealEsrgan', {
+        'paramPath': paramPath,
+        'binPath': binPath,
+        'scaleFactor': scaleFactor,
+      });
+      return success ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Runs neural inference on raw RGBA bytes on GPU
+  static Future<Uint8List?> upscaleFrame({
+    required Uint8List frameBytes,
+    required int width,
+    required int height,
+  }) async {
+    try {
+      final Uint8List? result = await _channel.invokeMethod<Uint8List>('upscaleFrameRealEsrgan', {
+        'bytes': frameBytes,
+        'width': width,
+        'height': height,
+      });
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Releases GPU pipeline and model tensors from VRAM
+  static Future<void> destroyRealEsrgan() async {
+    try {
+      await _channel.invokeMethod('destroyRealEsrgan');
+    } catch (_) {}
   }
 }
