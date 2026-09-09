@@ -15,8 +15,8 @@ class LutModel {
   final String id;
   final String name;
   final String filePath;
-  final int size; // Usually 32 or 33
-  final Float32List table; // size * size * size * 3
+  final int size;
+  final Float32List table;
 
   LutModel({
     required this.id,
@@ -63,6 +63,7 @@ class AdjustmentLayer {
   double vignette;
   double vignetteBoxed;
   double edgeDarken;
+  double edgeDarkenOpacity;
   double darkOutlines;
   double denoise;
   double filmGrain;
@@ -71,7 +72,7 @@ class AdjustmentLayer {
   double halationRadius;
   double halationWarmth;
 
-  // AE & Sapphire Glows / Flares
+  // Glows / Flares
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
@@ -110,7 +111,8 @@ class AdjustmentLayer {
   double bslaFogDensity;
   double bslaFogDepth;
   double bslaBloomHaze;
-  double bslFogScatter; // Added: Volumetric mist atmosphere scattering
+  double bslFogScatter;
+  double dehaze;
 
   // 3D LUT Implementation
   String? activeLutId;
@@ -135,6 +137,7 @@ class AdjustmentLayer {
     this.vignette = 0.0,
     this.vignetteBoxed = 0.0,
     this.edgeDarken = 0.0,
+    this.edgeDarkenOpacity = 0.85,
     this.darkOutlines = 0.0,
     this.denoise = 0.0,
     this.filmGrain = 0.0,
@@ -173,6 +176,7 @@ class AdjustmentLayer {
     this.bslaFogDepth = 0.5,
     this.bslaBloomHaze = 0.0,
     this.bslFogScatter = 0.35,
+    this.dehaze = 0.0,
     this.activeLutId,
     this.lutOpacity = 1.0,
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.5, 0.75, 1.0],
@@ -200,6 +204,7 @@ class AdjustmentLayer {
       vignette: vignette,
       vignetteBoxed: vignetteBoxed,
       edgeDarken: edgeDarken,
+      edgeDarkenOpacity: edgeDarkenOpacity,
       darkOutlines: darkOutlines,
       denoise: denoise,
       filmGrain: filmGrain,
@@ -238,6 +243,7 @@ class AdjustmentLayer {
       bslaFogDepth: bslaFogDepth,
       bslaBloomHaze: bslaBloomHaze,
       bslFogScatter: bslFogScatter,
+      dehaze: dehaze,
       activeLutId: activeLutId,
       lutOpacity: lutOpacity,
     );
@@ -262,6 +268,7 @@ class AdjustmentLayer {
     'vignette': vignette,
     'vignetteBoxed': vignetteBoxed,
     'edgeDarken': edgeDarken,
+    'edgeDarkenOpacity': edgeDarkenOpacity,
     'darkOutlines': darkOutlines,
     'denoise': denoise,
     'filmGrain': filmGrain,
@@ -300,6 +307,7 @@ class AdjustmentLayer {
     'bslaFogDepth': bslaFogDepth,
     'bslaBloomHaze': bslaBloomHaze,
     'bslFogScatter': bslFogScatter,
+    'dehaze': dehaze,
     'activeLutId': activeLutId,
     'lutOpacity': lutOpacity,
   };
@@ -323,6 +331,7 @@ class AdjustmentLayer {
     vignette: (json['vignette'] as num?)?.toDouble() ?? 0.0,
     vignetteBoxed: (json['vignetteBoxed'] as num?)?.toDouble() ?? 0.0,
     edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
+    edgeDarkenOpacity: (json['edgeDarkenOpacity'] as num?)?.toDouble() ?? 0.85,
     darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
     denoise: (json['denoise'] as num?)?.toDouble() ?? 0.0,
     filmGrain: (json['filmGrain'] as num?)?.toDouble() ?? 0.0,
@@ -361,6 +370,7 @@ class AdjustmentLayer {
     bslaFogDepth: (json['bslaFogDepth'] as num?)?.toDouble() ?? 0.5,
     bslaBloomHaze: (json['bslaBloomHaze'] as num?)?.toDouble() ?? 0.0,
     bslFogScatter: (json['bslFogScatter'] as num?)?.toDouble() ?? 0.35,
+    dehaze: (json['dehaze'] as num?)?.toDouble() ?? 0.0,
     activeLutId: json['activeLutId'],
     lutOpacity: (json['lutOpacity'] as num?)?.toDouble() ?? 1.0,
   );
@@ -502,16 +512,19 @@ class ProjectManager {
   static List<LutModel> _inMemoryLuts = [];
 
   static Future<List<StoredProject>> loadProjects() async {
-    return _inMemoryProjects;
+    return _inMemoryProjects.take(4).toList();
   }
 
   static Future<void> saveProject(StoredProject project) async {
     _inMemoryProjects.removeWhere((p) => p.id == project.id);
     _inMemoryProjects.insert(0, project);
+    if (_inMemoryProjects.length > 4) {
+      _inMemoryProjects = _inMemoryProjects.sublist(0, 4);
+    }
   }
 
   static Future<void> saveProjects(List<StoredProject> list) async {
-    _inMemoryProjects = List.from(list);
+    _inMemoryProjects = List.from(list.take(4));
   }
 
   static Future<List<CustomPresetItem>> loadCustomPresets() async {
@@ -527,6 +540,6 @@ class ProjectManager {
   }
 
   static Future<void> saveLuts(List<LutModel> luts) async {
-    _inMemoryLuts = List.from(luts);
+    _inMemoryLuts = List.from(luts.take(4));
   }
 }
