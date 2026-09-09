@@ -32,7 +32,7 @@ struct VulkanContext {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence computeFence = VK_NULL_HANDLE;
 
-    // Buffer references: Input, Output, Uniforms, 3D LUT
+    // Buffers: 0:Input, 1:Output, 2:UBO, 3:3D LUT Table
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
@@ -138,7 +138,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     cleanupBuffers();
 
     VkDeviceSize pixelBufferSize = requiredPixels * sizeof(uint32_t);
-    VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes (Matches 4x aligned LayerData structs)
+    VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes (UniformBlock + 4x LayerData)
     VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 98,304 floats (393,216 bytes)
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
@@ -214,7 +214,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     vkUpdateDescriptorSets(gVk.device, 4, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels (4K Master ready).", requiredPixels);
+    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels.", requiredPixels);
     return true;
 }
 
@@ -321,8 +321,8 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
             for (int l = 0; l < std::min(layerCount, 4); l++) {
-                int off = 8 + (l * 64);
-                if (ubo[off + 0] < 0.5f) continue; // Layer Disabled
+                int off = 20 + (l * 64);
+                if (ubo[off + 0] < 0.5f) continue;
 
                 float opacity = ubo[off + 1];
                 int mode = static_cast<int>(ubo[off + 2]);
@@ -340,7 +340,7 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
                 lg = (lg - 0.18f) * contrast + 0.18f;
                 lb = (lb - 0.18f) * contrast + 0.18f;
 
-                // Master Spline Curves
+                // Spline Curves
                 lr = evalSplineCPU(lr, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
                 lg = evalSplineCPU(lg, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
                 lb = evalSplineCPU(lb, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
@@ -479,7 +479,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
 
-    // 5. Create Descriptor Set Layout for 4 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT)
+    // 5. Descriptor Set Layout for 4 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT)
     VkDescriptorSetLayoutBinding bindings[4]{};
     for (int b = 0; b < 4; b++) {
         bindings[b].binding = b;
@@ -495,7 +495,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
-    // 6. Create Pipeline Layout
+    // 6. Pipeline Layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
@@ -503,7 +503,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
 
-    // 7. Create Compute Pipeline
+    // 7. Compute Pipeline
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = gVk.pipelineLayout;
@@ -514,7 +514,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
 
-    // 8. Create Descriptor Pool & Allocate Set
+    // 8. Descriptor Pool & Allocate Set
     VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 4;
@@ -557,7 +557,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
 
     gVk.isInitialized = true;
-    LOGI("Shaderly Vulkan Compute Pipeline Initialized Successfully with 4 slots.");
+    LOGI("Shaderly Vulkan Compute Pipeline Initialized Successfully.");
     return 1;
 }
 
