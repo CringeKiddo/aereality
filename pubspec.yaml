@@ -20,7 +20,7 @@ dependencies:
   file_picker: ^8.0.0
   path_provider: ^2.1.2
 
-  # Frame encoding / decoding (supports 8-bit & 16-bit pipelines)
+  # Frame encoding / decoding
   image: ^4.1.7
 
   # Native C++ Vulkan FFI bindings
@@ -39,3 +39,4 @@ flutter:
 
   assets:
     - assets/shaders/
+    - assets/models/
