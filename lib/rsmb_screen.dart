@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
+import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 
 import 'constants.dart';
 import 'models.dart';
@@ -103,7 +104,7 @@ class _RsmbScreenState extends State<RsmbScreen> {
 
     setState(() {
       _isProcessing = true;
-      _statusText = 'Rendering optical motion smear & protecting line-art...';
+      _statusText = 'Rendering optical motion smear & preserving audio...';
     });
 
     _controller?.pause();
@@ -117,13 +118,14 @@ class _RsmbScreenState extends State<RsmbScreen> {
       final List<String> weightsList = List.filled(steps, '1');
       final String weightsStr = weightsList.join(' ');
 
-      // Build clean, quote-safe FFmpeg CLI arguments without nested quoting errors
+      // Preserves original audio stream (-c:a copy) and uses safe scale filter
       final ffmpegCmd = '-y -i "$_videoPath" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,tmix=frames=$steps:weights=$weightsStr,format=yuv420p" -r $_detectedFps -c:v libx264 -preset veryfast -crf 17 -c:a copy -movflags +faststart "$outputPath"';
 
       final session = await FFmpegKit.execute(ffmpegCmd);
-      //  CORRECT
-final returnCode = await session.getReturnCode();
-if (returnCode == 0) {
+      final returnCode = await session.getReturnCode();
+
+      // FIXED: Proper ReturnCode check preventing red screen crash
+      if (ReturnCode.isSuccess(returnCode)) {
         setState(() {
           _isProcessing = false;
           _statusText = 'Complete!';
@@ -153,7 +155,7 @@ if (returnCode == 0) {
         } else {
           _loadVideo(outputPath);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('RSMB Rendered! Ready to paste into timeline.')),
+            const SnackBar(content: Text('RSMB Rendered! Audio preserved & ready.')),
           );
         }
       } else {
