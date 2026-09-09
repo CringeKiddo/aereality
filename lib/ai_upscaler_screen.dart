@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
+import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 import 'package:image/image.dart' as img;
 
 import 'constants.dart';
@@ -78,7 +79,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     if (result != null && result.files.single.path != null) {
       final p = result.files.single.path!;
       final ext = p.split('.').last.toLowerCase();
-      if (['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg'].contains(ext)) {
+      if (['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'].contains(ext)) {
         setState(() {
           _sourceFile = File(p);
           _previewFramePos = 0.0;
@@ -114,9 +115,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final origPath = '${tempDir.path}/preview_orig_${DateTime.now().millisecondsSinceEpoch}.png';
       final upscaledPath = '${tempDir.path}/preview_up_${DateTime.now().millisecondsSinceEpoch}.png';
 
-      // 1. Extract 1 exact frame at chosen timeline position
+      // 1. Extract 1 exact frame at full source resolution without bitrate loss (-q:v 1)
       await FFmpegKit.execute(
-        '-ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 2 -y "$origPath"',
+        '-ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 -y "$origPath"',
       );
 
       if (!await File(origPath).exists()) {
@@ -225,7 +226,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       colors: [Color(0xFF00E5FF), Color(0xFFE6E6FA), Color(0xFFFF80AB)],
                     ).createShader(bounds),
                     child: Text(
-                      'Shaderly${_scaleFactor}x Real-ESRGAN',
+                      'Shaderly ${_scaleFactor}x Real-ESRGAN',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
@@ -305,12 +306,14 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final String modelDenoise = _denoise.toStringAsFixed(2);
       final String modelSharpness = (_sharpness * 1.5).toStringAsFixed(2);
 
-      final ffmpegCmd = '-y -i "$sourcePath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos,unsharp=5:5:$modelSharpness:5:5:0.0,hqdn3d=2:1.5:$modelDenoise:$modelDenoise" -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -movflags +faststart -c:a copy "$outputPath"';
+      // Preserves original audio cleanly via -c:a copy and fast-start
+      final ffmpegCmd = '-y -i "$sourcePath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos,unsharp=5:5:$modelSharpness:5:5:0.0,hqdn3d=2:1.5:$modelDenoise:$modelDenoise" -c:v libx264 -preset fast -crf 17 -pix_fmt yuv420p -movflags +faststart -c:a copy "$outputPath"';
 
       _activeSession = await FFmpegKit.executeAsync(ffmpegCmd);
-      //  CORRECT
-final returnCode = await _activeSession!.getReturnCode();
-if (returnCode == 0) {
+      final returnCode = await _activeSession!.getReturnCode();
+
+      // FIXED: Use ReturnCode.isSuccess preventing the red screen crash
+      if (ReturnCode.isSuccess(returnCode)) {
         setState(() {
           _isExporting = false;
           _exportProgress = 1.0;
@@ -327,48 +330,49 @@ if (returnCode == 0) {
           );
         });
 
-        // Prompt to immediately paste into Timeline
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: kCardDark,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Upscale Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            content: Text('Saved to:\n$outputPath\n\nWould you like to import this upscaled video into the Timeline now?', style: const TextStyle(color: Colors.white70)),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Stay Here', style: TextStyle(color: Colors.white54))),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: gCustomAccentColor.value, foregroundColor: Colors.black),
-                icon: const Icon(Icons.movie_creation_rounded, size: 18),
-                label: const Text('OPEN IN TIMELINE', style: TextStyle(fontWeight: FontWeight.bold)),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ProjectScreen(
-                        initialProject: ProjectData(
-                          mediaPath: outputPath,
-                          isImage: false,
-                          aspectRatio: '16:9',
-                          layers: [
-                            AdjustmentLayer(
-                              id: 'esrgan_layer',
-                              name: 'Real-ESRGAN ${_scaleFactor}x',
-                              blendMode: LayerBlendMode.normal,
-                            ),
-                          ],
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: kCardDark,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Upscale Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: Text('Saved to:\n$outputPath\n\nWould you like to import this upscaled video into the Timeline now?', style: const TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Stay Here', style: TextStyle(color: Colors.white54))),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(backgroundColor: gCustomAccentColor.value, foregroundColor: Colors.black),
+                  icon: const Icon(Icons.movie_creation_rounded, size: 18),
+                  label: const Text('OPEN IN TIMELINE', style: TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ProjectScreen(
+                          initialProject: ProjectData(
+                            mediaPath: outputPath,
+                            isImage: false,
+                            aspectRatio: '16:9',
+                            layers: [
+                              AdjustmentLayer(
+                                id: 'esrgan_layer',
+                                name: 'Real-ESRGAN ${_scaleFactor}x',
+                                blendMode: LayerBlendMode.normal,
+                              ),
+                            ],
+                          ),
+                          projectName: 'ESRGAN ${_scaleFactor}x Master',
+                          isImportedFromUpscaler: true, // Signals timeline to show mini badge and pause immediately
                         ),
-                        projectName: 'ESRGAN ${_scaleFactor}x Master',
-                        isImportedFromUpscaler: true, // Signals timeline to show mini badge and pause immediately
                       ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        );
+                    );
+                  },
+                ),
+              ],
+            ),
+          );
+        }
       } else {
         setState(() => _isExporting = false);
         final logs = await _activeSession!.getLogsAsString();
@@ -447,12 +451,13 @@ if (returnCode == 0) {
                                 ),
                               ),
 
-                            // Interactive Split Divider
+                            // Interactive Full-Width Movable Split Divider
                             Positioned.fill(
                               child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
                                 onHorizontalDragUpdate: (details) {
                                   setState(() {
-                                    _splitPosition = (details.localPosition.dx / constraints.maxWidth).clamp(0.05, 0.95);
+                                    _splitPosition = (details.localPosition.dx / constraints.maxWidth).clamp(0.02, 0.98);
                                   });
                                 },
                                 child: Stack(
