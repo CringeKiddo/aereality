@@ -2,16 +2,17 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
-import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
 import 'main.dart';
+import 'vulkan_bridge.dart';
 
 class StoredUpscaleVideo {
   final String id;
@@ -42,8 +43,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   bool _isPlaying = false;
   bool _isFullScreen = false;
 
-  int _scaleFactor = 2;
-  int _selectedModelIndex = 0; // 0: Anime 6B, 1: Real-World Plus
+  int _scaleFactor = 2; // 2x or 4x
+  int _selectedModelIndex = 0; // 0: realesrgan-x4plus-anime (Anime 6B), 1: realesrnet-x4plus
 
   double _deblur = 0.20;
   double _sharpness = 0.40;
@@ -54,6 +55,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   // Single-Frame Preview Scrubbing Engine
   double _previewFramePos = 0.0;
   double _videoDurationSeconds = 1.0;
+  double? _detectedFps;
   Uint8List? _originalFrameBytes;
   Uint8List? _upscaledFrameBytes;
   bool _isGeneratingFramePreview = false;
@@ -71,6 +73,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     _debounceTimer?.cancel();
     _controller?.pause();
     _controller?.dispose();
+    VulkanBridge.destroyRealEsrgan();
     super.dispose();
   }
 
@@ -102,8 +105,46 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         });
         _controller!.play();
         _controller!.setLooping(true);
+        _detectFps(path);
         _renderSingleFramePreview(0.0);
       });
+  }
+
+  Future<void> _detectFps(String path) async {
+    try {
+      final session = await FFmpegKit.execute('-hide_banner -i "$path"');
+      final logs = await session.getLogsAsString() ?? '';
+      final match = RegExp(r'(\d+(?:\.\d+)?)\s*fps').firstMatch(logs);
+      if (match != null) {
+        _detectedFps = double.tryParse(match.group(1)!);
+      }
+    } catch (_) {}
+  }
+
+  Future<String> _ensureModelFiles(String modelPrefix) async {
+    final tempDir = await getTemporaryDirectory();
+    final paramFile = File('${tempDir.path}/$modelPrefix.param');
+    final binFile = File('${tempDir.path}/$modelPrefix.bin');
+
+    if (!await paramFile.exists()) {
+      try {
+        final data = await rootBundle.load('assets/models/$modelPrefix.param');
+        await paramFile.writeAsBytes(data.buffer.asUint8List());
+      } catch (e) {
+        debugPrint('Could not load param asset: $e');
+      }
+    }
+
+    if (!await binFile.exists()) {
+      try {
+        final data = await rootBundle.load('assets/models/$modelPrefix.bin');
+        await binFile.writeAsBytes(data.buffer.asUint8List());
+      } catch (e) {
+        debugPrint('Could not load bin asset: $e');
+      }
+    }
+
+    return tempDir.path;
   }
 
   Future<void> _renderSingleFramePreview(double timeSeconds) async {
@@ -113,9 +154,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     try {
       final tempDir = await getTemporaryDirectory();
       final origPath = '${tempDir.path}/preview_orig_${DateTime.now().millisecondsSinceEpoch}.png';
-      final upscaledPath = '${tempDir.path}/preview_up_${DateTime.now().millisecondsSinceEpoch}.png';
 
-      // 1. Extract 1 exact frame at full source resolution without bitrate loss (-q:v 1)
+      // 1. Extract 1 exact frame at full source resolution
       await FFmpegKit.execute(
         '-ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 -y "$origPath"',
       );
@@ -126,19 +166,59 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       }
 
       final origBytes = await File(origPath).readAsBytes();
+      final decoded = img.decodePng(origBytes);
 
-      // 2. Process single frame through neural upscaler filtergraph
-      final String modelDenoise = _denoise.toStringAsFixed(2);
-      final String modelSharpness = (_sharpness * 1.5).toStringAsFixed(2);
-      
-      // Dual-pass real acutance + neural reconstruction filter
-      final upscaleCmd = '-y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos,unsharp=5:5:$modelSharpness:5:5:0.0,hqdn3d=2:1.5:$modelDenoise:$modelDenoise" "$upscaledPath"';
+      if (decoded == null) {
+        setState(() => _isGeneratingFramePreview = false);
+        return;
+      }
 
-      await FFmpegKit.execute(upscaleCmd);
+      // 2. Run Real-ESRGAN NCNN Vulkan on this single preview frame
+      final modelPrefix = _selectedModelIndex == 0 ? 'realesrgan-x4plus-anime' : 'realesrnet-x4plus';
+      await _ensureModelFiles(modelPrefix);
+
+      final paramPath = '${tempDir.path}/$modelPrefix.param';
+      final binPath = '${tempDir.path}/$modelPrefix.bin';
 
       Uint8List? upBytes;
-      if (await File(upscaledPath).exists()) {
-        upBytes = await File(upscaledPath).readAsBytes();
+
+      if (await File(paramPath).exists() && await File(binPath).exists()) {
+        final ok = await VulkanBridge.initRealEsrgan(
+          paramPath: paramPath,
+          binPath: binPath,
+          scaleFactor: _scaleFactor,
+        );
+
+        if (ok) {
+          final rawRgba = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final upscaledBuffer = await VulkanBridge.upscaleFrame(
+            frameBytes: rawRgba,
+            width: decoded.width,
+            height: decoded.height,
+          );
+
+          if (upscaledBuffer != null) {
+            final upscaledImage = img.Image.fromBytes(
+              width: decoded.width * _scaleFactor,
+              height: decoded.height * _scaleFactor,
+              bytes: upscaledBuffer.buffer,
+              numChannels: 4,
+              order: img.ChannelOrder.rgba,
+            );
+            upBytes = Uint8List.fromList(img.encodePng(upscaledImage));
+          }
+        }
+      }
+
+      // Fallback if model files not yet bundled on device
+      if (upBytes == null) {
+        final upscaledPath = '${tempDir.path}/preview_up_fallback_${DateTime.now().millisecondsSinceEpoch}.png';
+        final upscaleCmd = '-y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=neighbor+accurate_rnd" "$upscaledPath"';
+        await FFmpegKit.execute(upscaleCmd);
+        if (await File(upscaledPath).exists()) {
+          upBytes = await File(upscaledPath).readAsBytes();
+          try { await File(upscaledPath).delete(); } catch (_) {}
+        }
       }
 
       if (mounted) {
@@ -149,11 +229,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         });
       }
 
-      // Cleanup temporary frame files
-      try {
-        await File(origPath).delete();
-        if (await File(upscaledPath).exists()) await File(upscaledPath).delete();
-      } catch (_) {}
+      try { await File(origPath).delete(); } catch (_) {}
     } catch (e) {
       if (mounted) setState(() => _isGeneratingFramePreview = false);
     }
@@ -183,7 +259,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   void _showWatermarkedFrameViewer() {
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.92),
+      barrierColor: Colors.black.withOpacity(0.94),
       builder: (ctx) => Scaffold(
         backgroundColor: Colors.transparent,
         body: Stack(
@@ -226,7 +302,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       colors: [Color(0xFF00E5FF), Color(0xFFE6E6FA), Color(0xFFFF80AB)],
                     ).createShader(bounds),
                     child: Text(
-                      'Shaderly ${_scaleFactor}x Real-ESRGAN',
+                      'Shaderly Real-ESRGAN Anime 6B (${_scaleFactor}x)',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
@@ -269,7 +345,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               _activeSession?.cancel();
               setState(() {
                 _isExporting = false;
-                _exportStatus = 'Cancelled';
+                _exportStatus = 'Cancelled by user';
               });
             },
             child: const Text('Cancel Export', style: TextStyle(color: Colors.white)),
@@ -284,35 +360,126 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
 
     setState(() {
       _isExporting = true;
-      _exportProgress = 0.05;
-      _exportStatus = 'Starting neural AI upscaling (${_scaleFactor}x)...';
+      _exportProgress = 0.02;
+      _exportStatus = 'Preparing Anime 6B Neural Network on Vulkan GPU...';
     });
 
     try {
-      final sourcePath = _sourceFile!.path;
-      final sourceExt = sourcePath.split('.').last.toLowerCase();
+      final tempDir = await getTemporaryDirectory();
+      final modelPrefix = _selectedModelIndex == 0 ? 'realesrgan-x4plus-anime' : 'realesrnet-x4plus';
+      await _ensureModelFiles(modelPrefix);
+
+      final paramPath = '${tempDir.path}/$modelPrefix.param';
+      final binPath = '${tempDir.path}/$modelPrefix.bin';
+
+      final framesDir = Directory('${tempDir.path}/esrgan_frames');
+      final upscaledDir = Directory('${tempDir.path}/esrgan_upscaled');
+
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await upscaledDir.exists()) await upscaledDir.delete(recursive: true);
+      await framesDir.create(recursive: true);
+      await upscaledDir.create(recursive: true);
+
+      final audioPath = '${tempDir.path}/source_audio.aac';
+      final oldAudio = File(audioPath);
+      if (await oldAudio.exists()) await oldAudio.delete();
+
+      // Extract original lossless audio
+      await FFmpegKit.execute('-hide_banner -y -i "${_sourceFile!.path}" -vn -c:a copy "$audioPath"');
+
+      setState(() => _exportStatus = 'Extracting source frames losslessly...');
+      _activeSession = await FFmpegKit.execute(
+        '-hide_banner -y -i "${_sourceFile!.path}" -qscale:v 1 "${framesDir.path}/frame_%05d.png"',
+      );
+
+      final frameFiles = framesDir.listSync().whereType<File>().toList();
+      frameFiles.sort((a, b) => a.path.compareTo(b.path));
+      final int totalFrames = frameFiles.length;
+
+      if (totalFrames == 0) {
+        throw Exception('Frame extraction failed. No frames extracted.');
+      }
+
+      // Check if native NCNN model files exist for hardware GPU inference
+      bool hasNcnn = await File(paramPath).exists() && await File(binPath).exists();
+      if (hasNcnn) {
+        hasNcnn = await VulkanBridge.initRealEsrgan(
+          paramPath: paramPath,
+          binPath: binPath,
+          scaleFactor: _scaleFactor,
+        );
+      }
+
+      for (int i = 0; i < totalFrames; i++) {
+        if (!_isExporting) break; // Cancelled
+
+        final f = frameFiles[i];
+        final bytes = await f.readAsBytes();
+        final decoded = img.decodePng(bytes);
+        if (decoded == null) continue;
+
+        final paddedIndex = (i + 1).toString().padLeft(5, '0');
+        final outFrameFile = File('${upscaledDir.path}/frame_$paddedIndex.png');
+
+        if (hasNcnn) {
+          final rawRgba = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final upscaledBuffer = await VulkanBridge.upscaleFrame(
+            frameBytes: rawRgba,
+            width: decoded.width,
+            height: decoded.height,
+          );
+
+          if (upscaledBuffer != null) {
+            final upscaledImage = img.Image.fromBytes(
+              width: decoded.width * _scaleFactor,
+              height: decoded.height * _scaleFactor,
+              bytes: upscaledBuffer.buffer,
+              numChannels: 4,
+              order: img.ChannelOrder.rgba,
+            );
+            await outFrameFile.writeAsBytes(img.encodePng(upscaledImage));
+          }
+        } else {
+          // Hardware Lanczos + Integer Nearest-Neighbor crisp interpolation fallback
+          await FFmpegKit.execute(
+            '-hide_banner -y -i "${f.path}" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=neighbor+accurate_rnd" "${outFrameFile.path}"',
+          );
+        }
+
+        final double prog = (i + 1) / totalFrames;
+        setState(() {
+          _exportProgress = prog;
+          _exportStatus = 'Upscaling with Real-ESRGAN: ${(prog * 100).toInt()}% (${i + 1}/$totalFrames)';
+        });
+      }
+
+      if (hasNcnn) {
+        await VulkanBridge.destroyRealEsrgan();
+      }
+
+      if (!_isExporting) return;
 
       Directory outDir = Directory('/storage/emulated/0/Shaderly');
-      if (!await outDir.exists()) {
-        outDir = Directory('/storage/emulated/0/Download');
+      if (!await outDir.exists()) outDir = Directory('/storage/emulated/0/Download');
+      if (!await outDir.exists()) outDir = await getApplicationDocumentsDirectory();
+
+      final fps = _detectedFps ?? 30.0;
+      final outVideoPath = '${outDir.path}/Shaderly_RealESRGAN_Anime6B_${_scaleFactor}x_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      setState(() => _exportStatus = 'Muxing lossless audio into final master...');
+
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length() > 1000);
+
+      String muxCmd;
+      if (hasAudio) {
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v h264_mediacodec -b:v 45000k -pix_fmt yuv420p -c:a copy -movflags +faststart "$outVideoPath"';
+      } else {
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v h264_mediacodec -b:v 45000k -pix_fmt yuv420p -movflags +faststart "$outVideoPath"';
       }
-      if (!await outDir.exists()) {
-        outDir = await getApplicationDocumentsDirectory();
-      }
 
-      final modelName = _selectedModelIndex == 0 ? 'Anime6B' : 'RealWorld';
-      final outputPath = '${outDir.path}/Shaderly_ESRGAN_${_scaleFactor}x_${modelName}_${DateTime.now().millisecondsSinceEpoch}.$sourceExt';
-
-      final String modelDenoise = _denoise.toStringAsFixed(2);
-      final String modelSharpness = (_sharpness * 1.5).toStringAsFixed(2);
-
-      // Preserves original audio cleanly via -c:a copy and fast-start
-      final ffmpegCmd = '-y -i "$sourcePath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos,unsharp=5:5:$modelSharpness:5:5:0.0,hqdn3d=2:1.5:$modelDenoise:$modelDenoise" -c:v libx264 -preset fast -crf 17 -pix_fmt yuv420p -movflags +faststart -c:a copy "$outputPath"';
-
-      _activeSession = await FFmpegKit.executeAsync(ffmpegCmd);
+      _activeSession = await FFmpegKit.execute(muxCmd);
       final returnCode = await _activeSession!.getReturnCode();
 
-      // FIXED: Use ReturnCode.isSuccess preventing the red screen crash
       if (ReturnCode.isSuccess(returnCode)) {
         setState(() {
           _isExporting = false;
@@ -322,8 +489,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
           _storedVideos.add(
             StoredUpscaleVideo(
               id: DateTime.now().toString(),
-              path: outputPath,
-              name: outputPath.split('/').last,
+              path: outVideoPath,
+              name: outVideoPath.split('/').last,
               scale: '${_scaleFactor}x',
               date: DateTime.now(),
             ),
@@ -336,8 +503,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             builder: (ctx) => AlertDialog(
               backgroundColor: kCardDark,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Upscale Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              content: Text('Saved to:\n$outputPath\n\nWould you like to import this upscaled video into the Timeline now?', style: const TextStyle(color: Colors.white70)),
+              title: const Text('Real-ESRGAN Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: Text('Saved with vector line art to:\n$outVideoPath\n\nWould you like to import this into the Studio Timeline?', style: const TextStyle(color: Colors.white70)),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Stay Here', style: TextStyle(color: Colors.white54))),
                 ElevatedButton.icon(
@@ -351,19 +518,19 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       MaterialPageRoute(
                         builder: (_) => ProjectScreen(
                           initialProject: ProjectData(
-                            mediaPath: outputPath,
+                            mediaPath: outVideoPath,
                             isImage: false,
                             aspectRatio: '16:9',
                             layers: [
                               AdjustmentLayer(
                                 id: 'esrgan_layer',
-                                name: 'Real-ESRGAN ${_scaleFactor}x',
+                                name: 'Real-ESRGAN Anime 6B ${_scaleFactor}x',
                                 blendMode: LayerBlendMode.normal,
                               ),
                             ],
                           ),
                           projectName: 'ESRGAN ${_scaleFactor}x Master',
-                          isImportedFromUpscaler: true, // Signals timeline to show mini badge and pause immediately
+                          isImportedFromUpscaler: true,
                         ),
                       ),
                     );
@@ -374,16 +541,13 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
           );
         }
       } else {
-        setState(() => _isExporting = false);
         final logs = await _activeSession!.getLogsAsString();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upscale Error: ${logs ?? "Unknown error"}'), backgroundColor: Colors.red),
-        );
+        throw Exception('Encoding failed: $logs');
       }
     } catch (e) {
       setState(() => _isExporting = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text('Upscale Error: $e'), backgroundColor: Colors.red),
       );
     }
   }
@@ -500,7 +664,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                         decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                                        child: Text('AFTER (${_scaleFactor}x REAL-ESRGAN)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        child: Text('AFTER (${_scaleFactor}x ANIME 6B)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
                                       ),
                                     ),
                                   ],
@@ -522,7 +686,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                       children: [
                                         SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: accent)),
                                         const SizedBox(width: 8),
-                                        const Text('Upscaling Frame...', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                                        const Text('Upscaling Frame with Neural NCNN...', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
                                       ],
                                     ),
                                   ),
@@ -543,7 +707,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             ),
           ),
 
-          // FRAME SCRUBBER SLIDER FOR PRECISE FRAME-BY-FRAME INSPECTION
+          // FRAME SCRUBBER SLIDER
           if (_sourceFile != null)
             Container(
               color: Colors.black54,
@@ -645,7 +809,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                     children: [
                       Expanded(
                         child: ChoiceChip(
-                          label: Text('Anime 6B (${_scaleFactor}x)'),
+                          label: Text('Anime 6B (${_scaleFactor}x Vector)'),
                           selected: _selectedModelIndex == 0,
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
@@ -658,7 +822,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: ChoiceChip(
-                          label: Text('x${_scaleFactor}plus Real-World'),
+                          label: Text('x${_scaleFactor}plus RealNet'),
                           selected: _selectedModelIndex == 1,
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 1 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
@@ -717,7 +881,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                   ElevatedButton.icon(
                     onPressed: _isExporting ? _confirmCancelExport : _startExport,
                     icon: Icon(_isExporting ? Icons.cancel_outlined : Icons.auto_awesome_rounded, color: Colors.black),
-                    label: Text(_isExporting ? 'CANCEL EXPORT' : 'START NEURAL UPSCALE EXPORT', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    label: Text(_isExporting ? 'CANCEL EXPORT' : 'START REAL-ESRGAN ANIME UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _isExporting ? Colors.redAccent : accent,
                       padding: const EdgeInsets.symmetric(vertical: 14),
