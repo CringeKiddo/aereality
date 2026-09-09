@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
+import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 import 'package:image/image.dart' as img;
 
 import 'constants.dart';
@@ -106,8 +107,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _load() async {
     final projs = await ProjectManager.loadProjects();
     if (mounted) {
-      setState(() => _recent = projs);
-      _generateThumbnails(projs);
+      setState(() {
+        // Strict 4-slot session management for instant updates
+        _recent = projs.take(4).toList();
+      });
+      _generateThumbnails(_recent);
     }
   }
 
@@ -159,7 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed!'),
+            content: Text('Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed!'),
             backgroundColor: Colors.teal,
           ),
         );
@@ -323,12 +327,13 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModal) {
+          final accent = gCustomAccentColor.value;
           return AlertDialog(
             backgroundColor: kCardDark,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
               children: [
-                Icon(Icons.tune_rounded, color: gCustomAccentColor.value, size: 20),
+                Icon(Icons.tune_rounded, color: accent, size: 20),
                 const SizedBox(width: 8),
                 const Text('App & Engine Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               ],
@@ -345,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Navigator.pop(ctx);
                       _showColorPickerModal();
                     },
-                    icon: Icon(Icons.color_lens_rounded, color: gCustomAccentColor.value, size: 18),
+                    icon: Icon(Icons.color_lens_rounded, color: accent, size: 18),
                     label: const Text('COLOURS (40+ SOFT & HARD SHADES)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1B1B24),
@@ -356,13 +361,38 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
+                  const Text('TIMELINE PRECISION (8 / 16 / 32-BIT)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [8, 16, 32].map((bit) {
+                      final isSel = gEnginePrecision == bit;
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: ChoiceChip(
+                            label: Text('${bit}-Bit'),
+                            selected: isSel,
+                            selectedColor: accent,
+                            backgroundColor: const Color(0xFF1E1E28),
+                            labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (_) {
+                              setModal(() => gEnginePrecision = bit);
+                              setState(() {});
+                            },
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+
+                  const SizedBox(height: 20),
                   const Text('DEVELOPER & COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   ElevatedButton.icon(
                     onPressed: () {
                       Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('YouTube channel link copied to clipboard: @null7839'), backgroundColor: Colors.redAccent),
+                        const SnackBar(content: Text('YouTube channel link copied: @null7839'), backgroundColor: Colors.redAccent),
                       );
                     },
                     icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
@@ -376,41 +406,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('ABOUT & LICENSING', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.black26,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Shaderly HDR Studio v3.5', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                        SizedBox(height: 4),
-                        Text(
-                          'Powered by Vulkan FP32 compute pipelines, Real-ESRGAN neural super-resolution (BSD 3-Clause), and FFmpeg Kit multimedia engines.',
-                          style: TextStyle(color: Colors.white54, fontSize: 10),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Text('TIMELINE PREVIEW QUALITY (FPS & LAG REDUCTION)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
                     runSpacing: 6,
                     children: [
                       ChoiceChip(
-                        label: const Text('25% Draft (Zero Lag)'),
+                        label: const Text('25% Draft'),
                         selected: gPreviewScale == 0.25,
-                        selectedColor: gCustomAccentColor.value,
-                        backgroundColor: const Color(0xFF1E1E28),
-                        labelStyle: TextStyle(color: gPreviewScale == 0.25 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        selectedColor: accent,
                         onSelected: (_) {
                           setModal(() => gPreviewScale = 0.25);
                           setState(() {});
@@ -419,31 +424,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       ChoiceChip(
                         label: const Text('50% Smooth'),
                         selected: gPreviewScale == 0.50,
-                        selectedColor: gCustomAccentColor.value,
-                        backgroundColor: const Color(0xFF1E1E28),
-                        labelStyle: TextStyle(color: gPreviewScale == 0.50 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        selectedColor: accent,
                         onSelected: (_) {
                           setModal(() => gPreviewScale = 0.50);
                           setState(() {});
                         },
                       ),
                       ChoiceChip(
-                        label: const Text('75% High'),
-                        selected: gPreviewScale == 0.75,
-                        selectedColor: gCustomAccentColor.value,
-                        backgroundColor: const Color(0xFF1E1E28),
-                        labelStyle: TextStyle(color: gPreviewScale == 0.75 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                        onSelected: (_) {
-                          setModal(() => gPreviewScale = 0.75);
-                          setState(() {});
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('100% Native 32-Bit'),
+                        label: const Text('100% Native FP32'),
                         selected: gPreviewScale == 1.0,
-                        selectedColor: gCustomAccentColor.value,
-                        backgroundColor: const Color(0xFF1E1E28),
-                        labelStyle: TextStyle(color: gPreviewScale == 1.0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        selectedColor: accent,
                         onSelected: (_) {
                           setModal(() => gPreviewScale = 1.0);
                           setState(() {});
@@ -457,7 +447,7 @@ class _HomeScreenState extends State<HomeScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: Text('Close', style: TextStyle(color: gCustomAccentColor.value, fontWeight: FontWeight.bold)),
+                child: Text('Close', style: TextStyle(color: accent, fontWeight: FontWeight.bold)),
               ),
             ],
           );
@@ -516,7 +506,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
                   child: Text(
-                    'SHADERLY CORE',
+                    '${gEnginePrecision}-BIT VULKAN',
                     style: TextStyle(color: accent, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -633,7 +623,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             const SizedBox(height: 24),
-            const Text('SAVED SESSIONS (WITH TIMELINE THUMBNAILS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
+            const Text('SAVED SESSIONS (4 INSTANT SLOTS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             if (_recent.isEmpty)
               Container(
@@ -683,7 +673,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text('${p.mediaPath.split('/').last} • ${p.data.layers.length} Layers • ${p.data.aspectRatio}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        subtitle: Text('${p.mediaPath.split('/').last} • Slot #${i + 1}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -712,6 +702,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
 class ProjectSetupScreen extends StatefulWidget {
   const ProjectSetupScreen({super.key});
 
@@ -751,7 +742,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               controller: TextEditingController(text: _projectName),
             ),
             const SizedBox(height: 20),
-            const Text('OUTPUT ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('OUTPUT ASPECT RATIO (ZOOM-TO-FILL PROTECTED)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
@@ -863,10 +854,11 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
+
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
-  final bool isImportedFromUpscaler; // Tag passed from Real-ESRGAN upscaler
+  final bool isImportedFromUpscaler;
 
   const ProjectScreen({
     super.key,
@@ -905,7 +897,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   List<CustomPresetItem> _customPresets = [];
   List<LutModel> _activeLuts = [];
 
-  // Export cancellation reference
+  // Split Toning & Dithering state
+  double _splitToneShadowH = 0.60;
+  double _splitToneShadowS = 0.0;
+  double _splitToneHighH = 0.12;
+  double _splitToneHighS = 0.0;
+  double _splitToneBalance = 0.0;
+  double _ditherStrength = 1.0;
+
+  // Text Effects Suite (WIS Edits)
+  double _textBevel = 0.0;
+  double _textLightSweep = 0.0;
+  double _textHorizonRamp = 0.0;
+  double _textInnerShadow = 0.0;
+  double _textOcclusionRim = 0.0;
+  double _textTightCoreGlow = 0.0;
+  double _textCenterAura = 0.0;
+
   FFmpegSession? _activeExportSession;
   bool _isExportCancelled = false;
 
@@ -914,7 +922,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 8, vsync: this);
+    // 9 Tabs: PRESETS, LUT, BASIC, HSL, GLOW / FLARE, ATMOSPHERE, TEXT FX, CURVES, TONEMAP
+    _tabController = TabController(length: 9, vsync: this);
     _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
@@ -1025,6 +1034,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  Future<void> _switchMediaFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result != null && result.files.single.path != null) {
+      final p = result.files.single.path!;
+      final ext = p.split('.').last.toLowerCase();
+      final validExts = ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'];
+      if (validExts.contains(ext)) {
+        await _loadMedia(p);
+      }
+    }
+  }
+
   Future<void> _loadMedia(String path) async {
     if (path.isEmpty) return;
     final ext = path.split('.').last.toLowerCase();
@@ -1065,7 +1086,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _videoDurationSeconds = _controller!.value.duration.inMilliseconds / 1000.0;
           if (_videoDurationSeconds <= 0.0) _videoDurationSeconds = 1.0;
 
-          // If imported from AI Upscaler, pause immediately so user inspects frames with slider
           if (widget.isImportedFromUpscaler) {
             _controller!.pause();
             _isPlaying = false;
@@ -1203,10 +1223,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         bslDepthAmt = l.bslaFogDepth;
       }
 
+      // Neutral, Gold, Cyan, Red, Violet tints
       if (l.edgeGlowTint == 1.0) bloomTint = const Color(0xFFFFD700);
       else if (l.edgeGlowTint == 2.0) bloomTint = const Color(0xFF00E5FF);
       else if (l.edgeGlowTint == 4.0) bloomTint = const Color(0xFFFF1744);
       else if (l.edgeGlowTint == 5.0) bloomTint = const Color(0xFF7C4DFF);
+      else bloomTint = Colors.white;
     }
 
     totalBloom = totalBloom.clamp(0.0, 0.85);
@@ -1226,8 +1248,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     center: Alignment.center,
                     radius: 0.9,
                     colors: [
-                      bloomTint.withOpacity(0.45),
-                      bloomTint.withOpacity(0.12),
+                      bloomTint.withOpacity(0.40),
+                      bloomTint.withOpacity(0.10),
                       Colors.transparent,
                     ],
                   ),
@@ -1263,8 +1285,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     end: Alignment.bottomCenter,
                     stops: [0.0, (1.0 - bslDepthAmt).clamp(0.1, 0.9), 1.0],
                     colors: [
-                      const Color(0xFF8FA3B8).withOpacity(0.55 * (1.0 + bslScatterAmt * 0.4)),
-                      const Color(0xFF708090).withOpacity(0.35),
+                      // Non-yellow neutral grey/slate mist
+                      const Color(0xFF8FA3B8).withOpacity(0.48 * (1.0 + bslScatterAmt * 0.4)),
+                      const Color(0xFF708090).withOpacity(0.28),
                       Colors.transparent,
                     ],
                   ),
@@ -1288,7 +1311,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
-  // 16-BYTE ALIGNED UNIFORM PACKER (Exact match with GLSL 64-float LayerData)
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
     final uniforms = Float32List(512);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
@@ -1300,13 +1322,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[2] = _project.tonemapMode;
     uniforms[3] = imgW;
     uniforms[4] = imgH;
-    uniforms[5] = _cur.activeLutId != null ? 1.0 : 0.0; // u_hasLut
-    uniforms[6] = _cur.lutOpacity;                     // u_lutOpacity
-    uniforms[7] = 0.0;                                 // pad
+    uniforms[5] = _cur.activeLutId != null ? 1.0 : 0.0;
+    uniforms[6] = _cur.lutOpacity;
+    uniforms[7] = _splitToneShadowH;
+    uniforms[8] = _splitToneShadowS;
+    uniforms[9] = _splitToneHighH;
+    uniforms[10] = _splitToneHighS;
+    uniforms[11] = _splitToneBalance;
+    uniforms[12] = _ditherStrength;
+    uniforms[13] = _textBevel;
+    uniforms[14] = _textLightSweep;
+    uniforms[15] = _textHorizonRamp;
+    uniforms[16] = _textInnerShadow;
+    uniforms[17] = _textOcclusionRim;
+    uniforms[18] = _textTightCoreGlow;
+    uniforms[19] = _textCenterAura;
 
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
-      final offset = 8 + (l * 64); // Exact 64-float (256-byte) stride
+      final offset = 20 + (l * 64);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1339,7 +1373,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 23] = layer.vignetteBoxed;
 
       uniforms[offset + 24] = layer.edgeDarken;
-      uniforms[offset + 25] = layer.darkOutlines;
+      uniforms[offset + 25] = 0.85; // subtle edge shadow opacity
       uniforms[offset + 26] = layer.denoise;
       uniforms[offset + 27] = layer.filmGrain;
 
@@ -1472,14 +1506,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           blendMode: LayerBlendMode.screen,
           opacity: 0.90,
           bslaGodRays: 0.75,
-          bslaFogDensity: 0.65,
-          bslaFogDepth: 0.70,
-          bslaBloomHaze: 0.85,
-          bslFogScatter: 0.45,
-          deepGlowIntensity: 0.60,
-          deepGlowRadius: 0.75,
-          deepGlowThreshold: 0.35,
-          edgeGlowTint: 1.0,
+          bslaFogDensity: 0.55,
+          bslaFogDepth: 0.65,
+          bslaBloomHaze: 0.65,
+          bslFogScatter: 0.40,
+          deepGlowIntensity: 0.45,
+          deepGlowRadius: 0.65,
+          deepGlowThreshold: 0.40,
+          edgeGlowTint: 0.0, // Non-yellow neutral tint
           contrast: 1.0,
           saturation: 1.0,
         );
@@ -1491,6 +1525,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
+  // ==========================================
+// main.dart (PART 2 OF 2)
+// Presets Logic, Tabs, Image Export Sheet, Master Export Pipeline & Viewport
+// ==========================================
 
   void _applyPreset(String name) {
     _pushUndoSnapshot();
@@ -1500,16 +1538,167 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _isBslaExtremeActive = false;
 
       switch (name) {
+        // Yuta Sendai Colony: Desaturated cold tones, punchy darks, warm skin highlights, crisp acutance
+        case 'okkotsu':
+          _project.layers.add(AdjustmentLayer(
+            id: 'okkotsu_base',
+            name: 'Sendai Cold Contrast',
+            contrast: 1.28,
+            saturation: 0.82, // Tasteful desaturation
+            brightness: -0.02,
+            temperature: 7200.0,
+            sharpness: 0.48,
+            shadows: -0.12,
+            edgeDarken: 0.22,
+            vignette: 0.05, // Bare minimum touch of vignette
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'okkotsu_rim',
+            name: 'Specular Rim & Dehaze',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.68,
+            deepGlowIntensity: 0.32,
+            deepGlowRadius: 0.45,
+            deepGlowThreshold: 0.52,
+            edgeGlowTint: 0.0, // Clean neutral/white
+            thinStreakIntensity: 0.15,
+            thinStreakOpacity: 0.70,
+          ));
+          break;
+
+        // Saber Alter: Dark gold armor sheen, deep blood crimson undertones, atmospheric mist
+        case 'artoria':
+          _project.layers.add(AdjustmentLayer(
+            id: 'artoria_base',
+            name: 'Excalibur Morgan Base',
+            contrast: 1.34,
+            saturation: 1.08,
+            temperature: 6200.0,
+            sharpness: 0.52,
+            shadows: -0.16,
+            edgeDarken: 0.28,
+            vignette: 0.06, // Bare touch of vignette
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.15, 0.50, 0.88, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'artoria_core',
+            name: 'Gold Armor & Crimson Flare',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.82,
+            deepGlowIntensity: 0.46,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 4.0, // Deep Blood Crimson
+            thinStreakIntensity: 0.28,
+            thinStreakWidth: 0.60,
+            thinStreakOpacity: 0.85,
+          ));
+          break;
+
+        // Asta vs Deku: Vibrant electric green & cyan lightning aura, punchy acutance, split-toned highlights
+        case 'deku tree':
+          _project.layers.add(AdjustmentLayer(
+            id: 'deku_base',
+            name: 'Full Cowling Acutance',
+            contrast: 1.26,
+            saturation: 1.22,
+            temperature: 6700.0,
+            sharpness: 0.55,
+            shadows: -0.05,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.52, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'deku_aura',
+            name: 'Neon Lightning Aura',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.88,
+            deepGlowIntensity: 0.58,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.36,
+            edgeGlowTint: 2.0, // Cyan / Teal
+            thinStreakIntensity: 0.38,
+            thinStreakWidth: 0.70,
+            thinStreakOpacity: 0.92,
+            lineChromaStrength: 0.40,
+          ));
+          break;
+
+        // Revamped Raiden (from Raiden vs Ei video): Neon electric violet & magenta highlights, sapphire glow, deep ink shadows
+        case 'Raiden':
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_base',
+            name: 'Musou Shinsetsu Ink',
+            contrast: 1.30,
+            saturation: 1.14,
+            temperature: 7100.0,
+            sharpness: 0.46,
+            shadows: -0.14,
+            edgeDarken: 0.24,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.17, 0.49, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_violet',
+            name: 'Sapphire Violet Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.84,
+            deepGlowIntensity: 0.54,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 5.0, // Electro Violet
+            sapphireGlowWidth: 0.85,
+            sapphireGlowThreshold: 0.42,
+            thinStreakIntensity: 0.30,
+            thinStreakOpacity: 0.88,
+          ));
+          break;
+
+        // Atmospheric Haze: Soft volumetric mist, subtle aerial perspective scatter, non-yellow
+        case 'atmospheric haze':
+          _project.layers.add(AdjustmentLayer(
+            id: 'haze_base',
+            name: 'Liminal Base',
+            contrast: 1.08,
+            saturation: 0.94,
+            temperature: 6400.0,
+            brightness: 0.03,
+            shadows: 0.08,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.04, 0.28, 0.52, 0.78, 0.96],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'haze_overlay',
+            name: 'Volumetric White Mist',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.72,
+            bslaFogDensity: 0.45,
+            bslaFogDepth: 0.60,
+            bslaBloomHaze: 0.55,
+            bslFogScatter: 0.40,
+            deepGlowIntensity: 0.30,
+            deepGlowRadius: 0.70,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 0.0, // Clean non-yellow neutral
+          ));
+          break;
+
         case 'tealdropped (conq knockoff)':
           _project.layers.add(AdjustmentLayer(
             id: 'conq_base',
             name: 'Base Grade',
-            contrast: 1.16,
-            saturation: 1.04,
-            brightness: 0.04,
+            contrast: 1.18,
+            saturation: 1.06,
+            brightness: 0.03,
             temperature: 6800.0,
-            sharpness: 0.40,
+            sharpness: 0.44,
             shadows: 0.02,
+            vignette: 0.04,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.25, 0.52, 0.82, 1.0],
           ));
@@ -1533,25 +1722,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'vint_base',
             name: 'Warm Film Stock',
-            contrast: 1.15,
+            contrast: 1.14,
             saturation: 0.88,
-            temperature: 5600.0,
-            shadows: 0.08,
+            temperature: 5800.0, // Natural warmth, not overblown
+            shadows: 0.06,
+            vignette: 0.05,
             blendMode: LayerBlendMode.normal,
-            curveMaster: [0.05, 0.26, 0.50, 0.78, 0.95],
+            curveMaster: [0.04, 0.26, 0.50, 0.78, 0.95],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'vint_grain',
             name: 'Halation & Soft Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.75,
-            deepGlowIntensity: 0.35,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.42,
+            opacity: 0.70,
+            deepGlowIntensity: 0.32,
+            deepGlowRadius: 0.60,
+            deepGlowThreshold: 0.45,
             edgeGlowTint: 1.0,
-            halationRadius: 0.25,
-            halationWarmth: 0.85,
-            filmGrain: 0.10,
+            halationRadius: 0.22,
+            halationWarmth: 0.75,
+            filmGrain: 0.08,
           ));
           break;
 
@@ -1559,13 +1749,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'noir_base',
             name: 'Deep Ink & Silver',
-            contrast: 1.35,
-            saturation: 0.12,
-            temperature: 7200.0,
-            shadows: -0.15,
-            sharpness: 0.42,
-            edgeDarken: 0.30,
-            darkOutlines: 0.25,
+            contrast: 1.32,
+            saturation: 0.25, // Cold silver tint, not flat B&W
+            temperature: 7400.0,
+            shadows: -0.14,
+            sharpness: 0.45,
+            edgeDarken: 0.26,
+            vignette: 0.06,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
           ));
@@ -1573,10 +1763,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'noir_specular',
             name: 'Silver Specular Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.70,
-            deepGlowIntensity: 0.42,
-            deepGlowRadius: 0.50,
-            deepGlowThreshold: 0.48,
+            opacity: 0.68,
+            deepGlowIntensity: 0.38,
+            deepGlowRadius: 0.48,
+            deepGlowThreshold: 0.50,
             edgeGlowTint: 0.0,
             thinStreakIntensity: 0.15,
             thinStreakOpacity: 0.80,
@@ -1587,12 +1777,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'choso_base',
             name: 'Piercing Blood Midtones',
-            contrast: 1.25,
-            saturation: 1.15,
-            temperature: 6100.0,
-            sharpness: 0.36,
+            contrast: 1.26,
+            saturation: 1.12,
+            temperature: 6200.0,
+            sharpness: 0.42,
             shadows: -0.08,
-            edgeDarken: 0.25,
+            edgeDarken: 0.24,
+            vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
           ));
@@ -1600,13 +1791,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'choso_blood',
             name: 'Dark Blood Halation',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.52,
-            deepGlowRadius: 0.58,
-            deepGlowThreshold: 0.38,
+            opacity: 0.82,
+            deepGlowIntensity: 0.50,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.40,
             edgeGlowTint: 4.0,
-            halationRadius: 0.28,
-            halationWarmth: 0.90,
+            halationRadius: 0.25,
+            halationWarmth: 0.85,
             thinStreakIntensity: 0.20,
             thinStreakOpacity: 0.85,
           ));
@@ -1616,11 +1807,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'yoru_base',
             name: 'Flash Step Contrast',
-            contrast: 1.24,
-            saturation: 1.12,
-            temperature: 6800.0,
-            sharpness: 0.38,
-            shadows: -0.06,
+            contrast: 1.25,
+            saturation: 1.10,
+            temperature: 6900.0,
+            sharpness: 0.44,
+            shadows: -0.08,
+            vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.21, 0.50, 0.83, 1.0],
           ));
@@ -1628,14 +1820,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'yoru_lightning',
             name: 'Electro Violet Streak',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.58,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.36,
+            opacity: 0.84,
+            deepGlowIntensity: 0.56,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.38,
             edgeGlowTint: 5.0,
-            thinStreakIntensity: 0.35,
-            thinStreakWidth: 0.70,
-            thinStreakOpacity: 0.90,
+            thinStreakIntensity: 0.32,
+            thinStreakWidth: 0.68,
+            thinStreakOpacity: 0.88,
             lineChromaStrength: 0.35,
           ));
           break;
@@ -1644,10 +1836,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _project.layers.add(AdjustmentLayer(
             id: 'gojo_base',
             name: 'Infinity Base',
-            contrast: 1.18,
-            saturation: 1.08,
-            temperature: 7000.0,
-            sharpness: 0.30,
+            contrast: 1.20,
+            saturation: 1.06,
+            temperature: 7100.0,
+            sharpness: 0.42,
+            vignette: 0.04,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.22, 0.50, 0.81, 1.0],
           ));
@@ -1655,196 +1848,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'gojo_bloom',
             name: 'Infinity Cyan Bloom',
             blendMode: LayerBlendMode.screen,
-            opacity: 0.82,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.62,
-            deepGlowThreshold: 0.42,
-            edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-
-        case 'Raiden':
-          _project.layers.add(AdjustmentLayer(
-            id: 'raiden_base',
-            name: 'Base Grade',
-            contrast: 1.20,
-            saturation: 1.10,
-            temperature: 6700.0,
-            sharpness: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'raiden_glow',
-            name: 'Electro Violet Glow',
-            blendMode: LayerBlendMode.screen,
             opacity: 0.80,
-            deepGlowIntensity: 0.52,
+            deepGlowIntensity: 0.46,
             deepGlowRadius: 0.60,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 5.0,
-          ));
-          break;
-
-        case 'bina':
-          _project.layers.add(AdjustmentLayer(
-            id: 'bina_base',
-            name: 'Base Grade',
-            contrast: 1.10,
-            saturation: 1.06,
-            brightness: 0.02,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'bina_glow',
-            name: 'Pastel Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.75,
-            deepGlowIntensity: 0.45,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.38,
-          ));
-          break;
-
-        case 'potential, man.':
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot_base',
-            name: 'Base Grade',
-            contrast: 1.22,
-            saturation: 1.04,
-            sharpness: 0.32,
-            edgeDarken: 0.20,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot_glow',
-            name: 'Specular Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.70,
-            deepGlowIntensity: 0.36,
-            deepGlowRadius: 0.48,
-            deepGlowThreshold: 0.48,
-          ));
-          break;
-
-        case 'potential 2.0':
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot2_base',
-            name: 'Base Grade',
-            contrast: 1.24,
-            saturation: 1.12,
-            sharpness: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'pot2_rays',
-            name: 'Mahoraga Rays',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.85,
-            deepGlowIntensity: 0.50,
-            deepGlowRadius: 0.65,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 1.0,
-            volRaysLength: 0.22,
-          ));
-          break;
-
-        case 'saber':
-          _project.layers.add(AdjustmentLayer(
-            id: 'saber_base',
-            name: 'Base Grade',
-            contrast: 1.20,
-            saturation: 1.12,
-            temperature: 6600.0,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'saber_glow',
-            name: 'Golden Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.82,
-            deepGlowIntensity: 0.52,
-            deepGlowRadius: 0.68,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 1.0,
-            thinStreakIntensity: 0.20,
-            thinStreakOpacity: 0.85,
-          ));
-          break;
-
-        case 'sasuke':
-          _project.layers.add(AdjustmentLayer(
-            id: 'sasuke_base',
-            name: 'Base Grade',
-            contrast: 1.25,
-            saturation: 1.06,
-            temperature: 6900.0,
-            sharpness: 0.36,
-            edgeDarken: 0.25,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'sasuke_flare',
-            name: 'Chidori Flare',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.55,
             deepGlowThreshold: 0.42,
             edgeGlowTint: 2.0,
-            thinStreakIntensity: 0.35,
-            thinStreakWidth: 0.65,
-            thinStreakOpacity: 0.90,
-          ));
-          break;
-
-        case 'toji':
-          _project.layers.add(AdjustmentLayer(
-            id: 'toji_base',
-            name: 'Base Grade',
-            contrast: 1.30,
-            saturation: 1.00,
-            temperature: 6200.0,
-            sharpness: 0.40,
-            shadows: -0.12,
-            edgeDarken: 0.30,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'toji_spec',
-            name: 'Specular Sheen',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.65,
-            deepGlowIntensity: 0.32,
-            deepGlowRadius: 0.42,
-            deepGlowThreshold: 0.50,
-          ));
-          break;
-
-        case 'shiki':
-          _project.layers.add(AdjustmentLayer(
-            id: 'shiki_base',
-            name: 'Base Grade',
-            contrast: 1.26,
-            saturation: 1.10,
-            temperature: 6700.0,
-            sharpness: 0.38,
-            blendMode: LayerBlendMode.normal,
-          ));
-          _project.layers.add(AdjustmentLayer(
-            id: 'shiki_glow',
-            name: 'Death Perception Bloom',
-            blendMode: LayerBlendMode.screen,
-            opacity: 0.80,
-            deepGlowIntensity: 0.48,
-            deepGlowRadius: 0.58,
-            deepGlowThreshold: 0.40,
-            edgeGlowTint: 2.0,
             thinStreakIntensity: 0.20,
             thinStreakOpacity: 0.85,
           ));
           break;
+
+        default:
+          _project.layers.add(AdjustmentLayer(
+            id: 'default_base',
+            name: 'Base Grade',
+            contrast: 1.15,
+            saturation: 1.05,
+            sharpness: 0.35,
+            blendMode: LayerBlendMode.normal,
+          ));
       }
 
       _project.activeLayerIndex = 0;
@@ -2069,9 +2091,148 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // Dedicated Image Export Sheet
+  void _showImageExportSheet() {
+    String format = 'PNG';
+    String resolution = '1080p';
+    int quality = 95;
+    final accent = gCustomAccentColor.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F0F14),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheet) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Image Export Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text('FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(
+                children: ['PNG', 'JPG', 'WEBP'].map((fmt) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Center(child: Text(fmt)),
+                      selected: format == fmt,
+                      selectedColor: accent,
+                      labelStyle: TextStyle(color: format == fmt ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) => setSheet(() => format = fmt),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 14),
+              const Text('RESOLUTION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(
+                children: ['1080p', '2K', '4K'].map((res) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Center(child: Text(res)),
+                      selected: resolution == res,
+                      selectedColor: accent,
+                      labelStyle: TextStyle(color: resolution == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) => setSheet(() => resolution = res),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('QUALITY / BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  Text('$quality%', style: TextStyle(color: accent, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+                ],
+              ),
+              Slider(
+                value: quality.toDouble(),
+                min: 50,
+                max: 100,
+                activeColor: accent,
+                onChanged: (v) => setSheet(() => quality = v.round()),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _exportStaticImageWithParams(format, resolution, quality);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: accent, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  child: Text('EXPORT $format ($resolution)', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportStaticImageWithParams(String format, String resolution, int quality) async {
+    if (_cachedRawImage == null) return;
+    try {
+      final dims = _calculateTargetDimensions(resolution, _project.aspectRatio);
+      final outW = dims['width']!;
+      final outH = dims['height']!;
+
+      final resized = img.copyResize(_cachedRawImage!, width: outW, height: outH);
+      final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
+      final uniforms = _packMultiLayerUniforms(outW.toDouble(), outH.toDouble());
+      final lutTable = _getActiveLutTable();
+
+      final outRaw = processImage(rawInput, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+
+      final gradedImg = img.Image.fromBytes(
+        width: outW,
+        height: outH,
+        bytes: outRaw.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+
+      Uint8List fileBytes;
+      if (format == 'JPG') {
+        fileBytes = Uint8List.fromList(img.encodeJpg(gradedImg, quality: quality));
+      } else {
+        fileBytes = Uint8List.fromList(img.encodePng(gradedImg));
+      }
+
+      final dir = await _getSafeMovieDirectory();
+      final ext = format.toLowerCase();
+      final dest = File('$dir/Shaderly_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext');
+      await dest.writeAsBytes(fileBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Saved image to:\n${dest.path}'), backgroundColor: Colors.teal),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
   void _showExportSheet() {
     if (_project.isImage) {
-      _exportStaticImage();
+      _showImageExportSheet();
       return;
     }
 
@@ -2351,54 +2512,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return docDir.path;
   }
 
-  Future<void> _exportStaticImage() async {
-    if (_cachedRawImage == null || _project.mediaPath.isEmpty) return;
-    try {
-      final dims = _calculateTargetDimensions('1080p', _project.aspectRatio);
-      final exportWidth = dims['width']!;
-      final exportHeight = dims['height']!;
-
-      final resized = img.copyResize(_cachedRawImage!, width: exportWidth, height: exportHeight);
-      final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
-      final uniforms = _packMultiLayerUniforms(exportWidth.toDouble(), exportHeight.toDouble());
-      final lutTable = _getActiveLutTable();
-
-      final outputRaw = processImage(
-        rawInput,
-        exportWidth,
-        exportHeight,
-        exportWidth,
-        exportHeight,
-        uniforms,
-        lutTable: lutTable,
-      );
-
-      final gradedImg = img.Image.fromBytes(
-        width: exportWidth,
-        height: exportHeight,
-        bytes: outputRaw.buffer,
-        numChannels: 4,
-        order: img.ChannelOrder.rgba,
-      );
-
-      final pngBytes = img.encodePng(gradedImg);
-      final folderPath = await _getSafeMovieDirectory();
-      final fileName = 'Shaderly_Graded_${DateTime.now().millisecondsSinceEpoch}.png';
-      final destFile = File('$folderPath/$fileName');
-      await destFile.writeAsBytes(pngBytes);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Graded Image Saved to:\n${destFile.path}'), backgroundColor: Colors.green),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image Export Error: $e'), backgroundColor: Colors.red));
-      }
-    }
-  }
-
   Future<void> _exportVideo(
     String resolution,
     String fps,
@@ -2640,7 +2753,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (!_isExportCancelled && mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+          SnackBar(content: Text('Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -2997,7 +3110,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
             child: const Center(
               child: Text(
-                'No .cube LUTs imported yet.\nTap "IMPORT .CUBE" or the top "LUT" button to load any 32x32x32 look.',
+                'No .cube LUTs imported yet.\nTap "IMPORT .CUBE" to load any 32x32x32 look.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
@@ -3077,26 +3190,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final builtInPresets = [
-      {'name': 'tealdropped (conq knockoff)', 'desc': 'Bright high-key lift with soft cyan-teal edge bloom & sharp lines', 'color': 0xFF00E5FF},
-      {'name': 'vintage cc', 'desc': 'Warm amber film tone with raised blacks and gentle halation', 'color': 0xFFFFB74D},
+      {'name': 'okkotsu', 'desc': 'Desaturated cold tones, deep punchy darks, and high line acutance', 'color': 0xFF90A4AE},
+      {'name': 'artoria', 'desc': 'Excalibur Morgan gold armor sheen, deep blood crimson undertones & mist', 'color': 0xFFFFD700},
+      {'name': 'deku tree', 'desc': 'Neon electric green & cyan lightning aura, punchy acutance & split tone', 'color': 0xFF00E676},
+      {'name': 'Raiden', 'desc': 'Musou Shinsetsu electric violet highlights, sapphire glow & deep ink', 'color': 0xFF7C4DFF},
+      {'name': 'atmospheric haze', 'desc': 'Volumetric white/slate mist atmosphere without yellow tinting', 'color': 0xFFB0BEC5},
+      {'name': 'tealdropped (conq knockoff)', 'desc': 'Bright lift with soft cyan-teal edge bloom & subtle vignette', 'color': 0xFF00E5FF},
+      {'name': 'vintage cc', 'desc': 'Warm film tone with raised blacks and gentle halation', 'color': 0xFFFFB74D},
       {'name': 'noir', 'desc': 'High-contrast stylized ink with a touch of cold silver tone', 'color': 0xFFB0BEC5},
       {'name': 'choso', 'desc': 'Blood manipulation dark crimson aura with high midtone contrast', 'color': 0xFFB71C1C},
       {'name': 'yoruichi', 'desc': 'Purple electric flare with clean high-acutance highlights', 'color': 0xFFAB47BC},
       {'name': 'Gojo', 'desc': 'Infinity cyan specular bloom and clean line contrast', 'color': 0xFF00E5FF},
-      {'name': 'Raiden', 'desc': 'Electro violet highlights with balanced natural tones', 'color': 0xFF7C4DFF},
-      {'name': 'bina', 'desc': 'Dreamcore soft radiant glow with pastel lift', 'color': 0xFFF48FB1},
-      {'name': 'potential, man.', 'desc': 'Crisp midtone contrast and deep ink shadows', 'color': 0xFF3F51B5},
-      {'name': 'potential 2.0', 'desc': 'Golden-white radiance with volumetric light shafts', 'color': 0xFFFFB300},
-      {'name': 'saber', 'desc': 'Excalibur noble gold with radiant specular gleam', 'color': 0xFFFFD54F},
-      {'name': 'sasuke', 'desc': 'Chidori electrical streak flare with cool shadowed edge', 'color': 0xFF00E5FF},
-      {'name': 'toji', 'desc': 'Inverted spear raw acutance with crushing ink lines', 'color': 0xFF37474F},
-      {'name': 'shiki', 'desc': 'Mystic Eyes of Death Perception edge tint with high punch', 'color': 0xFF00E5FF},
     ];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Top Action Row
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -3122,7 +3231,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 16),
 
-        // BSLA Extreme Atmospheric Toggle Card (Always co-exists cleanly)
+        // BSLA Atmospheric Mist Toggle
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -3153,7 +3262,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'BSLA Extreme Atmospheric',
+                      'BSLA Clean Atmospheric',
                       style: TextStyle(
                         color: _isBslaExtremeActive ? accent : Colors.white,
                         fontWeight: FontWeight.bold,
@@ -3162,7 +3271,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 2),
                     const Text(
-                      'Layered volumetric fog glow, depth scatter & God rays overlay',
+                      'Neutral volumetric mist, soft scatter & non-yellow haze overlay',
                       style: TextStyle(color: Colors.white54, fontSize: 10),
                     ),
                   ],
@@ -3178,7 +3287,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 18),
 
-        // Custom User Presets
         if (_customPresets.isNotEmpty) ...[
           const Text('MY CUSTOM PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
           const SizedBox(height: 8),
@@ -3241,7 +3349,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           const SizedBox(height: 14),
         ],
 
-        // Built-in Look Presets
         const Text('BUILT-IN COLOR GRADES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
         const SizedBox(height: 8),
         ...builtInPresets.map((p) {
@@ -3302,15 +3409,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       children: [
         _buildSliderRow('Exposure (Brightness)', _cur.brightness, -0.8, 0.8, (v) => _cur.brightness = v),
-        _buildSliderRow('Contrast (Mid-Pivot)', _cur.contrast, 0.2, 2.5, (v) => _cur.contrast = v),
+        _buildSliderRow('Contrast (0.18 Mid-Pivot)', _cur.contrast, 0.2, 2.5, (v) => _cur.contrast = v),
         _buildSliderRow('Saturation (Vibrance)', _cur.saturation, 0.0, 2.5, (v) => _cur.saturation = v),
         _buildSliderRow('Gamma Curve', _cur.gamma, 0.2, 2.5, (v) => _cur.gamma = v),
-        _buildSliderRow('Sharpness (Acutance)', _cur.sharpness, 0.0, 2.0, (v) => _cur.sharpness = v),
-        _buildSliderRow('Hue Shift Angle', _cur.hue, -3.14159, 3.14159, (v) => _cur.hue = v),
+        _buildSliderRow('CAS Acutance Sharpness', _cur.sharpness, 0.0, 2.0, (v) => _cur.sharpness = v),
         _buildSliderRow('Color Temperature (K)', _cur.temperature, 2000.0, 12000.0, (v) => _cur.temperature = v),
         _buildSliderRow('Highlights Recovery', _cur.highlights, -1.0, 1.0, (v) => _cur.highlights = v),
         _buildSliderRow('Shadows Lift', _cur.shadows, -1.0, 1.0, (v) => _cur.shadows = v),
         _buildSliderRow('Black Crush Floor', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
+      ],
+    );
+  }
+
+  Widget _buildHslTab() {
+    final accent = gCustomAccentColor.value;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('SELECTIVE HSL & VIBRANCE SPLIT', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 12),
+        _buildSliderRow('Hue Shift Global', _cur.hue, -3.14159, 3.14159, (v) => _cur.hue = v),
+        _buildSliderRow('Magic Bullet Mojo (Teal/Orange)', _cur.mblMojoTealOrange, 0.0, 1.5, (v) => _cur.mblMojoTealOrange = v),
       ],
     );
   }
@@ -3410,50 +3529,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildStylizedEffectsTab() {
+  Widget _buildTextEffectsTab() {
     final accent = gCustomAccentColor.value;
-
     return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      padding: const EdgeInsets.all(16),
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('EDGEDARKEN & LINE ART DETECTOR', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('WIS TEXT EFFECTS SUITE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+            const Text('PHYSICAL 3D METALLIC STACK', style: TextStyle(color: Colors.white38, fontSize: 9, fontFamily: 'monospace')),
+          ],
         ),
-        _buildSliderRow('EdgeDarken (Anime/Art Line Ink)', _cur.edgeDarken, 0.0, 1.5, (v) => _cur.edgeDarken = v),
-        _buildSliderRow('Dark Outlines Multiplier', _cur.darkOutlines, 0.0, 1.5, (v) => _cur.darkOutlines = v),
-
-        const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('OPTICS & VIGNETTE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
-        _buildSliderRow('Radial Vignette', _cur.vignette, 0.0, 1.5, (v) => _cur.vignette = v),
-        _buildSliderRow('Boxed / Anamorphic Vignette', _cur.vignetteBoxed, 0.0, 1.5, (v) => _cur.vignetteBoxed = v),
-        _buildSliderRow('Magic Bullet Mojo Teal / Orange', _cur.mblMojoTealOrange, 0.0, 1.5, (v) => _cur.mblMojoTealOrange = v),
-
-        const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('ANALOG FLICKER & SHUTTER PULSE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
-        _buildSliderRow('Flicker Intensity', _cur.flickerIntensity, 0.0, 1.0, (v) => _cur.flickerIntensity = v),
-        _buildSliderRow('Flicker Speed (Hz)', _cur.flickerSpeed, 0.1, 10.0, (v) => _cur.flickerSpeed = v),
-
-        const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('DEPTH OF FIELD (TILT-SHIFT FOCUS)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
-        _buildSliderRow('Depth of Field Blur', _cur.depthOfField, 0.0, 1.0, (v) => _cur.depthOfField = v),
-        _buildSliderRow('Focus Plane Center', _cur.dofFocus, 0.0, 1.0, (v) => _cur.dofFocus = v),
-        _buildSliderRow('Tilt Angle', _cur.dofAngle, -1.57, 1.57, (v) => _cur.dofAngle = v),
+        const SizedBox(height: 12),
+        _buildSliderRow('Chisel-Hard Bevel (3D Ridges)', _textBevel, 0.0, 1.0, (v) => setState(() => _textBevel = v)),
+        _buildSliderRow('Light Sweep (Specular Sheen)', _textLightSweep, 0.0, 1.0, (v) => setState(() => _textLightSweep = v)),
+        _buildSliderRow('Metallic Horizon Gradient Ramp', _textHorizonRamp, 0.0, 1.0, (v) => setState(() => _textHorizonRamp = v)),
+        _buildSliderRow('Inner Shadow / Depth Contour', _textInnerShadow, 0.0, 1.0, (v) => setState(() => _textInnerShadow = v)),
+        _buildSliderRow('Zero-Feather Occlusion Rim', _textOcclusionRim, 0.0, 1.0, (v) => setState(() => _textOcclusionRim = v)),
+        _buildSliderRow('Tight Specular Core Glow', _textTightCoreGlow, 0.0, 1.5, (v) => setState(() => _textTightCoreGlow = v)),
+        _buildSliderRow('Wide Atmospheric Aura (Center Deep Glow)', _textCenterAura, 0.0, 1.5, (v) => setState(() => _textCenterAura = v)),
       ],
     );
   }
 
   Widget _buildCurvesTab() {
-    final accent = gCustomAccentColor.value;
     List<double> activeCurve;
     Color curveColor;
 
@@ -3508,7 +3608,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 16),
 
-        // Interactive Spline Box
         Container(
           height: 220,
           decoration: BoxDecoration(
@@ -3556,60 +3655,51 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     final tonemappers = [
       {'id': 0.0, 'name': 'Linear (Passthrough)', 'desc': 'Unclamped floating point color grading'},
-      {'id': 1.0, 'name': 'ACES Filmic', 'desc': 'Industry standard academy color transform with soft highlight rolloff'},
-      {'id': 2.0, 'name': 'Reinhard', 'desc': 'Simple luminance-based compression preserving shadows'},
-      {'id': 3.0, 'name': 'AgX Natural', 'desc': 'Modern perceptual curve preventing color shifts in bright lights'},
-      {'id': 4.0, 'name': 'Filmic Hejl', 'desc': 'High-contrast cinematic curve with sharp highlight inflection'},
+      {'id': 1.0, 'name': 'ACES Filmic (Compensated)', 'desc': 'No dimness: Full highlight headroom preservation'},
+      {'id': 2.0, 'name': 'Reinhard (Punchy Uncapped)', 'desc': 'Punchy contrast with soft luminous rolloff'},
+      {'id': 3.0, 'name': 'AgX Natural', 'desc': 'Perceptually smooth saturation without clipping'},
     ];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-          child: Text('TONEMAPPING & DITHERING ENGINE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
+        Text('TONEMAPPING TRANSFORM (NON-DIMMING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 10),
         ...tonemappers.map((t) {
           final isSel = _project.tonemapMode == t['id'];
           return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
               color: isSel ? accent.withOpacity(0.16) : kCardDark,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+              border: Border.all(color: isSel ? accent : Colors.white12),
             ),
-            child: InkWell(
+            child: ListTile(
+              title: Text(t['name'] as String, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: Text(t['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
               onTap: () {
                 _pushUndoSnapshot();
                 setState(() => _project.tonemapMode = t['id'] as double);
                 _applyGrade();
                 _autoSaveProject();
               },
-              child: Row(
-                children: [
-                  Icon(
-                    isSel ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                    color: isSel ? accent : Colors.white38,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(t['name'] as String, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                        const SizedBox(height: 2),
-                        Text(t['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
             ),
           );
         }).toList(),
+
+        const SizedBox(height: 16),
+        Text('SPLIT TONING ENGINE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 8),
+        _buildSliderRow('Shadows Hue', _splitToneShadowH, 0.0, 1.0, (v) => setState(() => _splitToneShadowH = v)),
+        _buildSliderRow('Shadows Saturation', _splitToneShadowS, 0.0, 1.0, (v) => setState(() => _splitToneShadowS = v)),
+        _buildSliderRow('Highlights Hue', _splitToneHighH, 0.0, 1.0, (v) => setState(() => _splitToneHighH = v)),
+        _buildSliderRow('Highlights Saturation', _splitToneHighS, 0.0, 1.0, (v) => setState(() => _splitToneHighS = v)),
+        _buildSliderRow('Balance Pivot', _splitToneBalance, -1.0, 1.0, (v) => setState(() => _splitToneBalance = v)),
+
+        const SizedBox(height: 16),
+        Text('TRUE TPDF DITHERING (ANTI-BANDING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 8),
+        _buildSliderRow('Dither Strength', _ditherStrength, 0.0, 2.0, (v) => setState(() => _ditherStrength = v)),
       ],
     );
   }
@@ -3645,7 +3735,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  // Tag identifying upscaled imports from Real-ESRGAN
                   if (widget.isImportedFromUpscaler) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -3664,6 +3753,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ],
               ),
               actions: [
+                IconButton(
+                  icon: const Icon(Icons.video_library_rounded, color: Colors.white70),
+                  tooltip: 'Switch Video or Art',
+                  onPressed: _switchMediaFile,
+                ),
                 IconButton(
                   icon: const Icon(Icons.undo_rounded, color: Colors.white70),
                   tooltip: 'Undo',
@@ -3689,7 +3783,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       body: SafeArea(
         child: Column(
           children: [
-            // Preview Viewport (Maintains chosen Aspect Ratio like 4:5 inside 16:9 box)
+            // Preview Viewport with Zoom-to-Fill (BoxFit.cover) protection
             Expanded(
               flex: _isFullScreen ? 10 : 5,
               child: Stack(
@@ -3700,32 +3794,46 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     child: Center(
                       child: AspectRatio(
                         aspectRatio: _getAspectRatioValue(_project.aspectRatio),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            if (hasVideo)
-                              ColorFiltered(
-                                colorFilter: _buildLiveColorFilter(),
-                                child: VideoPlayer(_controller!),
-                              )
-                            else if (hasStatic && _processedStaticImage != null)
-                              RawImage(image: _processedStaticImage, fit: BoxFit.contain)
-                            else if (hasStatic)
-                              const Center(child: CircularProgressIndicator(color: Colors.white38))
-                            else
-                              const Center(
-                                child: Text('No media loaded', style: TextStyle(color: Colors.white24, fontSize: 12)),
-                              ),
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (hasVideo)
+                                ColorFiltered(
+                                  colorFilter: _buildLiveColorFilter(),
+                                  child: FittedBox(
+                                    fit: BoxFit.cover, // Zoom to fill - never stretch
+                                    child: SizedBox(
+                                      width: _controller!.value.size.width,
+                                      height: _controller!.value.size.height,
+                                      child: VideoPlayer(_controller!),
+                                    ),
+                                  ),
+                                )
+                              else if (hasStatic && _processedStaticImage != null)
+                                FittedBox(
+                                  fit: BoxFit.cover,
+                                  child: SizedBox(
+                                    width: _renderWidth.toDouble(),
+                                    height: _renderHeight.toDouble(),
+                                    child: RawImage(image: _processedStaticImage),
+                                  ),
+                                )
+                              else if (hasStatic)
+                                const Center(child: CircularProgressIndicator(color: Colors.white38))
+                              else
+                                const Center(
+                                  child: Text('No media loaded', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                                ),
 
-                            // Real-Time Bloom, Atmospheric Fog & Anamorphic Flare Overlay
-                            _buildLiveBloomAtmosphere(),
-                          ],
+                              _buildLiveBloomAtmosphere(),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
 
-                  // Full-Screen Preview Toggle
                   Positioned(
                     top: 10,
                     right: 10,
@@ -3751,16 +3859,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
 
             if (!_isFullScreen) ...[
-              // Timeline scrubber (with automatic pause on upscaler import)
               _buildTimelineScrubber(),
-
-              // Multi-Layer Adjustment Track
               _buildAdjustmentLayerBar(),
-
-              // Layer Blend & Opacity Sub-bar
               _buildLayerSettingsHeader(),
 
-              // Tool Category Tabs
               Container(
                 color: const Color(0xFF0F0F14),
                 child: TabBar(
@@ -3774,16 +3876,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     Tab(text: 'PRESETS'),
                     Tab(text: 'LUT'),
                     Tab(text: 'BASIC'),
+                    Tab(text: 'HSL'),
                     Tab(text: 'GLOW / FLARE'),
                     Tab(text: 'ATMOSPHERE'),
-                    Tab(text: 'STYLIZED'),
+                    Tab(text: 'TEXT FX'),
                     Tab(text: 'CURVES'),
                     Tab(text: 'TONEMAP'),
                   ],
                 ),
               ),
 
-              // Controls Body
               Expanded(
                 flex: 5,
                 child: Container(
@@ -3794,9 +3896,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       _buildPresetsTab(),
                       _buildLutsTab(),
                       _buildBasicGradingTab(),
+                      _buildHslTab(),
                       _buildGlowsAndFlaresTab(),
                       _buildAtmosphereTab(),
-                      _buildStylizedEffectsTab(),
+                      _buildTextEffectsTab(),
                       _buildCurvesTab(),
                       _buildTonemappingTab(),
                     ],
@@ -3811,7 +3914,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 }
 
-// Spline Painter for Interactive Curves Tab
 class SplineCurvePainter extends CustomPainter {
   final List<double> points;
   final Color curveColor;
@@ -3850,7 +3952,6 @@ class SplineCurvePainter extends CustomPainter {
     }
     canvas.drawPath(path, linePaint);
 
-    // Control Knots
     final knotPaint = Paint()..color = curveColor;
     for (int i = 0; i < 5; i++) {
       double kx = size.width * (i / 4.0);
