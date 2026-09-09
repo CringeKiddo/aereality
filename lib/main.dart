@@ -107,7 +107,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final projs = await ProjectManager.loadProjects();
     if (mounted) {
       setState(() {
-        // Strict 4-slot session management for instant updates
         _recent = projs.take(4).toList();
       });
       _generateThumbnails(_recent);
@@ -921,7 +920,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    // 9 Tabs: PRESETS, LUT, BASIC, HSL, GLOW / FLARE, ATMOSPHERE, TEXT FX, CURVES, TONEMAP
     _tabController = TabController(length: 9, vsync: this);
     _loadShader();
 
@@ -1222,7 +1220,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         bslDepthAmt = l.bslaFogDepth;
       }
 
-      // Neutral, Gold, Cyan, Red, Violet tints
       if (l.edgeGlowTint == 1.0) bloomTint = const Color(0xFFFFD700);
       else if (l.edgeGlowTint == 2.0) bloomTint = const Color(0xFF00E5FF);
       else if (l.edgeGlowTint == 4.0) bloomTint = const Color(0xFFFF1744);
@@ -1284,7 +1281,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     end: Alignment.bottomCenter,
                     stops: [0.0, (1.0 - bslDepthAmt).clamp(0.1, 0.9), 1.0],
                     colors: [
-                      // Non-yellow neutral grey/slate mist
                       const Color(0xFF8FA3B8).withOpacity(0.48 * (1.0 + bslScatterAmt * 0.4)),
                       const Color(0xFF708090).withOpacity(0.28),
                       Colors.transparent,
@@ -1372,7 +1368,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 23] = layer.vignetteBoxed;
 
       uniforms[offset + 24] = layer.edgeDarken;
-      uniforms[offset + 25] = 0.85; // subtle edge shadow opacity
+      uniforms[offset + 25] = layer.darkOutlines; // Sobel outlines
       uniforms[offset + 26] = layer.denoise;
       uniforms[offset + 27] = layer.filmGrain;
 
@@ -1512,7 +1508,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           deepGlowIntensity: 0.45,
           deepGlowRadius: 0.65,
           deepGlowThreshold: 0.40,
-          edgeGlowTint: 0.0, // Non-yellow neutral tint
+          edgeGlowTint: 0.0,
           contrast: 1.0,
           saturation: 1.0,
         );
@@ -1524,11 +1520,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
-  // ==========================================
-// main.dart (PART 2 OF 2)
-// Presets Logic, Tabs, Image Export Sheet, Master Export Pipeline & Viewport
-// ==========================================
-
   void _applyPreset(String name) {
     _pushUndoSnapshot();
     setState(() {
@@ -1537,19 +1528,56 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _isBslaExtremeActive = false;
 
       switch (name) {
-        // Yuta Sendai Colony: Desaturated cold tones, punchy darks, warm skin highlights, crisp acutance
+        // 1. NEW: Yuta Edit Master Preset (JJK 0 inspired)
+        case 'yuta':
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_base',
+            name: 'Okkotsu JJK0 Contrast',
+            contrast: 1.36,
+            saturation: 0.84,
+            brightness: 0.02,
+            temperature: 6300.0,
+            sharpness: 0.55,
+            shadows: -0.10,
+            highlights: 0.18,
+            blackCrush: 0.04,
+            edgeDarken: 0.24,
+            darkOutlines: 0.15,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.18, 0.49, 0.84, 1.0],
+            flickerIntensity: 0.025,
+            flickerSpeed: 11.0,
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_ivory_bloom',
+            name: 'Warm Ivory Specular Flare',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.72,
+            deepGlowIntensity: 0.36,
+            deepGlowRadius: 0.45,
+            deepGlowThreshold: 0.55,
+            edgeGlowTint: 1.0, // Warm Ivory / Noble Gold
+            thinStreakIntensity: 0.18,
+            thinStreakOpacity: 0.75,
+            lineChromaStrength: 0.20,
+          ));
+          break;
+
+        // 2. Okkotsu (Sendai Colony)
         case 'okkotsu':
           _project.layers.add(AdjustmentLayer(
             id: 'okkotsu_base',
             name: 'Sendai Cold Contrast',
             contrast: 1.28,
-            saturation: 0.82, // Tasteful desaturation
+            saturation: 0.82,
             brightness: -0.02,
             temperature: 7200.0,
             sharpness: 0.48,
             shadows: -0.12,
             edgeDarken: 0.22,
-            vignette: 0.05, // Bare minimum touch of vignette
+            darkOutlines: 0.10,
+            vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
           ));
@@ -1561,13 +1589,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.32,
             deepGlowRadius: 0.45,
             deepGlowThreshold: 0.52,
-            edgeGlowTint: 0.0, // Clean neutral/white
+            edgeGlowTint: 0.0,
             thinStreakIntensity: 0.15,
             thinStreakOpacity: 0.70,
           ));
           break;
 
-        // Saber Alter: Dark gold armor sheen, deep blood crimson undertones, atmospheric mist
+        // 3. Artoria (Excalibur Morgan)
         case 'artoria':
           _project.layers.add(AdjustmentLayer(
             id: 'artoria_base',
@@ -1578,7 +1606,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             sharpness: 0.52,
             shadows: -0.16,
             edgeDarken: 0.28,
-            vignette: 0.06, // Bare touch of vignette
+            darkOutlines: 0.14,
+            vignette: 0.06,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.15, 0.50, 0.88, 1.0],
           ));
@@ -1590,14 +1619,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.46,
             deepGlowRadius: 0.55,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 4.0, // Deep Blood Crimson
+            edgeGlowTint: 4.0, // Crimson
             thinStreakIntensity: 0.28,
             thinStreakWidth: 0.60,
             thinStreakOpacity: 0.85,
           ));
           break;
 
-        // Asta vs Deku: Vibrant electric green & cyan lightning aura, punchy acutance, split-toned highlights
+        // 4. Deku Tree (Full Cowling)
         case 'deku tree':
           _project.layers.add(AdjustmentLayer(
             id: 'deku_base',
@@ -1627,7 +1656,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // Revamped Raiden (from Raiden vs Ei video): Neon electric violet & magenta highlights, sapphire glow, deep ink shadows
+        // 5. Raiden (Musou Shinsetsu)
         case 'Raiden':
           _project.layers.add(AdjustmentLayer(
             id: 'raiden_base',
@@ -1638,6 +1667,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             sharpness: 0.46,
             shadows: -0.14,
             edgeDarken: 0.24,
+            darkOutlines: 0.12,
             vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.17, 0.49, 0.84, 1.0],
@@ -1650,7 +1680,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.54,
             deepGlowRadius: 0.62,
             deepGlowThreshold: 0.38,
-            edgeGlowTint: 5.0, // Electro Violet
+            edgeGlowTint: 5.0, // Violet
             sapphireGlowWidth: 0.85,
             sapphireGlowThreshold: 0.42,
             thinStreakIntensity: 0.30,
@@ -1658,7 +1688,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // Atmospheric Haze: Soft volumetric mist, subtle aerial perspective scatter, non-yellow
+        // 6. Atmospheric Haze
         case 'atmospheric haze':
           _project.layers.add(AdjustmentLayer(
             id: 'haze_base',
@@ -1683,10 +1713,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.30,
             deepGlowRadius: 0.70,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 0.0, // Clean non-yellow neutral
+            edgeGlowTint: 0.0,
           ));
           break;
 
+        // 7. Tealdropped (Conq Knockoff)
         case 'tealdropped (conq knockoff)':
           _project.layers.add(AdjustmentLayer(
             id: 'conq_base',
@@ -1717,13 +1748,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
+        // 8. Vintage CC
         case 'vintage cc':
           _project.layers.add(AdjustmentLayer(
             id: 'vint_base',
             name: 'Warm Film Stock',
             contrast: 1.14,
             saturation: 0.88,
-            temperature: 5800.0, // Natural warmth, not overblown
+            temperature: 5800.0,
             shadows: 0.06,
             vignette: 0.05,
             blendMode: LayerBlendMode.normal,
@@ -1744,16 +1776,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
+        // 9. Noir
         case 'noir':
           _project.layers.add(AdjustmentLayer(
             id: 'noir_base',
             name: 'Deep Ink & Silver',
             contrast: 1.32,
-            saturation: 0.25, // Cold silver tint, not flat B&W
+            saturation: 0.25,
             temperature: 7400.0,
             shadows: -0.14,
             sharpness: 0.45,
             edgeDarken: 0.26,
+            darkOutlines: 0.18,
             vignette: 0.06,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
@@ -1772,6 +1806,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
+        // 10. Choso
         case 'choso':
           _project.layers.add(AdjustmentLayer(
             id: 'choso_base',
@@ -1782,6 +1817,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             sharpness: 0.42,
             shadows: -0.08,
             edgeDarken: 0.24,
+            darkOutlines: 0.12,
             vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
@@ -1802,6 +1838,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
+        // 11. Yoruichi
         case 'yoruichi':
           _project.layers.add(AdjustmentLayer(
             id: 'yoru_base',
@@ -1831,6 +1868,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
+        // 12. Gojo
         case 'Gojo':
           _project.layers.add(AdjustmentLayer(
             id: 'gojo_base',
@@ -2090,7 +2128,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // Dedicated Image Export Sheet
   void _showImageExportSheet() {
     String format = 'PNG';
     String resolution = '1080p';
@@ -3189,6 +3226,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final builtInPresets = [
+      {'name': 'yuta', 'desc': 'Okkotsu JJK0 contrast, desaturated ink darks, warm ivory bloom, subtle 11Hz pulse', 'color': 0xFFE0E0E0},
       {'name': 'okkotsu', 'desc': 'Desaturated cold tones, deep punchy darks, and high line acutance', 'color': 0xFF90A4AE},
       {'name': 'artoria', 'desc': 'Excalibur Morgan gold armor sheen, deep blood crimson undertones & mist', 'color': 0xFFFFD700},
       {'name': 'deku tree', 'desc': 'Neon electric green & cyan lightning aura, punchy acutance & split tone', 'color': 0xFF00E676},
@@ -3416,6 +3454,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Highlights Recovery', _cur.highlights, -1.0, 1.0, (v) => _cur.highlights = v),
         _buildSliderRow('Shadows Lift', _cur.shadows, -1.0, 1.0, (v) => _cur.shadows = v),
         _buildSliderRow('Black Crush Floor', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
+
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('LINE ART STYLIZE & SHADOWS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('Sobel Dark Outlines', _cur.darkOutlines, 0.0, 1.0, (v) => _cur.darkOutlines = v),
+        _buildSliderRow('Line Art EdgeDarken', _cur.edgeDarken, 0.0, 1.0, (v) => _cur.edgeDarken = v),
+        _buildSliderRow('Radial Vignette', _cur.vignette, 0.0, 1.0, (v) => _cur.vignette = v),
+        _buildSliderRow('Boxed Vignette', _cur.vignetteBoxed, 0.0, 1.0, (v) => _cur.vignetteBoxed = v),
       ],
     );
   }
@@ -3801,7 +3849,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                 ColorFiltered(
                                   colorFilter: _buildLiveColorFilter(),
                                   child: FittedBox(
-                                    fit: BoxFit.cover, // Zoom to fill - never stretch
+                                    fit: BoxFit.cover,
                                     child: SizedBox(
                                       width: _controller!.value.size.width,
                                       height: _controller!.value.size.height,
