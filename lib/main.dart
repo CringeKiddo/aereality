@@ -12,7 +12,6 @@ import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
-import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
 import 'package:image/image.dart' as img;
 
 import 'constants.dart';
