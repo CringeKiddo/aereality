@@ -73,6 +73,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   String _currentStepDetail = '';
   FFmpegSession? _activeSession;
 
+  // Selected encode options for upscaler output
+  String _exportContainer = 'MP4'; // MP4, WebM, MKV
+  String _exportCodec = 'H.264 (Hardware)'; // H.264 (Hardware), VP9, MPEG4
+
   @override
   void dispose() {
     _debounceTimer?.cancel();
@@ -134,7 +138,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     final paramDest = File('${tempDir.path}/$modelName.param');
     final binDest = File('${tempDir.path}/$modelName.bin');
 
-    // Verify files exist and are NOT corrupted 0-byte files
     if (await paramDest.exists() && await binDest.exists()) {
       if (paramDest.lengthSync() > 100 && binDest.lengthSync() > 1024) {
         return {'param': paramDest.path, 'bin': binDest.path};
@@ -173,7 +176,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       }
     }
 
-    // Asset bundle fallback
     if (!await paramDest.exists()) {
       for (final p in [
         'assets/models/$modelName.param',
@@ -236,7 +238,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         return;
       }
 
-      setState(() => _previewStatus = 'Upscaling with Real-ESRGAN Vulkan NCNN...');
+      setState(() => _previewStatus = 'Upscaling with Real-ESRGAN...');
 
       Uint8List? upBytes;
       final modelPaths = await _resolveModelPaths();
@@ -271,9 +273,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         }
       }
 
-      // High-precision Lanczos unsharp fallback if Vulkan weights are not ready
       if (upBytes == null) {
-        setState(() => _previewStatus = 'Rendering High-Precision Preview...');
+        setState(() => _previewStatus = 'Rendering Preview...');
         final upscaledPath = '${tempDir.path}/preview_up_fallback.png';
         final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
         final upscaleCmd = '-hide_banner -y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "$upscaledPath"';
@@ -339,45 +340,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       : const Icon(Icons.image_outlined, size: 80, color: Colors.white24)),
             ),
             Positioned(
-              left: 36,
-              top: MediaQuery.of(context).size.height * 0.42,
-              child: IgnorePointer(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF00E5FF).withOpacity(0.4),
-                        blurRadius: 18,
-                        spreadRadius: 4,
-                      ),
-                      BoxShadow(
-                        color: const Color(0xFFE6E6FA).withOpacity(0.3),
-                        blurRadius: 28,
-                        spreadRadius: 6,
-                      ),
-                    ],
-                  ),
-                  child: ShaderMask(
-                    shaderCallback: (bounds) => const LinearGradient(
-                      colors: [Color(0xFF00E5FF), Color(0xFFE6E6FA), Color(0xFFFF80AB)],
-                    ).createShader(bounds),
-                    child: Text(
-                      'Shaderly Real-ESRGAN Anime 6B (${_scaleFactor}x)',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
               top: 40,
               right: 20,
               child: IconButton(
@@ -418,13 +380,100 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     );
   }
 
+  void _showPreExportOptionsDialog() {
+    final accent = gCustomAccentColor.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: kCardDark,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Upscale Export Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text('CONTAINER FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(
+                children: ['MP4', 'WebM', 'MKV'].map((c) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Center(child: Text(c)),
+                      selected: _exportContainer == c,
+                      selectedColor: accent,
+                      labelStyle: TextStyle(color: _exportContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) {
+                        setModal(() {
+                          _exportContainer = c;
+                          if (c == 'WebM') {
+                            _exportCodec = 'VP9 (Open Video)';
+                          } else {
+                            _exportCodec = 'H.264 (Hardware)';
+                          }
+                        });
+                      },
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 14),
+              const Text('VIDEO CODEC', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: (_exportContainer == 'WebM'
+                    ? ['VP9 (Open Video)', 'VP8']
+                    : ['H.264 (Hardware)', 'MPEG4'])
+                    .map((codec) => ChoiceChip(
+                  label: Text(codec),
+                  selected: _exportCodec == codec,
+                  selectedColor: accent,
+                  labelStyle: TextStyle(color: _exportCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                  onSelected: (_) => setModal(() => _exportCodec = codec),
+                )).toList(),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _startExport();
+                  },
+                  icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black),
+                  label: Text('START ${_scaleFactor}X UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: accent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _startExport() async {
     if (_sourceFile == null) return;
 
     setState(() {
       _isExporting = true;
       _exportProgress = 0.02;
-      _exportStatus = 'Preparing Real-ESRGAN Neural Engine...';
+      _exportStatus = 'Preparing AI Engine...';
       _currentStepDetail = 'Resolving model weights & frame cache...';
     });
 
@@ -449,7 +498,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       await FFmpegKit.execute('-hide_banner -y -i "${_sourceFile!.path}" -vn -c:a copy "$audioPath"');
 
       setState(() {
-        _exportStatus = 'Extracting source frames losslessly...';
+        _exportStatus = 'Extracting source frames...';
         _currentStepDetail = 'Demuxing video stream into PNG sequence...';
       });
 
@@ -513,11 +562,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         final double prog = (i + 1) / totalFrames;
         setState(() {
           _exportProgress = prog;
-          _exportStatus = 'Upscaling with Real-ESRGAN (${_scaleFactor}x): ${(prog * 100).toInt()}%';
+          _exportStatus = 'Upscaling (${_scaleFactor}x): ${(prog * 100).toInt()}%';
           _currentStepDetail = 'Processed frame ${i + 1} of $totalFrames';
         });
 
-        // Clean up source frame to save disk space
         try { await f.delete(); } catch (_) {}
       }
 
@@ -532,26 +580,49 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       if (!await outDir.exists()) outDir = await getApplicationDocumentsDirectory();
 
       final fps = _detectedFps ?? 30.0;
-      final outVideoPath = '${outDir.path}/Shaderly_RealESRGAN_${_scaleFactor}x_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final ext = _exportContainer.toLowerCase();
+      final outVideoPath = '${outDir.path}/Shaderly_AI_${_scaleFactor}x_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
       setState(() {
-        _exportStatus = 'Muxing final video & lossless audio...';
-        _currentStepDetail = 'Encoding Master H.264 @ ${fps.toStringAsFixed(1)} FPS...';
+        _exportStatus = 'Encoding final video...';
+        _currentStepDetail = 'Muxing with $_exportCodec @ ${fps.toStringAsFixed(1)} FPS...';
       });
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length() > 1000);
 
+      // Construct robust Android-compatible encode command
+      String videoCodecArgs;
+      String audioCodecArgs;
+
+      if (_exportContainer == 'WebM') {
+        videoCodecArgs = _exportCodec.contains('VP9') ? '-c:v libvpx-vp9 -b:v 20M -pix_fmt yuv420p' : '-c:v libvpx -b:v 15M';
+        audioCodecArgs = '-c:a libvorbis';
+      } else {
+        videoCodecArgs = _exportCodec.contains('Hardware')
+            ? '-c:v h264_mediacodec -b:v 25M -pix_fmt yuv420p'
+            : '-c:v mpeg4 -q:v 2 -pix_fmt yuv420p';
+        audioCodecArgs = '-c:a copy';
+      }
+
       String muxCmd;
       if (hasAudio) {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v libx264 -preset veryfast -crf 17 -pix_fmt yuv420p -c:a copy -movflags +faststart "$outVideoPath"';
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" $videoCodecArgs $audioCodecArgs -movflags +faststart "$outVideoPath"';
       } else {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v libx264 -preset veryfast -crf 17 -pix_fmt yuv420p -movflags +faststart "$outVideoPath"';
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" $videoCodecArgs -movflags +faststart "$outVideoPath"';
       }
 
       _activeSession = await FFmpegKit.execute(muxCmd);
-      final returnCode = await _activeSession!.getReturnCode();
+      var returnCode = await _activeSession!.getReturnCode();
 
-      // Clean up upscaled temp frames
+      // Fallback if hardware codec is unsupported on device
+      if (!ReturnCode.isSuccess(returnCode)) {
+        final fallbackCmd = hasAudio
+            ? '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v mpeg4 -q:v 2 -c:a aac "$outVideoPath"'
+            : '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v mpeg4 -q:v 2 "$outVideoPath"';
+        _activeSession = await FFmpegKit.execute(fallbackCmd);
+        returnCode = await _activeSession!.getReturnCode();
+      }
+
       try { await upscaledDir.delete(recursive: true); } catch (_) {}
 
       if (ReturnCode.isSuccess(returnCode)) {
@@ -559,7 +630,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
           _isExporting = false;
           _exportProgress = 1.0;
           _exportStatus = 'Upscale Complete!';
-          _currentStepDetail = 'Master saved successfully.';
+          _currentStepDetail = 'Saved successfully.';
           if (_storedVideos.length >= 3) _storedVideos.removeAt(0);
           _storedVideos.add(
             StoredUpscaleVideo(
@@ -578,8 +649,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             builder: (ctx) => AlertDialog(
               backgroundColor: kCardDark,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Real-ESRGAN Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              content: Text('Saved with vector line art to:\n$outVideoPath\n\nWould you like to import this into the Studio Timeline?', style: const TextStyle(color: Colors.white70)),
+              title: const Text('Upscale Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: Text('Video saved to:\n$outVideoPath\n\nOpen this video in the Studio Editor?', style: const TextStyle(color: Colors.white70)),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Stay Here', style: TextStyle(color: Colors.white54))),
                 ElevatedButton.icon(
@@ -599,12 +670,12 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                             layers: [
                               AdjustmentLayer(
                                 id: 'esrgan_layer',
-                                name: 'Real-ESRGAN Anime 6B ${_scaleFactor}x',
+                                name: 'Base Grade',
                                 blendMode: LayerBlendMode.normal,
                               ),
                             ],
                           ),
-                          projectName: 'ESRGAN ${_scaleFactor}x Master',
+                          projectName: 'AI Upscaled Master',
                           isImportedFromUpscaler: true,
                         ),
                       ),
@@ -634,7 +705,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     return Scaffold(
       backgroundColor: kBackgroundDark,
       appBar: AppBar(
-        title: const Text('Shaderly AI Upscaler (Real-ESRGAN)', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('AI Upscaler', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
             icon: const Icon(Icons.fullscreen_rounded),
@@ -650,7 +721,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       ),
       body: Column(
         children: [
-          // VIEWPORT WITH DEDICATED PROGRESS BAR OVERLAY
+          // VIEWPORT
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Container(
@@ -737,7 +808,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                         decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                                        child: Text('AFTER (${_scaleFactor}x ANIME 6B)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        child: Text('AFTER (${_scaleFactor}x)', style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
                                       ),
                                     ),
                                   ],
@@ -771,7 +842,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                 ),
                               ),
 
-                            // DEDICATED FULL EXPORT PROGRESS OVERLAY
+                            // EXPORT PROGRESS OVERLAY
                             if (_isExporting)
                               Positioned(
                                 bottom: 16,
@@ -822,7 +893,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       child: ElevatedButton.icon(
                         onPressed: _pickMedia,
                         icon: const Icon(Icons.video_library_rounded, color: Colors.black),
-                        label: const Text('CHOOSE VIDEO OR ART TO UPSCALE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                        label: const Text('CHOOSE VIDEO OR IMAGE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                         style: ElevatedButton.styleFrom(backgroundColor: accent),
                       ),
                     ),
@@ -861,7 +932,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               ),
             ),
 
-          // CONTROLS LIST
+          // CONTROLS
           Expanded(
             flex: 5,
             child: Container(
@@ -926,13 +997,13 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                   ),
 
                   const SizedBox(height: 14),
-                  const Text('NEURAL MODEL SELECTION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const Text('MODEL', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
                       Expanded(
                         child: ChoiceChip(
-                          label: Text('Anime 6B (${_scaleFactor}x Vector)'),
+                          label: Center(child: Text('Anime (${_scaleFactor}x)')),
                           selected: _selectedModelIndex == 0,
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
@@ -945,7 +1016,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: ChoiceChip(
-                          label: Text('x${_scaleFactor}plus RealNet'),
+                          label: Center(child: Text('Standard (${_scaleFactor}x)')),
                           selected: _selectedModelIndex == 1,
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 1 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
@@ -959,17 +1030,17 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                   ),
 
                   const SizedBox(height: 14),
-                  _buildSlider('Deblur Restoration', _deblur, 0.0, 1.0, (v) {
+                  _buildSlider('Deblur', _deblur, 0.0, 1.0, (v) {
                     setState(() => _deblur = v);
                     _debounceTimer?.cancel();
                     _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
                   }),
-                  _buildSlider('Acutance Sharpness', _sharpness, 0.0, 1.0, (v) {
+                  _buildSlider('Sharpness', _sharpness, 0.0, 1.0, (v) {
                     setState(() => _sharpness = v);
                     _debounceTimer?.cancel();
                     _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
                   }),
-                  _buildSlider('Noise Suppression', _denoise, 0.0, 1.0, (v) {
+                  _buildSlider('Noise Reduction', _denoise, 0.0, 1.0, (v) {
                     setState(() => _denoise = v);
                     _debounceTimer?.cancel();
                     _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
@@ -977,7 +1048,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
 
                   const SizedBox(height: 16),
                   if (_storedVideos.isNotEmpty) ...[
-                    const Text('PREVIOUSLY UPSCALED VIDEOS (MAX 3)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const Text('SAVED UPSCALED VIDEOS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     ...List.generate(_storedVideos.length, (i) {
                       final v = _storedVideos[i];
@@ -1002,9 +1073,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                   ],
 
                   ElevatedButton.icon(
-                    onPressed: _isExporting ? _confirmCancelExport : _startExport,
+                    onPressed: _isExporting ? _confirmCancelExport : _showPreExportOptionsDialog,
                     icon: Icon(_isExporting ? Icons.cancel_outlined : Icons.auto_awesome_rounded, color: Colors.black),
-                    label: Text(_isExporting ? 'CANCEL EXPORT' : 'START REAL-ESRGAN ANIME UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    label: Text(_isExporting ? 'CANCEL EXPORT' : 'EXPORT UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _isExporting ? Colors.redAccent : accent,
                       padding: const EdgeInsets.symmetric(vertical: 14),
