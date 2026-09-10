@@ -11,7 +11,7 @@ import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
-import 'main.dart';
+import 'project_screen.dart';
 import 'vulkan_bridge.dart';
 
 class StoredUpscaleVideo {
@@ -44,7 +44,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   bool _isFullScreen = false;
 
   int _scaleFactor = 2; // 2x or 4x
-  int _selectedModelIndex = 0; // 0: realesrgan-x4plus-anime (Anime 6B), 1: realesrnet-x4plus
+  int _selectedModelIndex = 0; // 0: Anime 6B (x4plus-anime), 1: RealNet (x4plus)
 
   double _deblur = 0.20;
   double _sharpness = 0.40;
@@ -52,7 +52,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
 
   double _splitPosition = 0.50;
 
-  // Single-Frame Preview Scrubbing Engine
   double _previewFramePos = 0.0;
   double _videoDurationSeconds = 1.0;
   double? _detectedFps;
@@ -121,30 +120,66 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     } catch (_) {}
   }
 
-  Future<String> _ensureModelFiles(String modelPrefix) async {
+  Future<Map<String, String>> _resolveModelPaths() async {
     final tempDir = await getTemporaryDirectory();
-    final paramFile = File('${tempDir.path}/$modelPrefix.param');
-    final binFile = File('${tempDir.path}/$modelPrefix.bin');
+    final paramDest = File('${tempDir.path}/realesrgan-x4plus-anime.param');
+    final binDest = File('${tempDir.path}/realesrgan-x4plus-anime.bin');
 
-    if (!await paramFile.exists()) {
-      try {
-        final data = await rootBundle.load('assets/models/$modelPrefix.param');
-        await paramFile.writeAsBytes(data.buffer.asUint8List());
-      } catch (e) {
-        debugPrint('Could not load param asset: $e');
+    if (await paramDest.exists() && await binDest.exists()) {
+      return {'param': paramDest.path, 'bin': binDest.path};
+    }
+
+    // 1. Direct /models directory check
+    final searchDirs = [
+      Directory('/models'),
+      Directory('models'),
+      Directory('/storage/emulated/0/Shaderly/models'),
+      Directory('/storage/emulated/0/Download'),
+      Directory('/storage/emulated/0/Shaderly'),
+    ];
+
+    for (var d in searchDirs) {
+      if (await d.exists()) {
+        final files = d.listSync();
+        for (var f in files) {
+          if (f is File) {
+            final name = f.path.split('/').last.toLowerCase();
+            if (name.contains('anime') && (name.endsWith('.param') || name.contains('.param'))) {
+              await f.copy(paramDest.path);
+            }
+            if (name.contains('anime') && (name.endsWith('.bin') || name.contains('.bin'))) {
+              await f.copy(binDest.path);
+            }
+          }
+        }
       }
     }
 
-    if (!await binFile.exists()) {
+    // 2. Flutter asset bundles check
+    if (!await paramDest.exists()) {
       try {
-        final data = await rootBundle.load('assets/models/$modelPrefix.bin');
-        await binFile.writeAsBytes(data.buffer.asUint8List());
-      } catch (e) {
-        debugPrint('Could not load bin asset: $e');
+        final data = await rootBundle.load('assets/models/realesrgan-x4plus-anime.param');
+        await paramDest.writeAsBytes(data.buffer.asUint8List());
+      } catch (_) {
+        try {
+          final data = await rootBundle.load('models/realesrgan-x4plus-anime.param');
+          await paramDest.writeAsBytes(data.buffer.asUint8List());
+        } catch (_) {}
+      }
+    }
+    if (!await binDest.exists()) {
+      try {
+        final data = await rootBundle.load('assets/models/realesrgan-x4plus-anime.bin');
+        await binDest.writeAsBytes(data.buffer.asUint8List());
+      } catch (_) {
+        try {
+          final data = await rootBundle.load('models/realesrgan-x4plus-anime.bin');
+          await binDest.writeAsBytes(data.buffer.asUint8List());
+        } catch (_) {}
       }
     }
 
-    return tempDir.path;
+    return {'param': paramDest.path, 'bin': binDest.path};
   }
 
   Future<void> _renderSingleFramePreview(double timeSeconds) async {
@@ -155,9 +190,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final tempDir = await getTemporaryDirectory();
       final origPath = '${tempDir.path}/preview_orig_${DateTime.now().millisecondsSinceEpoch}.png';
 
-      // 1. Extract 1 exact frame at full source resolution
       await FFmpegKit.execute(
-        '-ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 -y "$origPath"',
+        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 "$origPath"',
       );
 
       if (!await File(origPath).exists()) {
@@ -173,19 +207,15 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         return;
       }
 
-      // 2. Run Real-ESRGAN NCNN Vulkan on this single preview frame
-      final modelPrefix = _selectedModelIndex == 0 ? 'realesrgan-x4plus-anime' : 'realesrnet-x4plus';
-      await _ensureModelFiles(modelPrefix);
-
-      final paramPath = '${tempDir.path}/$modelPrefix.param';
-      final binPath = '${tempDir.path}/$modelPrefix.bin';
-
       Uint8List? upBytes;
+      final modelPaths = await _resolveModelPaths();
+      final paramFile = File(modelPaths['param']!);
+      final binFile = File(modelPaths['bin']!);
 
-      if (await File(paramPath).exists() && await File(binPath).exists()) {
+      if (await paramFile.exists() && await binFile.exists()) {
         final ok = await VulkanBridge.initRealEsrgan(
-          paramPath: paramPath,
-          binPath: binPath,
+          paramPath: paramFile.path,
+          binPath: binFile.path,
           scaleFactor: _scaleFactor,
         );
 
@@ -210,10 +240,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         }
       }
 
-      // Fallback if model files not yet bundled on device
       if (upBytes == null) {
         final upscaledPath = '${tempDir.path}/preview_up_fallback_${DateTime.now().millisecondsSinceEpoch}.png';
-        final upscaleCmd = '-y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=neighbor+accurate_rnd" "$upscaledPath"';
+        final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
+        final upscaleCmd = '-hide_banner -y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "$upscaledPath"';
         await FFmpegKit.execute(upscaleCmd);
         if (await File(upscaledPath).exists()) {
           upBytes = await File(upscaledPath).readAsBytes();
@@ -361,16 +391,14 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     setState(() {
       _isExporting = true;
       _exportProgress = 0.02;
-      _exportStatus = 'Preparing Anime 6B Neural Network on Vulkan GPU...';
+      _exportStatus = 'Initializing Real-ESRGAN Anime 6B on Vulkan GPU...';
     });
 
     try {
       final tempDir = await getTemporaryDirectory();
-      final modelPrefix = _selectedModelIndex == 0 ? 'realesrgan-x4plus-anime' : 'realesrnet-x4plus';
-      await _ensureModelFiles(modelPrefix);
-
-      final paramPath = '${tempDir.path}/$modelPrefix.param';
-      final binPath = '${tempDir.path}/$modelPrefix.bin';
+      final modelPaths = await _resolveModelPaths();
+      final paramPath = modelPaths['param']!;
+      final binPath = modelPaths['bin']!;
 
       final framesDir = Directory('${tempDir.path}/esrgan_frames');
       final upscaledDir = Directory('${tempDir.path}/esrgan_upscaled');
@@ -384,7 +412,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final oldAudio = File(audioPath);
       if (await oldAudio.exists()) await oldAudio.delete();
 
-      // Extract original lossless audio
       await FFmpegKit.execute('-hide_banner -y -i "${_sourceFile!.path}" -vn -c:a copy "$audioPath"');
 
       setState(() => _exportStatus = 'Extracting source frames losslessly...');
@@ -400,7 +427,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         throw Exception('Frame extraction failed. No frames extracted.');
       }
 
-      // Check if native NCNN model files exist for hardware GPU inference
       bool hasNcnn = await File(paramPath).exists() && await File(binPath).exists();
       if (hasNcnn) {
         hasNcnn = await VulkanBridge.initRealEsrgan(
@@ -411,7 +437,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       }
 
       for (int i = 0; i < totalFrames; i++) {
-        if (!_isExporting) break; // Cancelled
+        if (!_isExporting) break;
 
         final f = frameFiles[i];
         final bytes = await f.readAsBytes();
@@ -440,9 +466,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             await outFrameFile.writeAsBytes(img.encodePng(upscaledImage));
           }
         } else {
-          // Hardware Lanczos + Integer Nearest-Neighbor crisp interpolation fallback
+          final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
           await FFmpegKit.execute(
-            '-hide_banner -y -i "${f.path}" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=neighbor+accurate_rnd" "${outFrameFile.path}"',
+            '-hide_banner -y -i "${f.path}" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "${outFrameFile.path}"',
           );
         }
 
@@ -466,15 +492,15 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final fps = _detectedFps ?? 30.0;
       final outVideoPath = '${outDir.path}/Shaderly_RealESRGAN_Anime6B_${_scaleFactor}x_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-      setState(() => _exportStatus = 'Muxing lossless audio into final master...');
+      setState(() => _exportStatus = 'Assembling master video & muxing audio...');
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length() > 1000);
 
       String muxCmd;
       if (hasAudio) {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v h264_mediacodec -b:v 45000k -pix_fmt yuv420p -c:a copy -movflags +faststart "$outVideoPath"';
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v libx264 -preset veryfast -crf 17 -pix_fmt yuv420p -c:a copy -movflags +faststart "$outVideoPath"';
       } else {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v h264_mediacodec -b:v 45000k -pix_fmt yuv420p -movflags +faststart "$outVideoPath"';
+        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v libx264 -preset veryfast -crf 17 -pix_fmt yuv420p -movflags +faststart "$outVideoPath"';
       }
 
       _activeSession = await FFmpegKit.execute(muxCmd);
@@ -575,7 +601,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       ),
       body: Column(
         children: [
-          // SPLIT COMPARISON PREVIEW CONTAINER
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Container(
@@ -592,7 +617,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                         return Stack(
                           fit: StackFit.expand,
                           children: [
-                            // Left Side: Original Frame
                             Positioned.fill(
                               child: _originalFrameBytes != null
                                   ? Image.memory(_originalFrameBytes!, fit: BoxFit.contain)
@@ -606,7 +630,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                       : const SizedBox()),
                             ),
 
-                            // Right Side: Upscaled Frame (Clipped by split position)
                             if (_upscaledFrameBytes != null)
                               Positioned.fill(
                                 child: ClipRect(
@@ -615,7 +638,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                 ),
                               ),
 
-                            // Interactive Full-Width Movable Split Divider
                             Positioned.fill(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.translucent,
@@ -707,7 +729,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             ),
           ),
 
-          // FRAME SCRUBBER SLIDER
           if (_sourceFile != null)
             Container(
               color: Colors.black54,
