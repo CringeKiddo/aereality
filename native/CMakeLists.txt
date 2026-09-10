@@ -75,13 +75,28 @@ target_link_libraries(vulkan_processor
 )
 
 if(HAVE_NCNN)
-    # Link all required NCNN dependencies: NCNN core + OpenMP + SPIRV/Glslang shader compilers
-    target_link_libraries(vulkan_processor
+    # Collect all NCNN and Glslang/SPIRV archive paths
+    set(NCNN_LIBS
         "${NCNN_DIR}/lib/libncnn.a"
-        "${NCNN_DIR}/lib/libglslang.a"
         "${NCNN_DIR}/lib/libSPIRV.a"
+        "${NCNN_DIR}/lib/libglslang.a"
         "${NCNN_DIR}/lib/libOGLCompiler.a"
         "${NCNN_DIR}/lib/libOSDependent.a"
+    )
+
+    # If SPIRV-Tools archives exist in the prebuilt package, include them
+    if(EXISTS "${NCNN_DIR}/lib/libSPIRV-Tools.a")
+        list(APPEND NCNN_LIBS "${NCNN_DIR}/lib/libSPIRV-Tools.a")
+    endif()
+    if(EXISTS "${NCNN_DIR}/lib/libSPIRV-Tools-opt.a")
+        list(APPEND NCNN_LIBS "${NCNN_DIR}/lib/libSPIRV-Tools-opt.a")
+    endif()
+
+    # Wrap in --start-group and --end-group to resolve circular dependencies between glslang, SPIRV, and ncnn
+    target_link_libraries(vulkan_processor
+        -Wl,--start-group
+        ${NCNN_LIBS}
+        -Wl,--end-group
         OpenMP::OpenMP_CXX
     )
 endif()
