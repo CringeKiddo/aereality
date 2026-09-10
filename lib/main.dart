@@ -1,5 +1,5 @@
 // ==========================================
-// PART 1 OF 2: main.dart
+// PART 1 OF 2: lib/main.dart
 // ==========================================
 
 import 'dart:async';
@@ -165,7 +165,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed!'),
+            content: Text('Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed'),
             backgroundColor: Colors.teal,
           ),
         );
@@ -186,8 +186,8 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: kCardDark,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Delete Session?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Text('Are you sure you want to delete "${proj.name}"? This cannot be undone.', style: const TextStyle(color: Colors.white70)),
+        title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text('Delete "${proj.name}"?', style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
           ElevatedButton(
@@ -200,7 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
               });
               await ProjectManager.saveProjects(_recent);
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session deleted.')));
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project deleted.')));
               }
             },
             child: const Text('Delete'),
@@ -269,7 +269,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Icon(Icons.palette_rounded, color: Colors.white, size: 20),
                 SizedBox(width: 8),
-                Text('Choose Theme Accent Color', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                Text('Accent Color', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
             content: SizedBox(
@@ -345,7 +345,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('THEME ACCENT COLOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('ACCENT COLOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   ElevatedButton.icon(
                     onPressed: () {
@@ -353,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       _showColorPickerModal();
                     },
                     icon: Icon(Icons.color_lens_rounded, color: accent, size: 18),
-                    label: const Text('COLOURS (40+ SOFT & HARD SHADES)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    label: const Text('Pick Color', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1B1B24),
                       foregroundColor: Colors.white,
@@ -363,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('PRECISION (8 / 16 / 32-BIT)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('PROCESSING PRECISION', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Row(
                     children: [8, 16, 32].map((bit) {
@@ -385,26 +385,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       );
                     }).toList(),
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Text('COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('YouTube link copied: @null7839'), backgroundColor: Colors.redAccent),
-                      );
-                    },
-                    icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
-                    label: const Text('YOUTUBE (@null7839)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1E1418),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
                   ),
 
                   const SizedBox(height: 20),
@@ -443,6 +423,26 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 20),
+                  const Text('CREATOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('YouTube channel link copied'), backgroundColor: Colors.redAccent),
+                      );
+                    },
+                    icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
+                    label: const Text('YouTube (@null7839)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E1418),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -476,7 +476,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text('SH', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
             const SizedBox(width: 10),
-            const Text('Shaderly'),
+            const Text('Shaderly', style: TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
         actions: [
@@ -530,7 +530,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const SizedBox(height: 12),
 
-            // BUTTON 2: SHADERLY AI UPSCALER
+            // BUTTON 2: AI UPSCALER
             Container(
               width: double.infinity,
               decoration: BoxDecoration(
@@ -560,7 +560,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const SizedBox(height: 12),
 
-            // BUTTON 3: REELSMART MOTION BLUR STUDIO
+            // BUTTON 3: MOTION BLUR STUDIO
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
@@ -577,7 +577,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const SizedBox(height: 12),
 
-            // RECENT SESSION OPENER
+            // RECENT PROJECT OPENER
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
@@ -588,7 +588,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
                     ).then((_) => _load());
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved sessions yet.')));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved projects yet.')));
                   }
                 },
                 icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
@@ -617,7 +617,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Icon(Icons.layers_clear_outlined, color: Colors.white24, size: 36),
                     SizedBox(height: 10),
-                    Text('No saved sessions found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text('No saved projects found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
                     SizedBox(height: 4),
                     Text('Tap "NEW PROJECT" to start.', style: TextStyle(color: Colors.white24, fontSize: 11)),
                   ],
@@ -697,6 +697,60 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 
   final List<String> _aspectRatios = ['16:9', '9:16', '4:5', '1:1', '3:4', '21:9'];
 
+  Widget _buildProportionalRatioBox(String ratio, bool isSelected, Color accent) {
+    double w = 28.0;
+    double h = 28.0;
+    switch (ratio) {
+      case '16:9': w = 36.0; h = 20.0; break;
+      case '9:16': w = 20.0; h = 36.0; break;
+      case '4:5':  w = 24.0; h = 30.0; break;
+      case '1:1':  w = 26.0; h = 26.0; break;
+      case '3:4':  w = 24.0; h = 32.0; break;
+      case '21:9': w = 42.0; h = 18.0; break;
+    }
+
+    return GestureDetector(
+      onTap: () => setState(() => _selectedAspect = ratio),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? accent.withOpacity(0.18) : kCardDark,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: isSelected ? accent : Colors.white12, width: isSelected ? 2.0 : 1.0),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 44,
+              height: 40,
+              child: Center(
+                child: Container(
+                  width: w,
+                  height: h,
+                  decoration: BoxDecoration(
+                    color: isSelected ? accent : Colors.white24,
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(color: isSelected ? Colors.black : Colors.white54, width: 1.2),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              ratio,
+              style: TextStyle(
+                color: isSelected ? accent : Colors.white70,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
@@ -721,18 +775,12 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               controller: TextEditingController(text: _projectName),
             ),
             const SizedBox(height: 20),
-            const Text('ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('OUTPUT ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Wrap(
-              spacing: 8,
-              children: _aspectRatios.map((ratio) => ChoiceChip(
-                label: Text(ratio),
-                selected: _selectedAspect == ratio,
-                selectedColor: accent,
-                backgroundColor: kCardDark,
-                labelStyle: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70, fontWeight: FontWeight.bold),
-                onSelected: (_) => setState(() => _selectedAspect = ratio),
-              )).toList(),
+              spacing: 10,
+              runSpacing: 10,
+              children: _aspectRatios.map((ratio) => _buildProportionalRatioBox(ratio, _selectedAspect == ratio, accent)).toList(),
             ),
             const SizedBox(height: 24),
             const Text('SOURCE FOOTAGE OR ART', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
@@ -833,9 +881,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
-// ==========================================
-// PART 2 OF 2: main.dart
-// ==========================================
 
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -1382,7 +1427,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 23] = layer.vignetteBoxed;
 
       uniforms[offset + 24] = layer.edgeDarken;
-      uniforms[offset + 25] = layer.darkOutlines; // Sobel outlines
+      uniforms[offset + 25] = layer.darkOutlines;
       uniforms[offset + 26] = layer.denoise;
       uniforms[offset + 27] = layer.filmGrain;
 
@@ -1534,6 +1579,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
+  // ==========================================
+// PART 2 OF 2: lib/main.dart (Starts at _applyPreset)
+// ==========================================
 
   void _applyPreset(String name) {
     _pushUndoSnapshot();
@@ -1617,11 +1665,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             temperature: 6200.0,
             sharpness: 0.52,
             shadows: -0.16,
+            highlights: 0.12,
             edgeDarken: 0.28,
             darkOutlines: 0.14,
             vignette: 0.06,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.15, 0.50, 0.88, 1.0],
+            curveRed: [0.0, 0.18, 0.52, 0.89, 1.0],
+            curveGreen: [0.0, 0.14, 0.49, 0.86, 1.0],
+            curveBlue: [0.0, 0.12, 0.46, 0.82, 0.98],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'artoria_core',
@@ -1635,6 +1687,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             thinStreakIntensity: 0.28,
             thinStreakWidth: 0.60,
             thinStreakOpacity: 0.85,
+            lineChromaStrength: 0.22,
           ));
           break;
 
@@ -1764,9 +1817,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             saturation: 0.88,
             temperature: 5800.0,
             shadows: 0.06,
+            highlights: -0.05,
             vignette: 0.05,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.04, 0.26, 0.50, 0.78, 0.95],
+            curveRed: [0.06, 0.28, 0.52, 0.79, 0.96],
+            curveGreen: [0.03, 0.25, 0.50, 0.77, 0.94],
+            curveBlue: [0.02, 0.22, 0.48, 0.75, 0.91],
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'vint_grain',
@@ -2321,7 +2378,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('Master Render Pipeline', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        const Text('Render Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                         IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(context)),
                       ],
                     ),
@@ -2410,7 +2467,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     ),
                     const SizedBox(height: 14),
 
-                    const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const Text('RESOLUTION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -2957,7 +3014,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ),
           IconButton(
             icon: const Icon(Icons.undo_rounded, color: Colors.white70, size: 20),
-            tooltip: 'Revert Latest Change (Undo All)',
+            tooltip: 'Undo',
             onPressed: _performUndo,
           ),
           IconButton(
@@ -3209,18 +3266,54 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final builtInPresets = [
-      {'name': 'yuta', 'color': 0xFFE0E0E0},
-      {'name': 'okkotsu', 'color': 0xFF90A4AE},
-      {'name': 'artoria', 'color': 0xFFFFD700},
-      {'name': 'deku tree', 'color': 0xFF00E676},
-      {'name': 'Raiden', 'color': 0xFF7C4DFF},
-      {'name': 'atmospheric haze', 'color': 0xFFB0BEC5},
-      {'name': 'tealdropped (conq knockoff)', 'color': 0xFF00E5FF},
-      {'name': 'vintage cc', 'color': 0xFFFFB74D},
-      {'name': 'noir', 'color': 0xFFB0BEC5},
-      {'name': 'choso', 'color': 0xFFB71C1C},
-      {'name': 'yoruichi', 'color': 0xFFAB47BC},
-      {'name': 'Gojo', 'color': 0xFF00E5FF},
+      {
+        'name': 'yuta',
+        'color': 0xFFE0E0E0,
+      },
+      {
+        'name': 'okkotsu',
+        'color': 0xFF90A4AE,
+      },
+      {
+        'name': 'artoria',
+        'color': 0xFFFFD700,
+      },
+      {
+        'name': 'deku tree',
+        'color': 0xFF00E676,
+      },
+      {
+        'name': 'Raiden',
+        'color': 0xFF7C4DFF,
+      },
+      {
+        'name': 'atmospheric haze',
+        'color': 0xFFB0BEC5,
+      },
+      {
+        'name': 'tealdropped (conq knockoff)',
+        'color': 0xFF00E5FF,
+      },
+      {
+        'name': 'vintage cc',
+        'color': 0xFFFFB74D,
+      },
+      {
+        'name': 'noir',
+        'color': 0xFFB0BEC5,
+      },
+      {
+        'name': 'choso',
+        'color': 0xFFB71C1C,
+      },
+      {
+        'name': 'yoruichi',
+        'color': 0xFFAB47BC,
+      },
+      {
+        'name': 'Gojo',
+        'color': 0xFF00E5FF,
+      },
     ];
 
     return ListView(
@@ -3551,11 +3644,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 16),
 
-        _buildSliderRow('Blacks', activeCurve[0], 0.0, 1.0, (v) => activeCurve[0] = v),
-        _buildSliderRow('Shadows', activeCurve[1], 0.0, 1.0, (v) => activeCurve[1] = v),
-        _buildSliderRow('Midtones', activeCurve[2], 0.0, 1.0, (v) => activeCurve[2] = v),
-        _buildSliderRow('Highlights', activeCurve[3], 0.0, 1.0, (v) => activeCurve[3] = v),
-        _buildSliderRow('Whites', activeCurve[4], 0.0, 1.0, (v) => activeCurve[4] = v),
+        _buildSliderRow('Black Point (0.00)', activeCurve[0], 0.0, 1.0, (v) => activeCurve[0] = v),
+        _buildSliderRow('Shadow Lift (0.25)', activeCurve[1], 0.0, 1.0, (v) => activeCurve[1] = v),
+        _buildSliderRow('Midtone Gamma (0.50)', activeCurve[2], 0.0, 1.0, (v) => activeCurve[2] = v),
+        _buildSliderRow('Highlight Rolloff (0.75)', activeCurve[3], 0.0, 1.0, (v) => activeCurve[3] = v),
+        _buildSliderRow('White Clip (1.00)', activeCurve[4], 0.0, 1.0, (v) => activeCurve[4] = v),
 
         Center(
           child: TextButton.icon(
@@ -3701,7 +3794,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
                 IconButton(
                   icon: const Icon(Icons.file_upload_outlined, color: Colors.white),
-                  tooltip: 'Master Export',
+                  tooltip: 'Render Master Video / Art',
                   onPressed: _showExportSheet,
                 ),
               ],
@@ -3709,7 +3802,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       body: SafeArea(
         child: Column(
           children: [
-            // Preview Viewport with Zoom-to-Fill (BoxFit.cover) protection
             Expanded(
               flex: _isFullScreen ? 10 : 5,
               child: Stack(
