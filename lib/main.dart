@@ -337,7 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Icon(Icons.tune_rounded, color: accent, size: 20),
                 const SizedBox(width: 8),
-                const Text('App & Engine Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
             content: SingleChildScrollView(
@@ -363,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('TIMELINE PRECISION (8 / 16 / 32-BIT)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('PRECISION (8 / 16 / 32-BIT)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Row(
                     children: [8, 16, 32].map((bit) {
@@ -388,17 +388,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('DEVELOPER & COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   ElevatedButton.icon(
                     onPressed: () {
                       Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('YouTube channel link copied: @null7839'), backgroundColor: Colors.redAccent),
+                        const SnackBar(content: Text('YouTube link copied: @null7839'), backgroundColor: Colors.redAccent),
                       );
                     },
                     icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
-                    label: const Text('COPY MY YOUTUBE CHANNEL LINK (@null7839)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    label: const Text('YOUTUBE (@null7839)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E1418),
                       foregroundColor: Colors.white,
@@ -408,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -433,7 +433,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         },
                       ),
                       ChoiceChip(
-                        label: const Text('100% Native FP32'),
+                        label: const Text('100% Native'),
                         selected: gPreviewScale == 1.0,
                         selectedColor: accent,
                         onSelected: (_) {
@@ -497,30 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'ADJUSTMENT LAYER COMPOSITOR • FP32 HDR',
-                  style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
-                  child: Text(
-                    '${gEnginePrecision}-BIT VULKAN',
-                    style: TextStyle(color: accent, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            const Text('Shaderly', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            const Text(
-              'Adjustment Layers, Physical Inverse-Square Bloom, Real Anamorphic Flares & 4K Master Pipeline.',
-              style: TextStyle(color: Colors.white54, fontSize: 13),
-            ),
+            const Text('Shaderly', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
             const SizedBox(height: 20),
 
             // BUTTON 1: NEW PROJECT
@@ -569,7 +546,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ElevatedButton.icon(
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AiUpscalerScreen())).then((_) => _load()),
                 icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black, size: 20),
-                label: const Text('SHADERLY AI UPSCALER (2X / 4X)', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                label: const Text('AI UPSCALER (2X / 4X)', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00E5FF),
                   padding: const EdgeInsets.symmetric(vertical: 16),
@@ -589,7 +566,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: OutlinedButton.icon(
                 onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RsmbScreen())),
                 icon: Icon(Icons.blur_linear_rounded, color: accent, size: 18),
-                label: Text('REELSMART MOTION BLUR STUDIO', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                label: Text('MOTION BLUR STUDIO', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: accent.withOpacity(0.6), width: 1.2),
                   padding: const EdgeInsets.symmetric(vertical: 13),
@@ -615,7 +592,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   }
                 },
                 icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
-                label: Text('OPEN MOST RECENT SESSION', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                label: Text('OPEN RECENT PROJECT', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   side: BorderSide(color: accent.withOpacity(0.4), width: 1.0),
                   padding: const EdgeInsets.symmetric(vertical: 13),
@@ -625,7 +602,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             const SizedBox(height: 24),
-            const Text('SAVED SESSIONS (4 INSTANT SLOTS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
+            const Text('SAVED PROJECTS', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             if (_recent.isEmpty)
               Container(
@@ -642,7 +619,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     SizedBox(height: 10),
                     Text('No saved sessions found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
                     SizedBox(height: 4),
-                    Text('Tap "NEW PROJECT" to grade high-res footage or art.', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                    Text('Tap "NEW PROJECT" to start.', style: TextStyle(color: Colors.white24, fontSize: 11)),
                   ],
                 ),
               )
@@ -675,7 +652,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text('${p.mediaPath.split('/').last} • Slot #${i + 1}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        subtitle: Text('${p.mediaPath.split('/').last}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -744,7 +721,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               controller: TextEditingController(text: _projectName),
             ),
             const SizedBox(height: 20),
-            const Text('OUTPUT ASPECT RATIO (ZOOM-TO-FILL PROTECTED)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
@@ -795,13 +772,13 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      _selectedFile == null ? 'Browse video file or high-res image' : _selectedFile!.path.split('/').last,
+                      _selectedFile == null ? 'Browse video file or image' : _selectedFile!.path.split('/').last,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _selectedFile == null ? 'Supports MKV, WebM, MP4, MOV, Real-ESRGAN 2K/4K' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
+                      _selectedFile == null ? 'Supports MKV, WebM, MP4, MOV, PNG, JPG' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
                       style: const TextStyle(color: Colors.white38, fontSize: 12),
                     ),
                   ],
@@ -856,6 +833,9 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
+// ==========================================
+// PART 2 OF 2: main.dart
+// ==========================================
 
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -898,6 +878,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   List<CustomPresetItem> _customPresets = [];
   List<LutModel> _activeLuts = [];
+
+  bool _isVulkanProcessing = false;
+  bool _needsReprocess = false;
 
   // Split Toning & Dithering state
   double _splitToneShadowH = 0.60;
@@ -1113,12 +1096,40 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<void> _applyGrade() async {
-    if (_project.isImage && _cachedRawImage != null) {
-      try {
-        int w = _renderWidth;
-        int h = _renderHeight;
+    if (_isVulkanProcessing) {
+      _needsReprocess = true;
+      return;
+    }
+    _isVulkanProcessing = true;
+    _needsReprocess = false;
+
+    try {
+      int w = _renderWidth;
+      int h = _renderHeight;
+      Uint8List? rawBytes;
+
+      if (_project.isImage && _cachedRawImage != null) {
         final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
-        final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+        rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+      } else if (!_project.isImage && _project.mediaPath.isNotEmpty) {
+        final tempDir = await getTemporaryDirectory();
+        final framePath = '${tempDir.path}/tl_frame_preview.png';
+        await FFmpegKit.execute(
+          '-hide_banner -y -ss $_currentTimelinePosition -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
+        );
+
+        final frameFile = File(framePath);
+        if (await frameFile.exists()) {
+          final fBytes = await frameFile.readAsBytes();
+          final decoded = img.decodePng(fBytes);
+          if (decoded != null) {
+            rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
+          }
+          try { await frameFile.delete(); } catch (_) {}
+        }
+      }
+
+      if (rawBytes != null) {
         final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
         final lutTable = _getActiveLutTable();
 
@@ -1134,13 +1145,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             _processedStaticImage = res;
           });
         }
-      } catch (_) {}
-    } else {
-      if (mounted) {
-        setState(() {
-          _processedStaticImage?.dispose();
-          _processedStaticImage = null;
-        });
+      }
+    } catch (_) {
+    } finally {
+      _isVulkanProcessing = false;
+      if (_needsReprocess && mounted) {
+        _applyGrade();
       }
     }
   }
@@ -1501,7 +1511,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         }
         final bslaLayer = AdjustmentLayer(
           id: 'bsla_extreme_atmospheric',
-          name: 'BSLA Extreme Atmospheric',
+          name: 'BSLA Clean Atmospheric',
           blendMode: LayerBlendMode.screen,
           opacity: 0.90,
           bslaGodRays: 0.75,
@@ -1524,9 +1534,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
-  // ==========================================
-// PART 2 OF 2: main.dart
-// ==========================================
 
   void _applyPreset(String name) {
     _pushUndoSnapshot();
@@ -1535,12 +1542,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _selectedPresetName = name;
       _isBslaExtremeActive = false;
 
-      switch (name) {
-        // 1. NEW: Yuta Edit Master Preset (JJK 0 inspired)
+      switch (name.toLowerCase()) {
         case 'yuta':
           _project.layers.add(AdjustmentLayer(
             id: 'yuta_base',
-            name: 'Okkotsu JJK0 Contrast',
+            name: 'Base Grade',
             contrast: 1.36,
             saturation: 0.84,
             brightness: 0.02,
@@ -1559,24 +1565,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'yuta_ivory_bloom',
-            name: 'Warm Ivory Specular Flare',
+            name: 'Ivory Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.72,
             deepGlowIntensity: 0.36,
             deepGlowRadius: 0.45,
             deepGlowThreshold: 0.55,
-            edgeGlowTint: 1.0, // Warm Ivory / Noble Gold
+            edgeGlowTint: 1.0,
             thinStreakIntensity: 0.18,
             thinStreakOpacity: 0.75,
             lineChromaStrength: 0.20,
           ));
           break;
 
-        // 2. Okkotsu (Sendai Colony)
         case 'okkotsu':
           _project.layers.add(AdjustmentLayer(
             id: 'okkotsu_base',
-            name: 'Sendai Cold Contrast',
+            name: 'Base Grade',
             contrast: 1.28,
             saturation: 0.82,
             brightness: -0.02,
@@ -1591,7 +1596,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'okkotsu_rim',
-            name: 'Specular Rim & Dehaze',
+            name: 'Specular Rim',
             blendMode: LayerBlendMode.screen,
             opacity: 0.68,
             deepGlowIntensity: 0.32,
@@ -1603,11 +1608,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 3. Artoria (Excalibur Morgan)
         case 'artoria':
           _project.layers.add(AdjustmentLayer(
             id: 'artoria_base',
-            name: 'Excalibur Morgan Base',
+            name: 'Base Grade',
             contrast: 1.34,
             saturation: 1.08,
             temperature: 6200.0,
@@ -1621,24 +1625,23 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'artoria_core',
-            name: 'Gold Armor & Crimson Flare',
+            name: 'Gold & Crimson',
             blendMode: LayerBlendMode.screen,
             opacity: 0.82,
             deepGlowIntensity: 0.46,
             deepGlowRadius: 0.55,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 4.0, // Crimson
+            edgeGlowTint: 4.0,
             thinStreakIntensity: 0.28,
             thinStreakWidth: 0.60,
             thinStreakOpacity: 0.85,
           ));
           break;
 
-        // 4. Deku Tree (Full Cowling)
         case 'deku tree':
           _project.layers.add(AdjustmentLayer(
             id: 'deku_base',
-            name: 'Full Cowling Acutance',
+            name: 'Base Grade',
             contrast: 1.26,
             saturation: 1.22,
             temperature: 6700.0,
@@ -1650,13 +1653,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'deku_aura',
-            name: 'Neon Lightning Aura',
+            name: 'Neon Aura',
             blendMode: LayerBlendMode.screen,
             opacity: 0.88,
             deepGlowIntensity: 0.58,
             deepGlowRadius: 0.62,
             deepGlowThreshold: 0.36,
-            edgeGlowTint: 2.0, // Cyan / Teal
+            edgeGlowTint: 2.0,
             thinStreakIntensity: 0.38,
             thinStreakWidth: 0.70,
             thinStreakOpacity: 0.92,
@@ -1664,11 +1667,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 5. Raiden (Musou Shinsetsu)
-        case 'Raiden':
+        case 'raiden':
           _project.layers.add(AdjustmentLayer(
             id: 'raiden_base',
-            name: 'Musou Shinsetsu Ink',
+            name: 'Base Grade',
             contrast: 1.30,
             saturation: 1.14,
             temperature: 7100.0,
@@ -1682,13 +1684,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'raiden_violet',
-            name: 'Sapphire Violet Bloom',
+            name: 'Violet Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.84,
             deepGlowIntensity: 0.54,
             deepGlowRadius: 0.62,
             deepGlowThreshold: 0.38,
-            edgeGlowTint: 5.0, // Violet
+            edgeGlowTint: 5.0,
             sapphireGlowWidth: 0.85,
             sapphireGlowThreshold: 0.42,
             thinStreakIntensity: 0.30,
@@ -1696,11 +1698,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 6. Atmospheric Haze
         case 'atmospheric haze':
           _project.layers.add(AdjustmentLayer(
             id: 'haze_base',
-            name: 'Liminal Base',
+            name: 'Base Grade',
             contrast: 1.08,
             saturation: 0.94,
             temperature: 6400.0,
@@ -1711,7 +1712,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'haze_overlay',
-            name: 'Volumetric White Mist',
+            name: 'White Mist',
             blendMode: LayerBlendMode.screen,
             opacity: 0.72,
             bslaFogDensity: 0.45,
@@ -1725,7 +1726,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 7. Tealdropped (Conq Knockoff)
         case 'tealdropped (conq knockoff)':
           _project.layers.add(AdjustmentLayer(
             id: 'conq_base',
@@ -1742,7 +1742,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'conq_glow',
-            name: 'Teal Rim Flare',
+            name: 'Teal Rim',
             blendMode: LayerBlendMode.screen,
             opacity: 0.82,
             deepGlowIntensity: 0.45,
@@ -1756,11 +1756,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 8. Vintage CC
         case 'vintage cc':
           _project.layers.add(AdjustmentLayer(
             id: 'vint_base',
-            name: 'Warm Film Stock',
+            name: 'Base Grade',
             contrast: 1.14,
             saturation: 0.88,
             temperature: 5800.0,
@@ -1771,7 +1770,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'vint_grain',
-            name: 'Halation & Soft Bloom',
+            name: 'Halation',
             blendMode: LayerBlendMode.screen,
             opacity: 0.70,
             deepGlowIntensity: 0.32,
@@ -1784,11 +1783,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 9. Noir
         case 'noir':
           _project.layers.add(AdjustmentLayer(
             id: 'noir_base',
-            name: 'Deep Ink & Silver',
+            name: 'Base Grade',
             contrast: 1.32,
             saturation: 0.25,
             temperature: 7400.0,
@@ -1802,7 +1800,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'noir_specular',
-            name: 'Silver Specular Bloom',
+            name: 'Silver Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.68,
             deepGlowIntensity: 0.38,
@@ -1814,11 +1812,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 10. Choso
         case 'choso':
           _project.layers.add(AdjustmentLayer(
             id: 'choso_base',
-            name: 'Piercing Blood Midtones',
+            name: 'Base Grade',
             contrast: 1.26,
             saturation: 1.12,
             temperature: 6200.0,
@@ -1832,7 +1829,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'choso_blood',
-            name: 'Dark Blood Halation',
+            name: 'Blood Halation',
             blendMode: LayerBlendMode.screen,
             opacity: 0.82,
             deepGlowIntensity: 0.50,
@@ -1846,11 +1843,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 11. Yoruichi
         case 'yoruichi':
           _project.layers.add(AdjustmentLayer(
             id: 'yoru_base',
-            name: 'Flash Step Contrast',
+            name: 'Base Grade',
             contrast: 1.25,
             saturation: 1.10,
             temperature: 6900.0,
@@ -1862,7 +1858,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'yoru_lightning',
-            name: 'Electro Violet Streak',
+            name: 'Electro Streak',
             blendMode: LayerBlendMode.screen,
             opacity: 0.84,
             deepGlowIntensity: 0.56,
@@ -1876,11 +1872,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           break;
 
-        // 12. Gojo
-        case 'Gojo':
+        case 'gojo':
           _project.layers.add(AdjustmentLayer(
             id: 'gojo_base',
-            name: 'Infinity Base',
+            name: 'Base Grade',
             contrast: 1.20,
             saturation: 1.06,
             temperature: 7100.0,
@@ -1891,7 +1886,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           ));
           _project.layers.add(AdjustmentLayer(
             id: 'gojo_bloom',
-            name: 'Infinity Cyan Bloom',
+            name: 'Cyan Bloom',
             blendMode: LayerBlendMode.screen,
             opacity: 0.80,
             deepGlowIntensity: 0.46,
@@ -1928,7 +1923,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (ctx) => AlertDialog(
         backgroundColor: kCardDark,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Save Current CC as Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        title: const Text('Save Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: TextField(
           controller: controller,
           style: const TextStyle(color: Colors.white),
@@ -1944,7 +1939,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
               final newPreset = CustomPresetItem(
                 name: name,
-                description: '${_project.layers.length} Layers • Custom Saved CC',
+                description: '${_project.layers.length} Layers',
                 accentColor: gCustomAccentColor.value.value,
                 isBuiltIn: false,
                 layers: _project.layers.map((l) => l.clone()).toList(),
@@ -1957,11 +1952,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Preset "$name" saved to Presets tab!'), backgroundColor: Colors.teal),
+                  SnackBar(content: Text('Preset "$name" saved!'), backgroundColor: Colors.teal),
                 );
               }
             },
-            child: const Text('Save Preset'),
+            child: const Text('Save'),
           ),
         ],
       ),
@@ -1993,13 +1988,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _applyGrade();
           _autoSaveProject();
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Loaded preset "${_selectedPresetName}"!'), backgroundColor: Colors.green));
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Loaded preset "${_selectedPresetName}"'), backgroundColor: Colors.green));
           }
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please choose a valid JSON/XML preset file ($e)'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid preset file: $e'), backgroundColor: Colors.red));
       }
     }
   }
@@ -2011,8 +2006,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       builder: (ctx) => AlertDialog(
         backgroundColor: kCardDark,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Confirm Deletion', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Text('Are you sure you want to delete preset "${item.name}"?', style: const TextStyle(color: Colors.white70)),
+        title: const Text('Delete Preset?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text('Delete "${item.name}"?', style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
           ElevatedButton(
@@ -2072,14 +2067,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Imported and Applied "${lut.name}.cube" (32x32x32)'), backgroundColor: Colors.teal),
+            SnackBar(content: Text('Applied "${lut.name}.cube"'), backgroundColor: Colors.teal),
           );
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to parse .cube file: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Failed to parse LUT: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -2112,20 +2107,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('UNSHARP MASK CONTROLS', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                  const Text('UNSHARP MASK', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
                   IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
                 ],
               ),
               const SizedBox(height: 14),
-              _buildSliderRow('Unsharp Amount', _cur.unsharpAmount, 0.0, 2.0, (v) {
+              _buildSliderRow('Amount', _cur.unsharpAmount, 0.0, 2.0, (v) {
                 setModal(() => _cur.unsharpAmount = v);
                 setState(() {});
               }),
-              _buildSliderRow('Unsharp Radius', _cur.unsharpRadius, 0.0, 5.0, (v) {
+              _buildSliderRow('Radius', _cur.unsharpRadius, 0.0, 5.0, (v) {
                 setModal(() => _cur.unsharpRadius = v);
                 setState(() {});
               }),
-              _buildSliderRow('Threshold (Luma Floor)', _cur.unsharpThreshold, 0.0, 0.5, (v) {
+              _buildSliderRow('Threshold', _cur.unsharpThreshold, 0.0, 0.5, (v) {
                 setModal(() => _cur.unsharpThreshold = v);
                 setState(() {});
               }),
@@ -2156,7 +2151,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Image Export Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('Export Image', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                   IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
                 ],
               ),
@@ -2198,7 +2193,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('QUALITY / BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const Text('QUALITY', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                   Text('$quality%', style: TextStyle(color: accent, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
                 ],
               ),
@@ -2855,12 +2850,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 min: min,
                 max: max,
                 onChanged: (newVal) {
-                  onChanged(newVal);
+                  setState(() => onChanged(newVal));
                   _applyGrade();
                 },
                 onChangeEnd: (_) {
                   _pushUndoSnapshot();
                   _autoSaveProject();
+                  _applyGrade();
                 },
               ),
             ),
@@ -3118,14 +3114,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('3D LUT SUITE (.CUBE)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-                const SizedBox(height: 2),
-                const Text('Stores up to 4 .cube LUTs with trilinear sampling', style: TextStyle(color: Colors.white54, fontSize: 10)),
-              ],
-            ),
+            Text('3D LUT', style: TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.bold)),
             ElevatedButton.icon(
               onPressed: _pickAndImportCubeLut,
               icon: const Icon(Icons.add_rounded, size: 16, color: Colors.black),
@@ -3141,9 +3130,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           const SizedBox(height: 14),
         ],
 
-        const Text('LOADED .CUBE LUTS (MAX 4)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
-        const SizedBox(height: 8),
-
         if (_activeLuts.isEmpty)
           Container(
             padding: const EdgeInsets.all(20),
@@ -3154,9 +3140,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
             child: const Center(
               child: Text(
-                'No .cube LUTs imported yet.\nTap "IMPORT .CUBE" to load any 32x32x32 look.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white38, fontSize: 11),
+                'No .cube LUTs imported yet.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
               ),
             ),
           )
@@ -3204,17 +3189,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         _applyGrade();
                         _autoSaveProject();
                       },
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(lut.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          const SizedBox(height: 2),
-                          Text(
-                            isSel ? 'ACTIVE ON CURRENT LAYER' : 'Tap to apply to layer',
-                            style: TextStyle(color: isSel ? accent.withOpacity(0.8) : Colors.white38, fontSize: 10),
-                          ),
-                        ],
-                      ),
+                      child: Text(lut.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                     ),
                   ),
                   IconButton(
@@ -3234,18 +3209,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final builtInPresets = [
-      {'name': 'yuta', 'desc': 'Okkotsu JJK0 contrast, desaturated ink darks, warm ivory bloom, subtle 11Hz pulse', 'color': 0xFFE0E0E0},
-      {'name': 'okkotsu', 'desc': 'Desaturated cold tones, deep punchy darks, and high line acutance', 'color': 0xFF90A4AE},
-      {'name': 'artoria', 'desc': 'Excalibur Morgan gold armor sheen, deep blood crimson undertones & mist', 'color': 0xFFFFD700},
-      {'name': 'deku tree', 'desc': 'Neon electric green & cyan lightning aura, punchy acutance & split tone', 'color': 0xFF00E676},
-      {'name': 'Raiden', 'desc': 'Musou Shinsetsu electric violet highlights, sapphire glow & deep ink', 'color': 0xFF7C4DFF},
-      {'name': 'atmospheric haze', 'desc': 'Volumetric white/slate mist atmosphere without yellow tinting', 'color': 0xFFB0BEC5},
-      {'name': 'tealdropped (conq knockoff)', 'desc': 'Bright lift with soft cyan-teal edge bloom & subtle vignette', 'color': 0xFF00E5FF},
-      {'name': 'vintage cc', 'desc': 'Warm film tone with raised blacks and gentle halation', 'color': 0xFFFFB74D},
-      {'name': 'noir', 'desc': 'High-contrast stylized ink with a touch of cold silver tone', 'color': 0xFFB0BEC5},
-      {'name': 'choso', 'desc': 'Blood manipulation dark crimson aura with high midtone contrast', 'color': 0xFFB71C1C},
-      {'name': 'yoruichi', 'desc': 'Purple electric flare with clean high-acutance highlights', 'color': 0xFFAB47BC},
-      {'name': 'Gojo', 'desc': 'Infinity cyan specular bloom and clean line contrast', 'color': 0xFF00E5FF},
+      {'name': 'yuta', 'color': 0xFFE0E0E0},
+      {'name': 'okkotsu', 'color': 0xFF90A4AE},
+      {'name': 'artoria', 'color': 0xFFFFD700},
+      {'name': 'deku tree', 'color': 0xFF00E676},
+      {'name': 'Raiden', 'color': 0xFF7C4DFF},
+      {'name': 'atmospheric haze', 'color': 0xFFB0BEC5},
+      {'name': 'tealdropped (conq knockoff)', 'color': 0xFF00E5FF},
+      {'name': 'vintage cc', 'color': 0xFFFFB74D},
+      {'name': 'noir', 'color': 0xFFB0BEC5},
+      {'name': 'choso', 'color': 0xFFB71C1C},
+      {'name': 'yoruichi', 'color': 0xFFAB47BC},
+      {'name': 'Gojo', 'color': 0xFF00E5FF},
     ];
 
     return ListView(
@@ -3257,7 +3232,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ElevatedButton.icon(
               onPressed: _saveCurrentAsPreset,
               icon: const Icon(Icons.bookmark_add_rounded, size: 16, color: Colors.black),
-              label: const Text('SAVE CURRENT CC', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+              label: const Text('SAVE CC', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: accent,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -3276,7 +3251,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 16),
 
-        // BSLA Atmospheric Mist Toggle
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -3303,23 +3277,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               ),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'BSLA Clean Atmospheric',
-                      style: TextStyle(
-                        color: _isBslaExtremeActive ? accent : Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    const Text(
-                      'Neutral volumetric mist, soft scatter & non-yellow haze overlay',
-                      style: TextStyle(color: Colors.white54, fontSize: 10),
-                    ),
-                  ],
+                child: Text(
+                  'BSLA Clean Atmospheric',
+                  style: TextStyle(
+                    color: _isBslaExtremeActive ? accent : Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               Switch(
@@ -3333,115 +3297,56 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         const SizedBox(height: 18),
 
         if (_customPresets.isNotEmpty) ...[
-          const Text('MY CUSTOM PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+          const Text('MY PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
           const SizedBox(height: 8),
           ...List.generate(_customPresets.length, (index) {
             final custom = _customPresets[index];
             final isSel = _selectedPresetName == custom.name;
             return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              margin: const EdgeInsets.only(bottom: 8),
               decoration: BoxDecoration(
                 color: isSel ? accent.withOpacity(0.16) : kCardDark,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+                border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06)),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: Color(custom.accentColor),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.auto_awesome, color: Colors.black, size: 18),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        _pushUndoSnapshot();
-                        setState(() {
-                          _project.layers = custom.layers.map((l) => l.clone()).toList();
-                          _project.tonemapMode = custom.tonemapMode;
-                          _project.activeLayerIndex = 0;
-                          _selectedPresetName = custom.name;
-                        });
-                        _applyGrade();
-                        _autoSaveProject();
-                      },
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(custom.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          const SizedBox(height: 2),
-                          Text(custom.description, style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
-                    onPressed: () => _confirmDeleteCustomPreset(index),
-                  ),
-                ],
+              child: ListTile(
+                title: Text(custom.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
+                  onPressed: () => _confirmDeleteCustomPreset(index),
+                ),
+                onTap: () {
+                  _pushUndoSnapshot();
+                  setState(() {
+                    _project.layers = custom.layers.map((l) => l.clone()).toList();
+                    _project.tonemapMode = custom.tonemapMode;
+                    _project.activeLayerIndex = 0;
+                    _selectedPresetName = custom.name;
+                  });
+                  _applyGrade();
+                  _autoSaveProject();
+                },
               ),
             );
           }),
           const SizedBox(height: 14),
         ],
 
-        const Text('BUILT-IN COLOR GRADES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const Text('PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
         const SizedBox(height: 8),
         ...builtInPresets.map((p) {
           final isSel = _selectedPresetName == p['name'];
           return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
               color: isSel ? accent.withOpacity(0.16) : kCardDark,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+              border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06)),
             ),
-            child: InkWell(
+            child: ListTile(
+              title: Text(p['name'] as String, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold)),
+              trailing: isSel ? Icon(Icons.check_circle_rounded, color: accent, size: 18) : null,
               onTap: () => _applyPreset(p['name'] as String),
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: Color(p['color'] as int),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: Text(
-                        (p['name'] as String).substring(0, 1).toUpperCase(),
-                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          p['name'] as String,
-                          style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(p['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                      ],
-                    ),
-                  ),
-                  if (isSel)
-                    Icon(Icons.check_circle_rounded, color: accent, size: 18),
-                ],
-              ),
             ),
           );
         }).toList(),
@@ -3453,38 +3358,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       children: [
-        _buildSliderRow('Exposure (Brightness)', _cur.brightness, -0.8, 0.8, (v) => _cur.brightness = v),
-        _buildSliderRow('Contrast (0.18 Mid-Pivot)', _cur.contrast, 0.2, 2.5, (v) => _cur.contrast = v),
-        _buildSliderRow('Saturation (Vibrance)', _cur.saturation, 0.0, 2.5, (v) => _cur.saturation = v),
-        _buildSliderRow('Gamma Curve', _cur.gamma, 0.2, 2.5, (v) => _cur.gamma = v),
-        _buildSliderRow('CAS Acutance Sharpness', _cur.sharpness, 0.0, 2.0, (v) => _cur.sharpness = v),
-        _buildSliderRow('Color Temperature (K)', _cur.temperature, 2000.0, 12000.0, (v) => _cur.temperature = v),
-        _buildSliderRow('Highlights Recovery', _cur.highlights, -1.0, 1.0, (v) => _cur.highlights = v),
-        _buildSliderRow('Shadows Lift', _cur.shadows, -1.0, 1.0, (v) => _cur.shadows = v),
-        _buildSliderRow('Black Crush Floor', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
+        _buildSliderRow('Exposure', _cur.brightness, -0.8, 0.8, (v) => _cur.brightness = v),
+        _buildSliderRow('Contrast', _cur.contrast, 0.2, 2.5, (v) => _cur.contrast = v),
+        _buildSliderRow('Saturation', _cur.saturation, 0.0, 2.5, (v) => _cur.saturation = v),
+        _buildSliderRow('Gamma', _cur.gamma, 0.2, 2.5, (v) => _cur.gamma = v),
+        _buildSliderRow('Sharpness', _cur.sharpness, 0.0, 2.0, (v) => _cur.sharpness = v),
+        _buildSliderRow('Temperature', _cur.temperature, 2000.0, 12000.0, (v) => _cur.temperature = v),
+        _buildSliderRow('Highlights', _cur.highlights, -1.0, 1.0, (v) => _cur.highlights = v),
+        _buildSliderRow('Shadows', _cur.shadows, -1.0, 1.0, (v) => _cur.shadows = v),
+        _buildSliderRow('Black Crush', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
 
         const SizedBox(height: 10),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('LINE ART STYLIZE & SHADOWS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
-        _buildSliderRow('Sobel Dark Outlines', _cur.darkOutlines, 0.0, 1.0, (v) => _cur.darkOutlines = v),
-        _buildSliderRow('Line Art EdgeDarken', _cur.edgeDarken, 0.0, 1.0, (v) => _cur.edgeDarken = v),
-        _buildSliderRow('Radial Vignette', _cur.vignette, 0.0, 1.0, (v) => _cur.vignette = v),
+        _buildSliderRow('Sobel Outlines', _cur.darkOutlines, 0.0, 1.0, (v) => _cur.darkOutlines = v),
+        _buildSliderRow('Edge Darken', _cur.edgeDarken, 0.0, 1.0, (v) => _cur.edgeDarken = v),
+        _buildSliderRow('Vignette', _cur.vignette, 0.0, 1.0, (v) => _cur.vignette = v),
         _buildSliderRow('Boxed Vignette', _cur.vignetteBoxed, 0.0, 1.0, (v) => _cur.vignetteBoxed = v),
       ],
     );
   }
 
   Widget _buildHslTab() {
-    final accent = gCustomAccentColor.value;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('SELECTIVE HSL & VIBRANCE SPLIT', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        const SizedBox(height: 12),
-        _buildSliderRow('Hue Shift Global', _cur.hue, -3.14159, 3.14159, (v) => _cur.hue = v),
-        _buildSliderRow('Magic Bullet Mojo (Teal/Orange)', _cur.mblMojoTealOrange, 0.0, 1.5, (v) => _cur.mblMojoTealOrange = v),
+        _buildSliderRow('Hue Shift', _cur.hue, -3.14159, 3.14159, (v) => _cur.hue = v),
+        _buildSliderRow('Teal / Orange Split', _cur.mblMojoTealOrange, 0.0, 1.5, (v) => _cur.mblMojoTealOrange = v),
       ],
     );
   }
@@ -3495,19 +3393,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('DEEP GLOW & SAPPHIRE SUITE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
         _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 2.0, (v) => _cur.deepGlowIntensity = v),
-        _buildSliderRow('Deep Glow Radius (Spread)', _cur.deepGlowRadius, 0.0, 2.0, (v) => _cur.deepGlowRadius = v),
+        _buildSliderRow('Deep Glow Radius', _cur.deepGlowRadius, 0.0, 2.0, (v) => _cur.deepGlowRadius = v),
         _buildSliderRow('Deep Glow Threshold', _cur.deepGlowThreshold, 0.0, 1.0, (v) => _cur.deepGlowThreshold = v),
         _buildSliderRow('Sapphire Glow Width', _cur.sapphireGlowWidth, 0.0, 2.0, (v) => _cur.sapphireGlowWidth = v),
         _buildSliderRow('Sapphire Threshold', _cur.sapphireGlowThreshold, 0.0, 1.0, (v) => _cur.sapphireGlowThreshold = v),
 
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Text('GLOW TINT SPECTRUM', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('GLOW TINT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -3543,67 +3438,44 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
 
         const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('ANAMORPHIC FLARES & STREAKS', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
         _buildSliderRow('Streak Intensity', _cur.thinStreakIntensity, 0.0, 2.0, (v) => _cur.thinStreakIntensity = v),
-        _buildSliderRow('Streak Width (Horizontal Beam)', _cur.thinStreakWidth, 0.0, 2.0, (v) => _cur.thinStreakWidth = v),
-        _buildSliderRow('Streak Opacity & Punch', _cur.thinStreakOpacity, 0.0, 1.0, (v) => _cur.thinStreakOpacity = v),
-        _buildSliderRow('Chromatic Aberration Lines', _cur.lineChromaStrength, 0.0, 2.0, (v) => _cur.lineChromaStrength = v),
+        _buildSliderRow('Streak Width', _cur.thinStreakWidth, 0.0, 2.0, (v) => _cur.thinStreakWidth = v),
+        _buildSliderRow('Streak Opacity', _cur.thinStreakOpacity, 0.0, 1.0, (v) => _cur.thinStreakOpacity = v),
+        _buildSliderRow('Chromatic Aberration', _cur.lineChromaStrength, 0.0, 2.0, (v) => _cur.lineChromaStrength = v),
       ],
     );
   }
 
   Widget _buildAtmosphereTab() {
-    final accent = gCustomAccentColor.value;
-
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('BSL VOLUMETRIC FOG & GOD RAYS', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
-        _buildSliderRow('BSLA God Rays / Light Shafts', _cur.bslaGodRays, 0.0, 1.5, (v) => _cur.bslaGodRays = v),
-        _buildSliderRow('BSLA Fog Density', _cur.bslaFogDensity, 0.0, 1.0, (v) => _cur.bslaFogDensity = v),
-        _buildSliderRow('BSLA Fog Depth Plane', _cur.bslaFogDepth, 0.0, 1.0, (v) => _cur.bslaFogDepth = v),
-        _buildSliderRow('BSLA Bloom Atmospheric Haze', _cur.bslaBloomHaze, 0.0, 1.5, (v) => _cur.bslaBloomHaze = v),
-        _buildSliderRow('BSL Light Scatter Multiplier', _cur.bslFogScatter, 0.0, 1.5, (v) => _cur.bslFogScatter = v),
+        _buildSliderRow('Light Shafts', _cur.bslaGodRays, 0.0, 1.5, (v) => _cur.bslaGodRays = v),
+        _buildSliderRow('Fog Density', _cur.bslaFogDensity, 0.0, 1.0, (v) => _cur.bslaFogDensity = v),
+        _buildSliderRow('Fog Depth', _cur.bslaFogDepth, 0.0, 1.0, (v) => _cur.bslaFogDepth = v),
+        _buildSliderRow('Bloom Haze', _cur.bslaBloomHaze, 0.0, 1.5, (v) => _cur.bslaBloomHaze = v),
+        _buildSliderRow('Light Scatter', _cur.bslFogScatter, 0.0, 1.5, (v) => _cur.bslFogScatter = v),
 
         const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('HALATION & CINEMATIC FILM GRAIN', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-        ),
         _buildSliderRow('Halation Radius', _cur.halationRadius, 0.0, 1.5, (v) => _cur.halationRadius = v),
-        _buildSliderRow('Halation Warmth / Red Bleed', _cur.halationWarmth, 0.0, 1.5, (v) => _cur.halationWarmth = v),
-        _buildSliderRow('35mm Film Grain Amount', _cur.filmGrain, 0.0, 1.0, (v) => _cur.filmGrain = v),
-        _buildSliderRow('Lens Denoise Filter', _cur.denoise, 0.0, 1.0, (v) => _cur.denoise = v),
+        _buildSliderRow('Halation Warmth', _cur.halationWarmth, 0.0, 1.5, (v) => _cur.halationWarmth = v),
+        _buildSliderRow('Film Grain', _cur.filmGrain, 0.0, 1.0, (v) => _cur.filmGrain = v),
+        _buildSliderRow('Denoise', _cur.denoise, 0.0, 1.0, (v) => _cur.denoise = v),
       ],
     );
   }
 
   Widget _buildTextEffectsTab() {
-    final accent = gCustomAccentColor.value;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('WIS TEXT EFFECTS SUITE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-            const Text('PHYSICAL 3D METALLIC STACK', style: TextStyle(color: Colors.white38, fontSize: 9, fontFamily: 'monospace')),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _buildSliderRow('Chisel-Hard Bevel (3D Ridges)', _textBevel, 0.0, 1.0, (v) => setState(() => _textBevel = v)),
-        _buildSliderRow('Light Sweep (Specular Sheen)', _textLightSweep, 0.0, 1.0, (v) => setState(() => _textLightSweep = v)),
-        _buildSliderRow('Metallic Horizon Gradient Ramp', _textHorizonRamp, 0.0, 1.0, (v) => setState(() => _textHorizonRamp = v)),
-        _buildSliderRow('Inner Shadow / Depth Contour', _textInnerShadow, 0.0, 1.0, (v) => setState(() => _textInnerShadow = v)),
-        _buildSliderRow('Zero-Feather Occlusion Rim', _textOcclusionRim, 0.0, 1.0, (v) => setState(() => _textOcclusionRim = v)),
-        _buildSliderRow('Tight Specular Core Glow', _textTightCoreGlow, 0.0, 1.5, (v) => setState(() => _textTightCoreGlow = v)),
-        _buildSliderRow('Wide Atmospheric Aura (Center Deep Glow)', _textCenterAura, 0.0, 1.5, (v) => setState(() => _textCenterAura = v)),
+        _buildSliderRow('Bevel', _textBevel, 0.0, 1.0, (v) => setState(() => _textBevel = v)),
+        _buildSliderRow('Light Sweep', _textLightSweep, 0.0, 1.0, (v) => setState(() => _textLightSweep = v)),
+        _buildSliderRow('Horizon Ramp', _textHorizonRamp, 0.0, 1.0, (v) => setState(() => _textHorizonRamp = v)),
+        _buildSliderRow('Inner Shadow', _textInnerShadow, 0.0, 1.0, (v) => setState(() => _textInnerShadow = v)),
+        _buildSliderRow('Occlusion Rim', _textOcclusionRim, 0.0, 1.0, (v) => setState(() => _textOcclusionRim = v)),
+        _buildSliderRow('Core Glow', _textTightCoreGlow, 0.0, 1.5, (v) => setState(() => _textTightCoreGlow = v)),
+        _buildSliderRow('Center Aura', _textCenterAura, 0.0, 1.5, (v) => setState(() => _textCenterAura = v)),
       ],
     );
   }
@@ -3679,11 +3551,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
         const SizedBox(height: 16),
 
-        _buildSliderRow('Blacks Point (0%)', activeCurve[0], 0.0, 1.0, (v) => activeCurve[0] = v),
-        _buildSliderRow('Shadows Point (25%)', activeCurve[1], 0.0, 1.0, (v) => activeCurve[1] = v),
-        _buildSliderRow('Midtones Pivot (50%)', activeCurve[2], 0.0, 1.0, (v) => activeCurve[2] = v),
-        _buildSliderRow('Highlights Point (75%)', activeCurve[3], 0.0, 1.0, (v) => activeCurve[3] = v),
-        _buildSliderRow('Whites Point (100%)', activeCurve[4], 0.0, 1.0, (v) => activeCurve[4] = v),
+        _buildSliderRow('Blacks', activeCurve[0], 0.0, 1.0, (v) => activeCurve[0] = v),
+        _buildSliderRow('Shadows', activeCurve[1], 0.0, 1.0, (v) => activeCurve[1] = v),
+        _buildSliderRow('Midtones', activeCurve[2], 0.0, 1.0, (v) => activeCurve[2] = v),
+        _buildSliderRow('Highlights', activeCurve[3], 0.0, 1.0, (v) => activeCurve[3] = v),
+        _buildSliderRow('Whites', activeCurve[4], 0.0, 1.0, (v) => activeCurve[4] = v),
 
         Center(
           child: TextButton.icon(
@@ -3698,7 +3570,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               _autoSaveProject();
             },
             icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white38),
-            label: const Text('Reset Selected Channel Curve', style: TextStyle(color: Colors.white38, fontSize: 11)),
+            label: const Text('Reset Curve', style: TextStyle(color: Colors.white38, fontSize: 11)),
           ),
         ),
       ],
@@ -3709,16 +3581,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final tonemappers = [
-      {'id': 0.0, 'name': 'Linear (Passthrough)', 'desc': 'Unclamped floating point color grading'},
-      {'id': 1.0, 'name': 'ACES Filmic (Compensated)', 'desc': 'No dimness: Full highlight headroom preservation'},
-      {'id': 2.0, 'name': 'Reinhard (Punchy Uncapped)', 'desc': 'Punchy contrast with soft luminous rolloff'},
-      {'id': 3.0, 'name': 'AgX Natural', 'desc': 'Perceptually smooth saturation without clipping'},
+      {'id': 0.0, 'name': 'Linear'},
+      {'id': 1.0, 'name': 'ACES Filmic'},
+      {'id': 2.0, 'name': 'Reinhard'},
+      {'id': 3.0, 'name': 'AgX Natural'},
     ];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('TONEMAPPING TRANSFORM (NON-DIMMING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const Text('TONEMAPPING', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 10),
         ...tonemappers.map((t) {
           final isSel = _project.tonemapMode == t['id'];
@@ -3731,7 +3603,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
             child: ListTile(
               title: Text(t['name'] as String, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-              subtitle: Text(t['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
               onTap: () {
                 _pushUndoSnapshot();
                 setState(() => _project.tonemapMode = t['id'] as double);
@@ -3743,16 +3614,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         }).toList(),
 
         const SizedBox(height: 16),
-        Text('SPLIT TONING ENGINE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const Text('SPLIT TONING', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 8),
         _buildSliderRow('Shadows Hue', _splitToneShadowH, 0.0, 1.0, (v) => setState(() => _splitToneShadowH = v)),
         _buildSliderRow('Shadows Saturation', _splitToneShadowS, 0.0, 1.0, (v) => setState(() => _splitToneShadowS = v)),
         _buildSliderRow('Highlights Hue', _splitToneHighH, 0.0, 1.0, (v) => setState(() => _splitToneHighH = v)),
         _buildSliderRow('Highlights Saturation', _splitToneHighS, 0.0, 1.0, (v) => setState(() => _splitToneHighS = v)),
-        _buildSliderRow('Balance Pivot', _splitToneBalance, -1.0, 1.0, (v) => setState(() => _splitToneBalance = v)),
+        _buildSliderRow('Balance', _splitToneBalance, -1.0, 1.0, (v) => setState(() => _splitToneBalance = v)),
 
         const SizedBox(height: 16),
-        Text('TRUE TPDF DITHERING (ANTI-BANDING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const Text('DITHERING', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 8),
         _buildSliderRow('Dither Strength', _ditherStrength, 0.0, 2.0, (v) => setState(() => _ditherStrength = v)),
       ],
@@ -3800,7 +3671,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         border: Border.all(color: Colors.teal, width: 0.8),
                       ),
                       child: const Text(
-                        'REAL-ESRGAN UPSCALED',
+                        'AI UPSCALED',
                         style: TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold),
                       ),
                     ),
