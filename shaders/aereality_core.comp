@@ -116,12 +116,24 @@ struct LayerData {
 layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_time;
     float u_layerCount;
-    float u_tonemapMode;          // 0: Off, 1: Reinhard, 2: ACES
+    float u_tonemapMode;          // 0: Off, 1: Reinhard, 2: ACES Compensated
     float u_imgWidth;
     float u_imgHeight;
     float u_hasLut;               // 1.0 if a 3D LUT is bound to buffer 3, else 0.0
     float u_lutOpacity;           // 0.0 to 1.0
-    float u_pad;
+    float u_splitShadowH;
+    float u_splitShadowS;
+    float u_splitHighH;
+    float u_splitHighS;
+    float u_splitBalance;
+    float u_ditherStrength;
+    float u_textBevel;
+    float u_textLightSweep;
+    float u_textHorizonRamp;
+    float u_textInnerShadow;
+    float u_textOcclusionRim;
+    float u_textTightCoreGlow;
+    float u_textCenterAura;
     LayerData layers[4];
 };
 
@@ -215,13 +227,17 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-vec3 tonemapACES(vec3 x) {
+// Non-Dimming Compensated ACES Filmic:
+// Retains full highlight rolloff without dimming mid-tones
+vec3 tonemapACESCompensated(vec3 x) {
+    // Lift input scale to prevent the 18% midtone dip
+    vec3 v = x * 1.18;
     float a = 2.51;
     float b = 0.03;
     float c = 2.43;
     float d = 0.59;
     float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    return clamp((v * (a * v + b)) / (v * (c * v + d) + e), 0.0, 1.0);
 }
 
 vec3 tonemapReinhardExtended(vec3 x) {
@@ -282,7 +298,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line-art edge detection with sensitive range for all-edge coverage
+    // Sobel line-art edge detection
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -414,7 +430,7 @@ void main() {
 
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
-        // 9. Magic Bullet Mojo
+        // 9. Magic Bullet Mojo (Teal/Orange)
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - luma * 1.6, 0.0, 1.0);
             float warmMask = clamp(luma * 1.4 - 0.2, 0.0, 1.0);
@@ -620,14 +636,14 @@ void main() {
             layerColor += vec3(noise * L.filmGrain * 0.06);
         }
 
-        // 21. Flicker
-        if (L.flickerIntensity > 0.01) {
+        // 21. Subtle Fast Micro-Pulse / Flicker
+        if (L.flickerIntensity > 0.005) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
-            layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.50);
+            layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.45);
         }
 
-        // 22. Vignettes
+        // 22. Radial & Boxed Vignette
         if (L.vignette > 0.01) {
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
             float dist = length(uv);
@@ -644,16 +660,35 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
+    // 23. WIS Text Effects (Physical 3D Bevel, Light Sweep, Horizon Ramp)
+    if (u_textBevel > 0.01 || u_textLightSweep > 0.01 || u_textHorizonRamp > 0.01) {
+        vec2 uv = vec2(coord) / vec2(width, height);
+        if (u_textHorizonRamp > 0.01) {
+            float ramp = smoothstep(0.35, 0.65, uv.y);
+            currentComposite = mix(currentComposite, currentComposite * (0.7 + 0.6 * ramp), u_textHorizonRamp * 0.4);
+        }
+        if (u_textLightSweep > 0.01) {
+            float sweepPos = fract(u_time * 0.35);
+            float sweepDist = abs((uv.x + uv.y * 0.5) - sweepPos * 1.5);
+            float sweepBeam = smoothstep(0.12, 0.0, sweepDist);
+            currentComposite += vec3(sweepBeam * u_textLightSweep * 0.6);
+        }
+        if (u_textBevel > 0.01) {
+            float bevelEdge = smoothstep(0.04, 0.18, lineEdge);
+            currentComposite += vec3(bevelEdge * u_textBevel * 0.35);
+        }
+    }
+
     // 24. 3D LUT TRILINEAR APPLICATION
     if (u_hasLut > 0.5) {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
-    // Master Tonemapping
+    // 25. Master Tonemapping (Non-Dimming Compensated ACES)
     if (u_tonemapMode == 1.0) {
         currentComposite = tonemapReinhardExtended(currentComposite);
     } else if (u_tonemapMode == 2.0) {
-        currentComposite = tonemapACES(currentComposite);
+        currentComposite = tonemapACESCompensated(currentComposite);
     }
 
     out_pixels[pixelIndex] = packRGBA(vec4(currentComposite, basePixel.a));
