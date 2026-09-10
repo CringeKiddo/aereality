@@ -29,7 +29,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools
           mkdir -p assets/shaders
-          glslangValidator -V shaders/aereality_core.comp -o assets/shaders/aereality_core.spv
+          glslangValidator -V assets/shaders/aereality_core.comp -o assets/shaders/aereality_core.spv
+          ls -la assets/shaders/
 
       - name: Clean Gradle cache
         run: |
