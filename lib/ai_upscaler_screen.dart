@@ -11,7 +11,7 @@ import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
-import 'project_screen.dart';
+import 'main.dart';
 import 'vulkan_bridge.dart';
 
 class StoredUpscaleVideo {
