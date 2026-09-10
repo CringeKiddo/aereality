@@ -1,893 +1,57 @@
 // ==========================================
-// PART 1 OF 3: main.dart
+// PART 1 OF 2: main.dart
 // ==========================================
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'package:ffi/ffi.dart';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:image/image.dart' as img;
 
-// ==========================================
-// THEME & GLOBAL ACCENT CONFIGURATION
-// ==========================================
+import 'constants.dart';
+import 'models.dart';
+import 'lut_processor.dart';
+import 'components/curve_editor.dart';
+import 'vulkan_bridge.dart';
+import 'touch_particles.dart';
+import 'ai_upscaler_screen.dart';
+import 'rsmb_screen.dart';
 
-const Color kBackgroundDark = Color(0xFF0F0F13);
-const Color kCardDark = Color(0xFF17171F);
-const Color kSurfaceDark = Color(0xFF1F1F2B);
-const Color kNeonCyan = Color(0xFF00E5FF);
-
-final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(const Color(0xFF00E5FF));
-final ValueNotifier<bool> gHdrPrecisionMode = ValueNotifier<bool>(true);
-final ValueNotifier<double> gPreviewResolutionScale = ValueNotifier<double>(0.75);
-
-final List<Color> kStudioColorPalette = [
-  const Color(0xFF00E5FF),
-  const Color(0xFF00B0FF),
-  const Color(0xFF2979FF),
-  const Color(0xFF3D5AFE),
-  const Color(0xFF651FFF),
-  const Color(0xFF7C4DFF),
-  const Color(0xFFB388FF),
-  const Color(0xFFE040FB),
-  const Color(0xFFFF4081),
-  const Color(0xFFFF1744),
-  const Color(0xFFFF5252),
-  const Color(0xFFFF6E40),
-  const Color(0xFFFF9100),
-  const Color(0xFFFFAB00),
-  const Color(0xFFFFD600),
-  const Color(0xFFAEEA00),
-  const Color(0xFF76FF03),
-  const Color(0xFF00E676),
-  const Color(0xFF1DE9B6),
-  const Color(0xFF00BFA5),
-  const Color(0xFF64FFDA),
-  const Color(0xFF18FFFF),
-  const Color(0xFFE6E6FA),
-  const Color(0xFFFFFFFF),
-  const Color(0xFFB0BEC5),
-  const Color(0xFF78909C),
-  const Color(0xFFFF80AB),
-  const Color(0xFFEA80FC),
-  const Color(0xFF8C9EFF),
-  const Color(0xFF82B1FF),
-  const Color(0xFF80D8FF),
-  const Color(0xFF84FFFF),
-  const Color(0xFFA7FFEB),
-  const Color(0xFFB9F6CA),
-  const Color(0xFFCCFF90),
-  const Color(0xFFF4FF81),
-  const Color(0xFFFFE57F),
-  const Color(0xFFFFD180),
-  const Color(0xFFFF9E80),
-  const Color(0xFFFF6D00),
-];
-
-// ==========================================
-// DATA MODELS & ENUMS
-// ==========================================
-
-enum LayerBlendMode {
-  normal,
-  screen,
-  multiply,
-  overlay,
-  softLight,
-  colorDodge,
-  add,
-}
-
-enum EffectType {
-  colorCorrection,
-  glow,
-  vignette,
-  chromaticAberration,
-  rgbSplit,
-  filmGrain,
-  sharpen,
-  blur,
-  radialBlur,
-  directionalBlur,
-  hslSecondary,
-  vignetteColor,
-  reinhardTonemap,
-  filmicCurve,
-  edgeDetect,
-  bloomHDR,
-  duotone,
-  lensDistortion,
-}
-
-class AdjustmentLayer {
-  String id;
-  String name;
-  bool isVisible;
-  double opacity;
-  LayerBlendMode blendMode;
-
-  // Primary Color Grading
-  double exposure;
-  double contrast;
-  double saturation;
-  double brightness;
-  double vibrance;
-  double temperature;
-  double tint;
-  double highlights;
-  double shadows;
-  double whites;
-  double blacks;
-  double gamma;
-
-  // Secondary Wheels
-  Color shadowTint;
-  double shadowTintIntensity;
-  Color midtoneTint;
-  double midtoneTintIntensity;
-  Color highlightTint;
-  double highlightTintIntensity;
-
-  // Stylized Optics
-  double glowIntensity;
-  double glowRadius;
-  double vignetteIntensity;
-  double vignetteRoundness;
-  double chromaticIntensity;
-  double filmGrainIntensity;
-  double sharpness;
-  double blurRadius;
-  double bloomThreshold;
-  double bloomIntensity;
-
-  AdjustmentLayer({
-    required this.id,
-    required this.name,
-    this.isVisible = true,
-    this.opacity = 1.0,
-    this.blendMode = LayerBlendMode.normal,
-    this.exposure = 0.0,
-    this.contrast = 1.0,
-    this.saturation = 1.0,
-    this.brightness = 0.0,
-    this.vibrance = 0.0,
-    this.temperature = 0.0,
-    this.tint = 0.0,
-    this.highlights = 0.0,
-    this.shadows = 0.0,
-    this.whites = 0.0,
-    this.blacks = 0.0,
-    this.gamma = 1.0,
-    this.shadowTint = const Color(0xFF00E5FF),
-    this.shadowTintIntensity = 0.0,
-    this.midtoneTint = const Color(0xFFFFFFFF),
-    this.midtoneTintIntensity = 0.0,
-    this.highlightTint = const Color(0xFFFF9100),
-    this.highlightTintIntensity = 0.0,
-    this.glowIntensity = 0.0,
-    this.glowRadius = 15.0,
-    this.vignetteIntensity = 0.0,
-    this.vignetteRoundness = 0.5,
-    this.chromaticIntensity = 0.0,
-    this.filmGrainIntensity = 0.0,
-    this.sharpness = 0.0,
-    this.blurRadius = 0.0,
-    this.bloomThreshold = 0.8,
-    this.bloomIntensity = 0.0,
-  });
-
-  AdjustmentLayer copyWith({
-    String? id,
-    String? name,
-    bool? isVisible,
-    double? opacity,
-    LayerBlendMode? blendMode,
-    double? exposure,
-    double? contrast,
-    double? saturation,
-    double? brightness,
-    double? vibrance,
-    double? temperature,
-    double? tint,
-    double? highlights,
-    double? shadows,
-    double? whites,
-    double? blacks,
-    double? gamma,
-    Color? shadowTint,
-    double? shadowTintIntensity,
-    Color? midtoneTint,
-    double? midtoneTintIntensity,
-    Color? highlightTint,
-    double? highlightTintIntensity,
-    double? glowIntensity,
-    double? glowRadius,
-    double? vignetteIntensity,
-    double? vignetteRoundness,
-    double? chromaticIntensity,
-    double? filmGrainIntensity,
-    double? sharpness,
-    double? blurRadius,
-    double? bloomThreshold,
-    double? bloomIntensity,
-  }) {
-    return AdjustmentLayer(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      isVisible: isVisible ?? this.isVisible,
-      opacity: opacity ?? this.opacity,
-      blendMode: blendMode ?? this.blendMode,
-      exposure: exposure ?? this.exposure,
-      contrast: contrast ?? this.contrast,
-      saturation: saturation ?? this.saturation,
-      brightness: brightness ?? this.brightness,
-      vibrance: vibrance ?? this.vibrance,
-      temperature: temperature ?? this.temperature,
-      tint: tint ?? this.tint,
-      highlights: highlights ?? this.highlights,
-      shadows: shadows ?? this.shadows,
-      whites: whites ?? this.whites,
-      blacks: blacks ?? this.blacks,
-      gamma: gamma ?? this.gamma,
-      shadowTint: shadowTint ?? this.shadowTint,
-      shadowTintIntensity: shadowTintIntensity ?? this.shadowTintIntensity,
-      midtoneTint: midtoneTint ?? this.midtoneTint,
-      midtoneTintIntensity: midtoneTintIntensity ?? this.midtoneTintIntensity,
-      highlightTint: highlightTint ?? this.highlightTint,
-      highlightTintIntensity: highlightTintIntensity ?? this.highlightTintIntensity,
-      glowIntensity: glowIntensity ?? this.glowIntensity,
-      glowRadius: glowRadius ?? this.glowRadius,
-      vignetteIntensity: vignetteIntensity ?? this.vignetteIntensity,
-      vignetteRoundness: vignetteRoundness ?? this.vignetteRoundness,
-      chromaticIntensity: chromaticIntensity ?? this.chromaticIntensity,
-      filmGrainIntensity: filmGrainIntensity ?? this.filmGrainIntensity,
-      sharpness: sharpness ?? this.sharpness,
-      blurRadius: blurRadius ?? this.blurRadius,
-      bloomThreshold: bloomThreshold ?? this.bloomThreshold,
-      bloomIntensity: bloomIntensity ?? this.bloomIntensity,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'isVisible': isVisible,
-    'opacity': opacity,
-    'blendMode': blendMode.index,
-    'exposure': exposure,
-    'contrast': contrast,
-    'saturation': saturation,
-    'brightness': brightness,
-    'vibrance': vibrance,
-    'temperature': temperature,
-    'tint': tint,
-    'highlights': highlights,
-    'shadows': shadows,
-    'whites': whites,
-    'blacks': blacks,
-    'gamma': gamma,
-    'shadowTint': shadowTint.value,
-    'shadowTintIntensity': shadowTintIntensity,
-    'midtoneTint': midtoneTint.value,
-    'midtoneTintIntensity': midtoneTintIntensity,
-    'highlightTint': highlightTint.value,
-    'highlightTintIntensity': highlightTintIntensity,
-    'glowIntensity': glowIntensity,
-    'glowRadius': glowRadius,
-    'vignetteIntensity': vignetteIntensity,
-    'vignetteRoundness': vignetteRoundness,
-    'chromaticIntensity': chromaticIntensity,
-    'filmGrainIntensity': filmGrainIntensity,
-    'sharpness': sharpness,
-    'blurRadius': blurRadius,
-    'bloomThreshold': bloomThreshold,
-    'bloomIntensity': bloomIntensity,
-  };
-
-  factory AdjustmentLayer.fromJson(Map<String, dynamic> j) {
-    return AdjustmentLayer(
-      id: j['id'] ?? 'layer_${DateTime.now().millisecondsSinceEpoch}',
-      name: j['name'] ?? 'Layer',
-      isVisible: j['isVisible'] ?? true,
-      opacity: (j['opacity'] as num?)?.toDouble() ?? 1.0,
-      blendMode: LayerBlendMode.values[j['blendMode'] ?? 0],
-      exposure: (j['exposure'] as num?)?.toDouble() ?? 0.0,
-      contrast: (j['contrast'] as num?)?.toDouble() ?? 1.0,
-      saturation: (j['saturation'] as num?)?.toDouble() ?? 1.0,
-      brightness: (j['brightness'] as num?)?.toDouble() ?? 0.0,
-      vibrance: (j['vibrance'] as num?)?.toDouble() ?? 0.0,
-      temperature: (j['temperature'] as num?)?.toDouble() ?? 0.0,
-      tint: (j['tint'] as num?)?.toDouble() ?? 0.0,
-      highlights: (j['highlights'] as num?)?.toDouble() ?? 0.0,
-      shadows: (j['shadows'] as num?)?.toDouble() ?? 0.0,
-      whites: (j['whites'] as num?)?.toDouble() ?? 0.0,
-      blacks: (j['blacks'] as num?)?.toDouble() ?? 0.0,
-      gamma: (j['gamma'] as num?)?.toDouble() ?? 1.0,
-      shadowTint: Color(j['shadowTint'] ?? 0xFF00E5FF),
-      shadowTintIntensity: (j['shadowTintIntensity'] as num?)?.toDouble() ?? 0.0,
-      midtoneTint: Color(j['midtoneTint'] ?? 0xFFFFFFFF),
-      midtoneTintIntensity: (j['midtoneTintIntensity'] as num?)?.toDouble() ?? 0.0,
-      highlightTint: Color(j['highlightTint'] ?? 0xFFFF9100),
-      highlightTintIntensity: (j['highlightTintIntensity'] as num?)?.toDouble() ?? 0.0,
-      glowIntensity: (j['glowIntensity'] as num?)?.toDouble() ?? 0.0,
-      glowRadius: (j['glowRadius'] as num?)?.toDouble() ?? 15.0,
-      vignetteIntensity: (j['vignetteIntensity'] as num?)?.toDouble() ?? 0.0,
-      vignetteRoundness: (j['vignetteRoundness'] as num?)?.toDouble() ?? 0.5,
-      chromaticIntensity: (j['chromaticIntensity'] as num?)?.toDouble() ?? 0.0,
-      filmGrainIntensity: (j['filmGrainIntensity'] as num?)?.toDouble() ?? 0.0,
-      sharpness: (j['sharpness'] as num?)?.toDouble() ?? 0.0,
-      blurRadius: (j['blurRadius'] as num?)?.toDouble() ?? 0.0,
-      bloomThreshold: (j['bloomThreshold'] as num?)?.toDouble() ?? 0.8,
-      bloomIntensity: (j['bloomIntensity'] as num?)?.toDouble() ?? 0.0,
-    );
-  }
-}
-
-class ProjectData {
-  String mediaPath;
-  bool isImage;
-  String aspectRatio; // '16:9', '9:16', '1:1', '4:3', '21:9'
-  List<AdjustmentLayer> layers;
-
-  ProjectData({
-    required this.mediaPath,
-    required this.isImage,
-    required this.aspectRatio,
-    required this.layers,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'mediaPath': mediaPath,
-    'isImage': isImage,
-    'aspectRatio': aspectRatio,
-    'layers': layers.map((l) => l.toJson()).toList(),
-  };
-
-  factory ProjectData.fromJson(Map<String, dynamic> j) {
-    return ProjectData(
-      mediaPath: j['mediaPath'] ?? '',
-      isImage: j['isImage'] ?? false,
-      aspectRatio: j['aspectRatio'] ?? '16:9',
-      layers: (j['layers'] as List? ?? [])
-          .map((e) => AdjustmentLayer.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
-}
-
-// ==========================================
-// BUILT-IN PRESETS ENGINE (12 PRESETS)
-// ==========================================
-
-class PresetProfile {
-  final String id;
-  final String title;
-  final String category;
-  final Color badgeColor;
-  final List<AdjustmentLayer> layers;
-
-  PresetProfile({
-    required this.id,
-    required this.title,
-    required this.category,
-    required this.badgeColor,
-    required this.layers,
-  });
-}
-
-final List<PresetProfile> kBuiltInPresets = [
-  PresetProfile(
-    id: 'yuta_jjk0',
-    title: 'Yuta JJK0 Cursed',
-    category: 'Anime',
-    badgeColor: const Color(0xFFB388FF),
-    layers: [
-      AdjustmentLayer(
-        id: 'yuta_grade',
-        name: 'Cursed Energy Grade',
-        exposure: 0.15,
-        contrast: 1.35,
-        saturation: 0.85,
-        highlights: -0.20,
-        shadows: 0.30,
-        temperature: -0.25,
-        tint: 0.20,
-        shadowTint: const Color(0xFF4A148C),
-        shadowTintIntensity: 0.45,
-        highlightTint: const Color(0xFFE1BEE7),
-        highlightTintIntensity: 0.30,
-        glowIntensity: 0.40,
-        glowRadius: 20.0,
-        chromaticIntensity: 0.25,
-        sharpness: 0.35,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'okkotsu_ring',
-    title: 'Okkotsu Ring Manifest',
-    category: 'Anime',
-    badgeColor: const Color(0xFF00E5FF),
-    layers: [
-      AdjustmentLayer(
-        id: 'okkotsu_base',
-        name: 'Rika Pure Love',
-        exposure: 0.25,
-        contrast: 1.45,
-        saturation: 1.10,
-        highlights: 0.30,
-        shadows: -0.15,
-        whites: 0.20,
-        shadowTint: const Color(0xFF006064),
-        shadowTintIntensity: 0.50,
-        highlightTint: const Color(0xFF84FFFF),
-        highlightTintIntensity: 0.40,
-        bloomIntensity: 0.60,
-        bloomThreshold: 0.70,
-        sharpness: 0.45,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'artoria_excalibur_morgan',
-    title: 'Artoria Excalibur Morgan',
-    category: 'Anime',
-    badgeColor: const Color(0xFFFF1744),
-    layers: [
-      AdjustmentLayer(
-        id: 'morgan_alter',
-        name: 'Vortigern Dark Blade',
-        exposure: -0.10,
-        contrast: 1.60,
-        saturation: 1.30,
-        highlights: 0.40,
-        shadows: -0.40,
-        blacks: -0.30,
-        shadowTint: const Color(0xFF212121),
-        shadowTintIntensity: 0.70,
-        highlightTint: const Color(0xFFFF1744),
-        highlightTintIntensity: 0.65,
-        glowIntensity: 0.75,
-        glowRadius: 25.0,
-        vignetteIntensity: 0.60,
-        filmGrainIntensity: 0.20,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'deku_one_for_all',
-    title: 'Deku OFA Full Cowl',
-    category: 'Anime',
-    badgeColor: const Color(0xFF00E676),
-    layers: [
-      AdjustmentLayer(
-        id: 'deku_lightning',
-        name: 'Verdant Lightning',
-        exposure: 0.20,
-        contrast: 1.30,
-        saturation: 1.25,
-        temperature: -0.15,
-        tint: -0.25,
-        shadowTint: const Color(0xFF004D40),
-        shadowTintIntensity: 0.40,
-        highlightTint: const Color(0xFF69F0AE),
-        highlightTintIntensity: 0.50,
-        glowIntensity: 0.55,
-        sharpness: 0.50,
-        chromaticIntensity: 0.30,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'raiden_shogun_musou',
-    title: 'Raiden Musou no Hitotachi',
-    category: 'Game',
-    badgeColor: const Color(0xFFD500F9),
-    layers: [
-      AdjustmentLayer(
-        id: 'raiden_grade',
-        name: 'Electro Archon Radiance',
-        exposure: 0.05,
-        contrast: 1.40,
-        saturation: 1.15,
-        highlights: 0.25,
-        shadows: -0.20,
-        shadowTint: const Color(0xFF311B92),
-        shadowTintIntensity: 0.55,
-        highlightTint: const Color(0xFFEA80FC),
-        highlightTintIntensity: 0.45,
-        bloomIntensity: 0.50,
-        vignetteIntensity: 0.45,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'bsla_cinematic',
-    title: 'BSLA 35mm Master',
-    category: 'Cinematic',
-    badgeColor: const Color(0xFFFF9100),
-    layers: [
-      AdjustmentLayer(
-        id: 'bsla_lut',
-        name: 'Teal & Orange Hollywood',
-        exposure: 0.0,
-        contrast: 1.25,
-        saturation: 0.95,
-        temperature: 0.10,
-        highlights: -0.15,
-        shadows: 0.15,
-        shadowTint: const Color(0xFF00695C),
-        shadowTintIntensity: 0.40,
-        highlightTint: const Color(0xFFFF6D00),
-        highlightTintIntensity: 0.35,
-        filmGrainIntensity: 0.25,
-        vignetteIntensity: 0.30,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'vintage_kodak',
-    title: 'Kodak Portra 400',
-    category: 'Analog',
-    badgeColor: const Color(0xFFFFD54F),
-    layers: [
-      AdjustmentLayer(
-        id: 'kodak_base',
-        name: 'Warm Halation Portra',
-        exposure: 0.10,
-        contrast: 1.10,
-        saturation: 0.90,
-        temperature: 0.20,
-        tint: 0.05,
-        shadows: 0.20,
-        blacks: 0.15,
-        highlightTint: const Color(0xFFFFE082),
-        highlightTintIntensity: 0.25,
-        filmGrainIntensity: 0.40,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'monochrome_noir',
-    title: 'Tokyo Street Noir',
-    category: 'B&W',
-    badgeColor: const Color(0xFFECEFF1),
-    layers: [
-      AdjustmentLayer(
-        id: 'noir_base',
-        name: 'High Contrast Silver',
-        exposure: 0.0,
-        contrast: 1.70,
-        saturation: 0.0,
-        whites: 0.30,
-        blacks: -0.40,
-        filmGrainIntensity: 0.50,
-        sharpness: 0.60,
-        vignetteIntensity: 0.70,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'choso_blood_manipulation',
-    title: 'Choso Blood Piercing',
-    category: 'Anime',
-    badgeColor: const Color(0xFFD50000),
-    layers: [
-      AdjustmentLayer(
-        id: 'choso_blood',
-        name: 'Crimson Scale',
-        exposure: 0.05,
-        contrast: 1.50,
-        saturation: 1.35,
-        highlights: 0.20,
-        shadows: -0.30,
-        shadowTint: const Color(0xFF3E2723),
-        shadowTintIntensity: 0.50,
-        highlightTint: const Color(0xFFFF1744),
-        highlightTintIntensity: 0.55,
-        vignetteIntensity: 0.50,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'yoruichi_shunko',
-    title: 'Yoruichi Raijin Shunko',
-    category: 'Anime',
-    badgeColor: const Color(0xFFFFD600),
-    layers: [
-      AdjustmentLayer(
-        id: 'shunko_lightning',
-        name: 'Lightning Beast',
-        exposure: 0.30,
-        contrast: 1.35,
-        saturation: 1.20,
-        highlights: 0.40,
-        highlightTint: const Color(0xFFFFFF00),
-        highlightTintIntensity: 0.60,
-        bloomIntensity: 0.70,
-        glowIntensity: 0.60,
-        chromaticIntensity: 0.35,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'gojo_infinite_void',
-    title: 'Gojo Satoru Domain Void',
-    category: 'Anime',
-    badgeColor: const Color(0xFF40C4FF),
-    layers: [
-      AdjustmentLayer(
-        id: 'void_blue',
-        name: 'Six Eyes Celestial',
-        exposure: 0.20,
-        contrast: 1.45,
-        saturation: 1.15,
-        temperature: -0.40,
-        tint: -0.10,
-        shadowTint: const Color(0xFF01579B),
-        shadowTintIntensity: 0.60,
-        highlightTint: const Color(0xFF80D8FF),
-        highlightTintIntensity: 0.50,
-        glowIntensity: 0.65,
-        sharpness: 0.50,
-      ),
-    ],
-  ),
-  PresetProfile(
-    id: 'cyberpunk_neo_tokyo',
-    title: 'Cyberpunk 2077 Night City',
-    category: 'Sci-Fi',
-    badgeColor: const Color(0xFFFF007F),
-    layers: [
-      AdjustmentLayer(
-        id: 'cyber_lut',
-        name: 'Neon Magenta Teal',
-        exposure: 0.10,
-        contrast: 1.55,
-        saturation: 1.40,
-        shadowTint: const Color(0xFF00E5FF),
-        shadowTintIntensity: 0.50,
-        highlightTint: const Color(0xFFFF007F),
-        highlightTintIntensity: 0.50,
-        chromaticIntensity: 0.45,
-        vignetteIntensity: 0.40,
-      ),
-    ],
-  ),
-];
-
-// ==========================================
-// VULKAN COMPUTE NATIVE FFI BRIDGE
-// ==========================================
-
-typedef _VulkanApplyGradingC = Int32 Function(
-    Pointer<Uint8> inPixels,
-    Pointer<Uint8> outPixels,
-    Int32 width,
-    Int32 height,
-    Float exposure,
-    Float contrast,
-    Float saturation,
-    Float brightness,
-    Float gamma,
-    Float rTint,
-    Float gTint,
-    Float bTint,
-    Float tintIntensity,
-    Float glowIntensity,
-    Float vignetteIntensity,
-    Float chromaticIntensity,
-    Float sharpness,
-);
-
-typedef _VulkanApplyGradingDart = int Function(
-    Pointer<Uint8> inPixels,
-    Pointer<Uint8> outPixels,
-    int width,
-    int height,
-    double exposure,
-    double contrast,
-    double saturation,
-    double brightness,
-    double gamma,
-    double rTint,
-    double gTint,
-    double bTint,
-    double tintIntensity,
-    double glowIntensity,
-    double vignetteIntensity,
-    double chromaticIntensity,
-    double sharpness,
-);
-
-typedef _InitRealEsrganC = Int32 Function(
-    Pointer<Utf8> paramPath,
-    Pointer<Utf8> binPath,
-    Int32 scale,
-);
-typedef _InitRealEsrganDart = int Function(
-    Pointer<Utf8> paramPath,
-    Pointer<Utf8> binPath,
-    int scale,
-);
-
-typedef _UpscaleFrameC = Int32 Function(
-    Pointer<Uint8> inRgba,
-    Int32 inW,
-    Int32 inH,
-    Pointer<Uint8> outRgba,
-);
-typedef _UpscaleFrameDart = int Function(
-    Pointer<Uint8> inRgba,
-    int inW,
-    int inH,
-    Pointer<Uint8> outRgba,
-);
-
-typedef _DestroyRealEsrganC = Void Function();
-typedef _DestroyRealEsrganDart = void Function();
-
-class VulkanBridge {
-  static DynamicLibrary? _lib;
-  static _VulkanApplyGradingDart? _applyGrading;
-  static _InitRealEsrganDart? _initEsrgan;
-  static _UpscaleFrameDart? _upscaleFrameNative;
-  static _DestroyRealEsrganDart? _destroyEsrgan;
-  static bool _initialized = false;
-
-  static void init() {
-    if (_initialized) return;
-    try {
-      if (Platform.isAndroid) {
-        _lib = DynamicLibrary.open('libshaderly_vulkan.so');
-        _applyGrading = _lib!.lookupFunction<_VulkanApplyGradingC, _VulkanApplyGradingDart>('applyGradingVulkan');
-        _initEsrgan = _lib!.lookupFunction<_InitRealEsrganC, _InitRealEsrganDart>('initRealEsrganVulkan');
-        _upscaleFrameNative = _lib!.lookupFunction<_UpscaleFrameC, _UpscaleFrameDart>('upscaleFrameVulkan');
-        _destroyEsrgan = _lib!.lookupFunction<_DestroyRealEsrganC, _DestroyRealEsrganDart>('destroyRealEsrganVulkan');
-      }
-    } catch (_) {
-      // Fallback to pure SIMD Dart / CPU processing if shared object is absent
-    }
-    _initialized = true;
-  }
-
-  static Future<bool> initRealEsrgan({
-    required String paramPath,
-    required String binPath,
-    required int scaleFactor,
-  }) async {
-    init();
-    if (_initEsrgan != null) {
-      final pParam = paramPath.toNativeUtf8();
-      final pBin = binPath.toNativeUtf8();
-      final res = _initEsrgan!(pParam, pBin, scaleFactor);
-      calloc.free(pParam);
-      calloc.free(pBin);
-      return res == 1;
-    }
-    return false;
-  }
-
-  static Future<Uint8List?> upscaleFrame({
-    required Uint8List frameBytes,
-    required int width,
-    required int height,
-  }) async {
-    init();
-    if (_upscaleFrameNative != null) {
-      final inPtr = calloc<Uint8>(frameBytes.length);
-      inPtr.asTypedList(frameBytes.length).setAll(0, frameBytes);
-
-      final outSize = width * height * 4 * 16;
-      final outPtr = calloc<Uint8>(outSize);
-
-      final res = _upscaleFrameNative!(inPtr, width, height, outPtr);
-      calloc.free(inPtr);
-
-      if (res == 1) {
-        final upscaledBytes = Uint8List.fromList(outPtr.asTypedList(outSize));
-        calloc.free(outPtr);
-        return upscaledBytes;
-      }
-      calloc.free(outPtr);
-    }
-    return null;
-  }
-
-  static Future<void> destroyRealEsrgan() async {
-    if (_destroyEsrgan != null) {
-      _destroyEsrgan!();
-    }
-  }
-
-  static Uint8List gradeFrameCpuFallback(Uint8List rgba, int width, int height, AdjustmentLayer layer) {
-    final copy = Uint8List.fromList(rgba);
-    final len = copy.length;
-    final exp = math.pow(2.0, layer.exposure).toDouble();
-    final con = layer.contrast;
-    final sat = layer.saturation;
-    final gam = layer.gamma;
-    final brt = layer.brightness * 255.0;
-
-    final shadowR = layer.shadowTint.red / 255.0;
-    final shadowG = layer.shadowTint.green / 255.0;
-    final shadowB = layer.shadowTint.blue / 255.0;
-    final shadowInt = layer.shadowTintIntensity;
-
-    for (int i = 0; i < len; i += 4) {
-      double r = copy[i] / 255.0;
-      double g = copy[i + 1] / 255.0;
-      double b = copy[i + 2] / 255.0;
-
-      r *= exp;
-      g *= exp;
-      b *= exp;
-
-      r = (r - 0.5) * con + 0.5;
-      g = (g - 0.5) * con + 0.5;
-      b = (b - 0.5) * con + 0.5;
-
-      final gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      r = gray + (r - gray) * sat;
-      g = gray + (g - gray) * sat;
-      b = gray + (b - gray) * sat;
-
-      if (shadowInt > 0.0) {
-        final shadowMask = (1.0 - gray).clamp(0.0, 1.0);
-        r += (shadowR - r) * shadowInt * shadowMask;
-        g += (shadowG - g) * shadowInt * shadowMask;
-        b += (shadowB - b) * shadowInt * shadowMask;
-      }
-
-      if (gam != 1.0 && gam > 0.0) {
-        r = math.pow(r.clamp(0.0, 1.0), 1.0 / gam).toDouble();
-        g = math.pow(g.clamp(0.0, 1.0), 1.0 / gam).toDouble();
-        b = math.pow(b.clamp(0.0, 1.0), 1.0 / gam).toDouble();
-      }
-
-      copy[i] = ((r * 255.0) + brt).clamp(0, 255).toInt();
-      copy[i + 1] = ((g * 255.0) + brt).clamp(0, 255).toInt();
-      copy[i + 2] = ((b * 255.0) + brt).clamp(0, 255).toInt();
-    }
-    return copy;
-  }
-}
-
-// ==========================================
-// ENTRY POINT & APP ROOT
-// ==========================================
-
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: kBackgroundDark,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
-  VulkanBridge.init();
+
+  try {
+    await FFmpegKitExtended.initialize();
+  } catch (e) {
+    debugPrint('FFmpeg initialization error: $e');
+  }
+
+  try {
+    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+    if (!await shaderlyDir.exists()) {
+      await shaderlyDir.create(recursive: true);
+    }
+  } catch (_) {}
+
   runApp(const ShaderlyApp());
 }
 
 class ShaderlyApp extends StatelessWidget {
-  const ShaderlyApp({Key? key}) : super(key: key);
+  const ShaderlyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -896,154 +60,2475 @@ class ShaderlyApp extends StatelessWidget {
       builder: (context, accentColor, _) {
         return MaterialApp(
           title: 'Shaderly',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            brightness: Brightness.dark,
+          theme: ThemeData.dark().copyWith(
             scaffoldBackgroundColor: kBackgroundDark,
             primaryColor: accentColor,
             colorScheme: ColorScheme.dark(
               primary: accentColor,
-              secondary: accentColor,
-              surface: kSurfaceDark,
-              background: kBackgroundDark,
-            ),
-            cardTheme: CardTheme(
-              color: kCardDark,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Colors.white10, width: 1),
-              ),
+              secondary: kCyanAccent,
+              surface: kCardDark,
             ),
             appBarTheme: const AppBarTheme(
               backgroundColor: kBackgroundDark,
               elevation: 0,
-              centerTitle: true,
+              titleTextStyle: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+              iconTheme: IconThemeData(color: Colors.white),
             ),
           ),
-          home: const HomeScreen(),
+          home: const TouchParticlesWrapper(
+            child: HomeScreen(),
+          ),
+          debugShowCheckedModeBanner: false,
         );
       },
     );
   }
 }
 
-// ==========================================
-// HOME SCREEN (PROJECT CREATOR & RECENT SESSIONS)
-// ==========================================
-
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({Key? key}) : super(key: key);
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  final List<ProjectData> _recentProjects = [];
-  String _selectedAspectRatio = '16:9';
+class _HomeScreenState extends State<HomeScreen> {
+  List<StoredProject> _recent = [];
+  final Map<String, Uint8List?> _thumbnails = {};
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _loadSavedProjects();
+    _load();
   }
 
-  Future<void> _loadSavedProjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonList = prefs.getStringList('saved_projects') ?? [];
-    setState(() {
-      _recentProjects.clear();
-      for (var str in jsonList) {
+  Future<void> _load() async {
+    final projs = await ProjectManager.loadProjects();
+    if (mounted) {
+      setState(() {
+        _recent = projs.take(4).toList();
+      });
+      _generateThumbnails(_recent);
+    }
+  }
+
+  Future<void> _generateThumbnails(List<StoredProject> projects) async {
+    final tempDir = await getTemporaryDirectory();
+    for (final p in projects) {
+      if (_thumbnails.containsKey(p.id) && _thumbnails[p.id] != null) continue;
+      if (!File(p.mediaPath).existsSync()) continue;
+
+      if (p.data.isImage) {
         try {
-          final decoded = json.decode(str);
-          _recentProjects.add(ProjectData.fromJson(decoded));
+          final bytes = await File(p.mediaPath).readAsBytes();
+          if (mounted) setState(() => _thumbnails[p.id] = bytes);
+        } catch (_) {}
+      } else {
+        try {
+          final outThumb = '${tempDir.path}/thumb_${p.id}.jpg';
+          final thumbFile = File(outThumb);
+          if (!await thumbFile.exists()) {
+            await FFmpegKit.execute(
+              '-hide_banner -ss 0.1 -i "${p.mediaPath}" -vframes 1 -vf scale=160:-1 -q:v 4 -y "$outThumb"',
+            );
+          }
+          if (await thumbFile.exists()) {
+            final bytes = await thumbFile.readAsBytes();
+            if (mounted) setState(() => _thumbnails[p.id] = bytes);
+          }
         } catch (_) {}
       }
-    });
-  }
-
-  Future<void> _saveProjectToDisk(ProjectData project) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonList = prefs.getStringList('saved_projects') ?? [];
-    if (jsonList.length >= 4) {
-      jsonList.removeLast();
     }
-    jsonList.insert(0, json.encode(project.toJson()));
-    await prefs.setStringList('saved_projects', jsonList);
-    _loadSavedProjects();
   }
 
-  void _openPaletteSelector() {
-    showModalBottomSheet(
+  Future<void> _clearAppCache() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      int deletedBytes = 0;
+      if (await tempDir.exists()) {
+        final list = tempDir.listSync(recursive: true);
+        for (var f in list) {
+          if (f is File) {
+            try {
+              deletedBytes += f.lengthSync();
+              f.deleteSync();
+            } catch (_) {}
+          }
+        }
+      }
+      final double mbFreed = deletedBytes / (1024 * 1024);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cache Cleared: ${mbFreed.toStringAsFixed(1)} MB freed!'),
+            backgroundColor: Colors.teal,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error clearing cache: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _deleteProject(int index) {
+    final proj = _recent[index];
+    showDialog(
       context: context,
-      backgroundColor: kCardDark,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kCardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Session?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text('Are you sure you want to delete "${proj.name}"? This cannot be undone.', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              setState(() {
+                _recent.removeAt(index);
+                _thumbnails.remove(proj.id);
+              });
+              await ProjectManager.saveProjects(_recent);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session deleted.')));
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
       ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: const EdgeInsets.all(20.0),
+    );
+  }
+
+  void _showColorPickerModal() {
+    final List<Map<String, dynamic>> palette = [
+      {'name': 'Aquamarine', 'color': const Color(0xFF7FFFD4)},
+      {'name': 'Soft Cream', 'color': const Color(0xFFFFFDD0)},
+      {'name': 'Matcha Green', 'color': const Color(0xFFB7D5AC)},
+      {'name': 'Lavender Mist', 'color': const Color(0xFFE6E6FA)},
+      {'name': 'Muted Rose', 'color': const Color(0xFFDDA7A5)},
+      {'name': 'Peach Puff', 'color': const Color(0xFFFFDAB9)},
+      {'name': 'Pistachio', 'color': const Color(0xFF93C572)},
+      {'name': 'Mint Cream', 'color': const Color(0xFFF5FFFA)},
+      {'name': 'Pale Canary', 'color': const Color(0xFFFFFF99)},
+      {'name': 'Blush Pink', 'color': const Color(0xFFFFD1DC)},
+      {'name': 'Soft Lilac', 'color': const Color(0xFFC8A2C8)},
+      {'name': 'Baby Blue', 'color': const Color(0xFF89CFF0)},
+      {'name': 'Periwinkle', 'color': const Color(0xFFCCCCFF)},
+      {'name': 'Sage Gray', 'color': const Color(0xFF9EA99C)},
+      {'name': 'Almond Silk', 'color': const Color(0xFFEFDECD)},
+      {'name': 'Vanilla Custard', 'color': const Color(0xFFF3E5AB)},
+      {'name': 'Seafoam Frost', 'color': const Color(0xFF9FE2BF)},
+      {'name': 'Celadon', 'color': const Color(0xFFACE1AF)},
+      {'name': 'Muted Apricot', 'color': const Color(0xFFFBCEB1)},
+      {'name': 'Mauve Taupe', 'color': const Color(0xFFB784A7)},
+      {'name': 'Desert Sand', 'color': const Color(0xFFEDC9AF)},
+      {'name': 'Pure White', 'color': const Color(0xFFFFFFFF)},
+      {'name': 'Platinum Ice', 'color': const Color(0xFFE5E4E2)},
+      {'name': 'Ghost Slate', 'color': const Color(0xFFD8D8E0)},
+      {'name': 'Quincy Cyan', 'color': const Color(0xFF00E5FF)},
+      {'name': 'Electric Gold', 'color': const Color(0xFFFFD700)},
+      {'name': 'Neon Mint', 'color': const Color(0xFF00FF9D)},
+      {'name': 'Vibrant Violet', 'color': const Color(0xFF7C4DFF)},
+      {'name': 'Shogun Crimson', 'color': const Color(0xFFFF3366)},
+      {'name': 'Solar Amber', 'color': const Color(0xFFFF9100)},
+      {'name': 'Laser Lemon', 'color': const Color(0xFFF9E858)},
+      {'name': 'Spring Meadow', 'color': const Color(0xFF69F0AE)},
+      {'name': 'Hot Coral', 'color': const Color(0xFFFF6F61)},
+      {'name': 'Cyber Purple', 'color': const Color(0xFFB388FF)},
+      {'name': 'Deep Magenta', 'color': const Color(0xFFFF4081)},
+      {'name': 'Arctic Teal', 'color': const Color(0xFF1DE9B6)},
+      {'name': 'Imperial Ruby', 'color': const Color(0xFFFF1744)},
+      {'name': 'Cobalt Neon', 'color': const Color(0xFF2979FF)},
+      {'name': 'Sunburst Glow', 'color': const Color(0xFFFFAB00)},
+      {'name': 'Emerald Glow', 'color': const Color(0xFF00E676)},
+      {'name': 'Flamingo', 'color': const Color(0xFFFC8EAC)},
+      {'name': 'Steel Cyan', 'color': const Color(0xFF64FFDA)},
+    ];
+
+    Color selectedTemp = gCustomAccentColor.value;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF121218),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: const Row(
+              children: [
+                Icon(Icons.palette_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 8),
+                Text('Choose Theme Accent Color', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 380,
+              child: GridView.builder(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 6,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                ),
+                itemCount: palette.length,
+                itemBuilder: (context, i) {
+                  final col = palette[i]['color'] as Color;
+                  final isSel = selectedTemp.value == col.value;
+                  return GestureDetector(
+                    onTap: () => setModal(() => selectedTemp = col),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: col,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isSel ? Colors.white : Colors.white10,
+                          width: isSel ? 3.5 : 1.0,
+                        ),
+                        boxShadow: isSel ? [BoxShadow(color: col.withOpacity(0.5), blurRadius: 8, spreadRadius: 1)] : null,
+                      ),
+                      child: isSel ? const Icon(Icons.check_rounded, color: Colors.black, size: 16) : null,
+                    ),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: selectedTemp,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () {
+                  setState(() => gCustomAccentColor.value = selectedTemp);
+                  Navigator.pop(ctx);
+                },
+                child: const Text('APPLY COLOR', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) {
+          final accent = gCustomAccentColor.value;
+          return AlertDialog(
+            backgroundColor: kCardDark,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Icon(Icons.tune_rounded, color: accent, size: 20),
+                const SizedBox(width: 8),
+                const Text('App & Engine Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Select Studio Accent Glow',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white70),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
+                  const Text('THEME ACCENT COLOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showColorPickerModal();
+                    },
+                    icon: Icon(Icons.color_lens_rounded, color: accent, size: 18),
+                    label: const Text('COLOURS (40+ SOFT & HARD SHADES)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B1B24),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: kStudioColorPalette.map((color) {
-                      final isSelected = gCustomAccentColor.value.value == color.value;
-                      return GestureDetector(
-                        onTap: () {
-                          gCustomAccentColor.value = color;
-                          setModalState(() {});
-                          setState(() {});
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: isSelected ? Colors.white : Colors.transparent,
-                              width: isSelected ? 3.0 : 0.0,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: color.withOpacity(isSelected ? 0.6 : 0.2),
-                                blurRadius: isSelected ? 12 : 4,
-                                spreadRadius: isSelected ? 2 : 0,
-                              ),
-                            ],
+
+                  const SizedBox(height: 20),
+                  const Text('TIMELINE PRECISION (8 / 16 / 32-BIT)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [8, 16, 32].map((bit) {
+                      final isSel = gEnginePrecision == bit;
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: ChoiceChip(
+                            label: Text('${bit}-Bit'),
+                            selected: isSel,
+                            selectedColor: accent,
+                            backgroundColor: const Color(0xFF1E1E28),
+                            labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                            onSelected: (_) {
+                              setModal(() => gEnginePrecision = bit);
+                              setState(() {});
+                            },
                           ),
-                          child: isSelected
-                              ? const Icon(Icons.check, color: Colors.black87, size: 22)
-                              : null,
                         ),
                       );
                     }).toList(),
                   ),
+
                   const SizedBox(height: 20),
+                  const Text('DEVELOPER & COMMUNITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('YouTube channel link copied: @null7839'), backgroundColor: Colors.redAccent),
+                      );
+                    },
+                    icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
+                    label: const Text('COPY MY YOUTUBE CHANNEL LINK (@null7839)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E1418),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+                  const Text('TIMELINE PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('25% Draft'),
+                        selected: gPreviewScale == 0.25,
+                        selectedColor: accent,
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 0.25);
+                          setState(() {});
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('50% Smooth'),
+                        selected: gPreviewScale == 0.50,
+                        selectedColor: accent,
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 0.50);
+                          setState(() {});
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('100% Native FP32'),
+                        selected: gPreviewScale == 1.0,
+                        selectedColor: accent,
+                        onSelected: (_) {
+                          setModal(() => gPreviewScale = 1.0);
+                          setState(() {});
+                        },
+                      ),
+                    ],
+                  ),
                 ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Close', style: TextStyle(color: accent, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: accent.withOpacity(0.3)),
+              ),
+              child: Text('SH', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 13)),
+            ),
+            const SizedBox(width: 10),
+            const Text('Shaderly'),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.cleaning_services_rounded, color: Colors.white70),
+            tooltip: 'Clear App Cache',
+            onPressed: _clearAppCache,
+          ),
+          IconButton(
+            icon: Icon(Icons.tune_rounded, color: accent),
+            tooltip: 'Settings',
+            onPressed: _showSettingsDialog,
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'ADJUSTMENT LAYER COMPOSITOR • FP32 HDR',
+                  style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: accent.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                  child: Text(
+                    '${gEnginePrecision}-BIT VULKAN',
+                    style: TextStyle(color: accent, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text('Shaderly', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            const Text(
+              'Adjustment Layers, Physical Inverse-Square Bloom, Real Anamorphic Flares & 4K Master Pipeline.',
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            const SizedBox(height: 20),
+
+            // BUTTON 1: NEW PROJECT
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withOpacity(0.40),
+                    blurRadius: 14,
+                    spreadRadius: 1.5,
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
+                icon: const Icon(Icons.add_rounded, color: Colors.black, size: 22),
+                label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: accent, width: 2.0),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // BUTTON 2: SHADERLY AI UPSCALER
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00E5FF).withOpacity(0.35),
+                    blurRadius: 14,
+                    spreadRadius: 1.5,
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AiUpscalerScreen())).then((_) => _load()),
+                icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black, size: 20),
+                label: const Text('SHADERLY AI UPSCALER (2X / 4X)', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00E5FF),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: Color(0xFF00E5FF), width: 2.0),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // BUTTON 3: REELSMART MOTION BLUR STUDIO
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RsmbScreen())),
+                icon: Icon(Icons.blur_linear_rounded, color: accent, size: 18),
+                label: Text('REELSMART MOTION BLUR STUDIO', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: accent.withOpacity(0.6), width: 1.2),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // RECENT SESSION OPENER
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  if (_recent.isNotEmpty) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
+                    ).then((_) => _load());
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved sessions yet.')));
+                  }
+                },
+                icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
+                label: Text('OPEN MOST RECENT SESSION', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: accent.withOpacity(0.4), width: 1.0),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+            const Text('SAVED SESSIONS (4 INSTANT SLOTS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (_recent.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(28),
+                decoration: BoxDecoration(
+                  color: kSurfaceDark,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: const Column(
+                  children: [
+                    Icon(Icons.layers_clear_outlined, color: Colors.white24, size: 36),
+                    SizedBox(height: 10),
+                    Text('No saved sessions found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
+                    SizedBox(height: 4),
+                    Text('Tap "NEW PROJECT" to grade high-res footage or art.', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                  ],
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: _recent.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) {
+                    final p = _recent[i];
+                    final thumbBytes = _thumbnails[p.id];
+
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: kCardDark,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        leading: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            width: 50,
+                            height: 50,
+                            color: Colors.black45,
+                            child: thumbBytes != null
+                                ? Image.memory(thumbBytes, fit: BoxFit.cover)
+                                : Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: accent),
+                          ),
+                        ),
+                        title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                        subtitle: Text('${p.mediaPath.split('/').last} • Slot #${i + 1}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+                              tooltip: 'Delete Project',
+                              onPressed: () => _deleteProject(i),
+                            ),
+                            Icon(Icons.arrow_forward_ios_rounded, color: accent, size: 14),
+                          ],
+                        ),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: p.data, projectName: p.name)),
+                          ).then((_) => _load());
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProjectSetupScreen extends StatefulWidget {
+  const ProjectSetupScreen({super.key});
+
+  @override
+  State<ProjectSetupScreen> createState() => _ProjectSetupScreenState();
+}
+
+class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
+  String _projectName = 'Shaderly Master';
+  String _selectedAspect = '16:9';
+  File? _selectedFile;
+  bool _isImage = false;
+
+  final List<String> _aspectRatios = ['16:9', '9:16', '4:5', '1:1', '3:4', '21:9'];
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create New Session')),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('PROJECT TITLE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            TextField(
+              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: kCardDark,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              ),
+              onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shaderly Master',
+              controller: TextEditingController(text: _projectName),
+            ),
+            const SizedBox(height: 20),
+            const Text('OUTPUT ASPECT RATIO (ZOOM-TO-FILL PROTECTED)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: _aspectRatios.map((ratio) => ChoiceChip(
+                label: Text(ratio),
+                selected: _selectedAspect == ratio,
+                selectedColor: accent,
+                backgroundColor: kCardDark,
+                labelStyle: TextStyle(color: _selectedAspect == ratio ? Colors.black : Colors.white70, fontWeight: FontWeight.bold),
+                onSelected: (_) => setState(() => _selectedAspect = ratio),
+              )).toList(),
+            ),
+            const SizedBox(height: 24),
+            const Text('SOURCE FOOTAGE OR ART', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () async {
+                final result = await FilePicker.platform.pickFiles(
+                  type: FileType.any,
+                );
+                if (result != null && result.files.single.path != null) {
+                  final p = result.files.single.path!;
+                  final ext = p.split('.').last.toLowerCase();
+                  final validExts = ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'];
+                  if (validExts.contains(ext)) {
+                    final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+                    setState(() {
+                      _selectedFile = File(p);
+                      _isImage = isImg;
+                    });
+                  }
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: kCardDark,
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      _selectedFile == null ? Icons.folder_open_rounded : (_isImage ? Icons.image_rounded : Icons.movie_creation_rounded),
+                      color: accent,
+                      size: 40,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _selectedFile == null ? 'Browse video file or high-res image' : _selectedFile!.path.split('/').last,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _selectedFile == null ? 'Supports MKV, WebM, MP4, MOV, Real-ESRGAN 2K/4K' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (_selectedFile == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a media file first')));
+                    return;
+                  }
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ProjectScreen(
+                        initialProject: ProjectData(
+                          mediaPath: _selectedFile!.path,
+                          isImage: _isImage,
+                          aspectRatio: _selectedAspect,
+                          layers: [
+                            AdjustmentLayer(
+                              id: 'layer_clean_base',
+                              name: 'Base Grade',
+                              blendMode: LayerBlendMode.normal,
+                              contrast: 1.0,
+                              saturation: 1.0,
+                              brightness: 0.0,
+                            ),
+                          ],
+                        ),
+                        projectName: _projectName,
+                      ),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('OPEN STUDIO EDITOR', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProjectScreen extends StatefulWidget {
+  final ProjectData? initialProject;
+  final String? projectName;
+  final bool isImportedFromUpscaler;
+
+  const ProjectScreen({
+    super.key,
+    this.initialProject,
+    this.projectName,
+    this.isImportedFromUpscaler = false,
+  });
+
+  @override
+  State<ProjectScreen> createState() => _ProjectScreenState();
+}
+
+class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
+  late ProjectData _project;
+  final List<ProjectData> _undoHistory = [];
+
+  VideoPlayerController? _controller;
+  bool _isPlaying = false;
+  img.Image? _cachedRawImage;
+  bool _isFullScreen = false;
+
+  late TabController _tabController;
+  int _selectedCurveChannel = 0;
+
+  ui.Image? _processedStaticImage;
+  int _renderWidth = 720;
+  int _renderHeight = 900;
+
+  String? _selectedPresetName;
+  bool _isBslaExtremeActive = false;
+
+  Timer? _playbackTimer;
+  double _currentTimelinePosition = 0.0;
+  double _videoDurationSeconds = 1.0;
+
+  List<CustomPresetItem> _customPresets = [];
+  List<LutModel> _activeLuts = [];
+
+  // Split Toning & Dithering state
+  double _splitToneShadowH = 0.60;
+  double _splitToneShadowS = 0.0;
+  double _splitToneHighH = 0.12;
+  double _splitToneHighS = 0.0;
+  double _splitToneBalance = 0.0;
+  double _ditherStrength = 1.0;
+
+  // Text Effects Suite (WIS Edits)
+  double _textBevel = 0.0;
+  double _textLightSweep = 0.0;
+  double _textHorizonRamp = 0.0;
+  double _textInnerShadow = 0.0;
+  double _textOcclusionRim = 0.0;
+  double _textTightCoreGlow = 0.0;
+  double _textCenterAura = 0.0;
+
+  FFmpegSession? _activeExportSession;
+  bool _isExportCancelled = false;
+
+  AdjustmentLayer get _cur => _project.currentLayer;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 9, vsync: this);
+    _loadShader();
+
+    _project = widget.initialProject ?? ProjectData(mediaPath: '');
+    _pushUndoSnapshot();
+
+    _loadCustomPresets();
+    _loadLuts();
+    _loadMedia(_project.mediaPath);
+  }
+
+  @override
+  void dispose() {
+    _playbackTimer?.cancel();
+    _tabController.dispose();
+    _controller?.pause();
+    _controller?.dispose();
+    _controller = null;
+    _processedStaticImage?.dispose();
+    super.dispose();
+  }
+
+  void _pushUndoSnapshot() {
+    _undoHistory.add(_project.clone());
+    if (_undoHistory.length > 50) {
+      _undoHistory.removeAt(0);
+    }
+  }
+
+  void _performUndo() {
+    if (_undoHistory.length > 1) {
+      setState(() {
+        _undoHistory.removeLast();
+        _project = _undoHistory.last.clone();
+      });
+      _applyGrade();
+      _autoSaveProject();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reverted latest change'), duration: Duration(milliseconds: 750)),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Already at initial state'), duration: Duration(milliseconds: 750)),
+      );
+    }
+  }
+
+  Future<void> _loadCustomPresets() async {
+    final list = await ProjectManager.loadCustomPresets();
+    if (mounted) setState(() => _customPresets = list);
+  }
+
+  Future<void> _loadLuts() async {
+    final list = await ProjectManager.loadLuts();
+    if (mounted) setState(() => _activeLuts = list);
+  }
+
+  Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr, [double scale = 1.0]) {
+    int baseSize;
+    switch (resolutionName) {
+      case '720p':  baseSize = 720; break;
+      case '1080p': baseSize = 1080; break;
+      case '2K':    baseSize = 1440; break;
+      case '4K':    baseSize = 2160; break;
+      default:      baseSize = 1080;
+    }
+
+    baseSize = (baseSize * scale).round();
+    final double ratio = _getAspectRatioValue(ratioStr);
+    int targetW, targetH;
+
+    if (ratio < 1.0) {
+      targetW = baseSize;
+      targetH = (targetW / ratio).round();
+    } else {
+      targetH = baseSize;
+      targetW = (targetH * ratio).round();
+    }
+
+    targetW = math.max(16, ((targetW + 1) ~/ 2) * 2);
+    targetH = math.max(16, ((targetH + 1) ~/ 2) * 2);
+
+    return {'width': targetW, 'height': targetH};
+  }
+
+  void _updateDimensions(int srcW, int srcH) {
+    final dims = _calculateTargetDimensions('720p', _project.aspectRatio, gPreviewScale);
+    _renderWidth = dims['width']!;
+    _renderHeight = dims['height']!;
+  }
+
+  Future<void> _loadShader() async {
+    final candidateNames = [
+      'assets/shaders/aereality_core.spv',
+      'shaders/aereality_core.spv',
+    ];
+
+    Uint8List? shaderBytes;
+    for (final path in candidateNames) {
+      try {
+        final byteData = await rootBundle.load(path);
+        shaderBytes = byteData.buffer.asUint8List();
+        break;
+      } catch (_) {}
+    }
+
+    if (shaderBytes != null) {
+      initVulkan(shaderBytes, gEnginePrecision);
+    }
+  }
+
+  Future<void> _switchMediaFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result != null && result.files.single.path != null) {
+      final p = result.files.single.path!;
+      final ext = p.split('.').last.toLowerCase();
+      final validExts = ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'];
+      if (validExts.contains(ext)) {
+        await _loadMedia(p);
+      }
+    }
+  }
+
+  Future<void> _loadMedia(String path) async {
+    if (path.isEmpty) return;
+    final ext = path.split('.').last.toLowerCase();
+    final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+
+    _playbackTimer?.cancel();
+    if (_controller != null) {
+      await _controller!.pause();
+      await _controller!.dispose();
+      _controller = null;
+    }
+
+    setState(() {
+      _project.mediaPath = path;
+      _project.isImage = isImg;
+      _processedStaticImage?.dispose();
+      _processedStaticImage = null;
+      _isPlaying = false;
+      _currentTimelinePosition = 0.0;
+    });
+
+    if (isImg) {
+      final fileBytes = await File(path).readAsBytes();
+      final decoded = img.decodeImage(fileBytes);
+      if (decoded != null) {
+        _cachedRawImage = decoded;
+        _updateDimensions(decoded.width, decoded.height);
+        _applyGrade();
+      }
+    } else {
+      _cachedRawImage = null;
+      _controller = VideoPlayerController.file(File(path))
+        ..initialize().then((_) {
+          if (!mounted) return;
+          final vw = _controller!.value.size.width.toInt();
+          final vh = _controller!.value.size.height.toInt();
+          _updateDimensions(vw, vh);
+          _videoDurationSeconds = _controller!.value.duration.inMilliseconds / 1000.0;
+          if (_videoDurationSeconds <= 0.0) _videoDurationSeconds = 1.0;
+
+          if (widget.isImportedFromUpscaler) {
+            _controller!.pause();
+            _isPlaying = false;
+          } else {
+            _controller!.play();
+            _controller!.setLooping(true);
+            _isPlaying = true;
+          }
+
+          setState(() {});
+          _applyGrade();
+
+          _playbackTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
+            if (_controller != null && _controller!.value.isPlaying && mounted) {
+              setState(() {
+                _currentTimelinePosition = _controller!.value.position.inMilliseconds / 1000.0;
+              });
+            }
+          });
+        });
+    }
+
+    _autoSaveProject();
+  }
+
+  Future<void> _applyGrade() async {
+    if (_project.isImage && _cachedRawImage != null) {
+      try {
+        int w = _renderWidth;
+        int h = _renderHeight;
+        final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
+        final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
+        final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+        final lutTable = _getActiveLutTable();
+
+        final outBytes = processImage(rawBytes, w, h, w, h, uniforms, lutTable: lutTable);
+
+        final completer = Completer<ui.Image>();
+        ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (im) => completer.complete(im));
+        final res = await completer.future;
+
+        if (mounted) {
+          setState(() {
+            _processedStaticImage?.dispose();
+            _processedStaticImage = res;
+          });
+        }
+      } catch (_) {}
+    } else {
+      if (mounted) {
+        setState(() {
+          _processedStaticImage?.dispose();
+          _processedStaticImage = null;
+        });
+      }
+    }
+  }
+
+  Float32List? _getActiveLutTable() {
+    if (_cur.activeLutId == null) return null;
+    final match = _activeLuts.where((l) => l.id == _cur.activeLutId);
+    if (match.isEmpty) return null;
+    return match.first.table;
+  }
+
+  ColorFilter _buildLiveColorFilter() {
+    double c = 1.0;
+    double s = 1.0;
+    double b = 0.0;
+    double temp = 6500.0;
+    double highLift = 0.0;
+    double shadowLift = 0.0;
+    double flickerFactor = 1.0;
+
+    for (final l in _project.layers) {
+      if (!l.isEnabled) continue;
+      final op = l.opacity;
+      c *= (1.0 + (l.contrast - 1.0) * op);
+      s *= (1.0 + (l.saturation - 1.0) * op);
+      b += l.brightness * 255.0 * op;
+
+      highLift += (l.highlights * 30.0 * op);
+      shadowLift += (l.shadows * 30.0 * op);
+      temp += (l.temperature - 6500.0) * op;
+
+      if (l.flickerIntensity > 0.01) {
+        double t = (_controller?.value.position.inMilliseconds ?? DateTime.now().millisecondsSinceEpoch) / 1000.0 * l.flickerSpeed;
+        double fWave = (math.sin(t * 6.28318) * 0.5 + 0.5);
+        flickerFactor *= (1.0 + (fWave - 0.5) * l.flickerIntensity * 0.45 * op);
+      }
+    }
+
+    double rMult = 1.0;
+    double bMult = 1.0;
+    if (temp > 6500) {
+      rMult += (temp - 6500) / 7000.0;
+      bMult -= (temp - 6500) / 10000.0;
+    } else {
+      bMult += (6500 - temp) / 7000.0;
+      rMult -= (6500 - temp) / 10000.0;
+    }
+
+    final double sr = (1 - s) * 0.2126;
+    final double sg = (1 - s) * 0.7152;
+    final double sb = (1 - s) * 0.0722;
+    final double t = (1.0 - c) * 128.0;
+
+    final List<double> matrix = [
+      (sr + s) * c * rMult * flickerFactor, sg * c,           sb * c,           0, t + b + shadowLift + highLift,
+      sr * c,               (sg + s) * c * flickerFactor,     sb * c,           0, t + b + shadowLift + highLift,
+      sr * c,               sg * c,           (sb + s) * c * bMult * flickerFactor, 0, t + b + shadowLift + highLift,
+      0,                    0,                0,                1, 0,
+    ];
+
+    return ColorFilter.matrix(matrix);
+  }
+
+  Widget _buildLiveBloomAtmosphere() {
+    double totalBloom = 0.0;
+    Color bloomTint = Colors.white;
+    double flareOpacity = 0.0;
+    double bslFogAmt = 0.0;
+    double bslScatterAmt = 0.0;
+    double bslDepthAmt = 0.5;
+
+    for (final l in _project.layers) {
+      if (!l.isEnabled) continue;
+      final op = l.opacity;
+      totalBloom += (l.deepGlowIntensity * 0.45 + l.bslaBloomHaze * 0.55) * op;
+      flareOpacity += (l.thinStreakIntensity * l.thinStreakOpacity * 0.7) * op;
+
+      if (l.bslaFogDensity > 0.001) {
+        bslFogAmt += l.bslaFogDensity * op;
+        bslScatterAmt += l.bslFogScatter * op;
+        bslDepthAmt = l.bslaFogDepth;
+      }
+
+      if (l.edgeGlowTint == 1.0) bloomTint = const Color(0xFFFFD700);
+      else if (l.edgeGlowTint == 2.0) bloomTint = const Color(0xFF00E5FF);
+      else if (l.edgeGlowTint == 4.0) bloomTint = const Color(0xFFFF1744);
+      else if (l.edgeGlowTint == 5.0) bloomTint = const Color(0xFF7C4DFF);
+      else bloomTint = Colors.white;
+    }
+
+    totalBloom = totalBloom.clamp(0.0, 0.85);
+    flareOpacity = flareOpacity.clamp(0.0, 0.90);
+    bslFogAmt = bslFogAmt.clamp(0.0, 0.85);
+
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (totalBloom > 0.02)
+            Opacity(
+              opacity: totalBloom,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.center,
+                    radius: 0.9,
+                    colors: [
+                      bloomTint.withOpacity(0.40),
+                      bloomTint.withOpacity(0.10),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (flareOpacity > 0.02)
+            Center(
+              child: Opacity(
+                opacity: flareOpacity,
+                child: Container(
+                  height: 3.5,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        Colors.white.withOpacity(0.95),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (bslFogAmt > 0.01)
+            Opacity(
+              opacity: bslFogAmt,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: [0.0, (1.0 - bslDepthAmt).clamp(0.1, 0.9), 1.0],
+                    colors: [
+                      const Color(0xFF8FA3B8).withOpacity(0.48 * (1.0 + bslScatterAmt * 0.4)),
+                      const Color(0xFF708090).withOpacity(0.28),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _autoSaveProject() async {
+    if (_project.mediaPath.isEmpty) return;
+    final proj = StoredProject(
+      id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
+      name: widget.projectName ?? 'Shaderly Session',
+      mediaPath: _project.mediaPath,
+      data: _project,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(proj);
+  }
+
+  Float32List _packMultiLayerUniforms(double imgW, double imgH) {
+    final uniforms = Float32List(512);
+    final timeSeconds = (_controller != null && _controller!.value.isInitialized)
+        ? _controller!.value.position.inMilliseconds / 1000.0
+        : 0.0;
+
+    uniforms[0] = timeSeconds;
+    uniforms[1] = _project.layers.length.toDouble();
+    uniforms[2] = _project.tonemapMode;
+    uniforms[3] = imgW;
+    uniforms[4] = imgH;
+    uniforms[5] = _cur.activeLutId != null ? 1.0 : 0.0;
+    uniforms[6] = _cur.lutOpacity;
+    uniforms[7] = _splitToneShadowH;
+    uniforms[8] = _splitToneShadowS;
+    uniforms[9] = _splitToneHighH;
+    uniforms[10] = _splitToneHighS;
+    uniforms[11] = _splitToneBalance;
+    uniforms[12] = _ditherStrength;
+    uniforms[13] = _textBevel;
+    uniforms[14] = _textLightSweep;
+    uniforms[15] = _textHorizonRamp;
+    uniforms[16] = _textInnerShadow;
+    uniforms[17] = _textOcclusionRim;
+    uniforms[18] = _textTightCoreGlow;
+    uniforms[19] = _textCenterAura;
+
+    for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
+      final layer = _project.layers[l];
+      final offset = 20 + (l * 64);
+
+      uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
+      uniforms[offset + 1] = layer.opacity;
+      uniforms[offset + 2] = layer.blendMode.index.toDouble();
+      uniforms[offset + 3] = layer.brightness;
+
+      uniforms[offset + 4] = layer.saturation;
+      uniforms[offset + 5] = layer.contrast;
+      uniforms[offset + 6] = layer.sharpness;
+      uniforms[offset + 7] = layer.gamma;
+
+      uniforms[offset + 8] = layer.hue;
+      uniforms[offset + 9] = layer.temperature;
+      uniforms[offset + 10] = layer.deepGlowIntensity;
+      uniforms[offset + 11] = layer.deepGlowRadius;
+
+      uniforms[offset + 12] = layer.deepGlowThreshold;
+      uniforms[offset + 13] = layer.edgeGlowTint;
+      uniforms[offset + 14] = layer.thinStreakIntensity;
+      uniforms[offset + 15] = layer.thinStreakWidth;
+
+      uniforms[offset + 16] = layer.lineChromaStrength;
+      uniforms[offset + 17] = layer.volRaysLength;
+      uniforms[offset + 18] = layer.volRaysDecay;
+      uniforms[offset + 19] = layer.shadows;
+
+      uniforms[offset + 20] = layer.highlights;
+      uniforms[offset + 21] = layer.blackCrush;
+      uniforms[offset + 22] = layer.vignette;
+      uniforms[offset + 23] = layer.vignetteBoxed;
+
+      uniforms[offset + 24] = layer.edgeDarken;
+      uniforms[offset + 25] = layer.darkOutlines; // Sobel outlines
+      uniforms[offset + 26] = layer.denoise;
+      uniforms[offset + 27] = layer.filmGrain;
+
+      uniforms[offset + 28] = layer.flickerIntensity;
+      uniforms[offset + 29] = layer.flickerSpeed;
+      uniforms[offset + 30] = layer.halationRadius;
+      uniforms[offset + 31] = layer.halationWarmth;
+
+      uniforms[offset + 32] = layer.depthOfField;
+      uniforms[offset + 33] = layer.dofFocus;
+      uniforms[offset + 34] = layer.dofAngle;
+      uniforms[offset + 35] = layer.unsharpRadius;
+
+      uniforms[offset + 36] = layer.unsharpAmount;
+      uniforms[offset + 37] = layer.unsharpThreshold;
+      uniforms[offset + 38] = layer.curveMaster[0];
+      uniforms[offset + 39] = layer.curveMaster[1];
+
+      uniforms[offset + 40] = layer.curveMaster[2];
+      uniforms[offset + 41] = layer.curveMaster[3];
+      uniforms[offset + 42] = layer.curveMaster[4];
+      uniforms[offset + 43] = layer.curveRed[0];
+
+      uniforms[offset + 44] = layer.curveRed[1];
+      uniforms[offset + 45] = layer.curveRed[2];
+      uniforms[offset + 46] = layer.curveRed[3];
+      uniforms[offset + 47] = layer.curveRed[4];
+
+      uniforms[offset + 48] = layer.curveGreen[2];
+      uniforms[offset + 49] = layer.curveBlue[2];
+      uniforms[offset + 50] = layer.sapphireGlowWidth;
+      uniforms[offset + 51] = layer.sapphireGlowThreshold;
+
+      uniforms[offset + 52] = layer.thinStreakOpacity;
+      uniforms[offset + 53] = layer.mblMojoTealOrange;
+      uniforms[offset + 54] = layer.bslaGodRays;
+      uniforms[offset + 55] = layer.bslaFogDensity;
+
+      uniforms[offset + 56] = layer.bslaFogDepth;
+      uniforms[offset + 57] = layer.bslaBloomHaze;
+      uniforms[offset + 58] = layer.bslFogScatter;
+      uniforms[offset + 59] = 0.0;
+
+      uniforms[offset + 60] = 0.0;
+      uniforms[offset + 61] = 0.0;
+      uniforms[offset + 62] = 0.0;
+      uniforms[offset + 63] = 0.0;
+    }
+
+    return uniforms;
+  }
+
+  double _getAspectRatioValue(String ratio) {
+    switch (ratio) {
+      case "4:5": return 4 / 5;
+      case "16:9": return 16 / 9;
+      case "9:16": return 9 / 16;
+      case "1:1": return 1 / 1;
+      case "3:4": return 3 / 4;
+      case "21:9": return 21 / 9;
+      default: return 16 / 9;
+    }
+  }
+
+  void _addNewAdjustmentLayer() {
+    if (_project.layers.length >= 4) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 4 Adjustment Layers allowed.')));
+      return;
+    }
+    _pushUndoSnapshot();
+    setState(() {
+      final newIndex = _project.layers.length + 1;
+      _project.layers.add(AdjustmentLayer(
+        id: 'layer_${DateTime.now().millisecondsSinceEpoch}',
+        name: 'Layer $newIndex',
+        blendMode: LayerBlendMode.screen,
+      ));
+      _project.activeLayerIndex = _project.layers.length - 1;
+      _selectedPresetName = null;
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  void _removeCurrentLayer() {
+    _pushUndoSnapshot();
+    setState(() {
+      if (_project.layers.isNotEmpty) {
+        _project.layers.removeAt(_project.activeLayerIndex);
+        if (_project.layers.isNotEmpty) {
+          _project.activeLayerIndex = math.max(0, _project.activeLayerIndex - 1);
+        } else {
+          _project.activeLayerIndex = 0;
+        }
+      }
+      _selectedPresetName = null;
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  void _resetCurrentLayer() {
+    if (_project.layers.isEmpty) return;
+    _pushUndoSnapshot();
+    setState(() {
+      _project.layers[_project.activeLayerIndex] = AdjustmentLayer(
+        id: _cur.id,
+        name: _cur.name,
+        blendMode: _cur.blendMode,
+      );
+      _selectedPresetName = null;
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  void _toggleBslaExtremePreset() {
+    _pushUndoSnapshot();
+    setState(() {
+      if (_isBslaExtremeActive) {
+        _project.layers.removeWhere((l) => l.id == 'bsla_extreme_atmospheric');
+        _isBslaExtremeActive = false;
+      } else {
+        if (_project.layers.length >= 4) {
+          _project.layers.removeLast();
+        }
+        final bslaLayer = AdjustmentLayer(
+          id: 'bsla_extreme_atmospheric',
+          name: 'BSLA Extreme Atmospheric',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.90,
+          bslaGodRays: 0.75,
+          bslaFogDensity: 0.55,
+          bslaFogDepth: 0.65,
+          bslaBloomHaze: 0.65,
+          bslFogScatter: 0.40,
+          deepGlowIntensity: 0.45,
+          deepGlowRadius: 0.65,
+          deepGlowThreshold: 0.40,
+          edgeGlowTint: 0.0,
+          contrast: 1.0,
+          saturation: 1.0,
+        );
+        _project.layers.add(bslaLayer);
+        _project.activeLayerIndex = _project.layers.length - 1;
+        _isBslaExtremeActive = true;
+      }
+    });
+    _applyGrade();
+    _autoSaveProject();
+  }
+  // ==========================================
+// PART 2 OF 2: main.dart
+// ==========================================
+
+  void _applyPreset(String name) {
+    _pushUndoSnapshot();
+    setState(() {
+      _project.layers.clear();
+      _selectedPresetName = name;
+      _isBslaExtremeActive = false;
+
+      switch (name) {
+        // 1. NEW: Yuta Edit Master Preset (JJK 0 inspired)
+        case 'yuta':
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_base',
+            name: 'Okkotsu JJK0 Contrast',
+            contrast: 1.36,
+            saturation: 0.84,
+            brightness: 0.02,
+            temperature: 6300.0,
+            sharpness: 0.55,
+            shadows: -0.10,
+            highlights: 0.18,
+            blackCrush: 0.04,
+            edgeDarken: 0.24,
+            darkOutlines: 0.15,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.18, 0.49, 0.84, 1.0],
+            flickerIntensity: 0.025,
+            flickerSpeed: 11.0,
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'yuta_ivory_bloom',
+            name: 'Warm Ivory Specular Flare',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.72,
+            deepGlowIntensity: 0.36,
+            deepGlowRadius: 0.45,
+            deepGlowThreshold: 0.55,
+            edgeGlowTint: 1.0, // Warm Ivory / Noble Gold
+            thinStreakIntensity: 0.18,
+            thinStreakOpacity: 0.75,
+            lineChromaStrength: 0.20,
+          ));
+          break;
+
+        // 2. Okkotsu (Sendai Colony)
+        case 'okkotsu':
+          _project.layers.add(AdjustmentLayer(
+            id: 'okkotsu_base',
+            name: 'Sendai Cold Contrast',
+            contrast: 1.28,
+            saturation: 0.82,
+            brightness: -0.02,
+            temperature: 7200.0,
+            sharpness: 0.48,
+            shadows: -0.12,
+            edgeDarken: 0.22,
+            darkOutlines: 0.10,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'okkotsu_rim',
+            name: 'Specular Rim & Dehaze',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.68,
+            deepGlowIntensity: 0.32,
+            deepGlowRadius: 0.45,
+            deepGlowThreshold: 0.52,
+            edgeGlowTint: 0.0,
+            thinStreakIntensity: 0.15,
+            thinStreakOpacity: 0.70,
+          ));
+          break;
+
+        // 3. Artoria (Excalibur Morgan)
+        case 'artoria':
+          _project.layers.add(AdjustmentLayer(
+            id: 'artoria_base',
+            name: 'Excalibur Morgan Base',
+            contrast: 1.34,
+            saturation: 1.08,
+            temperature: 6200.0,
+            sharpness: 0.52,
+            shadows: -0.16,
+            edgeDarken: 0.28,
+            darkOutlines: 0.14,
+            vignette: 0.06,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.15, 0.50, 0.88, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'artoria_core',
+            name: 'Gold Armor & Crimson Flare',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.82,
+            deepGlowIntensity: 0.46,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 4.0, // Crimson
+            thinStreakIntensity: 0.28,
+            thinStreakWidth: 0.60,
+            thinStreakOpacity: 0.85,
+          ));
+          break;
+
+        // 4. Deku Tree (Full Cowling)
+        case 'deku tree':
+          _project.layers.add(AdjustmentLayer(
+            id: 'deku_base',
+            name: 'Full Cowling Acutance',
+            contrast: 1.26,
+            saturation: 1.22,
+            temperature: 6700.0,
+            sharpness: 0.55,
+            shadows: -0.05,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.52, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'deku_aura',
+            name: 'Neon Lightning Aura',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.88,
+            deepGlowIntensity: 0.58,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.36,
+            edgeGlowTint: 2.0, // Cyan / Teal
+            thinStreakIntensity: 0.38,
+            thinStreakWidth: 0.70,
+            thinStreakOpacity: 0.92,
+            lineChromaStrength: 0.40,
+          ));
+          break;
+
+        // 5. Raiden (Musou Shinsetsu)
+        case 'Raiden':
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_base',
+            name: 'Musou Shinsetsu Ink',
+            contrast: 1.30,
+            saturation: 1.14,
+            temperature: 7100.0,
+            sharpness: 0.46,
+            shadows: -0.14,
+            edgeDarken: 0.24,
+            darkOutlines: 0.12,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.17, 0.49, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'raiden_violet',
+            name: 'Sapphire Violet Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.84,
+            deepGlowIntensity: 0.54,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 5.0, // Violet
+            sapphireGlowWidth: 0.85,
+            sapphireGlowThreshold: 0.42,
+            thinStreakIntensity: 0.30,
+            thinStreakOpacity: 0.88,
+          ));
+          break;
+
+        // 6. Atmospheric Haze
+        case 'atmospheric haze':
+          _project.layers.add(AdjustmentLayer(
+            id: 'haze_base',
+            name: 'Liminal Base',
+            contrast: 1.08,
+            saturation: 0.94,
+            temperature: 6400.0,
+            brightness: 0.03,
+            shadows: 0.08,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.04, 0.28, 0.52, 0.78, 0.96],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'haze_overlay',
+            name: 'Volumetric White Mist',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.72,
+            bslaFogDensity: 0.45,
+            bslaFogDepth: 0.60,
+            bslaBloomHaze: 0.55,
+            bslFogScatter: 0.40,
+            deepGlowIntensity: 0.30,
+            deepGlowRadius: 0.70,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 0.0,
+          ));
+          break;
+
+        // 7. Tealdropped (Conq Knockoff)
+        case 'tealdropped (conq knockoff)':
+          _project.layers.add(AdjustmentLayer(
+            id: 'conq_base',
+            name: 'Base Grade',
+            contrast: 1.18,
+            saturation: 1.06,
+            brightness: 0.03,
+            temperature: 6800.0,
+            sharpness: 0.44,
+            shadows: 0.02,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.25, 0.52, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'conq_glow',
+            name: 'Teal Rim Flare',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.82,
+            deepGlowIntensity: 0.45,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.44,
+            edgeGlowTint: 2.0,
+            thinStreakIntensity: 0.22,
+            thinStreakWidth: 0.60,
+            thinStreakOpacity: 0.85,
+            lineChromaStrength: 0.35,
+          ));
+          break;
+
+        // 8. Vintage CC
+        case 'vintage cc':
+          _project.layers.add(AdjustmentLayer(
+            id: 'vint_base',
+            name: 'Warm Film Stock',
+            contrast: 1.14,
+            saturation: 0.88,
+            temperature: 5800.0,
+            shadows: 0.06,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.04, 0.26, 0.50, 0.78, 0.95],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'vint_grain',
+            name: 'Halation & Soft Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.70,
+            deepGlowIntensity: 0.32,
+            deepGlowRadius: 0.60,
+            deepGlowThreshold: 0.45,
+            edgeGlowTint: 1.0,
+            halationRadius: 0.22,
+            halationWarmth: 0.75,
+            filmGrain: 0.08,
+          ));
+          break;
+
+        // 9. Noir
+        case 'noir':
+          _project.layers.add(AdjustmentLayer(
+            id: 'noir_base',
+            name: 'Deep Ink & Silver',
+            contrast: 1.32,
+            saturation: 0.25,
+            temperature: 7400.0,
+            shadows: -0.14,
+            sharpness: 0.45,
+            edgeDarken: 0.26,
+            darkOutlines: 0.18,
+            vignette: 0.06,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'noir_specular',
+            name: 'Silver Specular Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.68,
+            deepGlowIntensity: 0.38,
+            deepGlowRadius: 0.48,
+            deepGlowThreshold: 0.50,
+            edgeGlowTint: 0.0,
+            thinStreakIntensity: 0.15,
+            thinStreakOpacity: 0.80,
+          ));
+          break;
+
+        // 10. Choso
+        case 'choso':
+          _project.layers.add(AdjustmentLayer(
+            id: 'choso_base',
+            name: 'Piercing Blood Midtones',
+            contrast: 1.26,
+            saturation: 1.12,
+            temperature: 6200.0,
+            sharpness: 0.42,
+            shadows: -0.08,
+            edgeDarken: 0.24,
+            darkOutlines: 0.12,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.20, 0.50, 0.82, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'choso_blood',
+            name: 'Dark Blood Halation',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.82,
+            deepGlowIntensity: 0.50,
+            deepGlowRadius: 0.55,
+            deepGlowThreshold: 0.40,
+            edgeGlowTint: 4.0,
+            halationRadius: 0.25,
+            halationWarmth: 0.85,
+            thinStreakIntensity: 0.20,
+            thinStreakOpacity: 0.85,
+          ));
+          break;
+
+        // 11. Yoruichi
+        case 'yoruichi':
+          _project.layers.add(AdjustmentLayer(
+            id: 'yoru_base',
+            name: 'Flash Step Contrast',
+            contrast: 1.25,
+            saturation: 1.10,
+            temperature: 6900.0,
+            sharpness: 0.44,
+            shadows: -0.08,
+            vignette: 0.05,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.21, 0.50, 0.83, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'yoru_lightning',
+            name: 'Electro Violet Streak',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.84,
+            deepGlowIntensity: 0.56,
+            deepGlowRadius: 0.62,
+            deepGlowThreshold: 0.38,
+            edgeGlowTint: 5.0,
+            thinStreakIntensity: 0.32,
+            thinStreakWidth: 0.68,
+            thinStreakOpacity: 0.88,
+            lineChromaStrength: 0.35,
+          ));
+          break;
+
+        // 12. Gojo
+        case 'Gojo':
+          _project.layers.add(AdjustmentLayer(
+            id: 'gojo_base',
+            name: 'Infinity Base',
+            contrast: 1.20,
+            saturation: 1.06,
+            temperature: 7100.0,
+            sharpness: 0.42,
+            vignette: 0.04,
+            blendMode: LayerBlendMode.normal,
+            curveMaster: [0.0, 0.22, 0.50, 0.81, 1.0],
+          ));
+          _project.layers.add(AdjustmentLayer(
+            id: 'gojo_bloom',
+            name: 'Infinity Cyan Bloom',
+            blendMode: LayerBlendMode.screen,
+            opacity: 0.80,
+            deepGlowIntensity: 0.46,
+            deepGlowRadius: 0.60,
+            deepGlowThreshold: 0.42,
+            edgeGlowTint: 2.0,
+            thinStreakIntensity: 0.20,
+            thinStreakOpacity: 0.85,
+          ));
+          break;
+
+        default:
+          _project.layers.add(AdjustmentLayer(
+            id: 'default_base',
+            name: 'Base Grade',
+            contrast: 1.15,
+            saturation: 1.05,
+            sharpness: 0.35,
+            blendMode: LayerBlendMode.normal,
+          ));
+      }
+
+      _project.activeLayerIndex = 0;
+    });
+
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  Future<void> _saveCurrentAsPreset() async {
+    final controller = TextEditingController(text: 'My Custom Grade');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kCardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Save Current CC as Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(labelText: 'Preset Name', labelStyle: TextStyle(color: Colors.white54)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: gCustomAccentColor.value, foregroundColor: Colors.black),
+            onPressed: () async {
+              final name = controller.text.trim().isNotEmpty ? controller.text.trim() : 'My Custom Grade';
+              Navigator.pop(ctx);
+
+              final newPreset = CustomPresetItem(
+                name: name,
+                description: '${_project.layers.length} Layers • Custom Saved CC',
+                accentColor: gCustomAccentColor.value.value,
+                isBuiltIn: false,
+                layers: _project.layers.map((l) => l.clone()).toList(),
+                tonemapMode: _project.tonemapMode,
+              );
+
+              _customPresets.add(newPreset);
+              await ProjectManager.saveCustomPresets(_customPresets);
+              setState(() {});
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Preset "$name" saved to Presets tab!'), backgroundColor: Colors.teal),
+                );
+              }
+            },
+            child: const Text('Save Preset'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _importPresetFromFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final content = await file.readAsString();
+        final Map<String, dynamic> data = jsonDecode(content);
+
+        if (data.containsKey('layers')) {
+          final List<dynamic> layerList = data['layers'];
+          _pushUndoSnapshot();
+          setState(() {
+            _project.layers.clear();
+            for (var l in layerList) {
+              _project.layers.add(AdjustmentLayer.fromJson(l));
+            }
+            if (data.containsKey('tonemapMode')) {
+              _project.tonemapMode = (data['tonemapMode'] as num).toDouble();
+            }
+            _project.activeLayerIndex = 0;
+            _selectedPresetName = data['presetName'] ?? 'Imported Preset';
+          });
+          _applyGrade();
+          _autoSaveProject();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Loaded preset "${_selectedPresetName}"!'), backgroundColor: Colors.green));
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please choose a valid JSON/XML preset file ($e)'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  void _confirmDeleteCustomPreset(int index) {
+    final item = _customPresets[index];
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kCardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Confirm Deletion', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text('Are you sure you want to delete preset "${item.name}"?', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              setState(() {
+                _customPresets.removeAt(index);
+              });
+              await ProjectManager.saveCustomPresets(_customPresets);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preset deleted.')));
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickAndImportCubeLut() async {
+    try {
+      final file = await LutProcessor.pickCubeFile();
+      if (file == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No .cube file selected.'), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+
+      final parsed = await LutProcessor.parseCubeFile(file);
+      if (parsed != null) {
+        final lut = LutModel(
+          id: 'lut_${DateTime.now().millisecondsSinceEpoch}',
+          name: parsed.title,
+          filePath: file.path,
+          size: parsed.size,
+          table: parsed.table,
+        );
+
+        if (_activeLuts.length >= 4) {
+          _activeLuts.removeAt(0);
+        }
+        _activeLuts.add(lut);
+        await ProjectManager.saveLuts(_activeLuts);
+
+        _pushUndoSnapshot();
+        setState(() {
+          _cur.activeLutId = lut.id;
+          _cur.lutOpacity = 1.0;
+        });
+        _applyGrade();
+        _autoSaveProject();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Imported and Applied "${lut.name}.cube" (32x32x32)'), backgroundColor: Colors.teal),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to parse .cube file: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _deleteLut(int index) async {
+    setState(() {
+      final removed = _activeLuts.removeAt(index);
+      if (_cur.activeLutId == removed.id) {
+        _cur.activeLutId = null;
+      }
+    });
+    await ProjectManager.saveLuts(_activeLuts);
+    _applyGrade();
+    _autoSaveProject();
+  }
+
+  void _showUnsharpMaskDrawer() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF101016),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) => Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('UNSHARP MASK CONTROLS', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _buildSliderRow('Unsharp Amount', _cur.unsharpAmount, 0.0, 2.0, (v) {
+                setModal(() => _cur.unsharpAmount = v);
+                setState(() {});
+              }),
+              _buildSliderRow('Unsharp Radius', _cur.unsharpRadius, 0.0, 5.0, (v) {
+                setModal(() => _cur.unsharpRadius = v);
+                setState(() {});
+              }),
+              _buildSliderRow('Threshold (Luma Floor)', _cur.unsharpThreshold, 0.0, 0.5, (v) {
+                setModal(() => _cur.unsharpThreshold = v);
+                setState(() {});
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showImageExportSheet() {
+    String format = 'PNG';
+    String resolution = '1080p';
+    int quality = 95;
+    final accent = gCustomAccentColor.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F0F14),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheet) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Image Export Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text('FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(
+                children: ['PNG', 'JPG', 'WEBP'].map((fmt) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Center(child: Text(fmt)),
+                      selected: format == fmt,
+                      selectedColor: accent,
+                      labelStyle: TextStyle(color: format == fmt ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) => setSheet(() => format = fmt),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 14),
+              const Text('RESOLUTION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(
+                children: ['1080p', '2K', '4K'].map((res) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Center(child: Text(res)),
+                      selected: resolution == res,
+                      selectedColor: accent,
+                      labelStyle: TextStyle(color: resolution == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) => setSheet(() => resolution = res),
+                    ),
+                  ),
+                )).toList(),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('QUALITY / BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  Text('$quality%', style: TextStyle(color: accent, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+                ],
+              ),
+              Slider(
+                value: quality.toDouble(),
+                min: 50,
+                max: 100,
+                activeColor: accent,
+                onChanged: (v) => setSheet(() => quality = v.round()),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _exportStaticImageWithParams(format, resolution, quality);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: accent, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  child: Text('EXPORT $format ($resolution)', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportStaticImageWithParams(String format, String resolution, int quality) async {
+    if (_cachedRawImage == null) return;
+    try {
+      final dims = _calculateTargetDimensions(resolution, _project.aspectRatio);
+      final outW = dims['width']!;
+      final outH = dims['height']!;
+
+      final resized = img.copyResize(_cachedRawImage!, width: outW, height: outH);
+      final rawInput = resized.getBytes(order: img.ChannelOrder.rgba);
+      final uniforms = _packMultiLayerUniforms(outW.toDouble(), outH.toDouble());
+      final lutTable = _getActiveLutTable();
+
+      final outRaw = processImage(rawInput, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+
+      final gradedImg = img.Image.fromBytes(
+        width: outW,
+        height: outH,
+        bytes: outRaw.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.rgba,
+      );
+
+      Uint8List fileBytes;
+      if (format == 'JPG') {
+        fileBytes = Uint8List.fromList(img.encodeJpg(gradedImg, quality: quality));
+      } else {
+        fileBytes = Uint8List.fromList(img.encodePng(gradedImg));
+      }
+
+      final dir = await _getSafeMovieDirectory();
+      final ext = format.toLowerCase();
+      final dest = File('$dir/Shaderly_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext');
+      await dest.writeAsBytes(fileBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Saved image to:\n${dest.path}'), backgroundColor: Colors.teal),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export error: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  void _showExportSheet() {
+    if (_project.isImage) {
+      _showImageExportSheet();
+      return;
+    }
+
+    String selectedContainer = 'MP4';
+    String selectedCodec = 'H.264 (Hardware MediaCodec)';
+    String selectedBitDepth = '8-bit';
+    String selectedRes = '1080p';
+    String selectedFps = '60fps';
+    String selectedBitrate = '35 Mbps';
+    String selectedAudioMode = 'Lossless Source Copy';
+
+    final containers = ['MP4', 'WebM', 'MOV', 'MKV'];
+    final resolutions = ['720p', '1080p', '2K', '4K'];
+    final fpsOptions = ['24fps', '30fps', '60fps', '90fps'];
+    final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps', '80 Mbps', '120 Mbps', 'Lossless Variable'];
+
+    final accent = gCustomAccentColor.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F0F14),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateModal) {
+            final targetDims = _calculateTargetDimensions(selectedRes, _project.aspectRatio);
+            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (Hardware MediaCodec)'];
+
+            if (!availableCodecs.contains(selectedCodec)) {
+              selectedCodec = availableCodecs.first;
+            }
+
+            if (selectedCodec.contains('FFV1') || selectedCodec.contains('ProRes')) {
+              selectedBitrate = 'Lossless Variable';
+            } else if (selectedBitrate == 'Lossless Variable') {
+              selectedBitrate = '35 Mbps';
+            }
+
+            return Padding(
+              padding: const EdgeInsets.all(20),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Master Render Pipeline', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(context)),
+                      ],
+                    ),
+                    Text(
+                      'Destination: /storage/emulated/0/Shaderly • ${targetDims['width']} x ${targetDims['height']}',
+                      style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+
+                    const Text('CONTAINER', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: containers.map((c) => ChoiceChip(
+                        label: Text(c),
+                        selected: selectedContainer == c,
+                        selectedColor: accent,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) {
+                            setStateModal(() {
+                              selectedContainer = c;
+                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (Hardware MediaCodec)']).first;
+                              if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
+                                selectedBitDepth = '8-bit';
+                              }
+                            });
+                          }
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    Text('CODECS FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: availableCodecs.map((codec) {
+                        return ChoiceChip(
+                          label: Text(codec),
+                          selected: selectedCodec == codec,
+                          selectedColor: accent,
+                          backgroundColor: const Color(0xFF18181E),
+                          labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (sel) {
+                            if (sel) {
+                              setStateModal(() {
+                                selectedCodec = codec;
+                                if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
+                                  selectedBitDepth = '8-bit';
+                                }
+                              });
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: ['8-bit', '10-bit', '16-bit'].map((depth) {
+                        final isValid = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, depth);
+                        return Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: ChoiceChip(
+                              label: Text(depth),
+                              selected: selectedBitDepth == depth,
+                              selectedColor: accent,
+                              backgroundColor: isValid ? const Color(0xFF18181E) : Colors.black26,
+                              labelStyle: TextStyle(
+                                color: !isValid
+                                    ? Colors.white24
+                                    : (selectedBitDepth == depth ? Colors.black : Colors.white),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                              onSelected: isValid ? (_) => setStateModal(() => selectedBitDepth = depth) : null,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('RESOLUTION (UP TO 4K MASTER)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: resolutions.map((res) => ChoiceChip(
+                        label: Text(res),
+                        selected: selectedRes == res,
+                        selectedColor: accent,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedRes == res ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedRes = res);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('FRAMERATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: fpsOptions.map((fps) => ChoiceChip(
+                        label: Text(fps),
+                        selected: selectedFps == fps,
+                        selectedColor: accent,
+                        backgroundColor: const Color(0xFF18181E),
+                        labelStyle: TextStyle(color: selectedFps == fps ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                        onSelected: (sel) {
+                          if (sel) setStateModal(() => selectedFps = fps);
+                        },
+                      )).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: bitrateOptions.map((bit) {
+                        final isValid = ExportMatrix.isBitrateValid(selectedCodec, bit);
+                        return ChoiceChip(
+                          label: Text(bit),
+                          selected: selectedBitrate == bit,
+                          selectedColor: accent,
+                          backgroundColor: isValid ? const Color(0xFF18181E) : Colors.black26,
+                          labelStyle: TextStyle(
+                            color: !isValid
+                                ? Colors.white24
+                                : (selectedBitrate == bit ? Colors.black : Colors.white),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
+                          onSelected: isValid ? (sel) {
+                            if (sel) setStateModal(() => selectedBitrate = bit);
+                          } : null,
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    const Text('AUDIO PIPELINE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Lossless Source Copy'),
+                          selected: selectedAudioMode == 'Lossless Source Copy',
+                          selectedColor: accent,
+                          backgroundColor: const Color(0xFF18181E),
+                          labelStyle: TextStyle(color: selectedAudioMode == 'Lossless Source Copy' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (_) => setStateModal(() => selectedAudioMode = 'Lossless Source Copy'),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('AAC 320 kbps Studio'),
+                          selected: selectedAudioMode == 'AAC 320 kbps Studio',
+                          selectedColor: accent,
+                          backgroundColor: const Color(0xFF18181E),
+                          labelStyle: TextStyle(color: selectedAudioMode == 'AAC 320 kbps Studio' ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (_) => setStateModal(() => selectedAudioMode = 'AAC 320 kbps Studio'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _exportVideo(
+                            selectedRes,
+                            selectedFps,
+                            selectedBitrate,
+                            selectedContainer,
+                            selectedCodec,
+                            selectedBitDepth,
+                            selectedAudioMode,
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: Text(
+                          'RENDER $selectedContainer (${selectedCodec.split(' ').first} • $selectedBitDepth)',
+                          style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -1051,4 +2536,1512 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       },
     );
   }
-  
+
+  Future<String> _getSafeMovieDirectory() async {
+    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+    if (!await shaderlyDir.exists()) {
+      try {
+        await shaderlyDir.create(recursive: true);
+        return shaderlyDir.path;
+      } catch (_) {}
+    } else {
+      return shaderlyDir.path;
+    }
+
+    final directDownload = Directory('/storage/emulated/0/Download');
+    if (await directDownload.exists()) {
+      return directDownload.path;
+    }
+    final docDir = await getApplicationDocumentsDirectory();
+    return docDir.path;
+  }
+
+  Future<void> _exportVideo(
+    String resolution,
+    String fps,
+    String bitrate,
+    String container,
+    String codec,
+    String bitDepth,
+    String audioMode,
+  ) async {
+    if (_project.mediaPath.isEmpty) return;
+
+    final targetDims = _calculateTargetDimensions(resolution, _project.aspectRatio);
+    final int outW = targetDims['width']!;
+    final int outH = targetDims['height']!;
+    final uniforms = _packMultiLayerUniforms(outW.toDouble(), outH.toDouble());
+    final lutTable = _getActiveLutTable();
+
+    int bitrateKbps = 35000;
+    if (bitrate.contains('15')) bitrateKbps = 15000;
+    else if (bitrate.contains('50')) bitrateKbps = 50000;
+    else if (bitrate.contains('80')) bitrateKbps = 80000;
+    else if (bitrate.contains('120')) bitrateKbps = 120000;
+
+    int targetFps = int.parse(fps.replaceAll('fps', ''));
+    String containerExt = container.toLowerCase();
+
+    final bool is16Bit = bitDepth == '16-bit';
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Starting Master Extraction: 0%');
+
+    _isExportCancelled = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF101014),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Exporting $outW x $outH ($bitDepth)',
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                tooltip: 'Cancel Export',
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (confirmCtx) => AlertDialog(
+                      backgroundColor: kCardDark,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: const Text('Cancel Video Export?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                      content: const Text('Are you sure you want to cancel the render in progress? All processed frames will be discarded.', style: TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(confirmCtx),
+                          child: const Text('Keep Rendering', style: TextStyle(color: Colors.white54)),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                          onPressed: () {
+                            Navigator.pop(confirmCtx);
+                            _isExportCancelled = true;
+                            _activeExportSession?.cancel();
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Export cancelled by user.')),
+                            );
+                          },
+                          child: const Text('Cancel Export', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<double>(
+                valueListenable: progressNotifier,
+                builder: (_, progress, __) => ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    color: kCyanAccent,
+                    backgroundColor: Colors.white12,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(
+                  status,
+                  style: const TextStyle(color: kCyanAccent, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final videoPath = _project.mediaPath;
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create(recursive: true);
+      await processedDir.create(recursive: true);
+
+      final audioPath = '${dir.path}/current_audio.aac';
+      final oldAudio = File(audioPath);
+      if (await oldAudio.exists()) await oldAudio.delete();
+      await FFmpegKit.execute('-hide_banner -i "$videoPath" -vn -c:a aac -y "$audioPath"');
+
+      if (_isExportCancelled) return;
+
+      statusNotifier.value = 'Extracting $outW x $outH frames...';
+      final extractSession = await FFmpegKit.execute(
+        '-hide_banner -i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
+      );
+
+      if (_isExportCancelled) return;
+
+      var frameFiles = await framesDir.list().toList();
+      frameFiles.sort((a, b) => a.path.compareTo(b.path));
+      final totalFrames = frameFiles.length;
+
+      if (totalFrames == 0) {
+        final logs = await extractSession.getLogsAsString();
+        throw Exception('Frame extraction failed. Logs: ${logs ?? "No logs"}');
+      }
+
+      for (int i = 0; i < totalFrames; i++) {
+        if (_isExportCancelled) return;
+
+        final file = frameFiles[i];
+        if (file is! File) continue;
+        final bytes = await file.readAsBytes();
+        final decoded = img.decodePng(bytes);
+        if (decoded == null) continue;
+
+        uniforms[0] = i / targetFps.toDouble();
+
+        img.Image gradedImg;
+        if (is16Bit) {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final rawInput16 = Uint16List(outW * outH * 4);
+          for (int px = 0; px < rawInput8.length; px++) {
+            rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
+          }
+          final outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw16.buffer,
+            numChannels: 4,
+            format: img.Format.uint16,
+            order: img.ChannelOrder.rgba,
+          );
+        } else {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw8.buffer,
+            numChannels: 4,
+            order: img.ChannelOrder.rgba,
+          );
+        }
+
+        final pngBytes = img.encodePng(gradedImg);
+        final paddedIndex = (i + 1).toString().padLeft(5, '0');
+        final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
+        await outputFile.writeAsBytes(pngBytes);
+
+        final percent = (((i + 1) / totalFrames) * 100).toInt();
+        progressNotifier.value = (i + 1) / totalFrames;
+        statusNotifier.value = 'Grading frames: $percent% (${i + 1}/$totalFrames)';
+
+        await Future.delayed(const Duration(milliseconds: 1));
+      }
+
+      if (_isExportCancelled) return;
+
+      statusNotifier.value = 'Assembling final $container master...';
+      final silentOutputPath = '${dir.path}/silent_video.$containerExt';
+      final silentFile = File(silentOutputPath);
+      if (await silentFile.exists()) await silentFile.delete();
+
+      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
+        fps: targetFps,
+        framePattern: '${processedDir.path}/frame_%05d.png',
+        container: container,
+        codec: codec,
+        bitDepth: bitDepth,
+        bitrateKbps: bitrateKbps,
+        outputPath: silentOutputPath,
+      );
+      final encodeSession = await FFmpegKit.execute(encodeCmd);
+
+      if (_isExportCancelled) return;
+
+      if (!await silentFile.exists()) {
+        final logs = await encodeSession.getLogsAsString();
+        throw Exception('Encoder failed: ${logs ?? "No logs"}');
+      }
+
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
+      final moviesDir = await _getSafeMovieDirectory();
+      final cleanCodec = codec.split(' ').first;
+      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final finalOutputFile = File('$moviesDir/$fileName');
+
+      if (hasAudio) {
+        if (audioMode == 'Lossless Source Copy') {
+          final audioCodec = ExportMatrix.getAudioCodec(container);
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+        } else {
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a aac -b:a 320k -shortest -y "${finalOutputFile.path}"');
+        }
+      } else {
+        await File(silentOutputPath).copy(finalOutputFile.path);
+      }
+
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Widget _buildSliderRow(String title, double val, double min, double max, ValueChanged<double> onChanged) {
+    final accent = gCustomAccentColor.value;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF14141C),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withOpacity(0.04)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    val.toStringAsFixed(2),
+                    style: TextStyle(color: accent, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4.0,
+                activeTrackColor: accent,
+                inactiveTrackColor: Colors.white12,
+                thumbColor: accent,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+              ),
+              child: Slider(
+                value: val.clamp(min, max),
+                min: min,
+                max: max,
+                onChanged: (newVal) {
+                  onChanged(newVal);
+                  _applyGrade();
+                },
+                onChangeEnd: (_) {
+                  _pushUndoSnapshot();
+                  _autoSaveProject();
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdjustmentLayerBar() {
+    final accent = gCustomAccentColor.value;
+
+    return Container(
+      color: const Color(0xFF0D0D12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(Icons.add_box_rounded, color: accent, size: 22),
+            tooltip: 'Add Adjustment Layer (Max 4)',
+            onPressed: _addNewAdjustmentLayer,
+          ),
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: ReorderableListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _project.layers.length,
+                onReorder: (oldIndex, newIndex) {
+                  _pushUndoSnapshot();
+                  setState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final item = _project.layers.removeAt(oldIndex);
+                    _project.layers.insert(newIndex, item);
+                    _project.activeLayerIndex = newIndex;
+                  });
+                  _applyGrade();
+                  _autoSaveProject();
+                },
+                itemBuilder: (context, idx) {
+                  final l = _project.layers[idx];
+                  final isSel = _project.activeLayerIndex == idx;
+                  return GestureDetector(
+                    key: ValueKey(l.id),
+                    onTap: () => setState(() => _project.activeLayerIndex = idx),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isSel ? accent.withOpacity(0.18) : kCardDark,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: isSel ? accent : Colors.white12),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            children: [
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() => l.isEnabled = !l.isEnabled);
+                                  _applyGrade();
+                                },
+                                child: Icon(
+                                  l.isEnabled ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                                  color: l.isEnabled ? (isSel ? accent : Colors.white70) : Colors.white24,
+                                  size: 14,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                l.name,
+                                style: TextStyle(
+                                  color: isSel ? Colors.white : Colors.white60,
+                                  fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '#${idx + 1}',
+                            style: TextStyle(
+                              color: isSel ? accent : Colors.white38,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.undo_rounded, color: Colors.white70, size: 20),
+            tooltip: 'Revert Latest Change (Undo All)',
+            onPressed: _performUndo,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+            tooltip: 'Delete Current Layer',
+            onPressed: _removeCurrentLayer,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLayerSettingsHeader() {
+    if (_project.layers.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        color: const Color(0xFF14141A),
+        child: const Text(
+          'RAW PASSTHROUGH (0 LAYERS ACTIVE)',
+          style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+        ),
+      );
+    }
+
+    final accent = gCustomAccentColor.value;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: const Color(0xFF14141A),
+      child: Row(
+        children: [
+          Text(
+            _cur.name.toUpperCase(),
+            style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.8),
+          ),
+          const SizedBox(width: 12),
+          DropdownButton<LayerBlendMode>(
+            value: _cur.blendMode,
+            dropdownColor: kCardDark,
+            underline: const SizedBox(),
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            items: const [
+              DropdownMenuItem(value: LayerBlendMode.normal, child: Text('Normal')),
+              DropdownMenuItem(value: LayerBlendMode.screen, child: Text('Screen (Glow)')),
+              DropdownMenuItem(value: LayerBlendMode.linearAdd, child: Text('Linear Add')),
+              DropdownMenuItem(value: LayerBlendMode.overlay, child: Text('Overlay')),
+              DropdownMenuItem(value: LayerBlendMode.softLight, child: Text('Soft Light')),
+              DropdownMenuItem(value: LayerBlendMode.multiply, child: Text('Multiply')),
+            ],
+            onChanged: (mode) {
+              if (mode != null) {
+                _pushUndoSnapshot();
+                setState(() => _cur.blendMode = mode);
+                _applyGrade();
+              }
+            },
+          ),
+          const Spacer(),
+          SizedBox(
+            width: 110,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2.0,
+                activeTrackColor: accent,
+                inactiveTrackColor: Colors.white12,
+                thumbColor: accent,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+              ),
+              child: Slider(
+                value: _cur.opacity,
+                min: 0.0,
+                max: 1.0,
+                onChanged: (v) {
+                  setState(() => _cur.opacity = v);
+                  _applyGrade();
+                },
+                onChangeEnd: (_) => _pushUndoSnapshot(),
+              ),
+            ),
+          ),
+          Text('${(_cur.opacity * 100).toInt()}%', style: const TextStyle(color: Colors.white54, fontSize: 11, fontFamily: 'monospace')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineScrubber() {
+    if (_project.isImage || _controller == null || !_controller!.value.isInitialized) {
+      return const SizedBox.shrink();
+    }
+
+    final accent = gCustomAccentColor.value;
+
+    return Container(
+      color: Colors.black45,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                if (_controller!.value.isPlaying) {
+                  _controller!.pause();
+                  _isPlaying = false;
+                } else {
+                  _controller!.play();
+                  _isPlaying = true;
+                }
+              });
+            },
+            child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 20),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${_currentTimelinePosition.toStringAsFixed(1)}s',
+            style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2.0,
+                activeTrackColor: accent,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: accent,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              ),
+              child: Slider(
+                value: _currentTimelinePosition.clamp(0.0, _videoDurationSeconds),
+                min: 0.0,
+                max: _videoDurationSeconds,
+                onChanged: (val) {
+                  setState(() => _currentTimelinePosition = val);
+                  _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
+                  _applyGrade();
+                },
+              ),
+            ),
+          ),
+          Text(
+            '${_videoDurationSeconds.toStringAsFixed(1)}s',
+            style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLutsTab() {
+    final accent = gCustomAccentColor.value;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('3D LUT SUITE (.CUBE)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                const SizedBox(height: 2),
+                const Text('Stores up to 4 .cube LUTs with trilinear sampling', style: TextStyle(color: Colors.white54, fontSize: 10)),
+              ],
+            ),
+            ElevatedButton.icon(
+              onPressed: _pickAndImportCubeLut,
+              icon: const Icon(Icons.add_rounded, size: 16, color: Colors.black),
+              label: const Text('IMPORT .CUBE', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(backgroundColor: accent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        if (_cur.activeLutId != null) ...[
+          _buildSliderRow('Active LUT Opacity', _cur.lutOpacity, 0.0, 1.0, (v) => setState(() => _cur.lutOpacity = v)),
+          const SizedBox(height: 14),
+        ],
+
+        const Text('LOADED .CUBE LUTS (MAX 4)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const SizedBox(height: 8),
+
+        if (_activeLuts.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: kCardDark,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withOpacity(0.04)),
+            ),
+            child: const Center(
+              child: Text(
+                'No .cube LUTs imported yet.\nTap "IMPORT .CUBE" to load any 32x32x32 look.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ),
+          )
+        else
+          ...List.generate(_activeLuts.length, (idx) {
+            final lut = _activeLuts[idx];
+            final isSel = _cur.activeLutId == lut.id;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isSel ? accent.withOpacity(0.16) : kCardDark,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: isSel ? accent : Colors.white10,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '3D',
+                        style: TextStyle(
+                          color: isSel ? Colors.black : Colors.white54,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        _pushUndoSnapshot();
+                        setState(() {
+                          _cur.activeLutId = isSel ? null : lut.id;
+                        });
+                        _applyGrade();
+                        _autoSaveProject();
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(lut.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text(
+                            isSel ? 'ACTIVE ON CURRENT LAYER' : 'Tap to apply to layer',
+                            style: TextStyle(color: isSel ? accent.withOpacity(0.8) : Colors.white38, fontSize: 10),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+                    tooltip: 'Delete LUT',
+                    onPressed: () => _deleteLut(idx),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  Widget _buildPresetsTab() {
+    final accent = gCustomAccentColor.value;
+
+    final builtInPresets = [
+      {'name': 'yuta', 'desc': 'Okkotsu JJK0 contrast, desaturated ink darks, warm ivory bloom, subtle 11Hz pulse', 'color': 0xFFE0E0E0},
+      {'name': 'okkotsu', 'desc': 'Desaturated cold tones, deep punchy darks, and high line acutance', 'color': 0xFF90A4AE},
+      {'name': 'artoria', 'desc': 'Excalibur Morgan gold armor sheen, deep blood crimson undertones & mist', 'color': 0xFFFFD700},
+      {'name': 'deku tree', 'desc': 'Neon electric green & cyan lightning aura, punchy acutance & split tone', 'color': 0xFF00E676},
+      {'name': 'Raiden', 'desc': 'Musou Shinsetsu electric violet highlights, sapphire glow & deep ink', 'color': 0xFF7C4DFF},
+      {'name': 'atmospheric haze', 'desc': 'Volumetric white/slate mist atmosphere without yellow tinting', 'color': 0xFFB0BEC5},
+      {'name': 'tealdropped (conq knockoff)', 'desc': 'Bright lift with soft cyan-teal edge bloom & subtle vignette', 'color': 0xFF00E5FF},
+      {'name': 'vintage cc', 'desc': 'Warm film tone with raised blacks and gentle halation', 'color': 0xFFFFB74D},
+      {'name': 'noir', 'desc': 'High-contrast stylized ink with a touch of cold silver tone', 'color': 0xFFB0BEC5},
+      {'name': 'choso', 'desc': 'Blood manipulation dark crimson aura with high midtone contrast', 'color': 0xFFB71C1C},
+      {'name': 'yoruichi', 'desc': 'Purple electric flare with clean high-acutance highlights', 'color': 0xFFAB47BC},
+      {'name': 'Gojo', 'desc': 'Infinity cyan specular bloom and clean line contrast', 'color': 0xFF00E5FF},
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            ElevatedButton.icon(
+              onPressed: _saveCurrentAsPreset,
+              icon: const Icon(Icons.bookmark_add_rounded, size: 16, color: Colors.black),
+              label: const Text('SAVE CURRENT CC', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: _importPresetFromFile,
+              icon: Icon(Icons.file_open_rounded, size: 16, color: accent),
+              label: Text('IMPORT JSON/XML', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: accent),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // BSLA Atmospheric Mist Toggle
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _isBslaExtremeActive ? accent.withOpacity(0.18) : kCardDark,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _isBslaExtremeActive ? accent : Colors.white12, width: _isBslaExtremeActive ? 1.5 : 1.0),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: _isBslaExtremeActive ? accent : Colors.white10,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: Icon(
+                    Icons.cloud_queue_rounded,
+                    color: _isBslaExtremeActive ? Colors.black : Colors.white70,
+                    size: 22,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'BSLA Clean Atmospheric',
+                      style: TextStyle(
+                        color: _isBslaExtremeActive ? accent : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Neutral volumetric mist, soft scatter & non-yellow haze overlay',
+                      style: TextStyle(color: Colors.white54, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _isBslaExtremeActive,
+                activeColor: accent,
+                onChanged: (_) => _toggleBslaExtremePreset(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+
+        if (_customPresets.isNotEmpty) ...[
+          const Text('MY CUSTOM PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+          const SizedBox(height: 8),
+          ...List.generate(_customPresets.length, (index) {
+            final custom = _customPresets[index];
+            final isSel = _selectedPresetName == custom.name;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isSel ? accent.withOpacity(0.16) : kCardDark,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Color(custom.accentColor),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Center(
+                      child: Icon(Icons.auto_awesome, color: Colors.black, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        _pushUndoSnapshot();
+                        setState(() {
+                          _project.layers = custom.layers.map((l) => l.clone()).toList();
+                          _project.tonemapMode = custom.tonemapMode;
+                          _project.activeLayerIndex = 0;
+                          _selectedPresetName = custom.name;
+                        });
+                        _applyGrade();
+                        _autoSaveProject();
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(custom.name, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text(custom.description, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
+                    onPressed: () => _confirmDeleteCustomPreset(index),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 14),
+        ],
+
+        const Text('BUILT-IN COLOR GRADES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const SizedBox(height: 8),
+        ...builtInPresets.map((p) {
+          final isSel = _selectedPresetName == p['name'];
+          return Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: isSel ? accent.withOpacity(0.16) : kCardDark,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
+            ),
+            child: InkWell(
+              onTap: () => _applyPreset(p['name'] as String),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Color(p['color'] as int),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        (p['name'] as String).substring(0, 1).toUpperCase(),
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          p['name'] as String,
+                          style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(p['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                  if (isSel)
+                    Icon(Icons.check_circle_rounded, color: accent, size: 18),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ],
+    );
+  }
+
+  Widget _buildBasicGradingTab() {
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      children: [
+        _buildSliderRow('Exposure (Brightness)', _cur.brightness, -0.8, 0.8, (v) => _cur.brightness = v),
+        _buildSliderRow('Contrast (0.18 Mid-Pivot)', _cur.contrast, 0.2, 2.5, (v) => _cur.contrast = v),
+        _buildSliderRow('Saturation (Vibrance)', _cur.saturation, 0.0, 2.5, (v) => _cur.saturation = v),
+        _buildSliderRow('Gamma Curve', _cur.gamma, 0.2, 2.5, (v) => _cur.gamma = v),
+        _buildSliderRow('CAS Acutance Sharpness', _cur.sharpness, 0.0, 2.0, (v) => _cur.sharpness = v),
+        _buildSliderRow('Color Temperature (K)', _cur.temperature, 2000.0, 12000.0, (v) => _cur.temperature = v),
+        _buildSliderRow('Highlights Recovery', _cur.highlights, -1.0, 1.0, (v) => _cur.highlights = v),
+        _buildSliderRow('Shadows Lift', _cur.shadows, -1.0, 1.0, (v) => _cur.shadows = v),
+        _buildSliderRow('Black Crush Floor', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
+
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('LINE ART STYLIZE & SHADOWS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('Sobel Dark Outlines', _cur.darkOutlines, 0.0, 1.0, (v) => _cur.darkOutlines = v),
+        _buildSliderRow('Line Art EdgeDarken', _cur.edgeDarken, 0.0, 1.0, (v) => _cur.edgeDarken = v),
+        _buildSliderRow('Radial Vignette', _cur.vignette, 0.0, 1.0, (v) => _cur.vignette = v),
+        _buildSliderRow('Boxed Vignette', _cur.vignetteBoxed, 0.0, 1.0, (v) => _cur.vignetteBoxed = v),
+      ],
+    );
+  }
+
+  Widget _buildHslTab() {
+    final accent = gCustomAccentColor.value;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('SELECTIVE HSL & VIBRANCE SPLIT', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 12),
+        _buildSliderRow('Hue Shift Global', _cur.hue, -3.14159, 3.14159, (v) => _cur.hue = v),
+        _buildSliderRow('Magic Bullet Mojo (Teal/Orange)', _cur.mblMojoTealOrange, 0.0, 1.5, (v) => _cur.mblMojoTealOrange = v),
+      ],
+    );
+  }
+
+  Widget _buildGlowsAndFlaresTab() {
+    final accent = gCustomAccentColor.value;
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('DEEP GLOW & SAPPHIRE SUITE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 2.0, (v) => _cur.deepGlowIntensity = v),
+        _buildSliderRow('Deep Glow Radius (Spread)', _cur.deepGlowRadius, 0.0, 2.0, (v) => _cur.deepGlowRadius = v),
+        _buildSliderRow('Deep Glow Threshold', _cur.deepGlowThreshold, 0.0, 1.0, (v) => _cur.deepGlowThreshold = v),
+        _buildSliderRow('Sapphire Glow Width', _cur.sapphireGlowWidth, 0.0, 2.0, (v) => _cur.sapphireGlowWidth = v),
+        _buildSliderRow('Sapphire Threshold', _cur.sapphireGlowThreshold, 0.0, 1.0, (v) => _cur.sapphireGlowThreshold = v),
+
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Text('GLOW TINT SPECTRUM', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+          child: Wrap(
+            spacing: 8,
+            children: [
+              {'id': 0.0, 'name': 'Natural White'},
+              {'id': 1.0, 'name': 'Noble Gold'},
+              {'id': 2.0, 'name': 'Cyan / Teal'},
+              {'id': 3.0, 'name': 'Amber Sun'},
+              {'id': 4.0, 'name': 'Blood Crimson'},
+              {'id': 5.0, 'name': 'Electro Violet'},
+            ].map((t) {
+              final isSel = _cur.edgeGlowTint == t['id'];
+              return ChoiceChip(
+                label: Text(t['name'] as String),
+                selected: isSel,
+                selectedColor: accent,
+                backgroundColor: const Color(0xFF1E1E28),
+                labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                onSelected: (sel) {
+                  if (sel) {
+                    _pushUndoSnapshot();
+                    setState(() => _cur.edgeGlowTint = t['id'] as double);
+                    _applyGrade();
+                  }
+                },
+              );
+            }).toList(),
+          ),
+        ),
+
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('ANAMORPHIC FLARES & STREAKS', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('Streak Intensity', _cur.thinStreakIntensity, 0.0, 2.0, (v) => _cur.thinStreakIntensity = v),
+        _buildSliderRow('Streak Width (Horizontal Beam)', _cur.thinStreakWidth, 0.0, 2.0, (v) => _cur.thinStreakWidth = v),
+        _buildSliderRow('Streak Opacity & Punch', _cur.thinStreakOpacity, 0.0, 1.0, (v) => _cur.thinStreakOpacity = v),
+        _buildSliderRow('Chromatic Aberration Lines', _cur.lineChromaStrength, 0.0, 2.0, (v) => _cur.lineChromaStrength = v),
+      ],
+    );
+  }
+
+  Widget _buildAtmosphereTab() {
+    final accent = gCustomAccentColor.value;
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('BSL VOLUMETRIC FOG & GOD RAYS', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('BSLA God Rays / Light Shafts', _cur.bslaGodRays, 0.0, 1.5, (v) => _cur.bslaGodRays = v),
+        _buildSliderRow('BSLA Fog Density', _cur.bslaFogDensity, 0.0, 1.0, (v) => _cur.bslaFogDensity = v),
+        _buildSliderRow('BSLA Fog Depth Plane', _cur.bslaFogDepth, 0.0, 1.0, (v) => _cur.bslaFogDepth = v),
+        _buildSliderRow('BSLA Bloom Atmospheric Haze', _cur.bslaBloomHaze, 0.0, 1.5, (v) => _cur.bslaBloomHaze = v),
+        _buildSliderRow('BSL Light Scatter Multiplier', _cur.bslFogScatter, 0.0, 1.5, (v) => _cur.bslFogScatter = v),
+
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('HALATION & CINEMATIC FILM GRAIN', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        ),
+        _buildSliderRow('Halation Radius', _cur.halationRadius, 0.0, 1.5, (v) => _cur.halationRadius = v),
+        _buildSliderRow('Halation Warmth / Red Bleed', _cur.halationWarmth, 0.0, 1.5, (v) => _cur.halationWarmth = v),
+        _buildSliderRow('35mm Film Grain Amount', _cur.filmGrain, 0.0, 1.0, (v) => _cur.filmGrain = v),
+        _buildSliderRow('Lens Denoise Filter', _cur.denoise, 0.0, 1.0, (v) => _cur.denoise = v),
+      ],
+    );
+  }
+
+  Widget _buildTextEffectsTab() {
+    final accent = gCustomAccentColor.value;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('WIS TEXT EFFECTS SUITE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+            const Text('PHYSICAL 3D METALLIC STACK', style: TextStyle(color: Colors.white38, fontSize: 9, fontFamily: 'monospace')),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _buildSliderRow('Chisel-Hard Bevel (3D Ridges)', _textBevel, 0.0, 1.0, (v) => setState(() => _textBevel = v)),
+        _buildSliderRow('Light Sweep (Specular Sheen)', _textLightSweep, 0.0, 1.0, (v) => setState(() => _textLightSweep = v)),
+        _buildSliderRow('Metallic Horizon Gradient Ramp', _textHorizonRamp, 0.0, 1.0, (v) => setState(() => _textHorizonRamp = v)),
+        _buildSliderRow('Inner Shadow / Depth Contour', _textInnerShadow, 0.0, 1.0, (v) => setState(() => _textInnerShadow = v)),
+        _buildSliderRow('Zero-Feather Occlusion Rim', _textOcclusionRim, 0.0, 1.0, (v) => setState(() => _textOcclusionRim = v)),
+        _buildSliderRow('Tight Specular Core Glow', _textTightCoreGlow, 0.0, 1.5, (v) => setState(() => _textTightCoreGlow = v)),
+        _buildSliderRow('Wide Atmospheric Aura (Center Deep Glow)', _textCenterAura, 0.0, 1.5, (v) => setState(() => _textCenterAura = v)),
+      ],
+    );
+  }
+
+  Widget _buildCurvesTab() {
+    List<double> activeCurve;
+    Color curveColor;
+
+    switch (_selectedCurveChannel) {
+      case 1:
+        activeCurve = _cur.curveRed;
+        curveColor = Colors.redAccent;
+        break;
+      case 2:
+        activeCurve = _cur.curveGreen;
+        curveColor = Colors.greenAccent;
+        break;
+      case 3:
+        activeCurve = _cur.curveBlue;
+        curveColor = Colors.blueAccent;
+        break;
+      default:
+        activeCurve = _cur.curveMaster;
+        curveColor = Colors.white;
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            {'name': 'RGB', 'idx': 0, 'col': Colors.white},
+            {'name': 'RED', 'idx': 1, 'col': Colors.redAccent},
+            {'name': 'GREEN', 'idx': 2, 'col': Colors.greenAccent},
+            {'name': 'BLUE', 'idx': 3, 'col': Colors.blueAccent},
+          ].map((ch) {
+            final isSel = _selectedCurveChannel == ch['idx'];
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: ChoiceChip(
+                label: Text(ch['name'] as String),
+                selected: isSel,
+                selectedColor: ch['col'] as Color,
+                backgroundColor: const Color(0xFF14141C),
+                labelStyle: TextStyle(
+                  color: isSel ? Colors.black : Colors.white70,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+                onSelected: (sel) {
+                  if (sel) setState(() => _selectedCurveChannel = ch['idx'] as int);
+                },
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 16),
+
+        Container(
+          height: 220,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C0C12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: CustomPaint(
+              painter: SplineCurvePainter(points: activeCurve, curveColor: curveColor),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        _buildSliderRow('Blacks Point (0%)', activeCurve[0], 0.0, 1.0, (v) => activeCurve[0] = v),
+        _buildSliderRow('Shadows Point (25%)', activeCurve[1], 0.0, 1.0, (v) => activeCurve[1] = v),
+        _buildSliderRow('Midtones Pivot (50%)', activeCurve[2], 0.0, 1.0, (v) => activeCurve[2] = v),
+        _buildSliderRow('Highlights Point (75%)', activeCurve[3], 0.0, 1.0, (v) => activeCurve[3] = v),
+        _buildSliderRow('Whites Point (100%)', activeCurve[4], 0.0, 1.0, (v) => activeCurve[4] = v),
+
+        Center(
+          child: TextButton.icon(
+            onPressed: () {
+              _pushUndoSnapshot();
+              setState(() {
+                for (int i = 0; i < 5; i++) {
+                  activeCurve[i] = i * 0.25;
+                }
+              });
+              _applyGrade();
+              _autoSaveProject();
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white38),
+            label: const Text('Reset Selected Channel Curve', style: TextStyle(color: Colors.white38, fontSize: 11)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTonemappingTab() {
+    final accent = gCustomAccentColor.value;
+
+    final tonemappers = [
+      {'id': 0.0, 'name': 'Linear (Passthrough)', 'desc': 'Unclamped floating point color grading'},
+      {'id': 1.0, 'name': 'ACES Filmic (Compensated)', 'desc': 'No dimness: Full highlight headroom preservation'},
+      {'id': 2.0, 'name': 'Reinhard (Punchy Uncapped)', 'desc': 'Punchy contrast with soft luminous rolloff'},
+      {'id': 3.0, 'name': 'AgX Natural', 'desc': 'Perceptually smooth saturation without clipping'},
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('TONEMAPPING TRANSFORM (NON-DIMMING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 10),
+        ...tonemappers.map((t) {
+          final isSel = _project.tonemapMode == t['id'];
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: isSel ? accent.withOpacity(0.16) : kCardDark,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isSel ? accent : Colors.white12),
+            ),
+            child: ListTile(
+              title: Text(t['name'] as String, style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: Text(t['desc'] as String, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+              onTap: () {
+                _pushUndoSnapshot();
+                setState(() => _project.tonemapMode = t['id'] as double);
+                _applyGrade();
+                _autoSaveProject();
+              },
+            ),
+          );
+        }).toList(),
+
+        const SizedBox(height: 16),
+        Text('SPLIT TONING ENGINE', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 8),
+        _buildSliderRow('Shadows Hue', _splitToneShadowH, 0.0, 1.0, (v) => setState(() => _splitToneShadowH = v)),
+        _buildSliderRow('Shadows Saturation', _splitToneShadowS, 0.0, 1.0, (v) => setState(() => _splitToneShadowS = v)),
+        _buildSliderRow('Highlights Hue', _splitToneHighH, 0.0, 1.0, (v) => setState(() => _splitToneHighH = v)),
+        _buildSliderRow('Highlights Saturation', _splitToneHighS, 0.0, 1.0, (v) => setState(() => _splitToneHighS = v)),
+        _buildSliderRow('Balance Pivot', _splitToneBalance, -1.0, 1.0, (v) => setState(() => _splitToneBalance = v)),
+
+        const SizedBox(height: 16),
+        Text('TRUE TPDF DITHERING (ANTI-BANDING)', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const SizedBox(height: 8),
+        _buildSliderRow('Dither Strength', _ditherStrength, 0.0, 2.0, (v) => setState(() => _ditherStrength = v)),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+    final bool hasVideo = !_project.isImage && _controller != null && _controller!.value.isInitialized;
+    final bool hasStatic = _project.isImage && _cachedRawImage != null;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0E),
+      appBar: _isFullScreen
+          ? null
+          : AppBar(
+              backgroundColor: const Color(0xFF0F0F14),
+              elevation: 0,
+              title: Row(
+                children: [
+                  Text(
+                    'SHADERLY',
+                    style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 1.5),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      _project.aspectRatio,
+                      style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (widget.isImportedFromUpscaler) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.teal, width: 0.8),
+                      ),
+                      child: const Text(
+                        'REAL-ESRGAN UPSCALED',
+                        style: TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.video_library_rounded, color: Colors.white70),
+                  tooltip: 'Switch Video or Art',
+                  onPressed: _switchMediaFile,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.undo_rounded, color: Colors.white70),
+                  tooltip: 'Undo',
+                  onPressed: _performUndo,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+                  tooltip: 'Reset Layer',
+                  onPressed: _resetCurrentLayer,
+                ),
+                IconButton(
+                  icon: Icon(Icons.filter_hdr_rounded, color: _cur.unsharpAmount > 0.01 ? accent : Colors.white70),
+                  tooltip: 'Unsharp Mask',
+                  onPressed: _showUnsharpMaskDrawer,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.file_upload_outlined, color: Colors.white),
+                  tooltip: 'Master Export',
+                  onPressed: _showExportSheet,
+                ),
+              ],
+            ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Preview Viewport with Zoom-to-Fill (BoxFit.cover) protection
+            Expanded(
+              flex: _isFullScreen ? 10 : 5,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    color: Colors.black,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: _getAspectRatioValue(_project.aspectRatio),
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (hasVideo)
+                                ColorFiltered(
+                                  colorFilter: _buildLiveColorFilter(),
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width: _controller!.value.size.width,
+                                      height: _controller!.value.size.height,
+                                      child: VideoPlayer(_controller!),
+                                    ),
+                                  ),
+                                )
+                              else if (hasStatic && _processedStaticImage != null)
+                                FittedBox(
+                                  fit: BoxFit.cover,
+                                  child: SizedBox(
+                                    width: _renderWidth.toDouble(),
+                                    height: _renderHeight.toDouble(),
+                                    child: RawImage(image: _processedStaticImage),
+                                  ),
+                                )
+                              else if (hasStatic)
+                                const Center(child: CircularProgressIndicator(color: Colors.white38))
+                              else
+                                const Center(
+                                  child: Text('No media loaded', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                                ),
+
+                              _buildLiveBloomAtmosphere(),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _isFullScreen = !_isFullScreen),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Icon(
+                          _isFullScreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            if (!_isFullScreen) ...[
+              _buildTimelineScrubber(),
+              _buildAdjustmentLayerBar(),
+              _buildLayerSettingsHeader(),
+
+              Container(
+                color: const Color(0xFF0F0F14),
+                child: TabBar(
+                  controller: _tabController,
+                  isScrollable: true,
+                  indicatorColor: accent,
+                  labelColor: accent,
+                  unselectedLabelColor: Colors.white38,
+                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                  tabs: const [
+                    Tab(text: 'PRESETS'),
+                    Tab(text: 'LUT'),
+                    Tab(text: 'BASIC'),
+                    Tab(text: 'HSL'),
+                    Tab(text: 'GLOW / FLARE'),
+                    Tab(text: 'ATMOSPHERE'),
+                    Tab(text: 'TEXT FX'),
+                    Tab(text: 'CURVES'),
+                    Tab(text: 'TONEMAP'),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                flex: 5,
+                child: Container(
+                  color: const Color(0xFF0C0C10),
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildPresetsTab(),
+                      _buildLutsTab(),
+                      _buildBasicGradingTab(),
+                      _buildHslTab(),
+                      _buildGlowsAndFlaresTab(),
+                      _buildAtmosphereTab(),
+                      _buildTextEffectsTab(),
+                      _buildCurvesTab(),
+                      _buildTonemappingTab(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SplineCurvePainter extends CustomPainter {
+  final List<double> points;
+  final Color curveColor;
+
+  SplineCurvePainter({required this.points, required this.curveColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = Colors.white.withOpacity(0.06)
+      ..strokeWidth = 1.0;
+
+    for (int i = 1; i < 4; i++) {
+      double x = size.width * (i / 4.0);
+      double y = size.height * (i / 4.0);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    final linePaint = Paint()
+      ..color = curveColor
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    for (int px = 0; px <= size.width.toInt(); px++) {
+      double normX = px / size.width;
+      double normY = _evalCatmullRom(normX, points);
+      double py = size.height - (normY * size.height);
+
+      if (px == 0) {
+        path.moveTo(px.toDouble(), py.clamp(0.0, size.height));
+      } else {
+        path.lineTo(px.toDouble(), py.clamp(0.0, size.height));
+      }
+    }
+    canvas.drawPath(path, linePaint);
+
+    final knotPaint = Paint()..color = curveColor;
+    for (int i = 0; i < 5; i++) {
+      double kx = size.width * (i / 4.0);
+      double ky = size.height - (points[i] * size.height);
+      canvas.drawCircle(Offset(kx, ky.clamp(0.0, size.height)), 5.0, knotPaint);
+      canvas.drawCircle(Offset(kx, ky.clamp(0.0, size.height)), 2.5, Paint()..color = Colors.black);
+    }
+  }
+
+  double _evalCatmullRom(double x, List<double> p) {
+    x = x.clamp(0.0, 1.0);
+    double seg = x * 4.0;
+    int idx = seg.floor();
+    if (idx >= 4) return p[4];
+    double t = seg - idx;
+
+    double p0 = (idx == 0) ? p[0] : (idx == 1) ? p[0] : (idx == 2) ? p[1] : p[2];
+    double p1 = (idx == 0) ? p[0] : (idx == 1) ? p[1] : (idx == 2) ? p[2] : p[3];
+    double p2 = (idx == 0) ? p[1] : (idx == 1) ? p[2] : (idx == 2) ? p[3] : p[4];
+    double p3 = (idx == 0) ? p[2] : (idx == 1) ? p[3] : (idx == 2) ? p[4] : p[4];
+
+    double m1 = 0.5 * (p2 - p0);
+    double m2 = 0.5 * (p3 - p1);
+
+    double t2 = t * t;
+    double t3 = t2 * t;
+
+    double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    double h10 = t3 - 2.0 * t2 + t;
+    double h01 = -2.0 * t3 + 3.0 * t2;
+    double h11 = t3 - t2;
+
+    return (h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2).clamp(0.0, 1.0);
+  }
+
+  @override
+  bool shouldRepaint(covariant SplineCurvePainter oldDelegate) => true;
+}
