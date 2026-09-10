@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 enum LayerBlendMode {
   normal,
@@ -317,7 +319,7 @@ class AdjustmentLayer {
     name: json['name'] ?? 'Adjustment Layer',
     isEnabled: json['isEnabled'] ?? true,
     opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
-    blendMode: LayerBlendMode.values[json['blendMode'] ?? 0],
+    blendMode: LayerBlendMode.values[(json['blendMode'] as num?)?.toInt() ?? 0],
     contrast: (json['contrast'] as num?)?.toDouble() ?? 1.0,
     saturation: (json['saturation'] as num?)?.toDouble() ?? 1.0,
     brightness: (json['brightness'] as num?)?.toDouble() ?? 0.0,
@@ -429,7 +431,7 @@ class ProjectData {
     isImage: json['isImage'] ?? false,
     aspectRatio: json['aspectRatio'] ?? '16:9',
     tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
-    activeLayerIndex: json['activeLayerIndex'] ?? 0,
+    activeLayerIndex: (json['activeLayerIndex'] as num?)?.toInt() ?? 0,
     layers: (json['layers'] as List<dynamic>?)?.map((e) => AdjustmentLayer.fromJson(e)).toList(),
   );
 }
@@ -458,11 +460,11 @@ class StoredProject {
   };
 
   factory StoredProject.fromJson(Map<String, dynamic> json) => StoredProject(
-    id: json['id'],
-    name: json['name'],
-    mediaPath: json['mediaPath'],
-    data: ProjectData.fromJson(json['data']),
-    lastOpened: DateTime.parse(json['lastOpened']),
+    id: json['id'] ?? '',
+    name: json['name'] ?? 'Project',
+    mediaPath: json['mediaPath'] ?? '',
+    data: ProjectData.fromJson(json['data'] ?? {}),
+    lastOpened: DateTime.tryParse(json['lastOpened'] ?? '') ?? DateTime.now(),
   );
 }
 
@@ -503,43 +505,88 @@ class CustomPresetItem {
 }
 
 class ProjectManager {
-  static const String _kProjectsKey = 'shadely_saved_projects_v3';
-  static const String _kPresetsKey = 'shadely_custom_presets_v3';
-  static const String _kLutsKey = 'shadely_stored_luts_v1';
+  static List<StoredProject> _cachedProjects = [];
+  static List<CustomPresetItem> _cachedPresets = [];
+  static List<LutModel> _cachedLuts = [];
 
-  static List<StoredProject> _inMemoryProjects = [];
-  static List<CustomPresetItem> _inMemoryPresets = [];
-  static List<LutModel> _inMemoryLuts = [];
+  static Future<File> _getFile(String filename) async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/$filename');
+  }
 
   static Future<List<StoredProject>> loadProjects() async {
-    return _inMemoryProjects.take(4).toList();
+    try {
+      final file = await _getFile('shaderly_saved_projects_v4.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final List<dynamic> list = jsonDecode(content);
+        _cachedProjects = list.map((e) => StoredProject.fromJson(e)).toList();
+      }
+    } catch (_) {}
+    return _cachedProjects.take(4).toList();
   }
 
   static Future<void> saveProject(StoredProject project) async {
-    _inMemoryProjects.removeWhere((p) => p.id == project.id);
-    _inMemoryProjects.insert(0, project);
-    if (_inMemoryProjects.length > 4) {
-      _inMemoryProjects = _inMemoryProjects.sublist(0, 4);
+    _cachedProjects.removeWhere((p) => p.id == project.id);
+    _cachedProjects.insert(0, project);
+    if (_cachedProjects.length > 4) {
+      _cachedProjects = _cachedProjects.sublist(0, 4);
     }
+    await _persistProjects();
   }
 
   static Future<void> saveProjects(List<StoredProject> list) async {
-    _inMemoryProjects = List.from(list.take(4));
+    _cachedProjects = List.from(list.take(4));
+    await _persistProjects();
+  }
+
+  static Future<void> _persistProjects() async {
+    try {
+      final file = await _getFile('shaderly_saved_projects_v4.json');
+      final data = jsonEncode(_cachedProjects.map((p) => p.toJson()).toList());
+      await file.writeAsString(data, flush: true);
+    } catch (_) {}
   }
 
   static Future<List<CustomPresetItem>> loadCustomPresets() async {
-    return _inMemoryPresets;
+    try {
+      final file = await _getFile('shaderly_custom_presets_v4.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final List<dynamic> list = jsonDecode(content);
+        _cachedPresets = list.map((e) => CustomPresetItem.fromJson(e)).toList();
+      }
+    } catch (_) {}
+    return _cachedPresets;
   }
 
   static Future<void> saveCustomPresets(List<CustomPresetItem> presets) async {
-    _inMemoryPresets = List.from(presets);
+    _cachedPresets = List.from(presets);
+    try {
+      final file = await _getFile('shaderly_custom_presets_v4.json');
+      final data = jsonEncode(_cachedPresets.map((p) => p.toJson()).toList());
+      await file.writeAsString(data, flush: true);
+    } catch (_) {}
   }
 
   static Future<List<LutModel>> loadLuts() async {
-    return _inMemoryLuts;
+    try {
+      final file = await _getFile('shaderly_stored_luts_v4.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final List<dynamic> list = jsonDecode(content);
+        _cachedLuts = list.map((e) => LutModel.fromJson(e)).toList();
+      }
+    } catch (_) {}
+    return _cachedLuts;
   }
 
   static Future<void> saveLuts(List<LutModel> luts) async {
-    _inMemoryLuts = List.from(luts.take(4));
+    _cachedLuts = List.from(luts.take(4));
+    try {
+      final file = await _getFile('shaderly_stored_luts_v4.json');
+      final data = jsonEncode(_cachedLuts.map((p) => p.toJson()).toList());
+      await file.writeAsString(data, flush: true);
+    } catch (_) {}
   }
 }
