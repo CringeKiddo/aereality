@@ -121,19 +121,19 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_imgHeight;
     float u_hasLut;               // 1.0 if a 3D LUT is bound to buffer 3, else 0.0
     float u_lutOpacity;           // 0.0 to 1.0
-    float u_splitShadowH;
-    float u_splitShadowS;
-    float u_splitHighH;
-    float u_splitHighS;
-    float u_splitBalance;
-    float u_ditherStrength;
-    float u_textBevel;
-    float u_textLightSweep;
-    float u_textHorizonRamp;
-    float u_textInnerShadow;
-    float u_textOcclusionRim;
-    float u_textTightCoreGlow;
-    float u_textCenterAura;
+    float u_splitToneShadowH;     // Split Toning Shadows Hue
+    float u_splitToneShadowS;     // Split Toning Shadows Saturation
+    float u_splitToneHighH;       // Split Toning Highlights Hue
+    float u_splitToneHighS;       // Split Toning Highlights Saturation
+    float u_splitToneBalance;     // Split Toning Balance Pivot
+    float u_ditherStrength;       // Anti-Banding TPDF Dither Strength
+    float u_textBevel;            // WIS Chisel-Hard Bevel 3D Ridges
+    float u_textLightSweep;       // WIS Light Sweep Specular Sheen
+    float u_textHorizonRamp;      // WIS Metallic Horizon Gradient Ramp
+    float u_textInnerShadow;      // WIS Inner Shadow / Depth Contour
+    float u_textOcclusionRim;     // WIS Zero-Feather Occlusion Rim
+    float u_textTightCoreGlow;    // WIS Tight Specular Core Glow
+    float u_textCenterAura;       // WIS Wide Atmospheric Aura (Center Deep Glow)
     LayerData layers[4];
 };
 
@@ -227,11 +227,10 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-// Non-Dimming Compensated ACES Filmic:
-// Retains full highlight rolloff without dimming mid-tones
-vec3 tonemapACESCompensated(vec3 x) {
-    // Lift input scale to prevent the 18% midtone dip
-    vec3 v = x * 1.18;
+// Compensated Non-Dimming ACES Filmic:
+// Retains clean highlight roll-off without dark/muddy midtones
+vec3 tonemapACES(vec3 x) {
+    vec3 v = x * 1.18; // Pre-compensation factor to avoid midtone dip
     float a = 2.51;
     float b = 0.03;
     float c = 2.43;
@@ -298,7 +297,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line-art edge detection
+    // Sobel line-art edge detection with sensitive range for all-edge coverage
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -430,7 +429,7 @@ void main() {
 
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
-        // 9. Magic Bullet Mojo (Teal/Orange)
+        // 9. Magic Bullet Mojo
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - luma * 1.6, 0.0, 1.0);
             float warmMask = clamp(luma * 1.4 - 0.2, 0.0, 1.0);
@@ -643,7 +642,7 @@ void main() {
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.45);
         }
 
-        // 22. Radial & Boxed Vignette
+        // 22. Vignettes (Radial & Boxed)
         if (L.vignette > 0.01) {
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
             float dist = length(uv);
@@ -660,22 +659,55 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
-    // 23. WIS Text Effects (Physical 3D Bevel, Light Sweep, Horizon Ramp)
-    if (u_textBevel > 0.01 || u_textLightSweep > 0.01 || u_textHorizonRamp > 0.01) {
+    // 23. WIS TEXT EFFECTS SUITE (Physical 3D Bevel, Light Sweep, Horizon Ramp, Inner Shadow, Occlusion Rim)
+    if (u_textBevel > 0.01 || u_textLightSweep > 0.01 || u_textHorizonRamp > 0.01 ||
+        u_textInnerShadow > 0.01 || u_textOcclusionRim > 0.01 || u_textTightCoreGlow > 0.01 || u_textCenterAura > 0.01) {
+
         vec2 uv = vec2(coord) / vec2(width, height);
+
+        // Metallic Horizon Gradient Ramp
         if (u_textHorizonRamp > 0.01) {
             float ramp = smoothstep(0.35, 0.65, uv.y);
-            currentComposite = mix(currentComposite, currentComposite * (0.7 + 0.6 * ramp), u_textHorizonRamp * 0.4);
+            currentComposite = mix(currentComposite, currentComposite * (0.72 + 0.56 * ramp), u_textHorizonRamp * 0.45);
         }
+
+        // Light Sweep (Diagonal Sheen Beam)
         if (u_textLightSweep > 0.01) {
             float sweepPos = fract(u_time * 0.35);
             float sweepDist = abs((uv.x + uv.y * 0.5) - sweepPos * 1.5);
             float sweepBeam = smoothstep(0.12, 0.0, sweepDist);
-            currentComposite += vec3(sweepBeam * u_textLightSweep * 0.6);
+            currentComposite += vec3(sweepBeam * u_textLightSweep * 0.65);
         }
+
+        // Chisel-Hard Bevel (3D Ridges along line edges)
         if (u_textBevel > 0.01) {
-            float bevelEdge = smoothstep(0.04, 0.18, lineEdge);
-            currentComposite += vec3(bevelEdge * u_textBevel * 0.35);
+            float bevelEdge = smoothstep(0.04, 0.22, lineEdge);
+            currentComposite += vec3(bevelEdge * u_textBevel * 0.40);
+        }
+
+        // Inner Shadow / Depth Contour
+        if (u_textInnerShadow > 0.01) {
+            float innerShad = smoothstep(0.06, 0.28, lineEdge);
+            currentComposite *= (1.0 - innerShad * u_textInnerShadow * 0.35);
+        }
+
+        // Zero-Feather Occlusion Rim
+        if (u_textOcclusionRim > 0.01) {
+            float rim = step(0.15, lineEdge);
+            currentComposite = mix(currentComposite, vec3(0.0), rim * u_textOcclusionRim * 0.65);
+        }
+
+        // Tight Specular Core Glow
+        if (u_textTightCoreGlow > 0.01) {
+            float coreEdge = smoothstep(0.02, 0.08, lineEdge);
+            currentComposite += vec3(coreEdge * u_textTightCoreGlow * 0.50);
+        }
+
+        // Wide Atmospheric Aura
+        if (u_textCenterAura > 0.01) {
+            float centerDist = length(uv - 0.5);
+            float aura = smoothstep(0.65, 0.0, centerDist);
+            currentComposite += vec3(aura * u_textCenterAura * 0.25);
         }
     }
 
@@ -688,7 +720,13 @@ void main() {
     if (u_tonemapMode == 1.0) {
         currentComposite = tonemapReinhardExtended(currentComposite);
     } else if (u_tonemapMode == 2.0) {
-        currentComposite = tonemapACESCompensated(currentComposite);
+        currentComposite = tonemapACES(currentComposite);
+    }
+
+    // 26. Anti-Banding TPDF Dithering
+    if (u_ditherStrength > 0.01) {
+        float dither = (hash12(vec2(coord)) - 0.5) / 255.0 * u_ditherStrength;
+        currentComposite += vec3(dither);
     }
 
     out_pixels[pixelIndex] = packRGBA(vec4(currentComposite, basePixel.a));
