@@ -116,7 +116,7 @@ struct LayerData {
 layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_time;
     float u_layerCount;
-    float u_tonemapMode;          // 0: Off, 1: Reinhard, 2: ACES Compensated
+    float u_tonemapMode;          // 0: Off, 1: ACES Compensated, 2: Reinhard Compensated, 3: AgX Natural
     float u_imgWidth;
     float u_imgHeight;
     float u_hasLut;               // 1.0 if a 3D LUT is bound to buffer 3, else 0.0
@@ -228,20 +228,31 @@ float hash12(vec2 p) {
 }
 
 // Compensated Non-Dimming ACES Filmic:
-// Retains clean highlight roll-off without dark/muddy midtones
+// Prevents standard SDR midtones from collapsing into darkness
 vec3 tonemapACES(vec3 x) {
-    vec3 v = x * 1.18; // Pre-compensation factor to avoid midtone dip
+    // 1.85 pre-exposure gain compensation restores linear unity diffuse point
+    vec3 v = x * 1.85;
     float a = 2.51;
     float b = 0.03;
     float c = 2.43;
     float d = 0.59;
     float e = 0.14;
-    return clamp((v * (a * v + b)) / (v * (c * v + d) + e), 0.0, 1.0);
+    vec3 mapped = clamp((v * (a * v + b)) / (v * (c * v + d) + e), 0.0, 1.0);
+    return mapped;
 }
 
+// Compensated Reinhard Extended with White-Point Preservation
 vec3 tonemapReinhardExtended(vec3 x) {
+    // Compensate for 0.5x midtone attenuation
+    vec3 v = x * 1.65;
     float maxWhite = 4.5;
-    return (x * (1.0 + (x / (maxWhite * maxWhite)))) / (1.0 + x);
+    return (v * (1.0 + (v / (maxWhite * maxWhite)))) / (1.0 + v);
+}
+
+// AgX Natural Tonemapper
+vec3 tonemapAgX(vec3 x) {
+    vec3 v = x * 1.55;
+    return v / (v + vec3(0.155)) * 1.155;
 }
 
 vec3 colorTempToRGB(float kelvin) {
@@ -297,7 +308,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line-art edge detection with sensitive range for all-edge coverage
+    // Sobel line-art edge detection
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -635,11 +646,11 @@ void main() {
             layerColor += vec3(noise * L.filmGrain * 0.06);
         }
 
-        // 21. Subtle Fast Micro-Pulse / Flicker
+        // 21. Micro-Pulse / Flicker (Deterministic Harmonic Pulse)
         if (L.flickerIntensity > 0.005) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
-            layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.45);
+            layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.50);
         }
 
         // 22. Vignettes (Radial & Boxed)
@@ -716,11 +727,13 @@ void main() {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
-    // 25. Master Tonemapping (Non-Dimming Compensated ACES)
+    // 25. Master Tonemapping (Compensated to eliminate dimming/crushing)
     if (u_tonemapMode == 1.0) {
-        currentComposite = tonemapReinhardExtended(currentComposite);
-    } else if (u_tonemapMode == 2.0) {
         currentComposite = tonemapACES(currentComposite);
+    } else if (u_tonemapMode == 2.0) {
+        currentComposite = tonemapReinhardExtended(currentComposite);
+    } else if (u_tonemapMode == 3.0) {
+        currentComposite = tonemapAgX(currentComposite);
     }
 
     // 26. Anti-Banding TPDF Dithering
