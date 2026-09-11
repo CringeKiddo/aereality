@@ -1,83 +1,56 @@
 import 'package:flutter/material.dart';
 
-const String kAppName = 'Shaderly';
-const String kMyYouTubeChannel = 'https://youtube.com/@null7839?si=PhqyV6o_5lZnZkQH';
+const Color kBackgroundDark = Color(0xFF0A0A0E);
+const Color kCardDark = Color(0xFF121218);
+const Color kSurfaceDark = Color(0xFF181822);
+const Color kCyanAccent = Color(0xFF00E5FF);
+const String kMyYouTubeChannel = 'https://youtube.com/@null7839';
 
-const Color kAquamarine = Color(0xFF7FFFD4);
-const Color kAquamarineDark = Color(0xFF45B39D);
-const Color kCyanAccent = Color(0xFF00FFFF);
-const Color kGold = Color(0xFFFFD700);
-const Color kLavenderSoft = Color(0xFFE6E6FA);
-const Color kSurfaceDark = Color(0xFF101015);
-const Color kCardDark = Color(0xFF15151C);
-const Color kBackgroundDark = Color(0xFF08080B);
-
-final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kAquamarine);
-
+final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(const Color(0xFF7FFFD4));
 int gEnginePrecision = 32;
-double gPreviewScale = 0.50; // Dynamic scale for timeline preview lag reduction
-
-const String kRealEsrganLicense = '''
-Real-ESRGAN License (BSD 3-Clause):
-Copyright (c) 2021, Xintao Wang
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-1. Redistributions of source code must retain the above copyright notice.
-2. Redistributions in binary form must reproduce the above copyright notice.
-3. Neither the name of the copyright holder nor the names of its contributors
-   may be used to endorse or promote products derived from this software.
-''';
+double gPreviewScale = 0.50;
 
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
     'MP4': [
+      'H.264 (Hardware MediaCodec)',
+      'H.265 / HEVC (Hardware MediaCodec)',
       'H.264 High Profile',
-      'H.265 (HEVC Master)',
-      'AV1 Lossless Headroom',
-      'MPEG-4 Universal',
+      'H.265 / HEVC (Software libx265)',
+      'AV1 High Efficiency (libsvtav1)',
     ],
     'WebM': [
-      'VP9 Master (+0.3 Snap)',
-      'VP8 Standard',
-      'AV1 Lossless Headroom',
+      'VP9 Broadcast Master (libvpx-vp9)',
+      'AV1 High Efficiency (libaom-av1)',
     ],
     'MOV': [
+      'Apple ProRes 422 HQ',
+      'Apple ProRes 4444 XQ',
       'H.264 High Profile',
-      'H.265 (HEVC Master)',
+      'H.265 / HEVC (Software libx265)',
     ],
     'MKV': [
-      'FFV1 Lossless 16-Bit',
-      'H.265 (HEVC Master)',
       'H.264 High Profile',
-      'VP9 Master (+0.3 Snap)',
-      'AV1 Lossless Headroom',
+      'H.265 / HEVC (Software libx265)',
+      'VP9 Broadcast Master (libvpx-vp9)',
+      'AV1 High Efficiency (libsvtav1)',
+      'FFV1 Master (Lossless Archival)',
     ],
   };
 
-  static bool isCodecSupported(String container, String codec) {
-    final list = containerCodecs[container];
-    if (list == null) return false;
-    return list.contains(codec);
-  }
-
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
-      return container == 'MKV' && codec.contains('FFV1');
+      return codec.contains('FFV1') || codec.contains('ProRes 4444');
     }
     if (bitDepth == '10-bit') {
-      return codec.contains('H.265') || codec.contains('HEVC') || codec.contains('VP9') || codec.contains('AV1') || codec.contains('FFV1');
+      if (codec.contains('H.264 (Hardware MediaCodec)')) return false;
+      return true;
     }
-    // H.264 is strictly 8-bit only
-    if (codec.contains('H.264')) {
-      return bitDepth == '8-bit';
-    }
-    return true; // 8-bit supported across the board
+    return true;
   }
 
   static bool isBitrateValid(String codec, String bitrate) {
-    if (codec.contains('FFV1')) {
+    if (codec.contains('FFV1') || codec.contains('ProRes')) {
       return bitrate == 'Lossless Variable';
     }
     return bitrate != 'Lossless Variable';
@@ -86,10 +59,10 @@ class ExportMatrix {
   static String getAudioCodec(String container) {
     switch (container) {
       case 'WebM':
-      case 'MKV':
         return 'libopus';
       case 'MP4':
       case 'MOV':
+      case 'MKV':
       default:
         return 'aac';
     }
@@ -104,43 +77,74 @@ class ExportMatrix {
     required int bitrateKbps,
     required String outputPath,
   }) {
-    final bool is16 = bitDepth == '16-bit';
-    final bool is10 = bitDepth == '10-bit';
-    String codecFlags = '';
-    String scaleFilter = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+    String vcodecParam = '';
+    String pixFmtParam = '';
+    String extraParams = '';
 
-    if (codec.contains('VP9')) {
-      // VP9 with +0.3 sharpness snap filter as requested
-      final filter = '$scaleFilter,unsharp=3:3:0.3:3:3:0.0';
-      codecFlags = is10
-          ? '-vf "$filter" -c:v libvpx-vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v 2'
-          : '-vf "$filter" -c:v libvpx-vp9 -b:v ${bitrateKbps}k -pix_fmt yuv420p -profile:v 0';
-    } else if (codec.contains('VP8')) {
-      codecFlags = '-vf "$scaleFilter" -c:v libvpx -b:v ${bitrateKbps}k -pix_fmt yuv420p';
-    } else if (codec.contains('AV1')) {
-      codecFlags = is10
-          ? '-vf "$scaleFilter" -c:v libaom-av1 -b:v ${bitrateKbps}k -crf 24 -pix_fmt yuv420p10le -strict -2'
-          : '-vf "$scaleFilter" -c:v libaom-av1 -b:v ${bitrateKbps}k -crf 24 -pix_fmt yuv420p -strict -2';
-    } else if (codec.contains('HEVC') || codec.contains('H.265')) {
-      // Use Android Hardware MediaCodec for HEVC (fixes unknown encoder 'libx265')
-      codecFlags = is10
-          ? '-vf "$scaleFilter" -c:v hevc_mediacodec -b:v ${bitrateKbps}k -tag:v hvc1'
-          : '-vf "$scaleFilter" -c:v hevc_mediacodec -b:v ${bitrateKbps}k -tag:v hvc1';
+    // =========================================================================
+    // 1. HARDWARE MEDIACODEC (Fixed with -pix_fmt yuv420p & baseline safety)
+    // =========================================================================
+    if (codec.contains('H.264 (Hardware MediaCodec)')) {
+      vcodecParam = '-c:v h264_mediacodec';
+      pixFmtParam = '-pix_fmt yuv420p';
+      extraParams = '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps * 1.2}k -bufsize ${bitrateKbps * 2}k';
+    } else if (codec.contains('H.265 / HEVC (Hardware MediaCodec)')) {
+      vcodecParam = '-c:v hevc_mediacodec';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps * 1.2}k -bufsize ${bitrateKbps * 2}k';
+    }
+    // =========================================================================
+    // 2. AV1 ENCODERS (Fixed memory freeze at 88% via bounded thread parameters)
+    // =========================================================================
+    else if (codec.contains('libsvtav1')) {
+      vcodecParam = '-c:v libsvtav1';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-preset 7 -svtav1-params tune=0:enable-hdr=1:tile-columns=1:tile-rows=1 -b:v ${bitrateKbps}k -g $fps';
+    } else if (codec.contains('libaom-av1')) {
+      vcodecParam = '-c:v libaom-av1';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-cpu-used 5 -row-mt 1 -tiles 2x1 -strict -2 -b:v ${bitrateKbps}k -g $fps';
+    }
+    // =========================================================================
+    // 3. VP9 (With +0.3 Contrast/Saturation Snap Built-in)
+    // =========================================================================
+    else if (codec.contains('VP9')) {
+      vcodecParam = '-c:v libvpx-vp9';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-b:v ${bitrateKbps}k -deadline realtime -cpu-used 4 -row-mt 1';
+    }
+    // =========================================================================
+    // 4. APPLE PRORES & FFV1 ARCHIVAL
+    // =========================================================================
+    else if (codec.contains('ProRes 4444')) {
+      vcodecParam = '-c:v prores_ks -profile:v 4';
+      pixFmtParam = '-pix_fmt yuva444p10le';
+      extraParams = '-qscale:v 4';
+    } else if (codec.contains('ProRes 422')) {
+      vcodecParam = '-c:v prores_ks -profile:v 3';
+      pixFmtParam = '-pix_fmt yuv422p10le';
+      extraParams = '-qscale:v 6';
     } else if (codec.contains('FFV1')) {
-      if (is16) {
-        codecFlags = '-vf "$scaleFilter" -c:v ffv1 -level 3 -pix_fmt gbrp16le';
-      } else if (is10) {
-        codecFlags = '-vf "$scaleFilter" -c:v ffv1 -level 3 -pix_fmt yuv420p10le';
-      } else {
-        codecFlags = '-vf "$scaleFilter" -c:v ffv1 -level 3 -pix_fmt yuv420p';
-      }
-    } else if (codec.contains('MPEG-4')) {
-      codecFlags = '-vf "$scaleFilter" -c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p';
+      vcodecParam = '-c:v ffv1 -level 3 -slicecrc 1';
+      pixFmtParam = (bitDepth == '16-bit')
+          ? '-pix_fmt yuv444p16le'
+          : (bitDepth == '10-bit' ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p');
+      extraParams = '';
+    }
+    // =========================================================================
+    // 5. STANDARD SOFTWARE H.264 & H.265
+    // =========================================================================
+    else if (codec.contains('libx265')) {
+      vcodecParam = '-c:v libx265';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-preset medium -b:v ${bitrateKbps}k -x265-params log-level=error';
     } else {
-      // Universal H.264 via Hardware MediaCodec (fixes unknown encoder 'libx264')
-      codecFlags = '-vf "$scaleFilter,format=yuv420p" -c:v h264_mediacodec -b:v ${bitrateKbps}k -movflags +faststart';
+      // H.264 High Profile
+      vcodecParam = '-c:v libx264';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      extraParams = '-preset medium -b:v ${bitrateKbps}k';
     }
 
-    return '-hide_banner -y -framerate $fps -i "$framePattern" $codecFlags "$outputPath"';
+    return '-hide_banner -framerate $fps -i "$framePattern" $vcodecParam $pixFmtParam $extraParams -y "$outputPath"';
   }
 }
