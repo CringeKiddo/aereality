@@ -52,7 +52,7 @@ public:
 
         vkdev = ncnn::get_gpu_device(gpuId >= gpuCount ? 0 : gpuId);
 
-        // Turn on high-performance FP16 Vulkan compute
+        // High-performance FP16 Vulkan compute
         net.opt.use_vulkan_compute = true;
         net.opt.use_fp16_packed = true;
         net.opt.use_fp16_storage = true;
@@ -149,8 +149,7 @@ public:
         const float norm_vals_inv[3] = { -1.0f, -1.0f, -1.0f };
         outimage.substract_mean_normalize(mean_vals, norm_vals_inv);
 
-        // If user requested 2X from a 4X model:
-        // Use Integer-Interval Nearest-Neighbor downsampling to preserve razor-sharp line art
+        // Integer-Interval Downsampling for 2X to maintain razor-sharp line art
         if (targetScale == 2) {
             int outW = w * 2;
             int outH = h * 2;
@@ -186,6 +185,24 @@ static RealESRGANAnimeEngine gAnimeEngine;
 
 extern "C" {
 
+// Direct Dart FFI Functions
+int32_t init_realesrgan(const char* paramPath, const char* binPath, int32_t scaleFactor) {
+    if (!paramPath || !binPath) return -1;
+    bool res = gAnimeEngine.init(std::string(paramPath), std::string(binPath), scaleFactor);
+    return res ? 0 : -1;
+}
+
+int32_t upscale_frame(const uint8_t* inRgba, int32_t inW, int32_t inH, uint8_t* outRgba) {
+    if (!gAnimeEngine.isLoaded || !inRgba || !outRgba) return -1;
+    bool ok = gAnimeEngine.process(inRgba, inW, inH, outRgba);
+    return ok ? 0 : -1;
+}
+
+void destroy_realesrgan() {
+    gAnimeEngine.cleanup();
+}
+
+// Android JNI Compatibility Bindings
 JNIEXPORT jboolean JNICALL
 Java_com_example_aereality_VulkanBridge_initRealEsrgan(JNIEnv* env, jobject thiz,
                                                       jstring jParamPath,
