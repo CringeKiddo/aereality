@@ -63,7 +63,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   Uint8List? _upscaledFrameBytes;
   bool _isGeneratingFramePreview = false;
   String _previewStatus = '';
-  Timer? _debounceTimer;
 
   static final List<StoredUpscaleVideo> _storedVideos = [];
 
@@ -74,12 +73,13 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   FFmpegSession? _activeSession;
 
   // Selected encode options for upscaler output
-  String _exportContainer = 'MP4'; // MP4, WebM, MKV
-  String _exportCodec = 'H.264 (Hardware)'; // H.264 (Hardware), VP9, MPEG4
+  String _exportContainer = 'MP4'; // MP4, WebM, MKV, MOV
+  String _exportCodec = 'H.264 (Hardware MediaCodec)';
+  String _exportBitDepth = '8-bit';
+  String _exportBitrate = '50 Mbps';
 
   @override
   void dispose() {
-    _debounceTimer?.cancel();
     _controller?.pause();
     _controller?.dispose();
     VulkanBridge.destroyRealEsrgan();
@@ -117,7 +117,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         _controller!.play();
         _controller!.setLooping(true);
         _detectFps(path);
-        _renderSingleFramePreview(0.0);
+        // Extract the base frame for preview without auto-running AI inference
+        _extractBaseFrame(0.0);
       });
   }
 
@@ -207,11 +208,38 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     return {'param': paramDest.path, 'bin': binDest.path};
   }
 
-  Future<void> _renderSingleFramePreview(double timeSeconds) async {
+  // Fast frame extract without running heavy AI inference
+  Future<void> _extractBaseFrame(double timeSeconds) async {
     if (_sourceFile == null) return;
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final origPath = '${tempDir.path}/preview_orig.png';
+      final old = File(origPath);
+      if (await old.exists()) await old.delete();
+
+      await FFmpegKit.execute(
+        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 "$origPath"',
+      );
+
+      if (await File(origPath).exists()) {
+        final origBytes = await File(origPath).readAsBytes();
+        if (mounted) {
+          setState(() {
+            _originalFrameBytes = origBytes;
+            _upscaledFrameBytes = null; // Clears so split screen waits for manual upscale
+          });
+        }
+        try { await File(origPath).delete(); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  // Manual Trigger: ONLY upscales when user clicks [ UPSCALE CURRENT FRAME ]
+  Future<void> _renderSingleFramePreview(double timeSeconds) async {
+    if (_sourceFile == null || _isGeneratingFramePreview) return;
     setState(() {
       _isGeneratingFramePreview = true;
-      _previewStatus = 'Extracting source frame...';
+      _previewStatus = 'Extracting frame...';
     });
 
     try {
@@ -274,7 +302,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       }
 
       if (upBytes == null) {
-        setState(() => _previewStatus = 'Rendering Preview...');
+        setState(() => _previewStatus = 'Rendering Vector Super-Resolution...');
         final upscaledPath = '${tempDir.path}/preview_up_fallback.png';
         final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
         final upscaleCmd = '-hide_banner -y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "$upscaledPath"';
@@ -299,16 +327,13 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     }
   }
 
+  // Pure seek: Fast video playhead response with NO automatic upscale crash
   void _onFrameSliderChanged(double val) {
-    setState(() => _previewFramePos = val);
-    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
-    _controller?.pause();
-    setState(() => _isPlaying = false);
-
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
-      _renderSingleFramePreview(val);
+    setState(() {
+      _previewFramePos = val;
+      _upscaledFrameBytes = null; // Clear old upscaled frame
     });
+    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
   }
 
   void _deleteStoredVideo(int index) {
@@ -386,83 +411,133 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: kCardDark,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) => StatefulBuilder(
-        builder: (context, setModal) => Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        builder: (context, setModal) {
+          final codecs = ExportMatrix.containerCodecs[_exportContainer] ?? ['H.264 (Hardware MediaCodec)'];
+          if (!codecs.contains(_exportCodec)) _exportCodec = codecs.first;
+
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Upscale Export Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                  IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx)),
-                ],
-              ),
-              const SizedBox(height: 14),
-              const Text('CONTAINER FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Row(
-                children: ['MP4', 'WebM', 'MKV'].map((c) => Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: ChoiceChip(
-                      label: Center(child: Text(c)),
-                      selected: _exportContainer == c,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Upscale Render Suite (${_scaleFactor}x)', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                      IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx)),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  const Text('CONTAINER FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: ['MP4', 'WebM', 'MKV', 'MOV'].map((c) => Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: ChoiceChip(
+                          label: Center(child: Text(c, style: const TextStyle(fontSize: 11))),
+                          selected: _exportContainer == c,
+                          selectedColor: accent,
+                          labelStyle: TextStyle(color: _exportContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                          onSelected: (_) {
+                            setModal(() {
+                              _exportContainer = c;
+                              _exportCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (Hardware MediaCodec)']).first;
+                              if (!ExportMatrix.isBitDepthValid(_exportContainer, _exportCodec, _exportBitDepth)) {
+                                _exportBitDepth = '8-bit';
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 14),
+
+                  const Text('VIDEO CODEC', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: codecs.map((codec) => ChoiceChip(
+                      label: Text(codec),
+                      selected: _exportCodec == codec,
                       selectedColor: accent,
-                      labelStyle: TextStyle(color: _exportContainer == c ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                      onSelected: (_) {
-                        setModal(() {
-                          _exportContainer = c;
-                          if (c == 'WebM') {
-                            _exportCodec = 'VP9 (Open Video)';
-                          } else {
-                            _exportCodec = 'H.264 (Hardware)';
-                          }
-                        });
+                      labelStyle: TextStyle(color: _exportCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
+                      onSelected: (_) => setModal(() {
+                        _exportCodec = codec;
+                        if (!ExportMatrix.isBitDepthValid(_exportContainer, _exportCodec, _exportBitDepth)) {
+                          _exportBitDepth = '8-bit';
+                        }
+                      }),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 14),
+
+                  const Text('BIT-DEPTH PRECISION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: ['8-bit', '10-bit', '16-bit'].map((depth) {
+                      final isValid = ExportMatrix.isBitDepthValid(_exportContainer, _exportCodec, depth);
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ChoiceChip(
+                            label: Text(depth),
+                            selected: _exportBitDepth == depth,
+                            selectedColor: accent,
+                            labelStyle: TextStyle(color: !isValid ? Colors.white24 : (_exportBitDepth == depth ? Colors.black : Colors.white), fontWeight: FontWeight.bold),
+                            onSelected: isValid ? (_) => setModal(() => _exportBitDepth = depth) : null,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 14),
+
+                  const Text('TARGET BITRATE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: ['25 Mbps', '50 Mbps', '80 Mbps', '120 Mbps', 'Lossless Variable'].map((bit) {
+                      final isValid = ExportMatrix.isBitrateValid(_exportCodec, bit);
+                      return ChoiceChip(
+                        label: Text(bit),
+                        selected: _exportBitrate == bit,
+                        selectedColor: accent,
+                        labelStyle: TextStyle(color: !isValid ? Colors.white24 : (_exportBitrate == bit ? Colors.black : Colors.white), fontWeight: FontWeight.bold),
+                        onSelected: isValid ? (_) => setModal(() => _exportBitrate = bit) : null,
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 20),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _startExport();
                       },
+                      icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black),
+                      label: Text('START ${_scaleFactor}X MASTER UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: accent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
                     ),
                   ),
-                )).toList(),
+                ],
               ),
-              const SizedBox(height: 14),
-              const Text('VIDEO CODEC', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: (_exportContainer == 'WebM'
-                    ? ['VP9 (Open Video)', 'VP8']
-                    : ['H.264 (Hardware)', 'MPEG4'])
-                    .map((codec) => ChoiceChip(
-                  label: Text(codec),
-                  selected: _exportCodec == codec,
-                  selectedColor: accent,
-                  labelStyle: TextStyle(color: _exportCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                  onSelected: (_) => setModal(() => _exportCodec = codec),
-                )).toList(),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _startExport();
-                  },
-                  icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black),
-                  label: Text('START ${_scaleFactor}X UPSCALE', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: accent,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -579,48 +654,47 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       if (!await outDir.exists()) outDir = Directory('/storage/emulated/0/Download');
       if (!await outDir.exists()) outDir = await getApplicationDocumentsDirectory();
 
-      final fps = _detectedFps ?? 30.0;
+      final fps = (_detectedFps ?? 30.0).round();
       final ext = _exportContainer.toLowerCase();
       final outVideoPath = '${outDir.path}/Shaderly_AI_${_scaleFactor}x_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final silentOut = '${tempDir.path}/upscaled_silent.$ext';
+
+      int bitrateKbps = 50000;
+      if (_exportBitrate.contains('25')) bitrateKbps = 25000;
+      if (_exportBitrate.contains('80')) bitrateKbps = 80000;
+      if (_exportBitrate.contains('120')) bitrateKbps = 120000;
 
       setState(() {
-        _exportStatus = 'Encoding final video...';
-        _currentStepDetail = 'Muxing with $_exportCodec @ ${fps.toStringAsFixed(1)} FPS...';
+        _exportStatus = 'Encoding final master video...';
+        _currentStepDetail = 'Rendering $_exportContainer via $_exportCodec...';
       });
 
-      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length() > 1000);
+      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
+        fps: fps,
+        framePattern: '${upscaledDir.path}/frame_%05d.png',
+        container: _exportContainer,
+        codec: _exportCodec,
+        bitDepth: _exportBitDepth,
+        bitrateKbps: bitrateKbps,
+        outputPath: silentOut,
+      );
 
-      // Construct robust Android-compatible encode command
-      String videoCodecArgs;
-      String audioCodecArgs;
-
-      if (_exportContainer == 'WebM') {
-        videoCodecArgs = _exportCodec.contains('VP9') ? '-c:v libvpx-vp9 -b:v 20M -pix_fmt yuv420p' : '-c:v libvpx -b:v 15M';
-        audioCodecArgs = '-c:a libvorbis';
-      } else {
-        videoCodecArgs = _exportCodec.contains('Hardware')
-            ? '-c:v h264_mediacodec -b:v 25M -pix_fmt yuv420p'
-            : '-c:v mpeg4 -q:v 2 -pix_fmt yuv420p';
-        audioCodecArgs = '-c:a copy';
-      }
-
-      String muxCmd;
-      if (hasAudio) {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" $videoCodecArgs $audioCodecArgs -movflags +faststart "$outVideoPath"';
-      } else {
-        muxCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" $videoCodecArgs -movflags +faststart "$outVideoPath"';
-      }
-
-      _activeSession = await FFmpegKit.execute(muxCmd);
+      _activeSession = await FFmpegKit.execute(encodeCmd);
       var returnCode = await _activeSession!.getReturnCode();
 
-      // Fallback if hardware codec is unsupported on device
+      // Fallback command if hardware encoder fails
       if (!ReturnCode.isSuccess(returnCode)) {
-        final fallbackCmd = hasAudio
-            ? '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -i "$audioPath" -c:v mpeg4 -q:v 2 -c:a aac "$outVideoPath"'
-            : '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v mpeg4 -q:v 2 "$outVideoPath"';
+        final fallbackCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v libx264 -pix_fmt yuv420p -b:v ${bitrateKbps}k "$silentOut"';
         _activeSession = await FFmpegKit.execute(fallbackCmd);
         returnCode = await _activeSession!.getReturnCode();
+      }
+
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length() > 1000);
+      if (hasAudio) {
+        final aCodec = ExportMatrix.getAudioCodec(_exportContainer);
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOut" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$outVideoPath"');
+      } else {
+        await File(silentOut).copy(outVideoPath);
       }
 
       try { await upscaledDir.delete(recursive: true); } catch (_) {}
@@ -940,13 +1014,36 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(14),
                 children: [
+                  // DEDICATED BUTTON TO PREVIEW CURRENT FRAME WITHOUT AUTOMATIC SEEK CRASHES
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: (_sourceFile != null && !_isGeneratingFramePreview)
+                          ? () => _renderSingleFramePreview(_previewFramePos)
+                          : null,
+                      icon: const Icon(Icons.auto_awesome_rounded, color: Colors.black, size: 18),
+                      label: Text(
+                        _isGeneratingFramePreview ? 'GENERATING PREVIEW...' : 'UPSCALE CURRENT FRAME',
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E5FF),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
                   Row(
                     children: [
                       Expanded(
                         child: GestureDetector(
                           onTap: () {
-                            setState(() => _scaleFactor = 2);
-                            _renderSingleFramePreview(_previewFramePos);
+                            setState(() {
+                              _scaleFactor = 2;
+                              _upscaledFrameBytes = null;
+                            });
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -971,8 +1068,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                       Expanded(
                         child: GestureDetector(
                           onTap: () {
-                            setState(() => _scaleFactor = 4);
-                            _renderSingleFramePreview(_previewFramePos);
+                            setState(() {
+                              _scaleFactor = 4;
+                              _upscaledFrameBytes = null;
+                            });
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1008,8 +1107,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 0 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                           onSelected: (_) {
-                            setState(() => _selectedModelIndex = 0);
-                            _renderSingleFramePreview(_previewFramePos);
+                            setState(() {
+                              _selectedModelIndex = 0;
+                              _upscaledFrameBytes = null;
+                            });
                           },
                         ),
                       ),
@@ -1021,8 +1122,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                           selectedColor: accent,
                           labelStyle: TextStyle(color: _selectedModelIndex == 1 ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                           onSelected: (_) {
-                            setState(() => _selectedModelIndex = 1);
-                            _renderSingleFramePreview(_previewFramePos);
+                            setState(() {
+                              _selectedModelIndex = 1;
+                              _upscaledFrameBytes = null;
+                            });
                           },
                         ),
                       ),
@@ -1030,21 +1133,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                   ),
 
                   const SizedBox(height: 14),
-                  _buildSlider('Deblur', _deblur, 0.0, 1.0, (v) {
-                    setState(() => _deblur = v);
-                    _debounceTimer?.cancel();
-                    _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
-                  }),
-                  _buildSlider('Sharpness', _sharpness, 0.0, 1.0, (v) {
-                    setState(() => _sharpness = v);
-                    _debounceTimer?.cancel();
-                    _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
-                  }),
-                  _buildSlider('Noise Reduction', _denoise, 0.0, 1.0, (v) {
-                    setState(() => _denoise = v);
-                    _debounceTimer?.cancel();
-                    _debounceTimer = Timer(const Duration(milliseconds: 300), () => _renderSingleFramePreview(_previewFramePos));
-                  }),
+                  _buildSlider('Deblur', _deblur, 0.0, 1.0, (v) => setState(() => _deblur = v)),
+                  _buildSlider('Sharpness', _sharpness, 0.0, 1.0, (v) => setState(() => _sharpness = v)),
+                  _buildSlider('Noise Reduction', _denoise, 0.0, 1.0, (v) => setState(() => _denoise = v)),
 
                   const SizedBox(height: 16),
                   if (_storedVideos.isNotEmpty) ...[
