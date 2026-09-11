@@ -3813,10 +3813,10 @@ class SplineCurvePainter extends CustomPainter {
     double t2 = t * t;
     double t3 = t2 * t;
 
-    float h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    float h10 = t3 - 2.0 * t2 + t;
-    float h01 = -2.0 * t3 + 3.0 * t2;
-    float h11 = t3 - t2;
+    double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    double h10 = t3 - 2.0 * t2 + t;
+    double h01 = -2.0 * t3 + 3.0 * t2;
+    double h11 = t3 - t2;
 
     return (h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2).clamp(0.0, 1.0);
   }
