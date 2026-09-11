@@ -122,10 +122,10 @@ class ExportMatrix {
           ? '-vf "$scaleFilter" -c:v libaom-av1 -b:v ${bitrateKbps}k -crf 24 -pix_fmt yuv420p10le -strict -2'
           : '-vf "$scaleFilter" -c:v libaom-av1 -b:v ${bitrateKbps}k -crf 24 -pix_fmt yuv420p -strict -2';
     } else if (codec.contains('HEVC') || codec.contains('H.265')) {
-      // Using robust libx265 with mandatory -tag:v hvc1 to fix the 200-byte black screen bug
+      // Use Android Hardware MediaCodec for HEVC (fixes unknown encoder 'libx265')
       codecFlags = is10
-          ? '-vf "$scaleFilter" -c:v libx265 -preset veryfast -b:v ${bitrateKbps}k -pix_fmt yuv420p10le -profile:v main10 -tag:v hvc1'
-          : '-vf "$scaleFilter" -c:v libx265 -preset veryfast -b:v ${bitrateKbps}k -pix_fmt yuv420p -tag:v hvc1';
+          ? '-vf "$scaleFilter" -c:v hevc_mediacodec -b:v ${bitrateKbps}k -tag:v hvc1'
+          : '-vf "$scaleFilter" -c:v hevc_mediacodec -b:v ${bitrateKbps}k -tag:v hvc1';
     } else if (codec.contains('FFV1')) {
       if (is16) {
         codecFlags = '-vf "$scaleFilter" -c:v ffv1 -level 3 -pix_fmt gbrp16le';
@@ -137,8 +137,8 @@ class ExportMatrix {
     } else if (codec.contains('MPEG-4')) {
       codecFlags = '-vf "$scaleFilter" -c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p';
     } else {
-      // H.264 using libx264 veryfast with yuv420p and +faststart (guarantees zero black screen)
-      codecFlags = '-vf "$scaleFilter,format=yuv420p" -c:v libx264 -preset veryfast -b:v ${bitrateKbps}k -pix_fmt yuv420p -movflags +faststart';
+      // Universal H.264 via Hardware MediaCodec (fixes unknown encoder 'libx264')
+      codecFlags = '-vf "$scaleFilter,format=yuv420p" -c:v h264_mediacodec -b:v ${bitrateKbps}k -movflags +faststart';
     }
 
     return '-hide_banner -y -framerate $fps -i "$framePattern" $codecFlags "$outputPath"';
