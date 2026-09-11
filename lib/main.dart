@@ -1439,10 +1439,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade();
     _autoSaveProject();
   }
-  // ==========================================
-// PART 2 OF 2: lib/main.dart (Starts at _applyPreset)
-// ==========================================
-
   void _applyPreset(String name) {
     _pushUndoSnapshot();
     setState(() {
@@ -1559,7 +1555,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             id: 'yamato_base',
             name: 'Base Grade',
             contrast: 1.40,
-            saturation: 0.92, // Neutral skin fidelity
+            saturation: 0.92,
             brightness: 0.01,
             temperature: 6600.0,
             sharpness: 0.56,
@@ -1580,7 +1576,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.44,
             deepGlowRadius: 0.50,
             deepGlowThreshold: 0.48,
-            edgeGlowTint: 0.0, // Clean ivory/white
+            edgeGlowTint: 0.0,
             thinStreakIntensity: 0.24,
             thinStreakWidth: 0.62,
             thinStreakOpacity: 0.84,
@@ -1632,7 +1628,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.38,
             deepGlowRadius: 0.46,
             deepGlowThreshold: 0.52,
-            edgeGlowTint: 4.0, // Blood crimson glint
+            edgeGlowTint: 4.0,
           ));
           // Layer 3: Specular Aura
           _project.layers.add(AdjustmentLayer(
@@ -1723,7 +1719,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.40,
             deepGlowRadius: 0.46,
             deepGlowThreshold: 0.54,
-            edgeGlowTint: 0.0, // Pure ivory
+            edgeGlowTint: 0.0,
             thinStreakIntensity: 0.22,
             thinStreakWidth: 0.58,
             thinStreakOpacity: 0.80,
@@ -1771,7 +1767,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.52,
             deepGlowRadius: 0.56,
             deepGlowThreshold: 0.38,
-            edgeGlowTint: 4.0, // Blood Crimson
+            edgeGlowTint: 4.0,
             thinStreakIntensity: 0.34,
             thinStreakWidth: 0.72,
             thinStreakOpacity: 0.90,
@@ -1816,7 +1812,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.36,
             deepGlowRadius: 0.44,
             deepGlowThreshold: 0.55,
-            edgeGlowTint: 0.0, // Silver
+            edgeGlowTint: 0.0,
             lineChromaStrength: 0.35,
           ));
           // Layer 3: Cold Fog Scatter
@@ -1858,7 +1854,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.48,
             deepGlowRadius: 0.55,
             deepGlowThreshold: 0.42,
-            edgeGlowTint: 3.0, // Amber Sun
+            edgeGlowTint: 3.0,
             thinStreakIntensity: 0.32,
             thinStreakWidth: 0.68,
             thinStreakOpacity: 0.86,
@@ -2051,7 +2047,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.50,
             deepGlowRadius: 0.55,
             deepGlowThreshold: 0.42,
-            edgeGlowTint: 1.0, // Noble Gold
+            edgeGlowTint: 1.0,
             thinStreakIntensity: 0.32,
             thinStreakWidth: 0.64,
             thinStreakOpacity: 0.88,
@@ -2127,7 +2123,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.52,
             deepGlowRadius: 0.60,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 5.0, // Electro Violet
+            edgeGlowTint: 5.0,
             sapphireGlowWidth: 0.85,
             sapphireGlowThreshold: 0.42,
             thinStreakIntensity: 0.28,
@@ -2251,7 +2247,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.52,
             deepGlowRadius: 0.56,
             deepGlowThreshold: 0.38,
-            edgeGlowTint: 4.0, // Crimson
+            edgeGlowTint: 4.0,
             halationRadius: 0.28,
             halationWarmth: 0.88,
             thinStreakIntensity: 0.24,
@@ -2280,7 +2276,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.54,
             deepGlowRadius: 0.60,
             deepGlowThreshold: 0.40,
-            edgeGlowTint: 5.0, // Violet
+            edgeGlowTint: 5.0,
             thinStreakIntensity: 0.32,
             thinStreakWidth: 0.68,
             thinStreakOpacity: 0.88,
@@ -2308,7 +2304,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             deepGlowIntensity: 0.48,
             deepGlowRadius: 0.58,
             deepGlowThreshold: 0.42,
-            edgeGlowTint: 2.0, // Cyan
+            edgeGlowTint: 2.0,
             thinStreakIntensity: 0.24,
             thinStreakOpacity: 0.86,
           ));
@@ -2954,6 +2950,277 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         );
       },
     );
+  }
+
+  Future<String> _getSafeMovieDirectory() async {
+    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+    if (!await shaderlyDir.exists()) {
+      try {
+        await shaderlyDir.create(recursive: true);
+        return shaderlyDir.path;
+      } catch (_) {}
+    } else {
+      return shaderlyDir.path;
+    }
+
+    final directDownload = Directory('/storage/emulated/0/Download');
+    if (await directDownload.exists()) {
+      return directDownload.path;
+    }
+    final docDir = await getApplicationDocumentsDirectory();
+    return docDir.path;
+  }
+
+  Future<void> _exportVideo(
+    String resolution,
+    String fps,
+    String bitrate,
+    String container,
+    String codec,
+    String bitDepth,
+    String audioMode,
+  ) async {
+    if (_project.mediaPath.isEmpty) return;
+
+    final targetDims = _calculateTargetDimensions(resolution, _project.aspectRatio);
+    final int outW = targetDims['width']!;
+    final int outH = targetDims['height']!;
+    final uniforms = _packMultiLayerUniforms(outW.toDouble(), outH.toDouble());
+    final lutTable = _getActiveLutTable();
+
+    int bitrateKbps = 35000;
+    if (bitrate.contains('15')) bitrateKbps = 15000;
+    else if (bitrate.contains('50')) bitrateKbps = 50000;
+    else if (bitrate.contains('80')) bitrateKbps = 80000;
+    else if (bitrate.contains('120')) bitrateKbps = 120000;
+
+    int targetFps = int.parse(fps.replaceAll('fps', ''));
+    String containerExt = container.toLowerCase();
+
+    final bool is16Bit = bitDepth == '16-bit';
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('Starting Master Extraction: 0%');
+
+    _isExportCancelled = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF101014),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Exporting $outW x $outH ($bitDepth)',
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                tooltip: 'Cancel Export',
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (confirmCtx) => AlertDialog(
+                      backgroundColor: kCardDark,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: const Text('Cancel Video Export?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                      content: const Text('Are you sure you want to cancel the render in progress? All processed frames will be discarded.', style: TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(confirmCtx),
+                          child: const Text('Keep Rendering', style: TextStyle(color: Colors.white54)),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                          onPressed: () {
+                            Navigator.pop(confirmCtx);
+                            _isExportCancelled = true;
+                            _activeExportSession?.cancel();
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Export cancelled by user.')),
+                            );
+                          },
+                          child: const Text('Cancel Export', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<double>(
+                valueListenable: progressNotifier,
+                builder: (_, progress, __) => ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    color: kCyanAccent,
+                    backgroundColor: Colors.white12,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(
+                  status,
+                  style: const TextStyle(color: kCyanAccent, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final videoPath = _project.mediaPath;
+      final framesDir = Directory('${dir.path}/export_frames');
+      final processedDir = Directory('${dir.path}/export_processed');
+
+      if (await framesDir.exists()) await framesDir.delete(recursive: true);
+      if (await processedDir.exists()) await processedDir.delete(recursive: true);
+      await framesDir.create(recursive: true);
+      await processedDir.create(recursive: true);
+
+      final audioPath = '${dir.path}/current_audio.aac';
+      final oldAudio = File(audioPath);
+      if (await oldAudio.exists()) await oldAudio.delete();
+      await FFmpegKit.execute('-hide_banner -i "$videoPath" -vn -c:a aac -y "$audioPath"');
+
+      if (_isExportCancelled) return;
+
+      statusNotifier.value = 'Extracting $outW x $outH frames...';
+      final extractSession = await FFmpegKit.execute(
+        '-hide_banner -i "$videoPath" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
+      );
+
+      if (_isExportCancelled) return;
+
+      var frameFiles = await framesDir.list().toList();
+      frameFiles.sort((a, b) => a.path.compareTo(b.path));
+      final totalFrames = frameFiles.length;
+
+      if (totalFrames == 0) {
+        final logs = await extractSession.getLogsAsString();
+        throw Exception('Frame extraction failed. Logs: ${logs ?? "No logs"}');
+      }
+
+      for (int i = 0; i < totalFrames; i++) {
+        if (_isExportCancelled) return;
+
+        final file = frameFiles[i];
+        if (file is! File) continue;
+        final bytes = await file.readAsBytes();
+        final decoded = img.decodePng(bytes);
+        if (decoded == null) continue;
+
+        uniforms[0] = i / targetFps.toDouble();
+
+        img.Image gradedImg;
+        if (is16Bit) {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final rawInput16 = Uint16List(outW * outH * 4);
+          for (int px = 0; px < rawInput8.length; px++) {
+            rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
+          }
+          final outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw16.buffer,
+            numChannels: 4,
+            format: img.Format.uint16,
+            order: img.ChannelOrder.rgba,
+          );
+        } else {
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw8.buffer,
+            numChannels: 4,
+            order: img.ChannelOrder.rgba,
+          );
+        }
+
+        final pngBytes = img.encodePng(gradedImg);
+        final paddedIndex = (i + 1).toString().padLeft(5, '0');
+        final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
+        await outputFile.writeAsBytes(pngBytes);
+
+        final percent = (((i + 1) / totalFrames) * 100).toInt();
+        progressNotifier.value = (i + 1) / totalFrames;
+        statusNotifier.value = 'Grading frames: $percent% (${i + 1}/$totalFrames)';
+
+        await Future.delayed(const Duration(milliseconds: 1));
+      }
+
+      if (_isExportCancelled) return;
+
+      statusNotifier.value = 'Assembling final $container master...';
+      final silentOutputPath = '${dir.path}/silent_video.$containerExt';
+      final silentFile = File(silentOutputPath);
+      if (await silentFile.exists()) await silentFile.delete();
+
+      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
+        fps: targetFps,
+        framePattern: '${processedDir.path}/frame_%05d.png',
+        container: container,
+        codec: codec,
+        bitDepth: bitDepth,
+        bitrateKbps: bitrateKbps,
+        outputPath: silentOutputPath,
+      );
+      final encodeSession = await FFmpegKit.execute(encodeCmd);
+
+      if (_isExportCancelled) return;
+
+      if (!await silentFile.exists()) {
+        final logs = await encodeSession.getLogsAsString();
+        throw Exception('Encoder failed: ${logs ?? "No logs"}');
+      }
+
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
+      final moviesDir = await _getSafeMovieDirectory();
+      final cleanCodec = codec.split(' ').first;
+      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final finalOutputFile = File('$moviesDir/$fileName');
+
+      if (hasAudio) {
+        if (audioMode == 'Lossless Source Copy') {
+          final audioCodec = ExportMatrix.getAudioCodec(container);
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest -y "${finalOutputFile.path}"');
+        } else {
+          await FFmpegKit.execute('-hide_banner -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a aac -b:a 320k -shortest -y "${finalOutputFile.path}"');
+        }
+      } else {
+        await File(silentOutputPath).copy(finalOutputFile.path);
+      }
+
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (!_isExportCancelled && mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+      }
+    }
   }
 
   Widget _buildSliderRow(String title, double val, double min, double max, ValueChanged<double> onChanged) {
