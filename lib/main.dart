@@ -388,7 +388,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 20),
-                  const Text('PREVIEW QUALITY', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const Text('PREVIEW QUALITY (LAG REDUCTION / 4K SHIELD)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -1038,6 +1038,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   void _updateDimensions(int srcW, int srcH) {
+    // Dynamically downscale preview buffer for large 4K / 2K imports to eliminate OOM
     final dims = _calculateTargetDimensions('720p', _project.aspectRatio, gPreviewScale);
     _renderWidth = dims['width']!;
     _renderHeight = dims['height']!;
@@ -1178,6 +1179,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
         final lutTable = _getActiveLutTable();
 
+        // 100% PURE 32-BIT VULKAN COMPUTE EXECUTION
         final outBytes = processImage(rawBytes, w, h, w, h, uniforms, lutTable: lutTable);
 
         final completer = Completer<ui.Image>();
@@ -1205,152 +1207,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final match = _activeLuts.where((l) => l.id == _cur.activeLutId);
     if (match.isEmpty) return null;
     return match.first.table;
-  }
-
-  ColorFilter _buildLiveColorFilter() {
-    double c = 1.0;
-    double s = 1.0;
-    double b = 0.0;
-    double temp = 6500.0;
-    double highLift = 0.0;
-    double shadowLift = 0.0;
-    double flickerFactor = 1.0;
-
-    for (final l in _project.layers) {
-      if (!l.isEnabled) continue;
-      final op = l.opacity;
-      c *= (1.0 + (l.contrast - 1.0) * op);
-      s *= (1.0 + (l.saturation - 1.0) * op);
-      b += l.brightness * 255.0 * op;
-
-      highLift += (l.highlights * 30.0 * op);
-      shadowLift += (l.shadows * 30.0 * op);
-      temp += (l.temperature - 6500.0) * op;
-
-      if (l.flickerIntensity > 0.01) {
-        double t = (_controller?.value.position.inMilliseconds ?? DateTime.now().millisecondsSinceEpoch) / 1000.0 * l.flickerSpeed;
-        double fWave = (math.sin(t * 6.28318) * 0.5 + 0.5);
-        flickerFactor *= (1.0 + (fWave - 0.5) * l.flickerIntensity * 0.45 * op);
-      }
-    }
-
-    double rMult = 1.0;
-    double bMult = 1.0;
-    if (temp > 6500) {
-      rMult += (temp - 6500) / 7000.0;
-      bMult -= (temp - 6500) / 10000.0;
-    } else {
-      bMult += (6500 - temp) / 7000.0;
-      rMult -= (6500 - temp) / 10000.0;
-    }
-
-    final double sr = (1 - s) * 0.2126;
-    final double sg = (1 - s) * 0.7152;
-    final double sb = (1 - s) * 0.0722;
-    final double t = (1.0 - c) * 128.0;
-
-    final List<double> matrix = [
-      (sr + s) * c * rMult * flickerFactor, sg * c,           sb * c,           0, t + b + shadowLift + highLift,
-      sr * c,               (sg + s) * c * flickerFactor,     sb * c,           0, t + b + shadowLift + highLift,
-      sr * c,               sg * c,           (sb + s) * c * bMult * flickerFactor, 0, t + b + shadowLift + highLift,
-      0,                    0,                0,                1, 0,
-    ];
-
-    return ColorFilter.matrix(matrix);
-  }
-
-  Widget _buildLiveBloomAtmosphere() {
-    double totalBloom = 0.0;
-    Color bloomTint = Colors.white;
-    double flareOpacity = 0.0;
-    double bslFogAmt = 0.0;
-    double bslScatterAmt = 0.0;
-    double bslDepthAmt = 0.5;
-
-    for (final l in _project.layers) {
-      if (!l.isEnabled) continue;
-      final op = l.opacity;
-      totalBloom += (l.deepGlowIntensity * 0.45 + l.bslaBloomHaze * 0.55) * op;
-      flareOpacity += (l.thinStreakIntensity * l.thinStreakOpacity * 0.7) * op;
-
-      if (l.bslaFogDensity > 0.001) {
-        bslFogAmt += l.bslaFogDensity * op;
-        bslScatterAmt += l.bslFogScatter * op;
-        bslDepthAmt = l.bslaFogDepth;
-      }
-
-      if (l.edgeGlowTint == 1.0) bloomTint = const Color(0xFFFFD700);
-      else if (l.edgeGlowTint == 2.0) bloomTint = const Color(0xFF00E5FF);
-      else if (l.edgeGlowTint == 4.0) bloomTint = const Color(0xFFFF1744);
-      else if (l.edgeGlowTint == 5.0) bloomTint = const Color(0xFF7C4DFF);
-      else bloomTint = Colors.white;
-    }
-
-    totalBloom = totalBloom.clamp(0.0, 0.85);
-    flareOpacity = flareOpacity.clamp(0.0, 0.90);
-    bslFogAmt = bslFogAmt.clamp(0.0, 0.85);
-
-    return IgnorePointer(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (totalBloom > 0.02)
-            Opacity(
-              opacity: totalBloom,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment.center,
-                    radius: 0.9,
-                    colors: [
-                      bloomTint.withOpacity(0.40),
-                      bloomTint.withOpacity(0.10),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (flareOpacity > 0.02)
-            Center(
-              child: Opacity(
-                opacity: flareOpacity,
-                child: Container(
-                  height: 3.5,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.transparent,
-                        Colors.white.withOpacity(0.95),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          if (bslFogAmt > 0.01)
-            Opacity(
-              opacity: bslFogAmt,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: [0.0, (1.0 - bslDepthAmt).clamp(0.1, 0.9), 1.0],
-                    colors: [
-                      const Color(0xFF8FA3B8).withOpacity(0.48 * (1.0 + bslScatterAmt * 0.4)),
-                      const Color(0xFF708090).withOpacity(0.28),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   Future<void> _autoSaveProject() async {
@@ -1608,7 +1464,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             vignette: 0.04,
             blendMode: LayerBlendMode.normal,
             curveMaster: [0.0, 0.18, 0.49, 0.84, 1.0],
-            flickerIntensity: 0.025,
+            flickerIntensity: 0.035,
             flickerSpeed: 11.0,
           ));
           _project.layers.add(AdjustmentLayer(
@@ -3266,54 +3122,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final builtInPresets = [
-      {
-        'name': 'yuta',
-        'color': 0xFFE0E0E0,
-      },
-      {
-        'name': 'okkotsu',
-        'color': 0xFF90A4AE,
-      },
-      {
-        'name': 'artoria',
-        'color': 0xFFFFD700,
-      },
-      {
-        'name': 'deku tree',
-        'color': 0xFF00E676,
-      },
-      {
-        'name': 'Raiden',
-        'color': 0xFF7C4DFF,
-      },
-      {
-        'name': 'atmospheric haze',
-        'color': 0xFFB0BEC5,
-      },
-      {
-        'name': 'tealdropped (conq knockoff)',
-        'color': 0xFF00E5FF,
-      },
-      {
-        'name': 'vintage cc',
-        'color': 0xFFFFB74D,
-      },
-      {
-        'name': 'noir',
-        'color': 0xFFB0BEC5,
-      },
-      {
-        'name': 'choso',
-        'color': 0xFFB71C1C,
-      },
-      {
-        'name': 'yoruichi',
-        'color': 0xFFAB47BC,
-      },
-      {
-        'name': 'Gojo',
-        'color': 0xFF00E5FF,
-      },
+      {'name': 'yuta', 'color': 0xFFE0E0E0},
+      {'name': 'okkotsu', 'color': 0xFF90A4AE},
+      {'name': 'artoria', 'color': 0xFFFFD700},
+      {'name': 'deku tree', 'color': 0xFF00E676},
+      {'name': 'Raiden', 'color': 0xFF7C4DFF},
+      {'name': 'atmospheric haze', 'color': 0xFFB0BEC5},
+      {'name': 'tealdropped (conq knockoff)', 'color': 0xFF00E5FF},
+      {'name': 'vintage cc', 'color': 0xFFFFB74D},
+      {'name': 'noir', 'color': 0xFFB0BEC5},
+      {'name': 'choso', 'color': 0xFFB71C1C},
+      {'name': 'yoruichi', 'color': 0xFFAB47BC},
+      {'name': 'Gojo', 'color': 0xFF00E5FF},
     ];
 
     return ListView(
@@ -3462,6 +3282,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Black Crush', _cur.blackCrush, 0.0, 0.5, (v) => _cur.blackCrush = v),
 
         const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('DYNAMICS & FLICKER', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        ),
+        _buildSliderRow('Flicker Intensity', _cur.flickerIntensity, 0.0, 1.0, (v) => _cur.flickerIntensity = v),
+        _buildSliderRow('Flicker Frequency (Hz)', _cur.flickerSpeed, 1.0, 20.0, (v) => _cur.flickerSpeed = v),
+
+        const SizedBox(height: 10),
         _buildSliderRow('Sobel Outlines', _cur.darkOutlines, 0.0, 1.0, (v) => _cur.darkOutlines = v),
         _buildSliderRow('Edge Darken', _cur.edgeDarken, 0.0, 1.0, (v) => _cur.edgeDarken = v),
         _buildSliderRow('Vignette', _cur.vignette, 0.0, 1.0, (v) => _cur.vignette = v),
@@ -3546,7 +3374,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Light Shafts', _cur.bslaGodRays, 0.0, 1.5, (v) => _cur.bslaGodRays = v),
         _buildSliderRow('Fog Density', _cur.bslaFogDensity, 0.0, 1.0, (v) => _cur.bslaFogDensity = v),
         _buildSliderRow('Fog Depth', _cur.bslaFogDepth, 0.0, 1.0, (v) => _cur.bslaFogDepth = v),
-        _buildSliderRow('Bloom Haze', _cur.bslaBloomHaze, 0.0, 1.5, (v) => _cur.bslaBloomHaze = v),
+        _buildBloomHazeSlider(),
         _buildSliderRow('Light Scatter', _cur.bslFogScatter, 0.0, 1.5, (v) => _cur.bslFogScatter = v),
 
         const SizedBox(height: 8),
@@ -3556,6 +3384,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _buildSliderRow('Denoise', _cur.denoise, 0.0, 1.0, (v) => _cur.denoise = v),
       ],
     );
+  }
+
+  Widget _buildBloomHazeSlider() {
+    return _buildSliderRow('Bloom Haze', _cur.bslaBloomHaze, 0.0, 1.5, (v) => _cur.bslaBloomHaze = v);
   }
 
   Widget _buildTextEffectsTab() {
@@ -3674,16 +3506,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
 
     final tonemappers = [
-      {'id': 0.0, 'name': 'Linear'},
-      {'id': 1.0, 'name': 'ACES Filmic'},
-      {'id': 2.0, 'name': 'Reinhard'},
+      {'id': 0.0, 'name': 'Linear (No Tonemap)'},
+      {'id': 1.0, 'name': 'ACES Filmic (Compensated)'},
+      {'id': 2.0, 'name': 'Reinhard Extended (Compensated)'},
       {'id': 3.0, 'name': 'AgX Natural'},
     ];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('TONEMAPPING', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+        const Text('TONEMAPPING (TRUE HDR ROLL-OFF)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
         const SizedBox(height: 10),
         ...tonemappers.map((t) {
           final isSel = _project.tonemapMode == t['id'];
@@ -3726,8 +3558,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
-    final bool hasVideo = !_project.isImage && _controller != null && _controller!.value.isInitialized;
-    final bool hasStatic = _project.isImage && _cachedRawImage != null;
+    final bool hasMedia = _processedStaticImage != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0E),
@@ -3816,19 +3647,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              if (hasVideo)
-                                ColorFiltered(
-                                  colorFilter: _buildLiveColorFilter(),
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width: _controller!.value.size.width,
-                                      height: _controller!.value.size.height,
-                                      child: VideoPlayer(_controller!),
-                                    ),
-                                  ),
-                                )
-                              else if (hasStatic && _processedStaticImage != null)
+                              // 100% PURE 32-BIT VULKAN COMPUTE OUTPUT (ZERO FLUTTER CPU FILTER FALLBACK)
+                              if (hasMedia)
                                 FittedBox(
                                   fit: BoxFit.cover,
                                   child: SizedBox(
@@ -3837,14 +3657,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     child: RawImage(image: _processedStaticImage),
                                   ),
                                 )
-                              else if (hasStatic)
-                                const Center(child: CircularProgressIndicator(color: Colors.white38))
                               else
                                 const Center(
-                                  child: Text('No media loaded', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                                  child: CircularProgressIndicator(color: Colors.white38),
                                 ),
-
-                              _buildLiveBloomAtmosphere(),
                             ],
                           ),
                         ),
@@ -3997,10 +3813,10 @@ class SplineCurvePainter extends CustomPainter {
     double t2 = t * t;
     double t3 = t2 * t;
 
-    double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    double h10 = t3 - 2.0 * t2 + t;
-    double h01 = -2.0 * t3 + 3.0 * t2;
-    double h11 = t3 - t2;
+    float h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    float h10 = t3 - 2.0 * t2 + t;
+    float h01 = -2.0 * t3 + 3.0 * t2;
+    float h11 = t3 - t2;
 
     return (h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2).clamp(0.0, 1.0);
   }
