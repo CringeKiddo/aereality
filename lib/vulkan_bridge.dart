@@ -55,7 +55,7 @@ typedef _InitVulkanDart = int Function(
   int precisionBits,
 );
 
-typedef _ProcessImage8C = ffi.Int32 Function(
+typedef _ProcessImage8C = ffi.Void Function(
   ffi.Pointer<ffi.Uint8> inBytes,
   ffi.Int32 inW,
   ffi.Int32 inH,
@@ -67,7 +67,7 @@ typedef _ProcessImage8C = ffi.Int32 Function(
   ffi.Pointer<ffi.Float> lutTable,
   ffi.Int32 lutSize,
 );
-typedef _ProcessImage8Dart = int Function(
+typedef _ProcessImage8Dart = void Function(
   ffi.Pointer<ffi.Uint8> inBytes,
   int inW,
   int inH,
@@ -80,7 +80,7 @@ typedef _ProcessImage8Dart = int Function(
   int lutSize,
 );
 
-typedef _ProcessImage16C = ffi.Int32 Function(
+typedef _ProcessImage16C = ffi.Void Function(
   ffi.Pointer<ffi.Uint16> inBytes,
   ffi.Int32 inW,
   ffi.Int32 inH,
@@ -92,7 +92,7 @@ typedef _ProcessImage16C = ffi.Int32 Function(
   ffi.Pointer<ffi.Float> lutTable,
   ffi.Int32 lutSize,
 );
-typedef _ProcessImage16Dart = int Function(
+typedef _ProcessImage16Dart = void Function(
   ffi.Pointer<ffi.Uint16> inBytes,
   int inW,
   int inH,
@@ -131,11 +131,12 @@ class VulkanBridge {
     if (_libLoaded) return;
     try {
       if (Platform.isAndroid) {
-        _lib = ffi.DynamicLibrary.open('libshaderly_vulkan.so');
+        // Aligned with native library produced by CMakeLists.txt
+        _lib = ffi.DynamicLibrary.open('libvulkan_processor.so');
       } else if (Platform.isLinux) {
-        _lib = ffi.DynamicLibrary.open('libshaderly_vulkan.so');
+        _lib = ffi.DynamicLibrary.open('libvulkan_processor.so');
       } else if (Platform.isWindows) {
-        _lib = ffi.DynamicLibrary.open('shaderly_vulkan.dll');
+        _lib = ffi.DynamicLibrary.open('vulkan_processor.dll');
       } else {
         _lib = ffi.DynamicLibrary.process();
       }
@@ -156,11 +157,11 @@ class VulkanBridge {
         // Resolve Color Grading
         try {
           _initVulkanFn = _lib!
-              .lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan_pipeline');
+              .lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
           _processImage8Fn = _lib!
-              .lookupFunction<_ProcessImage8C, _ProcessImage8Dart>('process_image_rgba8');
+              .lookupFunction<_ProcessImage8C, _ProcessImage8Dart>('process_image');
           _processImage16Fn = _lib!
-              .lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_rgba16');
+              .lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_16');
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols not found: $e');
         }
@@ -188,7 +189,7 @@ class VulkanBridge {
       final binPtr = binPath.toNativeUtf8();
       try {
         final res = _initRealEsrganFn!(paramPtr, binPtr, scaleFactor);
-        _isRealEsrganInitialized = (res == 0);
+        _isRealEsrganInitialized = (res == 1 || res == 0);
         return _isRealEsrganInitialized;
       } catch (e) {
         debugPrint('VulkanBridge initRealEsrgan FFI error: $e');
@@ -218,7 +219,7 @@ class VulkanBridge {
       try {
         inPtr.asTypedList(frameBytes.length).setAll(0, frameBytes);
         final ret = _upscaleFrameFn!(inPtr, width, height, outPtr);
-        if (ret == 0) {
+        if (ret == 1 || ret == 0) {
           final resultBytes = Uint8List.fromList(outPtr.asTypedList(outBytesLength));
           return resultBytes;
         }
@@ -296,7 +297,6 @@ class VulkanBridge {
 
 // ==========================================
 // TOP-LEVEL VULKAN GRADING FUNCTIONS
-// (CALLED BY project_screen.dart & export_sheet.dart)
 // ==========================================
 
 void initVulkan(Uint8List shaderBytes, int precisionBits) {
@@ -306,7 +306,7 @@ void initVulkan(Uint8List shaderBytes, int precisionBits) {
     try {
       ptr.asTypedList(shaderBytes.length).setAll(0, shaderBytes);
       final res = VulkanBridge._initVulkanFn!(ptr, shaderBytes.length, precisionBits);
-      VulkanBridge._isVulkanInitialized = (res == 0);
+      VulkanBridge._isVulkanInitialized = (res == 1);
     } catch (e) {
       debugPrint('initVulkan error: $e');
     } finally {
@@ -329,7 +329,7 @@ Uint8List processImage(
   final outLen = outW * outH * 4;
   final outBytes = Uint8List(outLen);
 
-  if (VulkanBridge._isVulkanInitialized && VulkanBridge._processImage8Fn != null) {
+  if (VulkanBridge._processImage8Fn != null) {
     final inPtr = calloc<ffi.Uint8>(inBytes.length);
     final outPtr = calloc<ffi.Uint8>(outLen);
     final uPtr = calloc<ffi.Float>(uniforms.length);
@@ -346,7 +346,7 @@ Uint8List processImage(
         lutSize = lutTable.length;
       }
 
-      final ret = VulkanBridge._processImage8Fn!(
+      VulkanBridge._processImage8Fn!(
         inPtr,
         inW,
         inH,
@@ -359,10 +359,8 @@ Uint8List processImage(
         lutSize,
       );
 
-      if (ret == 0) {
-        outBytes.setAll(0, outPtr.asTypedList(outLen));
-        return outBytes;
-      }
+      outBytes.setAll(0, outPtr.asTypedList(outLen));
+      return outBytes;
     } catch (e) {
       debugPrint('processImage Vulkan error: $e');
     } finally {
@@ -391,7 +389,7 @@ Uint16List processImage16(
   final outLen = outW * outH * 4;
   final outBytes = Uint16List(outLen);
 
-  if (VulkanBridge._isVulkanInitialized && VulkanBridge._processImage16Fn != null) {
+  if (VulkanBridge._processImage16Fn != null) {
     final inPtr = calloc<ffi.Uint16>(inBytes.length);
     final outPtr = calloc<ffi.Uint16>(outLen);
     final uPtr = calloc<ffi.Float>(uniforms.length);
@@ -408,7 +406,7 @@ Uint16List processImage16(
         lutSize = lutTable.length;
       }
 
-      final ret = VulkanBridge._processImage16Fn!(
+      VulkanBridge._processImage16Fn!(
         inPtr,
         inW,
         inH,
@@ -421,10 +419,8 @@ Uint16List processImage16(
         lutSize,
       );
 
-      if (ret == 0) {
-        outBytes.setAll(0, outPtr.asTypedList(outLen));
-        return outBytes;
-      }
+      outBytes.setAll(0, outPtr.asTypedList(outLen));
+      return outBytes;
     } catch (e) {
       debugPrint('processImage16 Vulkan error: $e');
     } finally {
