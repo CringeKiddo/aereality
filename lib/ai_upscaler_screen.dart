@@ -72,8 +72,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   String _currentStepDetail = '';
   FFmpegSession? _activeSession;
 
-  // Selected encode options for upscaler output
-  String _exportContainer = 'MP4'; // MP4, WebM, MKV, MOV
+  String _exportContainer = 'MP4';
   String _exportCodec = 'H.264 (Hardware MediaCodec)';
   String _exportBitDepth = '8-bit';
   String _exportBitrate = '50 Mbps';
@@ -117,7 +116,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         _controller!.play();
         _controller!.setLooping(true);
         _detectFps(path);
-        // Extract the base frame for preview without auto-running AI inference
         _extractBaseFrame(0.0);
       });
   }
@@ -208,17 +206,18 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     return {'param': paramDest.path, 'bin': binDest.path};
   }
 
-  // Fast frame extract without running heavy AI inference
+  // Memory-Safe Base Frame Extraction: Uses JPEG 720p scaling to prevent Out of Memory
   Future<void> _extractBaseFrame(double timeSeconds) async {
     if (_sourceFile == null) return;
     try {
       final tempDir = await getTemporaryDirectory();
-      final origPath = '${tempDir.path}/preview_orig.png';
+      final origPath = '${tempDir.path}/preview_orig.jpg';
       final old = File(origPath);
       if (await old.exists()) await old.delete();
 
+      // Downscales to 720p for fast, zero-crash timeline scrubbing
       await FFmpegKit.execute(
-        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 "$origPath"',
+        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vf "scale=iw*min(1\\,720/ih):ih*min(1\\,720/ih)" -vframes 1 -q:v 2 "$origPath"',
       );
 
       if (await File(origPath).exists()) {
@@ -226,7 +225,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         if (mounted) {
           setState(() {
             _originalFrameBytes = origBytes;
-            _upscaledFrameBytes = null; // Clears so split screen waits for manual upscale
+            _upscaledFrameBytes = null;
           });
         }
         try { await File(origPath).delete(); } catch (_) {}
@@ -234,23 +233,23 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     } catch (_) {}
   }
 
-  // Manual Trigger: ONLY upscales when user clicks [ UPSCALE CURRENT FRAME ]
+  // Memory-Guarded Single-Frame Upscaler
   Future<void> _renderSingleFramePreview(double timeSeconds) async {
     if (_sourceFile == null || _isGeneratingFramePreview) return;
     setState(() {
       _isGeneratingFramePreview = true;
-      _previewStatus = 'Extracting frame...';
+      _previewStatus = 'Extracting preview frame...';
     });
 
     try {
       final tempDir = await getTemporaryDirectory();
       final origPath = '${tempDir.path}/preview_orig.png';
-
       final old = File(origPath);
       if (await old.exists()) await old.delete();
 
+      // Extracts at a max vertical dimension of 720 to prevent GPU VRAM overflows on mobile
       await FFmpegKit.execute(
-        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vframes 1 -q:v 1 "$origPath"',
+        '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vf "scale=iw*min(1\\,720/ih):ih*min(1\\,720/ih):flags=lanczos" -vframes 1 "$origPath"',
       );
 
       if (!await File(origPath).exists()) {
@@ -273,7 +272,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final paramFile = File(modelPaths['param']!);
       final binFile = File(modelPaths['bin']!);
 
-      if (await paramFile.exists() && await binFile.exists()) {
+      if (await paramFile.exists() && await binFile.exists() && paramFile.lengthSync() > 100) {
         final ok = await VulkanBridge.initRealEsrgan(
           paramPath: paramFile.path,
           binPath: binFile.path,
@@ -281,17 +280,26 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         );
 
         if (ok) {
-          final rawRgba = decoded.getBytes(order: img.ChannelOrder.rgba);
+          // Align input width & height to 16 pixels to prevent native Vulkan driver crash
+          int alignedW = (decoded.width ~/ 16) * 16;
+          int alignedH = (decoded.height ~/ 16) * 16;
+
+          img.Image inputImage = decoded;
+          if (decoded.width != alignedW || decoded.height != alignedH) {
+            inputImage = img.copyResize(decoded, width: alignedW, height: alignedH);
+          }
+
+          final rawRgba = inputImage.getBytes(order: img.ChannelOrder.rgba);
           final upscaledBuffer = await VulkanBridge.upscaleFrame(
             frameBytes: rawRgba,
-            width: decoded.width,
-            height: decoded.height,
+            width: inputImage.width,
+            height: inputImage.height,
           );
 
           if (upscaledBuffer != null) {
             final upscaledImage = img.Image.fromBytes(
-              width: decoded.width * _scaleFactor,
-              height: decoded.height * _scaleFactor,
+              width: inputImage.width * _scaleFactor,
+              height: inputImage.height * _scaleFactor,
               bytes: upscaledBuffer.buffer,
               numChannels: 4,
               order: img.ChannelOrder.rgba,
@@ -301,10 +309,11 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         }
       }
 
+      // High-performance Lanczos fallback if NCNN models aren't present
       if (upBytes == null) {
-        setState(() => _previewStatus = 'Rendering Vector Super-Resolution...');
+        setState(() => _previewStatus = 'Rendering Super-Resolution Fallback...');
         final upscaledPath = '${tempDir.path}/preview_up_fallback.png';
-        final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
+        final sharpVal = (_sharpness * 2.5).toStringAsFixed(2);
         final upscaleCmd = '-hide_banner -y -i "$origPath" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "$upscaledPath"';
         await FFmpegKit.execute(upscaleCmd);
         if (await File(upscaledPath).exists()) {
@@ -327,11 +336,10 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     }
   }
 
-  // Pure seek: Fast video playhead response with NO automatic upscale crash
   void _onFrameSliderChanged(double val) {
     setState(() {
       _previewFramePos = val;
-      _upscaledFrameBytes = null; // Clear old upscaled frame
+      _upscaledFrameBytes = null;
     });
     _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
   }
@@ -589,7 +597,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         throw Exception('Frame extraction failed. No frames found.');
       }
 
-      bool hasNcnn = await File(paramPath).exists() && await File(binPath).exists();
+      bool hasNcnn = await File(paramPath).exists() && await File(binPath).exists() && (File(paramPath).lengthSync() > 100);
       if (hasNcnn) {
         hasNcnn = await VulkanBridge.initRealEsrgan(
           paramPath: paramPath,
@@ -610,17 +618,24 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         final outFrameFile = File('${upscaledDir.path}/frame_$paddedIndex.png');
 
         if (hasNcnn) {
-          final rawRgba = decoded.getBytes(order: img.ChannelOrder.rgba);
+          int alignedW = (decoded.width ~/ 16) * 16;
+          int alignedH = (decoded.height ~/ 16) * 16;
+          img.Image inputImage = decoded;
+          if (decoded.width != alignedW || decoded.height != alignedH) {
+            inputImage = img.copyResize(decoded, width: alignedW, height: alignedH);
+          }
+
+          final rawRgba = inputImage.getBytes(order: img.ChannelOrder.rgba);
           final upscaledBuffer = await VulkanBridge.upscaleFrame(
             frameBytes: rawRgba,
-            width: decoded.width,
-            height: decoded.height,
+            width: inputImage.width,
+            height: inputImage.height,
           );
 
           if (upscaledBuffer != null) {
             final upscaledImage = img.Image.fromBytes(
-              width: decoded.width * _scaleFactor,
-              height: decoded.height * _scaleFactor,
+              width: inputImage.width * _scaleFactor,
+              height: inputImage.height * _scaleFactor,
               bytes: upscaledBuffer.buffer,
               numChannels: 4,
               order: img.ChannelOrder.rgba,
@@ -628,7 +643,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             await outFrameFile.writeAsBytes(img.encodePng(upscaledImage));
           }
         } else {
-          final sharpVal = (_sharpness * 2.0).toStringAsFixed(2);
+          final sharpVal = (_sharpness * 2.5).toStringAsFixed(2);
           await FFmpegKit.execute(
             '-hide_banner -y -i "${f.path}" -vf "scale=iw*$_scaleFactor:ih*$_scaleFactor:flags=lanczos+accurate_rnd,unsharp=5:5:$sharpVal:5:5:0.0" "${outFrameFile.path}"',
           );
@@ -682,7 +697,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       _activeSession = await FFmpegKit.execute(encodeCmd);
       var returnCode = await _activeSession!.getReturnCode();
 
-      // Fallback command if hardware encoder fails
       if (!ReturnCode.isSuccess(returnCode)) {
         final fallbackCmd = '-hide_banner -y -framerate $fps -i "${upscaledDir.path}/frame_%05d.png" -c:v libx264 -pix_fmt yuv420p -b:v ${bitrateKbps}k "$silentOut"';
         _activeSession = await FFmpegKit.execute(fallbackCmd);
@@ -1014,7 +1028,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(14),
                 children: [
-                  // DEDICATED BUTTON TO PREVIEW CURRENT FRAME WITHOUT AUTOMATIC SEEK CRASHES
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
