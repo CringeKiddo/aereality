@@ -1040,8 +1040,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _updateDimensions(int srcW, int srcH) {
     final dims = _calculateTargetDimensions('720p', _project.aspectRatio, gPreviewScale);
-    _renderWidth = dims['width']!;
-    _renderHeight = dims['height']!;
+    _renderWidth = math.min(1080, dims['width']!);
+    _renderHeight = math.min(1920, dims['height']!);
   }
 
   Future<void> _loadShader() async {
