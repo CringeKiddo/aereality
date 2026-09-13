@@ -130,10 +130,7 @@ class VulkanBridge {
   static void _ensureLibraryLoaded() {
     if (_libLoaded) return;
     try {
-      if (Platform.isAndroid) {
-        // Aligned with native library produced by CMakeLists.txt
-        _lib = ffi.DynamicLibrary.open('libvulkan_processor.so');
-      } else if (Platform.isLinux) {
+      if (Platform.isAndroid || Platform.isLinux) {
         _lib = ffi.DynamicLibrary.open('libvulkan_processor.so');
       } else if (Platform.isWindows) {
         _lib = ffi.DynamicLibrary.open('vulkan_processor.dll');
@@ -142,7 +139,6 @@ class VulkanBridge {
       }
 
       if (_lib != null) {
-        // Resolve Real-ESRGAN
         try {
           _initRealEsrganFn = _lib!
               .lookupFunction<_InitRealEsrganC, _InitRealEsrganDart>('init_realesrgan');
@@ -151,10 +147,9 @@ class VulkanBridge {
           _destroyRealEsrganFn = _lib!
               .lookupFunction<_DestroyRealEsrganC, _DestroyRealEsrganDart>('destroy_realesrgan');
         } catch (e) {
-          debugPrint('VulkanBridge: Real-ESRGAN symbols not found in so: $e');
+          debugPrint('VulkanBridge: Real-ESRGAN symbols lookup note: $e');
         }
 
-        // Resolve Color Grading
         try {
           _initVulkanFn = _lib!
               .lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
@@ -163,7 +158,7 @@ class VulkanBridge {
           _processImage16Fn = _lib!
               .lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_16');
         } catch (e) {
-          debugPrint('VulkanBridge: Vulkan grading symbols not found: $e');
+          debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
         }
       }
     } catch (e) {
@@ -173,7 +168,7 @@ class VulkanBridge {
   }
 
   // -------------------------------------------------------------
-  // REAL-ESRGAN NCNN GPU METHODS
+  // REAL-ESRGAN NCNN GPU METHODS (GUARDED & ISOLATED)
   // -------------------------------------------------------------
 
   static Future<bool> initRealEsrgan({
@@ -193,6 +188,7 @@ class VulkanBridge {
         return _isRealEsrganInitialized;
       } catch (e) {
         debugPrint('VulkanBridge initRealEsrgan FFI error: $e');
+        _isRealEsrganInitialized = false;
       } finally {
         calloc.free(paramPtr);
         calloc.free(binPtr);
@@ -208,27 +204,34 @@ class VulkanBridge {
   }) async {
     _ensureLibraryLoaded();
 
+    if (!_isRealEsrganInitialized || _upscaleFrameFn == null) {
+      return null;
+    }
+
     final int outWidth = width * _currentScaleFactor;
     final int outHeight = height * _currentScaleFactor;
     final int outBytesLength = outWidth * outHeight * 4;
 
-    if (_isRealEsrganInitialized && _upscaleFrameFn != null) {
-      final inPtr = calloc<ffi.Uint8>(frameBytes.length);
-      final outPtr = calloc<ffi.Uint8>(outBytesLength);
+    ffi.Pointer<ffi.Uint8>? inPtr;
+    ffi.Pointer<ffi.Uint8>? outPtr;
 
-      try {
-        inPtr.asTypedList(frameBytes.length).setAll(0, frameBytes);
-        final ret = _upscaleFrameFn!(inPtr, width, height, outPtr);
-        if (ret == 1 || ret == 0) {
-          final resultBytes = Uint8List.fromList(outPtr.asTypedList(outBytesLength));
-          return resultBytes;
-        }
-      } catch (e) {
-        debugPrint('VulkanBridge upscaleFrame FFI error: $e');
-      } finally {
-        calloc.free(inPtr);
-        calloc.free(outPtr);
+    try {
+      inPtr = calloc<ffi.Uint8>(frameBytes.length);
+      outPtr = calloc<ffi.Uint8>(outBytesLength);
+
+      inPtr.asTypedList(frameBytes.length).setAll(0, frameBytes);
+      final ret = _upscaleFrameFn!(inPtr, width, height, outPtr);
+
+      if (ret == 1 || ret == 0) {
+        final resultBytes = Uint8List(outBytesLength);
+        resultBytes.setAll(0, outPtr.asTypedList(outBytesLength));
+        return resultBytes;
       }
+    } catch (e) {
+      debugPrint('VulkanBridge upscaleFrame safe trap: $e');
+    } finally {
+      if (inPtr != null) calloc.free(inPtr);
+      if (outPtr != null) calloc.free(outPtr);
     }
 
     return null;
@@ -270,17 +273,14 @@ class VulkanBridge {
       double g = result[i + 1].toDouble();
       double bCol = result[i + 2].toDouble();
 
-      // Exposure / Brightness
       r += b;
       g += b;
       bCol += b;
 
-      // Contrast around midpoint 128
       r = (r - 128.0) * c + 128.0;
       g = (g - 128.0) * c + 128.0;
       bCol = (bCol - 128.0) * c + 128.0;
 
-      // Saturation (Rec.709 luma)
       final luma = 0.2126 * r + 0.7152 * g + 0.0722 * bCol;
       r = luma + (r - luma) * s;
       g = luma + (g - luma) * s;
@@ -371,7 +371,6 @@ Uint8List processImage(
     }
   }
 
-  // CPU fallback grading
   return _cpuFallbackGrade(inBytes, inW, inH, uniforms);
 }
 
@@ -431,7 +430,6 @@ Uint16List processImage16(
     }
   }
 
-  // Pass-through fallback
   outBytes.setAll(0, inBytes);
   return outBytes;
 }
@@ -440,7 +438,6 @@ Uint8List _cpuFallbackGrade(Uint8List inBytes, int w, int h, Float32List uniform
   final out = Uint8List.fromList(inBytes);
   if (uniforms.length < 25) return out;
 
-  // Layer 0 brightness, contrast, saturation offsets
   final double b = uniforms[23] * 255.0;
   final double s = uniforms[24];
   final double c = uniforms[25];
