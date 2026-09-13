@@ -31,14 +31,14 @@ struct LayerData {
     // Offset 8..11 (16 bytes)
     float hue;                    // -0.5 to +0.5
     float temperature;            // Kelvin (3000 to 9500)
-    float deepGlowIntensity;      // 0.0 to 1.5
+    float deepGlowIntensity;      // 0.0 to 2.0
     float deepGlowRadius;         // 0.1 to 1.0
 
     // Offset 12..15 (16 bytes)
-    float deepGlowThreshold;      // 0.1 to 0.9
+    float deepGlowThreshold;      // 0.1 to 0.95
     float edgeGlowTint;           // 0:Neutral, 1:Gold, 2:Cyan, 3:Dark/Ink, 4:Deep Blood Crimson, 5:Violet
-    float thinStreakIntensity;    // 0.0 to 1.0
-    float thinStreakWidth;        // 0.1 to 1.0 (Horizontal Flare Stretch)
+    float thinStreakIntensity;    // 0.0 to 2.0
+    float thinStreakWidth;        // 0.1 to 2.0 (Horizontal Flare Stretch)
 
     // Offset 16..19 (16 bytes)
     float lineChromaStrength;     // 0.0 to 1.0 (All-Edge Chromatic Aberration)
@@ -165,7 +165,6 @@ vec3 linearToSRGB(vec3 c) {
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 }
 
-// True ACES Fitted Curve in Linear Space
 vec3 tonemapACESLinear(vec3 x) {
     vec3 lin = sRGBToLinear(clamp(x, 0.0, 10.0));
     float a = 2.51;
@@ -177,7 +176,6 @@ vec3 tonemapACESLinear(vec3 x) {
     return linearToSRGB(clamp(mapped, 0.0, 1.0));
 }
 
-// True Reinhard with Luminance-Preserving Knee Rolloff
 vec3 tonemapReinhardLinear(vec3 x) {
     vec3 lin = sRGBToLinear(clamp(x, 0.0, 10.0));
     float luma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
@@ -187,14 +185,12 @@ vec3 tonemapReinhardLinear(vec3 x) {
     return linearToSRGB(clamp(mapped, 0.0, 1.0));
 }
 
-// True AgX Look
 vec3 tonemapAgXLinear(vec3 x) {
     vec3 lin = sRGBToLinear(clamp(x, 0.0, 10.0));
     vec3 mapped = lin / (lin + vec3(0.18)) * 1.18;
     return linearToSRGB(clamp(mapped, 0.0, 1.0));
 }
 
-// 3D LUT TRILINEAR INTERPOLATION
 vec3 sample3DLut(vec3 color, float opacity) {
     if (opacity <= 0.001) return color;
 
@@ -263,7 +259,6 @@ float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) 
     return clamp(h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2, 0.0, 1.0);
 }
 
-// TPDF Blue-Noise Hash
 float hash12(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
@@ -296,21 +291,21 @@ vec3 colorTempToRGB(float kelvin) {
     return clamp(vec3(red, green, blue) / 255.0, 0.0, 1.0);
 }
 
-// AE-ACCURATE BLEND MODES WITH SOFT KNEE HIGHLIGHT PROTECTION
+// AE BLEND MODES WITH SOFT HIGHLIGHT COMPRESSION
 vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
     vec3 result = blendCol;
     if (mode == 1) {
-        // Screen with Highlight Shoulder (Prevents Nuclear Whiteout)
+        // Screen with highlight soft knee
         result = 1.0 - (1.0 - baseCol) * (1.0 - blendCol);
     } else if (mode == 2) {
-        // Linear Add with Soft Knee compression
+        // Linear Add with shoulder compression
         vec3 sum = baseCol + blendCol;
-        result = sum / (1.0 + max(vec3(0.0), sum - 1.0) * 0.5);
+        result = sum / (1.0 + max(vec3(0.0), sum - 1.0) * 0.65);
     } else if (mode == 3) {
         // Overlay
         result = mix(2.0 * baseCol * blendCol, 1.0 - 2.0 * (1.0 - baseCol) * (1.0 - blendCol), step(vec3(0.5), baseCol));
     } else if (mode == 4) {
-        // Soft Light (W3C standard)
+        // Soft Light
         result = (1.0 - 2.0 * blendCol) * baseCol * baseCol + 2.0 * blendCol * baseCol;
     } else if (mode == 5) {
         // Multiply
@@ -330,7 +325,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line-art edge detection with normalized kernel
+    // HIGH-PRECISION SOBEL LINE-ART DETECTION (Sensitivity calibrated for anime ink outlines)
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -343,7 +338,8 @@ void main() {
             gy += lum * ky;
         }
     }
-    float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 0.25, 0.0, 1.0);
+    // High-sensitivity multiplier ensures anime linework is properly captured
+    float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.65, 0.0, 1.0);
 
     int totalLayers = int(clamp(u_layerCount, 0.0, 4.0));
 
@@ -361,9 +357,9 @@ void main() {
 
         vec3 layerColor = currentComposite;
 
-        // 1. Line-Art Chromatic Aberration (Masked strictly to detected edges)
+        // 1. Line-Art Chromatic Aberration (Masked strictly to ink edges)
         if (L.lineChromaStrength > 0.001) {
-            float edgeFactor = smoothstep(0.04, 0.25, lineEdge);
+            float edgeFactor = smoothstep(0.08, 0.35, lineEdge);
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
             ivec2 shift = ivec2(normalize(uv + vec2(0.0001)) * (L.lineChromaStrength * 3.5) * edgeFactor);
 
@@ -373,8 +369,8 @@ void main() {
             vec4 rPix = unpackRGBA(in_pixels[rCoord.y * width + rCoord.x]);
             vec4 bPix = unpackRGBA(in_pixels[bCoord.y * width + bCoord.x]);
 
-            layerColor.r = mix(layerColor.r, rPix.r, edgeFactor * 0.70);
-            layerColor.b = mix(layerColor.b, bPix.b, edgeFactor * 0.70);
+            layerColor.r = mix(layerColor.r, rPix.r, edgeFactor * 0.75);
+            layerColor.b = mix(layerColor.b, bPix.b, edgeFactor * 0.75);
         }
 
         // 2. Bilateral Denoise Filter
@@ -395,7 +391,7 @@ void main() {
             layerColor = mix(layerColor, avgCol / float(count), L.denoise * 0.75);
         }
 
-        // 3. True High-Pass Frequency Unsharp Mask (AE / BCC Unsharp Mask Standard)
+        // 3. High-Pass Frequency Unsharp Mask (AE BCC Unsharp Mask Standard)
         if (L.unsharpAmount > 0.01) {
             int uRad = int(clamp(L.unsharpRadius, 1.0, 4.0));
             vec3 lowPass = vec3(0.0);
@@ -416,7 +412,7 @@ void main() {
             }
         }
 
-        // 4. Micro-Sharpness (Ultra-thin crisp linework enhancer)
+        // 4. Micro-Sharpness (Ultra-crisp anime detail enhancer)
         if (L.sharpness > 0.01) {
             vec4 blur = vec4(0.0);
             blur += unpackRGBA(in_pixels[clamp(coord.y - 1, 0, height - 1) * width + coord.x]);
@@ -428,15 +424,16 @@ void main() {
             layerColor += detail * (L.sharpness * 1.10);
         }
 
-        // 5. Dark Outlines (Anime Cel Line Enhancement)
+        // 5. SOBEL OUTLINES (ACTIVE CEL DARKENER - Calibrated for visible anime line darkening)
         if (L.darkOutlines > 0.01) {
-            layerColor = mix(layerColor, vec3(0.0), clamp(lineEdge * L.darkOutlines * 0.75, 0.0, 0.90));
+            float outlineFactor = smoothstep(0.12, 0.40, lineEdge);
+            layerColor = mix(layerColor, vec3(0.0), outlineFactor * L.darkOutlines * 0.85);
         }
 
         // 6. Line Art Edge Darken
         if (L.edgeDarken > 0.01) {
-            float innerEdge = smoothstep(0.08, 0.35, lineEdge);
-            layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.35);
+            float innerEdge = smoothstep(0.10, 0.45, lineEdge);
+            layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.45);
         }
 
         // 7. Color Temperature
@@ -445,30 +442,29 @@ void main() {
             layerColor *= tempColor / colorTempToRGB(6500.0);
         }
 
-        // 8. Exposure (Photographic Stops: 2^EV), Contrast & Black Crush
-        // Fix: Uses exponential stops rather than arithmetic addition to prevent whiteout
+        // 8. Exposure (Photographic Stops 2^EV - Prevents flat whiteout)
         if (abs(L.brightness) > 0.001) {
-            layerColor *= pow(2.0, L.brightness * 2.5);
+            layerColor *= pow(2.0, L.brightness * 2.2);
         }
         
         // Mid-gray pivot contrast (0.18 scene linear)
         layerColor = (layerColor - 0.18) * L.contrast + 0.18;
 
         if (L.blackCrush > 0.01) {
-            layerColor = smoothstep(vec3(L.blackCrush * 0.10), vec3(1.0), layerColor);
+            layerColor = smoothstep(vec3(L.blackCrush * 0.12), vec3(1.0), layerColor);
         }
 
-        // Isolated Highlights & Shadows (Rec.709 Luma)
+        // Isolated Highlights & Shadows
         float luma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-        float sWeight = 1.0 - smoothstep(0.0, 0.50, luma);
+        float sWeight = 1.0 - smoothstep(0.0, 0.45, luma);
         layerColor += layerColor * (L.shadows * sWeight * 0.40);
 
-        float hWeight = smoothstep(0.50, 1.0, luma);
+        float hWeight = smoothstep(0.55, 1.0, luma);
         layerColor += layerColor * (L.highlights * hWeight * 0.40);
 
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
-        // 9. True Magic Bullet Mojo (Skin-Tone Masked Teal/Orange Split)
+        // 9. True Magic Bullet Mojo (Teal/Orange Split with Skin Masking)
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - luma * 1.8, 0.0, 1.0);
             float warmMask = clamp((luma - 0.45) * 2.0, 0.0, 1.0);
@@ -504,25 +500,27 @@ void main() {
             layerColor = clamp(hueMat * layerColor, 0.0, 1.0);
         }
 
-        // 13. TRUE SILKY DEEP GLOW WITH MULTI-OCTAVE GAUSSIAN FALLOFF
-        // Rebuilt: Eliminates checkerboard steps, blocky rings, and blinding whiteout
+        // =====================================================================
+        // 13. SILKY DEEP GLOW (Multi-Octave Soft Falloff + Highlight Compression)
+        // Eliminates duplicate ghosting: Samples source luma directly with smooth cubic knee
+        // =====================================================================
         if (L.deepGlowIntensity > 0.01) {
             vec3 bloomTint = vec3(1.0);
-            if (L.edgeGlowTint == 1.0) bloomTint = vec3(1.15, 1.02, 0.72);
-            else if (L.edgeGlowTint == 2.0) bloomTint = vec3(0.45, 1.10, 1.35);
-            else if (L.edgeGlowTint == 3.0) bloomTint = vec3(0.22, 0.22, 0.28);
-            else if (L.edgeGlowTint == 4.0) bloomTint = vec3(1.15, 0.12, 0.15);
-            else if (L.edgeGlowTint == 5.0) bloomTint = vec3(0.85, 0.50, 1.35);
+            if (L.edgeGlowTint == 1.0) bloomTint = vec3(1.18, 1.05, 0.70);      // Noble Gold
+            else if (L.edgeGlowTint == 2.0) bloomTint = vec3(0.40, 1.15, 1.40); // Cyan / Teal
+            else if (L.edgeGlowTint == 3.0) bloomTint = vec3(1.20, 0.85, 0.40); // Amber Sun
+            else if (L.edgeGlowTint == 4.0) bloomTint = vec3(1.25, 0.15, 0.20); // Crimson
+            else if (L.edgeGlowTint == 5.0) bloomTint = vec3(0.90, 0.45, 1.35); // Violet
 
             vec3 bloomAcc = vec3(0.0);
             float totalWeight = 0.0;
-            float baseRad = clamp(L.deepGlowRadius * 16.0, 3.0, 18.0);
-            float thresh = clamp(L.deepGlowThreshold, 0.40, 0.95);
+            float baseRad = clamp(L.deepGlowRadius * 18.0, 4.0, 20.0);
+            float thresh = clamp(L.deepGlowThreshold, 0.45, 0.95);
 
-            // 12-direction radial sampling prevents grid/block artifacts
+            // 12-Angle radial distribution stops grid blockiness & banding
             const int radialSteps = 12;
             for (int r = 1; r <= 3; r++) {
-                float currentR = baseRad * float(r) * 0.45;
+                float currentR = baseRad * float(r) * 0.48;
                 float sigma2 = 2.0 * currentR * currentR;
                 for (int d = 0; d < radialSteps; d++) {
                     float theta = float(d) * (6.2831853 / float(radialSteps));
@@ -531,8 +529,8 @@ void main() {
                     vec4 sCol = unpackRGBA(in_pixels[sCoord.y * width + sCoord.x]);
                     float sLum = dot(sCol.rgb, vec3(0.2126, 0.7152, 0.0722));
 
-                    // Soft-knee extraction (smooth cubic rolloff)
-                    float pass = smoothstep(thresh - 0.10, thresh + 0.12, sLum);
+                    // Soft cubic threshold knee
+                    float pass = smoothstep(thresh - 0.08, thresh + 0.14, sLum);
                     if (pass > 0.001) {
                         float dist2 = dot(offset, offset);
                         float weight = exp(-dist2 / max(sigma2, 0.001));
@@ -543,18 +541,23 @@ void main() {
             }
 
             if (totalWeight > 0.0) {
-                vec3 finalBloom = (bloomAcc / totalWeight) * (L.deepGlowIntensity * 0.60) * bloomTint;
-                // Soft-shoulder compression keeps line art and faces visible under glow
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(finalBloom, 0.0, 0.85));
+                vec3 rawGlow = (bloomAcc / totalWeight) * (L.deepGlowIntensity * 0.65) * bloomTint;
+                // Reinhard shoulder compression: Eliminates blinding nuclear whiteout!
+                vec3 safeGlow = rawGlow / (vec3(1.0) + rawGlow * 0.65);
+                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(safeGlow, 0.0, 0.85));
             }
         }
 
-        // 14. TRUE SAPPHIRE S_GLOW CORE WITH LINE ART PROTECTION
+        // =====================================================================
+        // 14. SAPPHIRE S_GLOW SPECULAR CORE (Tight Edge Specular Only)
+        // Frequency separated: Only wraps the razor peak highlights (hair, eyes, sword glints)
+        // =====================================================================
         if (L.sapphireGlowWidth > 0.01) {
-            float sRad = clamp(L.sapphireGlowWidth * 8.0, 2.0, 12.0);
+            float sRad = clamp(L.sapphireGlowWidth * 7.0, 1.5, 10.0);
             vec3 sGlowAcc = vec3(0.0);
             float sWeight = 0.0;
-            float sThresh = clamp(L.sapphireGlowThreshold, 0.50, 0.95);
+            // High threshold ensures it never overlaps with Deep Glow
+            float sThresh = clamp(L.sapphireGlowThreshold, 0.65, 0.98);
             float sSigma2 = 2.0 * sRad * sRad;
 
             const int sSteps = 8;
@@ -573,34 +576,63 @@ void main() {
             }
 
             if (sWeight > 0.0) {
-                vec3 sAura = (sGlowAcc / sWeight) * 0.30;
-                layerColor += sAura * (1.0 - lineEdge * 0.65);
+                vec3 sCore = (sGlowAcc / sWeight) * 0.35;
+                // Line art protection keeps dark anime ink lines crisp right under the specular glint
+                layerColor += sCore * (1.0 - lineEdge * 0.70);
             }
         }
 
-        // 15. SPECULAR ANAMORPHIC FLARES (Row-Bounded Specular Highlights)
+        // =====================================================================
+        // 15. ADEVOB-GRADE ANAMORPHIC FLARES & STAR SPARKLES (Zero Purple Laser Bars!)
+        // Triggers ONLY from genuine high-intensity pinpoints with blue-tail chromatic dispersion
+        // =====================================================================
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
             float localLum = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-            if (localLum > 0.82) {
-                int flareSpan = int(float(width) * clamp(L.thinStreakWidth * 0.25, 0.05, 0.35));
-                vec3 flareAcc = vec3(0.0);
-                float fWeight = 0.0;
 
-                for (int fx = -flareSpan; fx <= flareSpan; fx += 4) {
-                    ivec2 fc = clamp(coord + ivec2(fx, 0), ivec2(0), ivec2(width - 1, height - 1));
-                    vec4 fp = unpackRGBA(in_pixels[fc.y * width + fc.x]);
-                    float fl = dot(fp.rgb, vec3(0.2126, 0.7152, 0.0722));
-                    if (fl > 0.84) {
-                        float dist = abs(float(fx));
-                        float w = pow(1.0 - (dist / float(flareSpan)), 3.0);
-                        flareAcc += fp.rgb * w;
-                        fWeight += w;
+            // Pinpoint luma gating: Never activates across flat skin or background
+            if (localLum > 0.78) {
+                int halfSpan = int(clamp(L.thinStreakWidth * float(width) * 0.28, 16.0, 160.0));
+                
+                vec3 flareAcc = vec3(0.0);
+                float weightTotal = 0.0;
+                float sigmaX = float(halfSpan) * 0.38;
+                float twoSigma2 = 2.0 * sigmaX * sigmaX;
+
+                for (int dx = -halfSpan; dx <= halfSpan; dx += 2) {
+                    ivec2 sCoord = clamp(coord + ivec2(dx, 0), ivec2(0), ivec2(width - 1, height - 1));
+                    vec4 sampleCol = unpackRGBA(in_pixels[sCoord.y * width + sCoord.x]);
+                    float sLum = dot(sampleCol.rgb, vec3(0.2126, 0.7152, 0.0722));
+
+                    float specularFactor = smoothstep(0.80, 0.98, sLum);
+                    if (specularFactor > 0.001) {
+                        float dist = float(dx * dx);
+                        float gWeight = exp(-dist / twoSigma2);
+
+                        // True Anamorphic Chromatic Dispersion (Blue whisker stretches wider)
+                        vec3 dispersion = vec3(
+                            exp(-dist / (twoSigma2 * 0.75)), // Red (tight core)
+                            exp(-dist / (twoSigma2 * 0.90)), // Green
+                            exp(-dist / (twoSigma2 * 1.25))  // Blue (anamorphic cyan/blue tail)
+                        );
+
+                        flareAcc += sampleCol.rgb * specularFactor * gWeight * dispersion;
+                        weightTotal += gWeight;
                     }
                 }
 
-                if (fWeight > 0.0) {
-                    vec3 streak = (flareAcc / fWeight) * L.thinStreakIntensity * L.thinStreakOpacity * 0.38;
-                    layerColor += streak;
+                if (weightTotal > 0.0) {
+                    vec3 streak = (flareAcc / weightTotal) * (L.thinStreakIntensity * 1.65);
+
+                    vec3 streakTint = vec3(1.0, 1.05, 1.15);
+                    if (L.edgeGlowTint == 1.0) streakTint = vec3(1.20, 1.05, 0.70);
+                    else if (L.edgeGlowTint == 2.0) streakTint = vec3(0.40, 1.15, 1.40);
+                    else if (L.edgeGlowTint == 3.0) streakTint = vec3(1.20, 0.80, 0.40);
+                    else if (L.edgeGlowTint == 4.0) streakTint = vec3(1.25, 0.15, 0.20);
+                    else if (L.edgeGlowTint == 5.0) streakTint = vec3(0.90, 0.45, 1.35);
+
+                    streak *= streakTint * L.thinStreakOpacity;
+                    float outlineProtect = 1.0 - clamp(lineEdge * 0.75, 0.0, 0.85);
+                    layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(streak * outlineProtect, 0.0, 0.90));
                 }
             }
         }
