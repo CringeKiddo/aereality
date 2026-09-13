@@ -264,7 +264,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       width: outW,
       height: outH,
       numChannels: 4,
-      order: img.ChannelOrder.rgba,
     );
 
     // Mobile Vulkan safe tile size (200x200 with 12px seam overlap)
@@ -308,7 +307,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
           height: tileH * _scaleFactor,
           bytes: upscaledTileBytes.buffer,
           numChannels: 4,
-          order: img.ChannelOrder.rgba,
         );
 
         // Blit back inside inner crop (excluding overlap seam padding)
@@ -320,7 +318,14 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         for (int ty = 0; ty < validTileH; ty++) {
           for (int tx = 0; tx < validTileW; tx++) {
             final p = upTileImg.getPixel(inDstX + tx, inDstY + ty);
-            resultImage.setPixel(x * _scaleFactor + tx, y * _scaleFactor + ty, p);
+            resultImage.setPixelRgba(
+              x * _scaleFactor + tx,
+              y * _scaleFactor + ty,
+              p.r,
+              p.g,
+              p.b,
+              p.a,
+            );
           }
         }
       }
