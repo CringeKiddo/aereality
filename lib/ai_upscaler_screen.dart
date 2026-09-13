@@ -374,7 +374,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         throw Exception('Real-ESRGAN could not process the frame.');
       }
 
-      final upBytes = Uint8List.fromList(img.encodePng(upscaledImage));
+      final upBytes = img.encodePng(upscaledImage);
 
       if (mounted) {
         setState(() {
