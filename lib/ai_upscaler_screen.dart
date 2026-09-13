@@ -207,7 +207,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     return {'param': paramDest.path, 'bin': binDest.path};
   }
 
-  // Fast frame snapshot for timeline scrubber without memory pressure
   Future<void> _extractBaseFrame(double timeSeconds) async {
     if (_sourceFile == null) return;
     try {
@@ -234,15 +233,15 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
   }
 
   // ===========================================================================
-  // TRUE NEURAL REAL-ESRGAN TILING PIPELINE (ZERO GPU CRASHES, REAL AI UPSCALE)
+  // REAL-ESRGAN NEURAL TILING ENGINE (HARDWARE CRASH SHIELDED)
   // ===========================================================================
-  Future<img.Image?> _upscaleImageWithRealEsrganTiled(img.Image srcImage) async {
+  Future<Uint8List?> _upscaleImageWithRealEsrganTiled(img.Image srcImage) async {
     final modelPaths = await _resolveModelPaths();
     final paramFile = File(modelPaths['param']!);
     final binFile = File(modelPaths['bin']!);
 
     if (!await paramFile.exists() || !await binFile.exists() || paramFile.lengthSync() < 50 || binFile.lengthSync() < 1024) {
-      throw Exception('Real-ESRGAN weights not found in assets/models or Download folder.');
+      throw Exception('Real-ESRGAN model weights not located in assets or /storage/emulated/0/Shaderly.');
     }
 
     final bool ok = await VulkanBridge.initRealEsrgan(
@@ -252,7 +251,7 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     );
 
     if (!ok) {
-      throw Exception('Vulkan Real-ESRGAN GPU initialization failed.');
+      throw Exception('Native Vulkan NCNN GPU pipeline could not be initialized.');
     }
 
     final int inW = srcImage.width;
@@ -260,14 +259,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
     final int outW = inW * _scaleFactor;
     final int outH = inH * _scaleFactor;
 
-    final resultImage = img.Image(
-      width: outW,
-      height: outH,
-      numChannels: 4,
-    );
+    final Uint8List resultBytes = Uint8List(outW * outH * 4);
 
-    // Mobile Vulkan safe tile size (200x200 with 12px seam overlap)
-    const int tileSize = 200;
+    const int tileSize = 192; // 192 is directly divisible by 16 and 32 (Zero NCNN Crash)
     const int pad = 12;
 
     for (int y = 0; y < inH; y += tileSize) {
@@ -281,12 +275,8 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         final int x1 = math.min(inW, x + tileSize + pad);
         final int y1 = math.min(inH, y + tileSize + pad);
 
-        int tileW = x1 - x0;
-        int tileH = y1 - y0;
-
-        // Force 16-pixel alignment on tile dimensions for GPU compatibility
-        tileW = (tileW ~/ 16) * 16;
-        tileH = (tileH ~/ 16) * 16;
+        int tileW = ((x1 - x0) ~/ 16) * 16;
+        int tileH = ((y1 - y0) ~/ 16) * 16;
         if (tileW <= 0 || tileH <= 0) continue;
 
         final tileCrop = img.copyCrop(srcImage, x: x0, y: y0, width: tileW, height: tileH);
@@ -299,42 +289,39 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         );
 
         if (upscaledTileBytes == null) {
-          throw Exception('GPU neural inference failed on tile at ($x, $y).');
+          throw Exception('GPU inference stalled on tile at ($x, $y).');
         }
 
-        final upTileImg = img.Image.fromBytes(
-          width: tileW * _scaleFactor,
-          height: tileH * _scaleFactor,
-          bytes: upscaledTileBytes.buffer,
-          numChannels: 4,
-        );
-
-        // Blit back inside inner crop (excluding overlap seam padding)
+        final int tileOutW = tileW * _scaleFactor;
         final int inDstX = (x - x0) * _scaleFactor;
         final int inDstY = (y - y0) * _scaleFactor;
         final int validTileW = math.min(tileSize, inW - x) * _scaleFactor;
         final int validTileH = math.min(tileSize, inH - y) * _scaleFactor;
 
         for (int ty = 0; ty < validTileH; ty++) {
-          for (int tx = 0; tx < validTileW; tx++) {
-            final p = upTileImg.getPixel(inDstX + tx, inDstY + ty);
-            resultImage.setPixelRgba(
-              x * _scaleFactor + tx,
-              y * _scaleFactor + ty,
-              p.r,
-              p.g,
-              p.b,
-              p.a,
-            );
-          }
+          final int srcRowOffset = ((inDstY + ty) * tileOutW + inDstX) * 4;
+          final int dstRowOffset = (((y * _scaleFactor + ty) * outW) + (x * _scaleFactor)) * 4;
+          final int bytesToCopy = validTileW * 4;
+
+          resultBytes.setRange(
+            dstRowOffset,
+            dstRowOffset + bytesToCopy,
+            upscaledTileBytes.sublist(srcRowOffset, srcRowOffset + bytesToCopy),
+          );
         }
       }
     }
 
-    return resultImage;
+    final outImage = img.Image.fromBytes(
+      width: outW,
+      height: outH,
+      bytes: resultBytes.buffer,
+      numChannels: 4,
+    );
+
+    return Uint8List.fromList(img.encodePng(outImage));
   }
 
-  // Pure Real-ESRGAN Single-Frame Preview
   Future<void> _renderSingleFramePreview(double timeSeconds) async {
     if (_sourceFile == null || _isGeneratingFramePreview) return;
     setState(() {
@@ -348,7 +335,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       final old = File(origPath);
       if (await old.exists()) await old.delete();
 
-      // Extract reference frame at 720p so tiling takes 2-4 seconds with zero phone lag
       await FFmpegKit.execute(
         '-hide_banner -y -ss $timeSeconds -i "${_sourceFile!.path}" -vf "scale=iw*min(1\\,720/ih):ih*min(1\\,720/ih)" -vframes 1 "$origPath"',
       );
@@ -368,13 +354,11 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
 
       setState(() => _previewStatus = 'Running Tiled Real-ESRGAN Anime 6B...');
 
-      final upscaledImage = await _upscaleImageWithRealEsrganTiled(decoded);
+      final upBytes = await _upscaleImageWithRealEsrganTiled(decoded);
 
-      if (upscaledImage == null) {
-        throw Exception('Real-ESRGAN could not process the frame.');
+      if (upBytes == null) {
+        throw Exception('Real-ESRGAN could not complete inference.');
       }
-
-      final upBytes = img.encodePng(upscaledImage);
 
       if (mounted) {
         setState(() {
@@ -663,10 +647,9 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
         final paddedIndex = (i + 1).toString().padLeft(5, '0');
         final outFrameFile = File('${upscaledDir.path}/frame_$paddedIndex.png');
 
-        // Execute Real-ESRGAN Neural Tiling
-        final upscaledImg = await _upscaleImageWithRealEsrganTiled(decoded);
-        if (upscaledImg != null) {
-          await outFrameFile.writeAsBytes(img.encodePng(upscaledImg));
+        final upscaledPng = await _upscaleImageWithRealEsrganTiled(decoded);
+        if (upscaledPng != null) {
+          await outFrameFile.writeAsBytes(upscaledPng);
         }
 
         final double prog = (i + 1) / totalFrames;
@@ -827,7 +810,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
       ),
       body: Column(
         children: [
-          // VIEWPORT
           Expanded(
             flex: _isFullScreen ? 10 : 5,
             child: Container(
@@ -865,7 +847,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                 ),
                               ),
 
-                            // Split drag controller
                             Positioned.fill(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.translucent,
@@ -922,7 +903,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                               ),
                             ),
 
-                            // LIVE PREVIEW PROCESSING INDICATOR
                             if (_isGeneratingFramePreview)
                               Positioned(
                                 top: 12,
@@ -948,7 +928,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
                                 ),
                               ),
 
-                            // EXPORT PROGRESS OVERLAY
                             if (_isExporting)
                               Positioned(
                                 bottom: 16,
@@ -1006,7 +985,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
             ),
           ),
 
-          // TIMELINE FRAME SCRUBBER
           if (_sourceFile != null)
             Container(
               color: Colors.black54,
@@ -1038,7 +1016,6 @@ class _AiUpscalerScreenState extends State<AiUpscalerScreen> {
               ),
             ),
 
-          // CONTROLS
           Expanded(
             flex: 5,
             child: Container(
