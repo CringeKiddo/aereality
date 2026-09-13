@@ -3831,16 +3831,43 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       children: [
-        _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 2.0, (v) => _cur.deepGlowIntensity = v),
-        _buildSliderRow('Deep Glow Radius', _cur.deepGlowRadius, 0.0, 2.0, (v) => _cur.deepGlowRadius = v),
-        _buildSliderRow('Deep Glow Threshold', _cur.deepGlowThreshold, 0.0, 1.0, (v) => _cur.deepGlowThreshold = v),
-        _buildSliderRow('Sapphire Glow Width', _cur.sapphireGlowWidth, 0.0, 2.0, (v) => _cur.sapphireGlowWidth = v),
-        _buildSliderRow('Sapphire Threshold', _cur.sapphireGlowThreshold, 0.0, 1.0, (v) => _cur.sapphireGlowThreshold = v),
-
-        const SizedBox(height: 10),
+        // -------------------------------------------------------------
+        // 1. DEEP GLOW SECTION (Atmospheric Silk Falloff)
+        // -------------------------------------------------------------
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('GLOW TINT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          child: Text(
+            'DEEP GLOW (ATMOSPHERIC)',
+            style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+          ),
+        ),
+        _buildSliderRow('Deep Glow Intensity', _cur.deepGlowIntensity, 0.0, 2.0, (v) => _cur.deepGlowIntensity = v),
+        _buildSliderRow('Deep Glow Radius', _cur.deepGlowRadius, 0.0, 1.0, (v) => _cur.deepGlowRadius = v),
+        _buildSliderRow('Deep Glow Threshold', _cur.deepGlowThreshold, 0.20, 0.95, (v) => _cur.deepGlowThreshold = v),
+
+        const SizedBox(height: 8),
+
+        // -------------------------------------------------------------
+        // 2. SAPPHIRE SPECULAR CORE (Sharp Edge Wrap Only)
+        // -------------------------------------------------------------
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text(
+            'SAPPHIRE SPECULAR CORE',
+            style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+          ),
+        ),
+        _buildSliderRow('Sapphire Glow Width', _cur.sapphireGlowWidth, 0.0, 2.0, (v) => _cur.sapphireGlowWidth = v),
+        _buildSliderRow('Sapphire Threshold', _cur.sapphireGlowThreshold, 0.50, 0.99, (v) => _cur.sapphireGlowThreshold = v),
+
+        const SizedBox(height: 8),
+
+        // -------------------------------------------------------------
+        // 3. GLOW & FLARE TINT
+        // -------------------------------------------------------------
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('GLOW & FLARE TINT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -3848,6 +3875,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
           child: Wrap(
             spacing: 8,
+            runSpacing: 6,
             children: [
               {'id': 0.0, 'name': 'Natural White'},
               {'id': 1.0, 'name': 'Noble Gold'},
@@ -3876,10 +3904,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
 
         const SizedBox(height: 12),
-        _buildSliderRow('Streak Intensity', _cur.thinStreakIntensity, 0.0, 2.0, (v) => _cur.thinStreakIntensity = v),
-        _buildSliderRow('Streak Width', _cur.thinStreakWidth, 0.0, 2.0, (v) => _cur.thinStreakWidth = v),
-        _buildSliderRow('Streak Opacity', _cur.thinStreakOpacity, 0.0, 1.0, (v) => _cur.thinStreakOpacity = v),
-        _buildSliderRow('Chromatic Aberration', _cur.lineChromaStrength, 0.0, 2.0, (v) => _cur.lineChromaStrength = v),
+
+        // -------------------------------------------------------------
+        // 4. REVAMPED ANAMORPHIC FLARES & SPARKLES (ADEVOB / ENIGMA SUITE)
+        // -------------------------------------------------------------
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text(
+            'ANAMORPHIC FLARES & SPARKLES',
+            style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+          ),
+        ),
+        _buildSliderRow('Flare Intensity (Core)', _cur.thinStreakIntensity, 0.0, 2.0, (v) => _cur.thinStreakIntensity = v),
+        _buildSliderRow('Flare Spread (Width)', _cur.thinStreakWidth, 0.05, 2.0, (v) => _cur.thinStreakWidth = v),
+        _buildSliderRow('Flare Opacity & Falloff', _cur.thinStreakOpacity, 0.0, 1.0, (v) => _cur.thinStreakOpacity = v),
+        _buildSliderRow('Flare Chromatic Aberration', _cur.lineChromaStrength, 0.0, 2.0, (v) => _cur.lineChromaStrength = v),
       ],
     );
   }
