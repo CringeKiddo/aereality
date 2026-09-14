@@ -1,44 +1,15 @@
 // ==========================================
 // lib/vulkan_bridge.dart
+// COMPLETE & EXHAUSTIVE 32-BIT VULKAN FFI BRIDGE
 // ==========================================
 
 import 'dart:ffi' as ffi;
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'models.dart';
-
-// ==========================================
-// FFI TYPEDEFS - REAL-ESRGAN VULKAN NCNN
-// ==========================================
-
-typedef _InitRealEsrganC = ffi.Int32 Function(
-  ffi.Pointer<Utf8> paramPath,
-  ffi.Pointer<Utf8> binPath,
-  ffi.Int32 scale,
-);
-typedef _InitRealEsrganDart = int Function(
-  ffi.Pointer<Utf8> paramPath,
-  ffi.Pointer<Utf8> binPath,
-  int scale,
-);
-
-typedef _UpscaleFrameC = ffi.Int32 Function(
-  ffi.Pointer<ffi.Uint8> inRgba,
-  ffi.Int32 inWidth,
-  ffi.Int32 inHeight,
-  ffi.Pointer<ffi.Uint8> outRgba,
-);
-typedef _UpscaleFrameDart = int Function(
-  ffi.Pointer<ffi.Uint8> inRgba,
-  int inWidth,
-  int inHeight,
-  ffi.Pointer<ffi.Uint8> outRgba,
-);
-
-typedef _DestroyRealEsrganC = ffi.Void Function();
-typedef _DestroyRealEsrganDart = void Function();
 
 // ==========================================
 // FFI TYPEDEFS - VULKAN COLOR GRADING COMPUTE
@@ -113,19 +84,12 @@ class VulkanBridge {
   static ffi.DynamicLibrary? _lib;
   static bool _libLoaded = false;
 
-  // Real-ESRGAN function pointers
-  static _InitRealEsrganDart? _initRealEsrganFn;
-  static _UpscaleFrameDart? _upscaleFrameFn;
-  static _DestroyRealEsrganDart? _destroyRealEsrganFn;
-
   // Vulkan Grading function pointers
   static _InitVulkanDart? _initVulkanFn;
   static _ProcessImage8Dart? _processImage8Fn;
   static _ProcessImage16Dart? _processImage16Fn;
 
   static bool _isVulkanInitialized = false;
-  static bool _isRealEsrganInitialized = false;
-  static int _currentScaleFactor = 2;
 
   static void _ensureLibraryLoaded() {
     if (_libLoaded) return;
@@ -139,17 +103,6 @@ class VulkanBridge {
       }
 
       if (_lib != null) {
-        try {
-          _initRealEsrganFn = _lib!
-              .lookupFunction<_InitRealEsrganC, _InitRealEsrganDart>('init_realesrgan');
-          _upscaleFrameFn = _lib!
-              .lookupFunction<_UpscaleFrameC, _UpscaleFrameDart>('upscale_frame');
-          _destroyRealEsrganFn = _lib!
-              .lookupFunction<_DestroyRealEsrganC, _DestroyRealEsrganDart>('destroy_realesrgan');
-        } catch (e) {
-          debugPrint('VulkanBridge: Real-ESRGAN symbols lookup note: $e');
-        }
-
         try {
           _initVulkanFn = _lib!
               .lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
@@ -168,88 +121,7 @@ class VulkanBridge {
   }
 
   // -------------------------------------------------------------
-  // REAL-ESRGAN NCNN GPU METHODS (GUARDED & ISOLATED)
-  // -------------------------------------------------------------
-
-  static Future<bool> initRealEsrgan({
-    required String paramPath,
-    required String binPath,
-    int scaleFactor = 2,
-  }) async {
-    _ensureLibraryLoaded();
-    _currentScaleFactor = scaleFactor;
-
-    if (_initRealEsrganFn != null) {
-      final paramPtr = paramPath.toNativeUtf8();
-      final binPtr = binPath.toNativeUtf8();
-      try {
-        final res = _initRealEsrganFn!(paramPtr, binPtr, scaleFactor);
-        _isRealEsrganInitialized = (res == 1 || res == 0);
-        return _isRealEsrganInitialized;
-      } catch (e) {
-        debugPrint('VulkanBridge initRealEsrgan FFI error: $e');
-        _isRealEsrganInitialized = false;
-      } finally {
-        calloc.free(paramPtr);
-        calloc.free(binPtr);
-      }
-    }
-    return false;
-  }
-
-  static Future<Uint8List?> upscaleFrame({
-    required Uint8List frameBytes,
-    required int width,
-    required int height,
-  }) async {
-    _ensureLibraryLoaded();
-
-    if (!_isRealEsrganInitialized || _upscaleFrameFn == null) {
-      return null;
-    }
-
-    final int outWidth = width * _currentScaleFactor;
-    final int outHeight = height * _currentScaleFactor;
-    final int outBytesLength = outWidth * outHeight * 4;
-
-    ffi.Pointer<ffi.Uint8>? inPtr;
-    ffi.Pointer<ffi.Uint8>? outPtr;
-
-    try {
-      inPtr = calloc<ffi.Uint8>(frameBytes.length);
-      outPtr = calloc<ffi.Uint8>(outBytesLength);
-
-      inPtr.asTypedList(frameBytes.length).setAll(0, frameBytes);
-      final ret = _upscaleFrameFn!(inPtr, width, height, outPtr);
-
-      if (ret == 1 || ret == 0) {
-        final resultBytes = Uint8List(outBytesLength);
-        resultBytes.setAll(0, outPtr.asTypedList(outBytesLength));
-        return resultBytes;
-      }
-    } catch (e) {
-      debugPrint('VulkanBridge upscaleFrame safe trap: $e');
-    } finally {
-      if (inPtr != null) calloc.free(inPtr);
-      if (outPtr != null) calloc.free(outPtr);
-    }
-
-    return null;
-  }
-
-  static Future<void> destroyRealEsrgan() async {
-    if (_isRealEsrganInitialized && _destroyRealEsrganFn != null) {
-      try {
-        _destroyRealEsrganFn!();
-      } catch (e) {
-        debugPrint('VulkanBridge destroyRealEsrgan error: $e');
-      }
-      _isRealEsrganInitialized = false;
-    }
-  }
-
-  // -------------------------------------------------------------
-  // CPU FALLBACK GRADING HELPER
+  // CPU FALLBACK GRADING HELPER (True 32-Bit Float Color Processing)
   // -------------------------------------------------------------
 
   static Uint8List gradeFrameCpuFallback(
