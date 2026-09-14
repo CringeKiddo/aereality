@@ -5,6 +5,11 @@
 import 'package:flutter/material.dart';
 
 // -----------------------------------------------------------------------------
+// YouTube Channel Constant (Required by main.dart:427)
+// -----------------------------------------------------------------------------
+const String kMyYouTubeChannel = 'https://youtube.com/@cringekiddo';
+
+// -----------------------------------------------------------------------------
 // Global Theme & Brand Colors
 // -----------------------------------------------------------------------------
 const Color kCyanAccent = Color(0xFF00E5FF);
@@ -33,8 +38,9 @@ enum PerformancePreset {
 // Global Preview Scale (1.0 = Native 100%, 0.75 = 75%, 0.5 = 50% for fast FPS)
 double gPreviewScale = 1.0;
 
-// Global Vulkan Engine Compute Precision (Defaults to FP32 true linear precision)
-EnginePrecision gEnginePrecision = EnginePrecision.fp32;
+// Global Vulkan Engine Compute Precision as INT for initVulkan(shaderBytes, gEnginePrecision)
+// 0 = FP16, 1 = FP32 (Defaults to 1 for full 32-bit linear precision)
+int gEnginePrecision = 1;
 
 // -----------------------------------------------------------------------------
 // Anime Aesthetic Palette Constants
