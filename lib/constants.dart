@@ -1,10 +1,12 @@
 // =============================================================================
-// AEReality - Constants, Palettes, Enums & Hardware MediaCodec Export Matrix
+// AEReality - Constants, Globals, Palettes, Enums & Hardware MediaCodec Export Matrix
 // =============================================================================
 
 import 'package:flutter/material.dart';
 
-// Brand Accent & Theme Colors
+// -----------------------------------------------------------------------------
+// Global Theme & Brand Colors
+// -----------------------------------------------------------------------------
 const Color kCyanAccent = Color(0xFF00E5FF);
 const Color kBackgroundDark = Color(0xFF08080C);
 const Color kSurfaceDark = Color(0xFF101016);
@@ -14,7 +16,29 @@ const Color kBorderDark = Color(0xFF222230);
 // Global Active Accent
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kCyanAccent);
 
+// -----------------------------------------------------------------------------
+// Global Engine & Performance Settings (Required by main.dart)
+// -----------------------------------------------------------------------------
+enum EnginePrecision {
+  fp16,
+  fp32,
+}
+
+enum PerformancePreset {
+  powerSave,
+  balanced,
+  ultra,
+}
+
+// Global Preview Scale (1.0 = Native 100%, 0.75 = 75%, 0.5 = 50% for fast FPS)
+double gPreviewScale = 1.0;
+
+// Global Vulkan Engine Compute Precision (Defaults to FP32 true linear precision)
+EnginePrecision gEnginePrecision = EnginePrecision.fp32;
+
+// -----------------------------------------------------------------------------
 // Anime Aesthetic Palette Constants
+// -----------------------------------------------------------------------------
 class AnimePalette {
   static const Color gokuOrange = Color(0xFFFF9100);
   static const Color gojoCyan = Color(0xFF00E5FF);
@@ -30,7 +54,9 @@ class AnimePalette {
   static const Color deepCharcoal = Color(0xFF212121);
 }
 
+// -----------------------------------------------------------------------------
 // Preset Category Styles & Color Accents
+// -----------------------------------------------------------------------------
 class PresetStyle {
   final String name;
   final Color accent;
@@ -69,7 +95,9 @@ const List<PresetStyle> kAnimePresetStyles = [
   PresetStyle(name: 'Gojo', accent: AnimePalette.gojoCyan, description: 'Six Eyes electric cyan infinity bloom, razor acutance & vivid rim'),
 ];
 
+// -----------------------------------------------------------------------------
 // Robust Export Matrix & Universal FFmpeg Command Builder
+// -----------------------------------------------------------------------------
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
     'MP4': [
@@ -164,7 +192,7 @@ class ExportMatrix {
       extraFlags = '-preset ultrafast -tune animation -threads 4 -b:v ${bitrateKbps}k';
     }
 
-    // -framerate BEFORE -i prevents infinite frame buffer stall on Android
+    // Placing -framerate BEFORE -i prevents infinite frame buffer stall on Android
     return '-hide_banner -loglevel error -y -framerate $fps -i "$framePattern" -c:v $vcodec -pix_fmt $pixFmt $extraFlags "$outputPath"';
   }
 }
