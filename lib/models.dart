@@ -65,7 +65,6 @@ class AdjustmentLayer {
   double vignette;
   double vignetteBoxed;
   double edgeDarken;
-  double edgeDarkenOpacity;
   double darkOutlines;
   double denoise;
   double filmGrain;
@@ -87,16 +86,29 @@ class AdjustmentLayer {
   double volRaysDecay;
   double sapphireGlowWidth;
   double sapphireGlowThreshold;
+  double centerAura;
+  double horizontalRamp;
+  int videoFlareType; // 0: None, 1: Anamorphic Blue, 2: Sun Warm, 3: Laser White
 
-  // Depth of Field
-  double depthOfField;
-  double dofFocus;
-  double dofAngle;
+  // Magic (Magic Bullet Suite replication)
+  double mblMojoTealOrange;
+  double mblColoristaLift;
+  double mblColoristaGamma;
+  double mblColoristaGain;
+  double cosmoCleanHighlight;
 
-  // Unsharp Mask Sub-Sliders
-  double unsharpRadius;
-  double unsharpAmount;
-  double unsharpThreshold;
+  // Copied Stuff (From @adevob.cranberry reference videos)
+  double copiedChromaShift;
+  double copiedEdgeRays;
+  double copiedProMist;
+  double copiedStarGlint;
+
+  // Atmosphere / BSLA
+  double bslaGodRays;
+  double bslaFogDensity;
+  double bslaFogDepth;
+  double bslaBloomHaze;
+  double bslFogScatter;
 
   // Spline Curves
   List<double> curveMaster;
@@ -104,19 +116,12 @@ class AdjustmentLayer {
   List<double> curveGreen;
   List<double> curveBlue;
 
-  // Magic Bullet & BSLA
-  double mblMojoTealOrange;
-  double mblColoristaLift;
-  double mblColoristaGamma;
-  double mblColoristaGain;
-  double bslaGodRays;
-  double bslaFogDensity;
-  double bslaFogDepth;
-  double bslaBloomHaze;
-  double bslFogScatter;
-  double dehaze;
+  // Unsharp Mask Sub-Sliders
+  double unsharpRadius;
+  double unsharpAmount;
+  double unsharpThreshold;
 
-  // 3D LUT Implementation
+  // 3D LUT
   String? activeLutId;
   double lutOpacity;
 
@@ -139,7 +144,6 @@ class AdjustmentLayer {
     this.vignette = 0.0,
     this.vignetteBoxed = 0.0,
     this.edgeDarken = 0.0,
-    this.edgeDarkenOpacity = 0.85,
     this.darkOutlines = 0.0,
     this.denoise = 0.0,
     this.filmGrain = 0.0,
@@ -149,7 +153,7 @@ class AdjustmentLayer {
     this.halationWarmth = 0.0,
     this.deepGlowIntensity = 0.0,
     this.deepGlowRadius = 0.5,
-    this.deepGlowThreshold = 0.45,
+    this.deepGlowThreshold = 0.65,
     this.edgeGlowTint = 0.0,
     this.thinStreakIntensity = 0.0,
     this.thinStreakWidth = 0.5,
@@ -158,10 +162,24 @@ class AdjustmentLayer {
     this.volRaysLength = 0.0,
     this.volRaysDecay = 0.88,
     this.sapphireGlowWidth = 0.0,
-    this.sapphireGlowThreshold = 0.5,
-    this.depthOfField = 0.0,
-    this.dofFocus = 0.5,
-    this.dofAngle = 0.0,
+    this.sapphireGlowThreshold = 0.70,
+    this.centerAura = 0.0,
+    this.horizontalRamp = 0.0,
+    this.videoFlareType = 0,
+    this.mblMojoTealOrange = 0.0,
+    this.mblColoristaLift = 0.0,
+    this.mblColoristaGamma = 0.0,
+    this.mblColoristaGain = 0.0,
+    this.cosmoCleanHighlight = 0.0,
+    this.copiedChromaShift = 0.0,
+    this.copiedEdgeRays = 0.0,
+    this.copiedProMist = 0.0,
+    this.copiedStarGlint = 0.0,
+    this.bslaGodRays = 0.0,
+    this.bslaFogDensity = 0.0,
+    this.bslaFogDepth = 0.5,
+    this.bslaBloomHaze = 0.0,
+    this.bslFogScatter = 0.35,
     this.unsharpRadius = 1.5,
     this.unsharpAmount = 0.0,
     this.unsharpThreshold = 0.02,
@@ -169,16 +187,6 @@ class AdjustmentLayer {
     List<double>? curveRed,
     List<double>? curveGreen,
     List<double>? curveBlue,
-    this.mblMojoTealOrange = 0.0,
-    this.mblColoristaLift = 0.0,
-    this.mblColoristaGamma = 0.0,
-    this.mblColoristaGain = 0.0,
-    this.bslaGodRays = 0.0,
-    this.bslaFogDensity = 0.0,
-    this.bslaFogDepth = 0.5,
-    this.bslaBloomHaze = 0.0,
-    this.bslFogScatter = 0.35,
-    this.dehaze = 0.0,
     this.activeLutId,
     this.lutOpacity = 1.0,
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.5, 0.75, 1.0],
@@ -206,7 +214,6 @@ class AdjustmentLayer {
       vignette: vignette,
       vignetteBoxed: vignetteBoxed,
       edgeDarken: edgeDarken,
-      edgeDarkenOpacity: edgeDarkenOpacity,
       darkOutlines: darkOutlines,
       denoise: denoise,
       filmGrain: filmGrain,
@@ -226,9 +233,23 @@ class AdjustmentLayer {
       volRaysDecay: volRaysDecay,
       sapphireGlowWidth: sapphireGlowWidth,
       sapphireGlowThreshold: sapphireGlowThreshold,
-      depthOfField: depthOfField,
-      dofFocus: dofFocus,
-      dofAngle: dofAngle,
+      centerAura: centerAura,
+      horizontalRamp: horizontalRamp,
+      videoFlareType: videoFlareType,
+      mblMojoTealOrange: mblMojoTealOrange,
+      mblColoristaLift: mblColoristaLift,
+      mblColoristaGamma: mblColoristaGamma,
+      mblColoristaGain: mblColoristaGain,
+      cosmoCleanHighlight: cosmoCleanHighlight,
+      copiedChromaShift: copiedChromaShift,
+      copiedEdgeRays: copiedEdgeRays,
+      copiedProMist: copiedProMist,
+      copiedStarGlint: copiedStarGlint,
+      bslaGodRays: bslaGodRays,
+      bslaFogDensity: bslaFogDensity,
+      bslaFogDepth: bslaFogDepth,
+      bslaBloomHaze: bslaBloomHaze,
+      bslFogScatter: bslFogScatter,
       unsharpRadius: unsharpRadius,
       unsharpAmount: unsharpAmount,
       unsharpThreshold: unsharpThreshold,
@@ -236,16 +257,6 @@ class AdjustmentLayer {
       curveRed: List<double>.from(curveRed),
       curveGreen: List<double>.from(curveGreen),
       curveBlue: List<double>.from(curveBlue),
-      mblMojoTealOrange: mblMojoTealOrange,
-      mblColoristaLift: mblColoristaLift,
-      mblColoristaGamma: mblColoristaGamma,
-      mblColoristaGain: mblColoristaGain,
-      bslaGodRays: bslaGodRays,
-      bslaFogDensity: bslaFogDensity,
-      bslaFogDepth: bslaFogDepth,
-      bslaBloomHaze: bslaBloomHaze,
-      bslFogScatter: bslFogScatter,
-      dehaze: dehaze,
       activeLutId: activeLutId,
       lutOpacity: lutOpacity,
     );
@@ -270,7 +281,6 @@ class AdjustmentLayer {
     'vignette': vignette,
     'vignetteBoxed': vignetteBoxed,
     'edgeDarken': edgeDarken,
-    'edgeDarkenOpacity': edgeDarkenOpacity,
     'darkOutlines': darkOutlines,
     'denoise': denoise,
     'filmGrain': filmGrain,
@@ -290,9 +300,23 @@ class AdjustmentLayer {
     'volRaysDecay': volRaysDecay,
     'sapphireGlowWidth': sapphireGlowWidth,
     'sapphireGlowThreshold': sapphireGlowThreshold,
-    'depthOfField': depthOfField,
-    'dofFocus': dofFocus,
-    'dofAngle': dofAngle,
+    'centerAura': centerAura,
+    'horizontalRamp': horizontalRamp,
+    'videoFlareType': videoFlareType,
+    'mblMojoTealOrange': mblMojoTealOrange,
+    'mblColoristaLift': mblColoristaLift,
+    'mblColoristaGamma': mblColoristaGamma,
+    'mblColoristaGain': mblColoristaGain,
+    'cosmoCleanHighlight': cosmoCleanHighlight,
+    'copiedChromaShift': copiedChromaShift,
+    'copiedEdgeRays': copiedEdgeRays,
+    'copiedProMist': copiedProMist,
+    'copiedStarGlint': copiedStarGlint,
+    'bslaGodRays': bslaGodRays,
+    'bslaFogDensity': bslaFogDensity,
+    'bslaFogDepth': bslaFogDepth,
+    'bslaBloomHaze': bslaBloomHaze,
+    'bslFogScatter': bslFogScatter,
     'unsharpRadius': unsharpRadius,
     'unsharpAmount': unsharpAmount,
     'unsharpThreshold': unsharpThreshold,
@@ -300,16 +324,6 @@ class AdjustmentLayer {
     'curveRed': curveRed,
     'curveGreen': curveGreen,
     'curveBlue': curveBlue,
-    'mblMojoTealOrange': mblMojoTealOrange,
-    'mblColoristaLift': mblColoristaLift,
-    'mblColoristaGamma': mblColoristaGamma,
-    'mblColoristaGain': mblColoristaGain,
-    'bslaGodRays': bslaGodRays,
-    'bslaFogDensity': bslaFogDensity,
-    'bslaFogDepth': bslaFogDepth,
-    'bslaBloomHaze': bslaBloomHaze,
-    'bslFogScatter': bslFogScatter,
-    'dehaze': dehaze,
     'activeLutId': activeLutId,
     'lutOpacity': lutOpacity,
   };
@@ -333,7 +347,6 @@ class AdjustmentLayer {
     vignette: (json['vignette'] as num?)?.toDouble() ?? 0.0,
     vignetteBoxed: (json['vignetteBoxed'] as num?)?.toDouble() ?? 0.0,
     edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
-    edgeDarkenOpacity: (json['edgeDarkenOpacity'] as num?)?.toDouble() ?? 0.85,
     darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
     denoise: (json['denoise'] as num?)?.toDouble() ?? 0.0,
     filmGrain: (json['filmGrain'] as num?)?.toDouble() ?? 0.0,
@@ -343,7 +356,7 @@ class AdjustmentLayer {
     halationWarmth: (json['halationWarmth'] as num?)?.toDouble() ?? 0.0,
     deepGlowIntensity: (json['deepGlowIntensity'] as num?)?.toDouble() ?? 0.0,
     deepGlowRadius: (json['deepGlowRadius'] as num?)?.toDouble() ?? 0.5,
-    deepGlowThreshold: (json['deepGlowThreshold'] as num?)?.toDouble() ?? 0.45,
+    deepGlowThreshold: (json['deepGlowThreshold'] as num?)?.toDouble() ?? 0.65,
     edgeGlowTint: (json['edgeGlowTint'] as num?)?.toDouble() ?? 0.0,
     thinStreakIntensity: (json['thinStreakIntensity'] as num?)?.toDouble() ?? 0.0,
     thinStreakWidth: (json['thinStreakWidth'] as num?)?.toDouble() ?? 0.5,
@@ -352,10 +365,24 @@ class AdjustmentLayer {
     volRaysLength: (json['volRaysLength'] as num?)?.toDouble() ?? 0.0,
     volRaysDecay: (json['volRaysDecay'] as num?)?.toDouble() ?? 0.88,
     sapphireGlowWidth: (json['sapphireGlowWidth'] as num?)?.toDouble() ?? 0.0,
-    sapphireGlowThreshold: (json['sapphireGlowThreshold'] as num?)?.toDouble() ?? 0.5,
-    depthOfField: (json['depthOfField'] as num?)?.toDouble() ?? 0.0,
-    dofFocus: (json['dofFocus'] as num?)?.toDouble() ?? 0.5,
-    dofAngle: (json['dofAngle'] as num?)?.toDouble() ?? 0.0,
+    sapphireGlowThreshold: (json['sapphireGlowThreshold'] as num?)?.toDouble() ?? 0.70,
+    centerAura: (json['centerAura'] as num?)?.toDouble() ?? 0.0,
+    horizontalRamp: (json['horizontalRamp'] as num?)?.toDouble() ?? 0.0,
+    videoFlareType: (json['videoFlareType'] as num?)?.toInt() ?? 0,
+    mblMojoTealOrange: (json['mblMojoTealOrange'] as num?)?.toDouble() ?? 0.0,
+    mblColoristaLift: (json['mblColoristaLift'] as num?)?.toDouble() ?? 0.0,
+    mblColoristaGamma: (json['mblColoristaGamma'] as num?)?.toDouble() ?? 0.0,
+    mblColoristaGain: (json['mblColoristaGain'] as num?)?.toDouble() ?? 0.0,
+    cosmoCleanHighlight: (json['cosmoCleanHighlight'] as num?)?.toDouble() ?? 0.0,
+    copiedChromaShift: (json['copiedChromaShift'] as num?)?.toDouble() ?? 0.0,
+    copiedEdgeRays: (json['copiedEdgeRays'] as num?)?.toDouble() ?? 0.0,
+    copiedProMist: (json['copiedProMist'] as num?)?.toDouble() ?? 0.0,
+    copiedStarGlint: (json['copiedStarGlint'] as num?)?.toDouble() ?? 0.0,
+    bslaGodRays: (json['bslaGodRays'] as num?)?.toDouble() ?? 0.0,
+    bslaFogDensity: (json['bslaFogDensity'] as num?)?.toDouble() ?? 0.0,
+    bslaFogDepth: (json['bslaFogDepth'] as num?)?.toDouble() ?? 0.5,
+    bslaBloomHaze: (json['bslaBloomHaze'] as num?)?.toDouble() ?? 0.0,
+    bslFogScatter: (json['bslFogScatter'] as num?)?.toDouble() ?? 0.35,
     unsharpRadius: (json['unsharpRadius'] as num?)?.toDouble() ?? 1.5,
     unsharpAmount: (json['unsharpAmount'] as num?)?.toDouble() ?? 0.0,
     unsharpThreshold: (json['unsharpThreshold'] as num?)?.toDouble() ?? 0.02,
@@ -363,16 +390,6 @@ class AdjustmentLayer {
     curveRed: (json['curveRed'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
     curveGreen: (json['curveGreen'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
     curveBlue: (json['curveBlue'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
-    mblMojoTealOrange: (json['mblMojoTealOrange'] as num?)?.toDouble() ?? 0.0,
-    mblColoristaLift: (json['mblColoristaLift'] as num?)?.toDouble() ?? 0.0,
-    mblColoristaGamma: (json['mblColoristaGamma'] as num?)?.toDouble() ?? 0.0,
-    mblColoristaGain: (json['mblColoristaGain'] as num?)?.toDouble() ?? 0.0,
-    bslaGodRays: (json['bslaGodRays'] as num?)?.toDouble() ?? 0.0,
-    bslaFogDensity: (json['bslaFogDensity'] as num?)?.toDouble() ?? 0.0,
-    bslaFogDepth: (json['bslaFogDepth'] as num?)?.toDouble() ?? 0.5,
-    bslaBloomHaze: (json['bslaBloomHaze'] as num?)?.toDouble() ?? 0.0,
-    bslFogScatter: (json['bslFogScatter'] as num?)?.toDouble() ?? 0.35,
-    dehaze: (json['dehaze'] as num?)?.toDouble() ?? 0.0,
     activeLutId: json['activeLutId'],
     lutOpacity: (json['lutOpacity'] as num?)?.toDouble() ?? 1.0,
   );
@@ -382,7 +399,7 @@ class ProjectData {
   String mediaPath;
   bool isImage;
   String aspectRatio;
-  double tonemapMode;
+  double tonemapMode; // 0: None, 1: Shaderly Tonemapper 1, 2: Shaderly Tonemapper 2
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
 
@@ -516,7 +533,7 @@ class ProjectManager {
 
   static Future<List<StoredProject>> loadProjects() async {
     try {
-      final file = await _getFile('shaderly_saved_projects_v4.json');
+      final file = await _getFile('shaderly_saved_projects_v5.json');
       if (await file.exists()) {
         final content = await file.readAsString();
         final List<dynamic> list = jsonDecode(content);
@@ -542,7 +559,7 @@ class ProjectManager {
 
   static Future<void> _persistProjects() async {
     try {
-      final file = await _getFile('shaderly_saved_projects_v4.json');
+      final file = await _getFile('shaderly_saved_projects_v5.json');
       final data = jsonEncode(_cachedProjects.map((p) => p.toJson()).toList());
       await file.writeAsString(data, flush: true);
     } catch (_) {}
@@ -550,7 +567,7 @@ class ProjectManager {
 
   static Future<List<CustomPresetItem>> loadCustomPresets() async {
     try {
-      final file = await _getFile('shaderly_custom_presets_v4.json');
+      final file = await _getFile('shaderly_custom_presets_v5.json');
       if (await file.exists()) {
         final content = await file.readAsString();
         final List<dynamic> list = jsonDecode(content);
@@ -563,7 +580,7 @@ class ProjectManager {
   static Future<void> saveCustomPresets(List<CustomPresetItem> presets) async {
     _cachedPresets = List.from(presets);
     try {
-      final file = await _getFile('shaderly_custom_presets_v4.json');
+      final file = await _getFile('shaderly_custom_presets_v5.json');
       final data = jsonEncode(_cachedPresets.map((p) => p.toJson()).toList());
       await file.writeAsString(data, flush: true);
     } catch (_) {}
@@ -571,7 +588,7 @@ class ProjectManager {
 
   static Future<List<LutModel>> loadLuts() async {
     try {
-      final file = await _getFile('shaderly_stored_luts_v4.json');
+      final file = await _getFile('shaderly_stored_luts_v5.json');
       if (await file.exists()) {
         final content = await file.readAsString();
         final List<dynamic> list = jsonDecode(content);
@@ -584,7 +601,7 @@ class ProjectManager {
   static Future<void> saveLuts(List<LutModel> luts) async {
     _cachedLuts = List.from(luts.take(4));
     try {
-      final file = await _getFile('shaderly_stored_luts_v4.json');
+      final file = await _getFile('shaderly_stored_luts_v5.json');
       final data = jsonEncode(_cachedLuts.map((p) => p.toJson()).toList());
       await file.writeAsString(data, flush: true);
     } catch (_) {}
