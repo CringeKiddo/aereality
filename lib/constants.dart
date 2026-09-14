@@ -7,16 +7,14 @@ const Color kCyanAccent = Color(0xFF00E5FF);
 const String kMyYouTubeChannel = 'https://youtube.com/@null7839';
 
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(const Color(0xFF7FFFD4));
-int gEnginePrecision = 32;
-double gPreviewScale = 0.50;
+const int gEnginePrecision = 32; // Strictly 32-bit float
+double gPreviewScale = 0.50; // Active preview scaler (shield for 2K/4K imports)
 
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
     'MP4': [
       'H.264 (Hardware MediaCodec)',
       'H.265 / HEVC (Hardware MediaCodec)',
-      'H.264 High Profile',
-      'H.265 / HEVC (Software libx265)',
       'AV1 High Efficiency (libsvtav1)',
     ],
     'WebM': [
@@ -26,12 +24,12 @@ class ExportMatrix {
     'MOV': [
       'Apple ProRes 422 HQ',
       'Apple ProRes 4444 XQ',
-      'H.264 High Profile',
-      'H.265 / HEVC (Software libx265)',
+      'H.264 (Hardware MediaCodec)',
+      'H.265 / HEVC (Hardware MediaCodec)',
     ],
     'MKV': [
-      'H.264 High Profile',
-      'H.265 / HEVC (Software libx265)',
+      'H.264 (Hardware MediaCodec)',
+      'H.265 / HEVC (Hardware MediaCodec)',
       'VP9 Broadcast Master (libvpx-vp9)',
       'AV1 High Efficiency (libsvtav1)',
       'FFV1 Master (Lossless Archival)',
@@ -40,10 +38,10 @@ class ExportMatrix {
 
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
-      return codec.contains('FFV1') || codec.contains('ProRes 4444');
+      return container == 'MKV' && (codec.contains('FFV1') || codec.contains('ProRes'));
     }
     if (bitDepth == '10-bit') {
-      if (codec.contains('H.264 (Hardware MediaCodec)')) return false;
+      if (codec.contains('H.264')) return false;
       return true;
     }
     return true;
@@ -59,10 +57,10 @@ class ExportMatrix {
   static String getAudioCodec(String container) {
     switch (container) {
       case 'WebM':
+      case 'MKV':
         return 'libopus';
       case 'MP4':
       case 'MOV':
-      case 'MKV':
       default:
         return 'aac';
     }
@@ -80,9 +78,10 @@ class ExportMatrix {
     String vcodecParam = '';
     String pixFmtParam = '';
     String extraParams = '';
+    String videoFilter = '';
 
     // =========================================================================
-    // 1. HARDWARE MEDIACODEC (Fixed with -pix_fmt yuv420p & baseline safety)
+    // 1. HARDWARE MEDIACODEC (Native Android HW Encode)
     // =========================================================================
     if (codec.contains('H.264 (Hardware MediaCodec)')) {
       vcodecParam = '-c:v h264_mediacodec';
@@ -94,27 +93,28 @@ class ExportMatrix {
       extraParams = '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps * 1.2}k -bufsize ${bitrateKbps * 2}k';
     }
     // =========================================================================
-    // 2. AV1 ENCODERS (Fixed memory freeze at 88% via bounded thread parameters)
+    // 2. VP9 (With +0.3 Contrast/Sharpness Snap)
+    // =========================================================================
+    else if (codec.contains('VP9')) {
+      vcodecParam = '-c:v libvpx-vp9';
+      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
+      videoFilter = '-vf "unsharp=5:5:0.3:5:5:0.0"';
+      extraParams = '-b:v ${bitrateKbps}k -deadline realtime -cpu-used 4 -row-mt 1';
+    }
+    // =========================================================================
+    // 3. AV1 (Bound thread params to prevent OOM hang)
     // =========================================================================
     else if (codec.contains('libsvtav1')) {
       vcodecParam = '-c:v libsvtav1';
       pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
-      extraParams = '-preset 7 -svtav1-params tune=0:enable-hdr=1:tile-columns=1:tile-rows=1 -b:v ${bitrateKbps}k -g $fps';
+      extraParams = '-preset 7 -b:v ${bitrateKbps}k -g $fps';
     } else if (codec.contains('libaom-av1')) {
       vcodecParam = '-c:v libaom-av1';
       pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
       extraParams = '-cpu-used 5 -row-mt 1 -tiles 2x1 -strict -2 -b:v ${bitrateKbps}k -g $fps';
     }
     // =========================================================================
-    // 3. VP9 (With +0.3 Contrast/Saturation Snap Built-in)
-    // =========================================================================
-    else if (codec.contains('VP9')) {
-      vcodecParam = '-c:v libvpx-vp9';
-      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
-      extraParams = '-b:v ${bitrateKbps}k -deadline realtime -cpu-used 4 -row-mt 1';
-    }
-    // =========================================================================
-    // 4. APPLE PRORES & FFV1 ARCHIVAL
+    // 4. APPLE PRORES & FFV1
     // =========================================================================
     else if (codec.contains('ProRes 4444')) {
       vcodecParam = '-c:v prores_ks -profile:v 4';
@@ -127,24 +127,16 @@ class ExportMatrix {
     } else if (codec.contains('FFV1')) {
       vcodecParam = '-c:v ffv1 -level 3 -slicecrc 1';
       pixFmtParam = (bitDepth == '16-bit')
-          ? '-pix_fmt yuv444p16le'
+          ? '-pix_fmt gbrp16le'
           : (bitDepth == '10-bit' ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p');
       extraParams = '';
-    }
-    // =========================================================================
-    // 5. STANDARD SOFTWARE H.264 & H.265
-    // =========================================================================
-    else if (codec.contains('libx265')) {
-      vcodecParam = '-c:v libx265';
-      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
-      extraParams = '-preset medium -b:v ${bitrateKbps}k -x265-params log-level=error';
     } else {
-      // H.264 High Profile
-      vcodecParam = '-c:v libx264';
-      pixFmtParam = (bitDepth == '10-bit') ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv420p';
-      extraParams = '-preset medium -b:v ${bitrateKbps}k';
+      vcodecParam = '-c:v h264_mediacodec';
+      pixFmtParam = '-pix_fmt yuv420p';
+      extraParams = '-b:v ${bitrateKbps}k';
     }
 
-    return '-hide_banner -framerate $fps -i "$framePattern" $vcodecParam $pixFmtParam $extraParams -y "$outputPath"';
+    final vfPart = videoFilter.isNotEmpty ? ' $videoFilter' : '';
+    return '-hide_banner -framerate $fps -i "$framePattern"$vfPart $vcodecParam $pixFmtParam $extraParams -y "$outputPath"';
   }
 }
