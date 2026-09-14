@@ -85,6 +85,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Pre-build asset bundle to resolve FFmpeg build hooks
+        run: flutter build bundle
+
       - name: Build release APK
         run: flutter build apk --release --no-tree-shake-icons --dart-define=VM_SERVICE_MAX_HEAP_SIZE=4096 --android-skip-build-dependency-validation
 
