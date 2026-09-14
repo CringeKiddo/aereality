@@ -4,9 +4,10 @@
 // ==========================================
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 enum LayerBlendMode {
   normal,
@@ -403,7 +404,7 @@ class ProjectData {
   String aspectRatio;
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
-  double tonemapMode; // 0: None, 1: Shaderly Tonemapper 1 (ACES), 2: Shaderly Tonemapper 2 (AgX)
+  double tonemapMode;
 
   ProjectData({
     required this.mediaPath,
@@ -569,16 +570,17 @@ class LutModel {
 }
 
 class ProjectManager {
-  static const _kProjectsKey = 'shaderly_saved_projects_v2';
-  static const _kCustomPresetsKey = 'shaderly_custom_presets_v2';
-  static const _kLutsKey = 'shaderly_active_luts_v2';
+  static Future<File> _getFile(String filename) async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/$filename');
+  }
 
   static Future<List<StoredProject>> loadProjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_kProjectsKey);
-    if (jsonStr == null) return [];
     try {
-      final List<dynamic> list = jsonDecode(jsonStr);
+      final file = await _getFile('saved_projects.json');
+      if (!await file.exists()) return [];
+      final content = await file.readAsString();
+      final List<dynamic> list = jsonDecode(content);
       return list.map((item) => StoredProject.fromJson(item)).toList();
     } catch (_) {
       return [];
@@ -593,17 +595,19 @@ class ProjectManager {
   }
 
   static Future<void> saveProjects(List<StoredProject> list) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = jsonEncode(list.map((p) => p.toJson()).toList());
-    await prefs.setString(_kProjectsKey, jsonStr);
+    try {
+      final file = await _getFile('saved_projects.json');
+      final content = jsonEncode(list.map((p) => p.toJson()).toList());
+      await file.writeAsString(content);
+    } catch (_) {}
   }
 
   static Future<List<CustomPresetItem>> loadCustomPresets() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_kCustomPresetsKey);
-    if (jsonStr == null) return [];
     try {
-      final List<dynamic> list = jsonDecode(jsonStr);
+      final file = await _getFile('custom_presets.json');
+      if (!await file.exists()) return [];
+      final content = await file.readAsString();
+      final List<dynamic> list = jsonDecode(content);
       return list.map((item) => CustomPresetItem.fromJson(item)).toList();
     } catch (_) {
       return [];
@@ -611,17 +615,19 @@ class ProjectManager {
   }
 
   static Future<void> saveCustomPresets(List<CustomPresetItem> list) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = jsonEncode(list.map((p) => p.toJson()).toList());
-    await prefs.setString(_kCustomPresetsKey, jsonStr);
+    try {
+      final file = await _getFile('custom_presets.json');
+      final content = jsonEncode(list.map((p) => p.toJson()).toList());
+      await file.writeAsString(content);
+    } catch (_) {}
   }
 
   static Future<List<LutModel>> loadLuts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_kLutsKey);
-    if (jsonStr == null) return [];
     try {
-      final List<dynamic> list = jsonDecode(jsonStr);
+      final file = await _getFile('active_luts.json');
+      if (!await file.exists()) return [];
+      final content = await file.readAsString();
+      final List<dynamic> list = jsonDecode(content);
       return list.map((item) => LutModel.fromJson(item)).toList();
     } catch (_) {
       return [];
@@ -629,8 +635,10 @@ class ProjectManager {
   }
 
   static Future<void> saveLuts(List<LutModel> list) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = jsonEncode(list.map((p) => p.toJson()).toList());
-    await prefs.setString(_kLutsKey, jsonStr);
+    try {
+      final file = await _getFile('active_luts.json');
+      final content = jsonEncode(list.map((p) => p.toJson()).toList());
+      await file.writeAsString(content);
+    } catch (_) {}
   }
 }
