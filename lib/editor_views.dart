@@ -91,13 +91,15 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 1. PRESETS TAB
+  // 1. PRESETS TAB (All Presets Retained + Tap-To-Toggle + BSL Atmospheric Overlay)
   // ---------------------------------------------------------------------------
   static Widget buildPresetsTab({
     required BuildContext context,
     required ProjectData project,
     required List<CustomPresetItem> customPresets,
     required String? selectedPresetName,
+    required bool isBslOverlayActive,
+    required VoidCallback onToggleBslOverlay,
     required ValueChanged<String> onPresetSelected,
     required VoidCallback onSavePreset,
     required VoidCallback onImportPreset,
@@ -133,6 +135,39 @@ class EditorViews {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // BSL ATMOSPHERIC OVERLAY BUTTON (Can be layered on top of ANY preset)
+        Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: isBslOverlayActive ? accent.withOpacity(0.20) : const Color(0xFF161622),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isBslOverlayActive ? accent : Colors.white12,
+              width: isBslOverlayActive ? 1.8 : 1.0,
+            ),
+          ),
+          child: ListTile(
+            leading: Icon(
+              Icons.cloud_sync_rounded,
+              color: isBslOverlayActive ? accent : Colors.white70,
+              size: 24,
+            ),
+            title: const Text(
+              'BSL Volumetric Mist & God Rays Overlay',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            subtitle: const Text(
+              'Stackable atmospheric fog & light shafts across all active layers',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+            trailing: Switch(
+              value: isBslOverlayActive,
+              activeColor: accent,
+              onChanged: (_) => onToggleBslOverlay(),
+            ),
+          ),
+        ),
+
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -177,19 +212,14 @@ class EditorViews {
                   icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
                   onPressed: () => onDeleteCustomPreset(index),
                 ),
-                onTap: () {
-                  project.layers = custom.layers.map((l) => l.clone()).toList();
-                  project.tonemapMode = custom.tonemapMode;
-                  project.activeLayerIndex = 0;
-                  onPresetSelected(custom.name);
-                },
+                onTap: () => onPresetSelected(custom.name),
               ),
             );
           }),
           const SizedBox(height: 14),
         ],
 
-        const Text('PRESETS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const Text('PRESETS (TAP TO APPLY / TAP TO REMOVE)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
         const SizedBox(height: 8),
         ...builtInPresets.map((p) {
           final isSel = selectedPresetName == p['name'];
@@ -212,7 +242,82 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. LUT TAB
+  // 2. TONEMAPPERS TAB (Restored Category: Linear, ACES, AgX)
+  // ---------------------------------------------------------------------------
+  static Widget buildTonemappersTab({
+    required BuildContext context,
+    required ProjectData project,
+    required VoidCallback onChanged,
+  }) {
+    final accent = gCustomAccentColor.value;
+
+    final tonemappers = [
+      {
+        'mode': 0.0,
+        'title': 'Linear (Off / Native Passthrough)',
+        'desc': 'Raw floating-point color response with no dynamic curve compression.',
+      },
+      {
+        'mode': 1.0,
+        'title': 'Shaderly Tonemapper 1 (ACES Filmic)',
+        'desc': 'Academy Color Encoding System curve with cinematic toe and rich highlight rolloff.',
+      },
+      {
+        'mode': 2.0,
+        'title': 'Shaderly Tonemapper 2 (AgX Dynamic)',
+        'desc': 'Modern perceptual dynamic range tonemapper protecting saturated highlight values.',
+      },
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text('COLOR SPACE & TONEMAPPING', style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1)),
+        const SizedBox(height: 6),
+        const Text(
+          'Select the display transform for your true 32-bit float linear grade.',
+          style: TextStyle(color: Colors.white54, fontSize: 11),
+        ),
+        const SizedBox(height: 16),
+        ...tonemappers.map((tm) {
+          final isSel = project.tonemapMode == tm['mode'];
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: isSel ? accent.withOpacity(0.14) : kCardDark,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSel ? accent : Colors.white.withOpacity(0.06),
+                width: isSel ? 1.5 : 1.0,
+              ),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              title: Text(
+                tm['title'] as String,
+                style: TextStyle(color: isSel ? accent : Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4.0),
+                child: Text(
+                  tm['desc'] as String,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+              ),
+              trailing: isSel ? Icon(Icons.radio_button_checked, color: accent) : const Icon(Icons.radio_button_off, color: Colors.white24),
+              onTap: () {
+                project.tonemapMode = tm['mode'] as double;
+                onChanged();
+              },
+            ),
+          );
+        }).toList(),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3. LUT TAB
   // ---------------------------------------------------------------------------
   static Widget buildLutsTab({
     required BuildContext context,
@@ -332,7 +437,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. BASIC TAB
+  // 4. BASIC TAB
   // ---------------------------------------------------------------------------
   static Widget buildBasicGradingTab({
     required BuildContext context,
@@ -371,7 +476,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. MAGIC TAB (Magic Bullet Suite Replication)
+  // 5. MAGIC TAB (Magic Bullet Suite Replication)
   // ---------------------------------------------------------------------------
   static Widget buildMagicTab({
     required BuildContext context,
@@ -396,7 +501,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 5. COPIED STUFF TAB (After Effects Anime CC)
+  // 6. COPIED STUFF TAB (After Effects Anime CC)
   // ---------------------------------------------------------------------------
   static Widget buildCopiedStuffTab({
     required BuildContext context,
@@ -420,7 +525,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 6. GLOWS & FLARES TAB
+  // 7. GLOWS & FLARES TAB (Normal Flares Independent Control Restored)
   // ---------------------------------------------------------------------------
   static Widget buildGlowsAndFlaresTab({
     required BuildContext context,
@@ -435,11 +540,20 @@ class EditorViews {
       children: [
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('DEEP GLOW & AMBIENCE', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          child: Text('DEEP GLOW & AMBIENCE (REAL GAUSSIAN BLOOM)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Deep Glow Intensity', val: cur.deepGlowIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.deepGlowIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Deep Glow Radius', val: cur.deepGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.deepGlowRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Deep Glow Threshold (Protects Faces)', val: cur.deepGlowThreshold, min: 0.20, max: 0.95, onChanged: (v) { cur.deepGlowThreshold = v; onChanged(); }, onEnded: onEnded),
+        
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('SAPPHIRE S_GLOW (SPECULAR FREQUENCY CORE)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        ),
+        buildSliderRow(context: context, title: 'Sapphire Glow Width', val: cur.sapphireGlowWidth, min: 0.0, max: 2.0, onChanged: (v) { cur.sapphireGlowWidth = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Sapphire Glow Threshold', val: cur.sapphireGlowThreshold, min: 0.50, max: 0.99, onChanged: (v) { cur.sapphireGlowThreshold = v; onChanged(); }, onEnded: onEnded),
+
         buildSliderRow(context: context, title: 'Centre Aura', val: cur.centerAura, min: 0.0, max: 1.5, onChanged: (v) { cur.centerAura = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Horizontal Ramp', val: cur.horizontalRamp, min: 0.0, max: 1.0, onChanged: (v) { cur.horizontalRamp = v; onChanged(); }, onEnded: onEnded),
 
@@ -483,36 +597,7 @@ class EditorViews {
         const SizedBox(height: 12),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('SELECTABLE VIDEO FLARES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
-        ),
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
-          child: Wrap(
-            spacing: 8,
-            children: [
-              {'id': 0, 'name': 'None'},
-              {'id': 1, 'name': 'Anamorphic Blue'},
-              {'id': 2, 'name': 'Golden Sun'},
-              {'id': 3, 'name': 'Laser White'},
-            ].map((flare) {
-              final isSel = cur.videoFlareType == flare['id'];
-              return ChoiceChip(
-                label: Text(flare['name'] as String),
-                selected: isSel,
-                selectedColor: accent,
-                labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
-                onSelected: (s) {
-                  if (s) {
-                    cur.videoFlareType = flare['id'] as int;
-                    onChanged();
-                    onEnded();
-                  }
-                },
-              );
-            }).toList(),
-          ),
+          child: Text('NORMAL ANAMORPHIC FLARES (INDEPENDENT CONTROL)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Width', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
@@ -522,7 +607,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 7. ATMOSPHERE TAB
+  // 8. ATMOSPHERE TAB
   // ---------------------------------------------------------------------------
   static Widget buildAtmosphereTab({
     required BuildContext context,
@@ -546,7 +631,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 8. CURVES TAB
+  // 9. CURVES TAB
   // ---------------------------------------------------------------------------
   static Widget buildCurvesTab({
     required BuildContext context,
@@ -666,163 +751,359 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // PRESET LOGIC ENGINE
+  // BSL ATMOSPHERIC OVERLAY HELPER
+  // ---------------------------------------------------------------------------
+  static void applyBslOverlay({required ProjectData project, required bool active}) {
+    project.layers.removeWhere((l) => l.id == 'bsl_atmospheric_overlay_layer');
+    if (active) {
+      project.layers.add(AdjustmentLayer(
+        id: 'bsl_atmospheric_overlay_layer',
+        name: 'BSL Atmospheric Mist',
+        blendMode: LayerBlendMode.screen,
+        opacity: 0.70,
+        bslaGodRays: 0.45,
+        bslaFogDensity: 0.35,
+        bslaBloomHaze: 0.50,
+        bslFogScatter: 0.40,
+        deepGlowIntensity: 0.25,
+        deepGlowRadius: 0.60,
+      ));
+    }
+  }
+
+  static void clearPresetToNeutral(ProjectData project) {
+    project.layers.clear();
+    project.layers.add(AdjustmentLayer(
+      id: 'neutral_base',
+      name: 'Base Grade',
+      contrast: 1.0,
+      saturation: 1.0,
+      brightness: 0.0,
+      blendMode: LayerBlendMode.normal,
+    ));
+    project.activeLayerIndex = 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // FULL PRESET LOGIC ENGINE (2026 WIS EDIT AESTHETICS - ALL PRESETS POPULATED)
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
     project.layers.clear();
 
     switch (name.toLowerCase()) {
-      // PRESERVED BUILT-IN PRESETS (UNCHANGED AS MANDATED)
+      // 1. GOKU - REWORKED WITH 2026 ANIME SNAP
       case 'goku':
         project.layers.add(AdjustmentLayer(
           id: 'goku_base',
           name: 'Base Grade',
-          contrast: 1.44,
-          saturation: 0.82,
-          brightness: 0.01,
-          temperature: 7300.0,
-          sharpness: 0.58,
-          shadows: -0.16,
-          highlights: 0.22,
-          blackCrush: 0.06,
-          edgeDarken: 0.26,
-          darkOutlines: 0.16,
-          vignette: 0.05,
+          contrast: 1.55,
+          saturation: 0.95,
+          brightness: 0.02,
+          temperature: 7200.0,
+          sharpness: 0.75,
+          shadows: -0.22,
+          highlights: 0.28,
+          blackCrush: 0.08,
+          edgeDarken: 0.32,
+          darkOutlines: 0.22,
+          vignette: 0.06,
+          cosmoCleanHighlight: 0.45,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.16, 0.47, 0.86, 1.0],
+          curveMaster: [0.0, 0.16, 0.46, 0.88, 1.0],
           flickerIntensity: 0.04,
           flickerSpeed: 12.0,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'goku_rim',
-          name: 'Specular Rim',
+          id: 'goku_specular_core',
+          name: 'Specular Golden Core',
           blendMode: LayerBlendMode.screen,
-          opacity: 0.78,
-          deepGlowIntensity: 0.42,
+          opacity: 0.80,
+          deepGlowIntensity: 0.55,
           deepGlowRadius: 0.52,
-          deepGlowThreshold: 0.50,
+          deepGlowThreshold: 0.48,
           edgeGlowTint: 1.0,
-          thinStreakIntensity: 0.28,
+          sapphireGlowWidth: 0.40,
+          sapphireGlowThreshold: 0.72,
+          thinStreakIntensity: 0.35,
           thinStreakWidth: 0.65,
-          thinStreakOpacity: 0.82,
-          lineChromaStrength: 0.25,
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'goku_atmo',
-          name: 'Atmospheric Haze',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.65,
-          bslaBloomHaze: 0.58,
-          bslFogScatter: 0.35,
-          bslaFogDensity: 0.25,
-          deepGlowIntensity: 0.28,
-          deepGlowRadius: 0.68,
-          deepGlowThreshold: 0.44,
+          thinStreakOpacity: 0.85,
+          lineChromaStrength: 0.28,
         ));
         break;
 
+      // 2. DESATURATED - REWORKED WITH DARK CHROME AND SHARP ACUTANCE
       case 'desaturated':
         project.layers.add(AdjustmentLayer(
           id: 'desat_base',
           name: 'Base Grade',
-          contrast: 1.48,
-          saturation: 0.60,
-          brightness: -0.02,
-          temperature: 6900.0,
-          sharpness: 0.62,
-          shadows: -0.18,
-          highlights: 0.14,
-          blackCrush: 0.08,
-          edgeDarken: 0.32,
-          darkOutlines: 0.20,
-          vignette: 0.06,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.14, 0.46, 0.84, 0.98],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'desat_curve',
-          name: 'Cold Tone',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.75,
-          contrast: 1.15,
-          saturation: 0.75,
+          contrast: 1.62,
+          saturation: 0.48,
+          brightness: -0.03,
           temperature: 7600.0,
-          curveBlue: [0.04, 0.20, 0.50, 0.82, 0.96],
-          curveRed: [0.0, 0.14, 0.46, 0.80, 0.96],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'desat_glow',
-          name: 'Edge Specular',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.68,
-          deepGlowIntensity: 0.34,
-          deepGlowRadius: 0.44,
-          deepGlowThreshold: 0.54,
-          lineChromaStrength: 0.30,
-          thinStreakIntensity: 0.14,
-          thinStreakOpacity: 0.70,
-        ));
-        break;
-
-      case 'okkotsu':
-        project.layers.add(AdjustmentLayer(
-          id: 'okkotsu_base',
-          name: 'Base Grade',
-          contrast: 1.28,
-          saturation: 0.82,
-          brightness: -0.02,
-          temperature: 7200.0,
-          sharpness: 0.48,
-          shadows: -0.12,
-          edgeDarken: 0.22,
-          darkOutlines: 0.10,
-          vignette: 0.05,
+          sharpness: 0.85,
+          shadows: -0.28,
+          highlights: 0.18,
+          blackCrush: 0.12,
+          edgeDarken: 0.38,
+          darkOutlines: 0.30,
+          vignette: 0.08,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
+          curveMaster: [0.02, 0.13, 0.44, 0.82, 0.98],
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'okkotsu_rim',
-          name: 'Specular Rim',
+          id: 'desat_ice_glow',
+          name: 'Ice Cyan Specular',
           blendMode: LayerBlendMode.screen,
-          opacity: 0.68,
-          deepGlowIntensity: 0.32,
-          deepGlowRadius: 0.45,
-          deepGlowThreshold: 0.52,
-          thinStreakIntensity: 0.15,
-          thinStreakOpacity: 0.70,
-        ));
-        break;
-
-      case 'tealdropped (conq knockoff)':
-        project.layers.add(AdjustmentLayer(
-          id: 'conq_base',
-          name: 'Base Grade',
-          contrast: 1.18,
-          saturation: 1.06,
-          brightness: 0.03,
-          temperature: 6800.0,
-          sharpness: 0.44,
-          shadows: 0.02,
-          vignette: 0.04,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.25, 0.52, 0.82, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'conq_glow',
-          name: 'Teal Rim',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
+          opacity: 0.72,
           deepGlowIntensity: 0.45,
-          deepGlowRadius: 0.55,
-          deepGlowThreshold: 0.44,
+          deepGlowRadius: 0.46,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 2.0,
-          thinStreakIntensity: 0.22,
-          thinStreakWidth: 0.60,
-          thinStreakOpacity: 0.85,
+          sapphireGlowWidth: 0.35,
+          sapphireGlowThreshold: 0.70,
           lineChromaStrength: 0.35,
         ));
         break;
 
+      // 3. YAMATO - COLD ICE CYAN (NANAMI / FRIEREN STYLE)
+      case 'yamato':
+        project.layers.add(AdjustmentLayer(
+          id: 'yamato_base',
+          name: 'Base Grade',
+          contrast: 1.48,
+          saturation: 0.94,
+          temperature: 7800.0,
+          sharpness: 0.72,
+          shadows: -0.18,
+          highlights: 0.24,
+          edgeDarken: 0.30,
+          blendMode: LayerBlendMode.normal,
+          mblMojoTealOrange: 0.42,
+          curveMaster: [0.0, 0.18, 0.50, 0.86, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'yamato_frost',
+          name: 'Frost Edge Bloom',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.82,
+          deepGlowIntensity: 0.58,
+          deepGlowRadius: 0.54,
+          deepGlowThreshold: 0.42,
+          edgeGlowTint: 2.0,
+          sapphireGlowWidth: 0.50,
+          sapphireGlowThreshold: 0.65,
+          thinStreakIntensity: 0.30,
+          thinStreakWidth: 0.55,
+          thinStreakOpacity: 0.85,
+        ));
+        break;
+
+      // 4. SUGURU - DARK CURSE CRIMSON HALATION (SABER ALTER STYLE)
+      case 'suguru':
+        project.layers.add(AdjustmentLayer(
+          id: 'suguru_base',
+          name: 'Base Grade',
+          contrast: 1.68,
+          saturation: 0.82,
+          temperature: 6100.0,
+          shadows: -0.32,
+          blackCrush: 0.14,
+          edgeDarken: 0.40,
+          darkOutlines: 0.32,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.12, 0.42, 0.80, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'suguru_curse_blood',
+          name: 'Blood Crimson Core',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.84,
+          halationRadius: 0.38,
+          halationWarmth: 0.95,
+          deepGlowIntensity: 0.62,
+          edgeGlowTint: 4.0,
+          sapphireGlowWidth: 0.55,
+          sapphireGlowThreshold: 0.60,
+          thinStreakIntensity: 0.35,
+          thinStreakWidth: 0.70,
+          thinStreakOpacity: 0.88,
+        ));
+        break;
+
+      // 5. HOME-MADE SAUCE - DEEP AMBER SUNSET (DENJI & REZE STYLE)
+      case 'home-made sauce':
+        project.layers.add(AdjustmentLayer(
+          id: 'hms_base',
+          name: 'Base Grade',
+          contrast: 1.38,
+          saturation: 1.15,
+          temperature: 5200.0,
+          sharpness: 0.55,
+          shadows: -0.10,
+          highlights: 0.15,
+          vignette: 0.08,
+          cosmoCleanHighlight: 0.35,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.02, 0.20, 0.52, 0.85, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'hms_amber_haze',
+          name: 'Sunset Amber Bloom',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.78,
+          deepGlowIntensity: 0.48,
+          deepGlowRadius: 0.58,
+          deepGlowThreshold: 0.44,
+          edgeGlowTint: 3.0,
+          bslaBloomHaze: 0.42,
+          thinStreakIntensity: 0.25,
+        ));
+        break;
+
+      // 6. RIN - SHARP MONOCHROME SILVER CONTRAST (KILLUA STYLE)
+      case 'rin':
+        project.layers.add(AdjustmentLayer(
+          id: 'rin_base',
+          name: 'Base Grade',
+          contrast: 1.72,
+          saturation: 0.15,
+          brightness: -0.02,
+          sharpness: 0.95,
+          shadows: -0.35,
+          highlights: 0.30,
+          blackCrush: 0.15,
+          darkOutlines: 0.35,
+          edgeDarken: 0.45,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.10, 0.45, 0.90, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'rin_silver_bloom',
+          name: 'Silver Peak Bloom',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.85,
+          deepGlowIntensity: 0.65,
+          deepGlowRadius: 0.44,
+          deepGlowThreshold: 0.50,
+          edgeGlowTint: 0.0,
+          sapphireGlowWidth: 0.60,
+          sapphireGlowThreshold: 0.65,
+          lineChromaStrength: 0.40,
+        ));
+        break;
+
+      // 7. SUKUNA - CRIMSON EDGE ABERRATION & CEL DARKENER
+      case 'sukuna':
+        project.layers.add(AdjustmentLayer(
+          id: 'sukuna_base',
+          name: 'Base Grade',
+          contrast: 1.60,
+          saturation: 0.90,
+          sharpness: 0.80,
+          shadows: -0.28,
+          blackCrush: 0.12,
+          darkOutlines: 0.40,
+          edgeDarken: 0.35,
+          vignette: 0.10,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.14, 0.45, 0.84, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'sukuna_curse_rays',
+          name: 'Blood Streaks & Rays',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.82,
+          deepGlowIntensity: 0.54,
+          edgeGlowTint: 4.0,
+          thinStreakIntensity: 0.42,
+          thinStreakWidth: 0.75,
+          thinStreakOpacity: 0.90,
+          lineChromaStrength: 0.45,
+          copiedChromaShift: 0.35,
+        ));
+        break;
+
+      // 8. TOJI - HIGH DYNAMIC STEEL GRIT
+      case 'toji':
+        project.layers.add(AdjustmentLayer(
+          id: 'toji_base',
+          name: 'Base Grade',
+          contrast: 1.52,
+          saturation: 0.70,
+          temperature: 7100.0,
+          sharpness: 0.88,
+          shadows: -0.24,
+          blackCrush: 0.10,
+          edgeDarken: 0.35,
+          darkOutlines: 0.28,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'toji_acutance',
+          name: 'Steel Acutance',
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.75,
+          contrast: 1.30,
+          sharpness: 0.50,
+          deepGlowIntensity: 0.28,
+          edgeGlowTint: 2.0,
+        ));
+        break;
+
+      // 9. EREN - GOLDEN TITAN DAWN
+      case 'eren':
+        project.layers.add(AdjustmentLayer(
+          id: 'eren_base',
+          name: 'Base Grade',
+          contrast: 1.44,
+          saturation: 1.10,
+          temperature: 5500.0,
+          shadows: -0.15,
+          highlights: 0.22,
+          blendMode: LayerBlendMode.normal,
+          mblMojoTealOrange: 0.38,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'eren_sun',
+          name: 'Sunflare Volumetrics',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.78,
+          deepGlowIntensity: 0.52,
+          deepGlowRadius: 0.55,
+          deepGlowThreshold: 0.45,
+          edgeGlowTint: 1.0,
+          bslaGodRays: 0.45,
+          thinStreakIntensity: 0.30,
+        ));
+        break;
+
+      // 10. MAKIMA - PASTEL GLOW & PEACH SKIN PROTECTION
+      case 'makima':
+        project.layers.add(AdjustmentLayer(
+          id: 'makima_base',
+          name: 'Base Grade',
+          contrast: 1.25,
+          saturation: 1.05,
+          temperature: 6100.0,
+          sharpness: 0.45,
+          cosmoCleanHighlight: 0.55,
+          highlights: 0.12,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'makima_bloom',
+          name: 'Pastel Peach Glow',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.76,
+          deepGlowIntensity: 0.46,
+          deepGlowRadius: 0.62,
+          deepGlowThreshold: 0.40,
+          edgeGlowTint: 3.0,
+          bslaBloomHaze: 0.38,
+        ));
+        break;
+
+      // 11. YUTA - RETICULATED HIGHLIGHT BLEED & IVORY GLOW
       case 'yuta':
         project.layers.add(AdjustmentLayer(
           id: 'yuta_base',
@@ -866,16 +1147,182 @@ class EditorViews {
         ));
         break;
 
+      // 12. OKKOTSU - COLD SPECULAR RIM
+      case 'okkotsu':
+        project.layers.add(AdjustmentLayer(
+          id: 'okkotsu_base',
+          name: 'Base Grade',
+          contrast: 1.28,
+          saturation: 0.82,
+          brightness: -0.02,
+          temperature: 7200.0,
+          sharpness: 0.48,
+          shadows: -0.12,
+          edgeDarken: 0.22,
+          darkOutlines: 0.10,
+          vignette: 0.05,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'okkotsu_rim',
+          name: 'Specular Rim',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.68,
+          deepGlowIntensity: 0.32,
+          deepGlowRadius: 0.45,
+          deepGlowThreshold: 0.52,
+          thinStreakIntensity: 0.15,
+          thinStreakOpacity: 0.70,
+        ));
+        break;
+
+      // 13. ARTORIA - ROYAL GOLD GLINT & CONTRAST
+      case 'artoria':
+        project.layers.add(AdjustmentLayer(
+          id: 'artoria_base',
+          name: 'Base Grade',
+          contrast: 1.48,
+          saturation: 0.98,
+          temperature: 6300.0,
+          sharpness: 0.70,
+          shadows: -0.18,
+          highlights: 0.25,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.15, 0.48, 0.88, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'artoria_gold',
+          name: 'Royal Gold Glint',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.80,
+          deepGlowIntensity: 0.52,
+          edgeGlowTint: 1.0,
+          copiedStarGlint: 0.48,
+          copiedProMist: 0.25,
+          sapphireGlowWidth: 0.45,
+          sapphireGlowThreshold: 0.68,
+        ));
+        break;
+
+      // 14. DEKU TREE - VIVID EMERALD AURA
+      case 'deku tree':
+        project.layers.add(AdjustmentLayer(
+          id: 'deku_base',
+          name: 'Base Grade',
+          contrast: 1.35,
+          saturation: 1.20,
+          sharpness: 0.60,
+          shadows: -0.10,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'deku_emerald',
+          name: 'Emerald Aura & Mist',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.75,
+          deepGlowIntensity: 0.48,
+          deepGlowRadius: 0.55,
+          deepGlowThreshold: 0.42,
+          edgeGlowTint: 2.0,
+          bslaBloomHaze: 0.45,
+        ));
+        break;
+
+      // 15. RAIDEN - ELECTRO VIOLET WARP SHIFT
+      case 'raiden':
+        project.layers.add(AdjustmentLayer(
+          id: 'raiden_base',
+          name: 'Base Grade',
+          contrast: 1.55,
+          saturation: 1.05,
+          temperature: 7500.0,
+          sharpness: 0.82,
+          shadows: -0.22,
+          blackCrush: 0.08,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'raiden_electro',
+          name: 'Electro Violet Glow',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.82,
+          deepGlowIntensity: 0.58,
+          edgeGlowTint: 5.0,
+          copiedChromaShift: 0.40,
+          copiedEdgeRays: 0.45,
+          sapphireGlowWidth: 0.48,
+          sapphireGlowThreshold: 0.65,
+        ));
+        break;
+
+      // 16. ATMOSPHERIC HAZE - LIMINAL SILENT MIST
+      case 'atmospheric haze':
+        project.layers.add(AdjustmentLayer(
+          id: 'atmo_base',
+          name: 'Base Grade',
+          contrast: 1.15,
+          saturation: 0.85,
+          temperature: 6700.0,
+          shadows: 0.05,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'atmo_fog',
+          name: 'Liminal Volumetric Fog',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.80,
+          bslaFogDensity: 0.45,
+          bslaBloomHaze: 0.55,
+          bslFogScatter: 0.48,
+          deepGlowIntensity: 0.35,
+          deepGlowRadius: 0.70,
+        ));
+        break;
+
+      // 17. TEALDROPPED (CONQ KNOCKOFF) - HIGH IMPACT WIS TEAL
+      case 'tealdropped (conq knockoff)':
+        project.layers.add(AdjustmentLayer(
+          id: 'conq_base',
+          name: 'Base Grade',
+          contrast: 1.48,
+          saturation: 1.12,
+          brightness: 0.02,
+          temperature: 7000.0,
+          sharpness: 0.75,
+          shadows: -0.15,
+          highlights: 0.20,
+          vignette: 0.05,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.18, 0.50, 0.86, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'conq_glow',
+          name: 'Cyan Teal Rim',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.85,
+          deepGlowIntensity: 0.55,
+          deepGlowRadius: 0.54,
+          deepGlowThreshold: 0.42,
+          edgeGlowTint: 2.0,
+          thinStreakIntensity: 0.30,
+          thinStreakWidth: 0.65,
+          thinStreakOpacity: 0.88,
+          lineChromaStrength: 0.38,
+        ));
+        break;
+
+      // 18. VINTAGE CC - 35MM GRAIN & WARM HALATION
       case 'vintage cc':
         project.layers.add(AdjustmentLayer(
           id: 'vint_base',
           name: 'Base Grade',
-          contrast: 1.20,
-          saturation: 0.82,
-          temperature: 5900.0,
+          contrast: 1.25,
+          saturation: 0.86,
+          temperature: 5600.0,
           shadows: 0.04,
           highlights: -0.04,
-          vignette: 0.05,
+          vignette: 0.08,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.03, 0.24, 0.49, 0.80, 0.96],
         ));
@@ -884,78 +1331,124 @@ class EditorViews {
           name: 'Halation & Grain',
           blendMode: LayerBlendMode.screen,
           opacity: 0.76,
-          deepGlowIntensity: 0.36,
+          deepGlowIntensity: 0.38,
           deepGlowRadius: 0.58,
           deepGlowThreshold: 0.46,
           edgeGlowTint: 1.0,
-          halationRadius: 0.25,
-          halationWarmth: 0.80,
-          filmGrain: 0.11,
+          halationRadius: 0.30,
+          halationWarmth: 0.85,
+          filmGrain: 0.14,
         ));
         break;
 
-      // REVAMPED DISTINCT PRESETS
-      case 'yamato':
+      // 19. NOIR - HIGH CONTRAST HARD CEL
+      case 'noir':
         project.layers.add(AdjustmentLayer(
-          id: 'yamato_base',
+          id: 'noir_base',
           name: 'Base Grade',
-          contrast: 1.40,
-          saturation: 0.92,
-          temperature: 6600.0,
-          sharpness: 0.56,
-          shadows: -0.12,
-          highlights: 0.16,
-          edgeDarken: 0.28,
+          contrast: 1.85,
+          saturation: 0.0,
+          brightness: -0.04,
+          sharpness: 0.90,
+          shadows: -0.40,
+          blackCrush: 0.18,
+          darkOutlines: 0.45,
+          edgeDarken: 0.50,
+          vignette: 0.12,
           blendMode: LayerBlendMode.normal,
-          mblMojoTealOrange: 0.35,
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'yamato_specular',
-          name: 'Cyan Specular',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.76,
-          deepGlowIntensity: 0.44,
-          deepGlowRadius: 0.50,
-          deepGlowThreshold: 0.48,
-          edgeGlowTint: 2.0,
-          thinStreakIntensity: 0.24,
+          curveMaster: [0.0, 0.08, 0.40, 0.88, 1.0],
         ));
         break;
 
-      case 'suguru':
+      // 20. CHOSO - BLOOD SPRAY SPECULAR HALATION
+      case 'choso':
         project.layers.add(AdjustmentLayer(
-          id: 'suguru_base',
+          id: 'choso_base',
           name: 'Base Grade',
-          contrast: 1.46,
-          saturation: 0.78,
-          temperature: 6400.0,
-          shadows: -0.16,
-          blackCrush: 0.09,
-          edgeDarken: 0.30,
-          darkOutlines: 0.22,
+          contrast: 1.62,
+          saturation: 0.85,
+          temperature: 6300.0,
+          sharpness: 0.78,
+          shadows: -0.28,
+          blackCrush: 0.12,
+          darkOutlines: 0.35,
           blendMode: LayerBlendMode.normal,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'suguru_curse',
-          name: 'Curse Halation',
+          id: 'choso_blood',
+          name: 'Crimson Blood Glow',
           blendMode: LayerBlendMode.screen,
-          opacity: 0.74,
-          halationRadius: 0.28,
-          halationWarmth: 0.82,
-          deepGlowIntensity: 0.38,
+          opacity: 0.82,
+          deepGlowIntensity: 0.60,
           edgeGlowTint: 4.0,
+          halationRadius: 0.35,
+          halationWarmth: 0.90,
+          thinStreakIntensity: 0.38,
+        ));
+        break;
+
+      // 21. YORUICHI - THUNDER FLASH MAGENTA
+      case 'yoruichi':
+        project.layers.add(AdjustmentLayer(
+          id: 'yoruichi_base',
+          name: 'Base Grade',
+          contrast: 1.50,
+          saturation: 1.15,
+          temperature: 7000.0,
+          sharpness: 0.76,
+          shadows: -0.20,
+          blendMode: LayerBlendMode.normal,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'yoruichi_flash',
+          name: 'Violet Flash Glow',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.82,
+          deepGlowIntensity: 0.56,
+          edgeGlowTint: 5.0,
+          sapphireGlowWidth: 0.45,
+          sapphireGlowThreshold: 0.66,
+          copiedEdgeRays: 0.35,
+        ));
+        break;
+
+      // 22. GOJO - SIX EYES ELECTRIC CYAN CORE
+      case 'gojo':
+        project.layers.add(AdjustmentLayer(
+          id: 'gojo_base',
+          name: 'Base Grade',
+          contrast: 1.65,
+          saturation: 1.05,
+          temperature: 8200.0,
+          sharpness: 0.92,
+          shadows: -0.25,
+          highlights: 0.28,
+          blackCrush: 0.10,
+          darkOutlines: 0.30,
+          edgeDarken: 0.35,
+          blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.15, 0.48, 0.88, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'gojo_infinity_glow',
+          name: 'Six Eyes Cyan Bloom',
+          blendMode: LayerBlendMode.screen,
+          opacity: 0.88,
+          deepGlowIntensity: 0.68,
+          deepGlowRadius: 0.52,
+          deepGlowThreshold: 0.42,
+          edgeGlowTint: 2.0,
+          sapphireGlowWidth: 0.65,
+          sapphireGlowThreshold: 0.62,
+          thinStreakIntensity: 0.40,
+          thinStreakWidth: 0.70,
+          thinStreakOpacity: 0.90,
+          lineChromaStrength: 0.42,
         ));
         break;
 
       default:
-        project.layers.add(AdjustmentLayer(
-          id: 'default_base',
-          name: 'Base Grade',
-          contrast: 1.15,
-          saturation: 1.05,
-          sharpness: 0.35,
-          blendMode: LayerBlendMode.normal,
-        ));
+        clearPresetToNeutral(project);
     }
     project.activeLayerIndex = 0;
   }
@@ -1069,7 +1562,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 9. EXPORT SUITE (Hardware MediaCodec & Multi-Resolution Engine)
+  // 10. EXPORT SUITE (Hardware MediaCodec & Direct-to-Downloads Path)
   // ---------------------------------------------------------------------------
   static void showExportSheet({
     required BuildContext context,
@@ -1121,7 +1614,7 @@ class EditorViews {
                       ],
                     ),
                     Text(
-                      'Destination: /storage/emulated/0/Shaderly • 32-bit Vulkan Compute',
+                      'Destination: /storage/emulated/0/Download • 32-bit Vulkan Compute',
                       style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -1427,6 +1920,11 @@ class EditorViews {
         '-hide_banner -i "${project.mediaPath}" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -y "${framesDir.path}/frame_%05d.png"',
       );
 
+      final extractReturnCode = await activeSession.getReturnCode();
+      if (!ReturnCode.isSuccess(extractReturnCode)) {
+        throw Exception('FFmpeg frame extraction encountered an error.');
+      }
+
       if (isCancelled) return;
 
       var frameFiles = await framesDir.list().toList();
@@ -1434,7 +1932,7 @@ class EditorViews {
       final totalFrames = frameFiles.length;
 
       if (totalFrames == 0) {
-        throw Exception('Frame extraction failed.');
+        throw Exception('Frame extraction failed: 0 frames produced.');
       }
 
       for (int i = 0; i < totalFrames; i++) {
@@ -1506,16 +2004,28 @@ class EditorViews {
 
       if (isCancelled) return;
 
-      if (!await silentFile.exists()) {
+      final encodeReturnCode = await activeSession.getReturnCode();
+      if (!ReturnCode.isSuccess(encodeReturnCode) || !await silentFile.exists()) {
         final logs = await activeSession.getLogsAsString();
-        throw Exception('Hardware encoder failed: ${logs ?? "No logs"}');
+        throw Exception('Hardware encoder failed: ${logs ?? "Encoding rejected by FFmpeg"}');
       }
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
-      final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
+      
+      // Destination: ROOT DOWNLOAD (/storage/emulated/0/Download) as explicitly requested
+      Directory destDir = Directory('/storage/emulated/0/Download');
+      if (!await destDir.exists()) {
+        try {
+          await destDir.create(recursive: true);
+        } catch (_) {
+          final extDir = await getExternalStorageDirectory();
+          destDir = extDir ?? dir;
+        }
+      }
+
       final cleanCodec = codec.split(' ').first;
-      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final finalOutputFile = File('${shaderlyDir.path}/$fileName');
+      final fileName = 'AEReality_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final finalOutputFile = File('${destDir.path}/$fileName');
 
       if (hasAudio) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
@@ -1527,7 +2037,11 @@ class EditorViews {
       if (!isCancelled && context.mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Master Saved to /storage/emulated/0/Shaderly:\n${finalOutputFile.path}'), backgroundColor: Colors.green),
+          SnackBar(
+            content: Text('Master Saved to Downloads:\n${finalOutputFile.path}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     } catch (e) {
