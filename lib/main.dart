@@ -111,7 +111,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final projs = await ProjectManager.loadProjects();
     if (mounted) {
       setState(() {
-        // Up to 5 slots in the home menu as requested
         _recent = projs.take(5).toList();
       });
       _generateThumbnails(_recent);
@@ -1591,7 +1590,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               elevation: 0,
               title: Row(
                 children: [
-                  // BUTTON: SAVE PROJECT (Replaces "Shaderly" text as explicitly requested)
+                  // BUTTON: SAVE PROJECT (Replaces "Shaderly" text)
                   ElevatedButton.icon(
                     onPressed: _isSavingProject ? null : _manualSaveProject,
                     icon: _isSavingProject
@@ -1776,7 +1775,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         onPresetSelected: (presetName) {
                           _pushUndoSnapshot();
                           setState(() {
-                            // Tap again to turn off
+                            // Tap again to toggle off
                             if (_selectedPresetName == presetName) {
                               _selectedPresetName = null;
                               EditorViews.clearPresetToNeutral(_project);
@@ -1849,3 +1848,90 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         cur: _cur,
                         onChanged: () {
                           setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildMagicTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildCopiedStuffTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildGlowsAndFlaresTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildAtmosphereTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildCurvesTab(
+                        context: context,
+                        cur: _cur,
+                        selectedCurveChannel: _selectedCurveChannel,
+                        onChannelChanged: (ch) => setState(() => _selectedCurveChannel = ch),
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onResetCurve: () {
+                          _pushUndoSnapshot();
+                          setState(() {});
+                          _applyGrade();
+                          _autoSaveProject();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
