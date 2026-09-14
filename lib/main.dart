@@ -41,9 +41,9 @@ Future<void> main() async {
   }
 
   try {
-    final shaderlyDir = Directory('/storage/emulated/0/Shaderly');
-    if (!await shaderlyDir.exists()) {
-      await shaderlyDir.create(recursive: true);
+    final downloadDir = Directory('/storage/emulated/0/Download');
+    if (!await downloadDir.exists()) {
+      await downloadDir.create(recursive: true);
     }
   } catch (_) {}
 
@@ -111,7 +111,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final projs = await ProjectManager.loadProjects();
     if (mounted) {
       setState(() {
-        _recent = projs.take(4).toList();
+        // Up to 5 slots in the home menu as requested
+        _recent = projs.take(5).toList();
       });
       _generateThumbnails(_recent);
     }
@@ -550,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             const SizedBox(height: 24),
-            const Text('SAVED PROJECTS', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
+            const Text('SAVED PROJECTS (UP TO 5 SLOTS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             if (_recent.isEmpty)
               Container(
@@ -859,6 +860,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   int _renderHeight = 900;
 
   String? _selectedPresetName;
+  bool _isBslOverlayActive = false;
 
   Timer? _playbackTimer;
   double _currentTimelinePosition = 0.0;
@@ -869,6 +871,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   bool _isVulkanProcessing = false;
   bool _needsReprocess = false;
+  bool _isSavingProject = false;
 
   // Anti-banding TPDF Dither strength
   double _ditherStrength = 1.0;
@@ -878,8 +881,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    // Exactly 8 Categories: PRESETS, LUT, BASIC, MAGIC, COPIED STUFF, GLOW / FLARE, ATMOSPHERE, CURVES
-    _tabController = TabController(length: 8, vsync: this);
+    // 9 Categories: PRESETS, TONEMAP, LUT, BASIC, MAGIC, COPIED STUFF, GLOW / FLARE, ATMOSPHERE, CURVES
+    _tabController = TabController(length: 9, vsync: this);
     _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
@@ -958,7 +961,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       targetW = (targetH * ratio).round();
     }
 
-    // Hardware MediaCodec & Vulkan 16-pixel alignment
     targetW = math.max(16, ((targetW + 15) ~/ 16) * 16);
     targetH = math.max(16, ((targetH + 15) ~/ 16) * 16);
 
@@ -1020,7 +1022,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _project.isImage = isImg;
       _processedStaticImage?.dispose();
       _processedStaticImage = null;
-      _isPlaying = false; // Stay paused on import to prevent freezing
+      _isPlaying = false;
       _currentTimelinePosition = 0.0;
     });
 
@@ -1127,6 +1129,29 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final match = _activeLuts.where((l) => l.id == _cur.activeLutId);
     if (match.isEmpty) return null;
     return match.first.table;
+  }
+
+  Future<void> _manualSaveProject() async {
+    if (_project.mediaPath.isEmpty) return;
+    setState(() => _isSavingProject = true);
+    final proj = StoredProject(
+      id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
+      name: widget.projectName ?? 'Shaderly Session',
+      mediaPath: _project.mediaPath,
+      data: _project,
+      lastOpened: DateTime.now(),
+    );
+    await ProjectManager.saveProject(proj);
+    if (mounted) {
+      setState(() => _isSavingProject = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Project saved successfully (Synced to Home)'),
+          backgroundColor: Colors.teal,
+          duration: Duration(milliseconds: 1000),
+        ),
+      );
+    }
   }
 
   Future<void> _autoSaveProject() async {
@@ -1566,9 +1591,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               elevation: 0,
               title: Row(
                 children: [
-                  Text(
-                    'SHADERLY',
-                    style: TextStyle(color: accent, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 1.5),
+                  // BUTTON: SAVE PROJECT (Replaces "Shaderly" text as explicitly requested)
+                  ElevatedButton.icon(
+                    onPressed: _isSavingProject ? null : _manualSaveProject,
+                    icon: _isSavingProject
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                          )
+                        : const Icon(Icons.save_rounded, size: 16, color: Colors.black),
+                    label: const Text(
+                      'SAVE PROJECT',
+                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.6),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: accent,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Container(
@@ -1698,6 +1739,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
                   tabs: const [
                     Tab(text: 'PRESETS'),
+                    Tab(text: 'TONEMAPPERS'),
                     Tab(text: 'LUT'),
                     Tab(text: 'BASIC'),
                     Tab(text: 'MAGIC'),
@@ -1721,10 +1763,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         project: _project,
                         customPresets: _customPresets,
                         selectedPresetName: _selectedPresetName,
+                        isBslOverlayActive: _isBslOverlayActive,
+                        onToggleBslOverlay: () {
+                          _pushUndoSnapshot();
+                          setState(() {
+                            _isBslOverlayActive = !_isBslOverlayActive;
+                            EditorViews.applyBslOverlay(project: _project, active: _isBslOverlayActive);
+                          });
+                          _applyGrade();
+                          _autoSaveProject();
+                        },
                         onPresetSelected: (presetName) {
                           _pushUndoSnapshot();
-                          setState(() => _selectedPresetName = presetName);
-                          EditorViews.applyPresetLogic(_project, presetName);
+                          setState(() {
+                            // Tap again to turn off
+                            if (_selectedPresetName == presetName) {
+                              _selectedPresetName = null;
+                              EditorViews.clearPresetToNeutral(_project);
+                            } else {
+                              _selectedPresetName = presetName;
+                              EditorViews.applyPresetLogic(_project, presetName);
+                              if (_isBslOverlayActive) {
+                                EditorViews.applyBslOverlay(project: _project, active: true);
+                              }
+                            }
+                          });
                           _applyGrade();
                           _autoSaveProject();
                         },
@@ -1742,6 +1805,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         onDeleteCustomPreset: (index) async {
                           setState(() => _customPresets.removeAt(index));
                           await ProjectManager.saveCustomPresets(_customPresets);
+                        },
+                      ),
+                      EditorViews.buildTonemappersTab(
+                        context: context,
+                        project: _project,
+                        onChanged: () {
+                          _pushUndoSnapshot();
+                          setState(() {});
+                          _applyGrade();
+                          _autoSaveProject();
                         },
                       ),
                       EditorViews.buildLutsTab(
@@ -1776,90 +1849,3 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         cur: _cur,
                         onChanged: () {
                           setState(() {});
-                          _applyGrade();
-                        },
-                        onEnded: () {
-                          _pushUndoSnapshot();
-                          _autoSaveProject();
-                          _applyGrade();
-                        },
-                      ),
-                      EditorViews.buildMagicTab(
-                        context: context,
-                        cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
-                        onEnded: () {
-                          _pushUndoSnapshot();
-                          _autoSaveProject();
-                          _applyGrade();
-                        },
-                      ),
-                      EditorViews.buildCopiedStuffTab(
-                        context: context,
-                        cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
-                        onEnded: () {
-                          _pushUndoSnapshot();
-                          _autoSaveProject();
-                          _applyGrade();
-                        },
-                      ),
-                      EditorViews.buildGlowsAndFlaresTab(
-                        context: context,
-                        cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
-                        onEnded: () {
-                          _pushUndoSnapshot();
-                          _autoSaveProject();
-                          _applyGrade();
-                        },
-                      ),
-                      EditorViews.buildAtmosphereTab(
-                        context: context,
-                        cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
-                        onEnded: () {
-                          _pushUndoSnapshot();
-                          _autoSaveProject();
-                          _applyGrade();
-                        },
-                      ),
-                      EditorViews.buildCurvesTab(
-                        context: context,
-                        cur: _cur,
-                        selectedCurveChannel: _selectedCurveChannel,
-                        onChannelChanged: (ch) => setState(() => _selectedCurveChannel = ch),
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
-                        onResetCurve: () {
-                          _pushUndoSnapshot();
-                          setState(() {});
-                          _applyGrade();
-                          _autoSaveProject();
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
