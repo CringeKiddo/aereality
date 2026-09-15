@@ -1927,6 +1927,7 @@ class EditorViews {
 
     final bool is16Bit = bitDepth == '16-bit';
     final progressNotifier = ValueNotifier<double>(0.0);
+    final accent = gCustomAccentColor.value;
     final statusNotifier = ValueNotifier<String>('Initializing 32-bit Vulkan Engine: 0%');
     bool isCancelled = false;
     FFmpegSession? activeSession;
@@ -1959,13 +1960,13 @@ class EditorViews {
               valueListenable: progressNotifier,
               builder: (_, progress, __) => ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(value: progress, minHeight: 8, color: kCyanAccent, backgroundColor: Colors.white12),
+                child: LinearProgressIndicator(value: progress, minHeight: 8, color: accent, backgroundColor: Colors.white12),
               ),
             ),
             const SizedBox(height: 14),
             ValueListenableBuilder<String>(
               valueListenable: statusNotifier,
-              builder: (_, status, __) => Text(status, style: const TextStyle(color: kCyanAccent, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'monospace')),
+              builder: (_, status, __) => Text(status, style: TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'monospace')),
             ),
           ],
         ),
