@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                     },
                     icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
-                    label: const Text('YouTube (@null7839)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    label: const Text('YouTube (@cringekiddo)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1E1418),
                       foregroundColor: Colors.white,
@@ -452,7 +452,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
@@ -1050,10 +1049,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           setState(() {});
           _applyGrade();
 
-          _playbackTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
-            if (_controller != null && _controller!.value.isPlaying && mounted) {
+          // Continuous Timeline Position Updater
+          _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+            if (_controller != null && _controller!.value.isInitialized && _controller!.value.isPlaying && mounted) {
+              final newPos = _controller!.value.position.inMilliseconds / 1000.0;
+              if (newPos >= _videoDurationSeconds) {
+                // Loop video automatically
+                _controller!.seekTo(Duration.zero);
+                _controller!.play();
+              }
               setState(() {
-                _currentTimelinePosition = _controller!.value.position.inMilliseconds / 1000.0;
+                _currentTimelinePosition = newPos;
               });
             }
           });
@@ -1515,6 +1521,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // TIMELINE SCRUBBER & LIVE PLAYBACK CONTROLLER
+  // ---------------------------------------------------------------------------
   Widget _buildTimelineScrubber() {
     if (_project.isImage || _controller == null || !_controller!.value.isInitialized) {
       return const SizedBox.shrink();
@@ -1533,13 +1542,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 if (_controller!.value.isPlaying) {
                   _controller!.pause();
                   _isPlaying = false;
+                  // On pause, render full graded 32-bit linear frame
+                  _applyGrade();
                 } else {
                   _controller!.play();
                   _isPlaying = true;
                 }
               });
             },
-            child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 22),
+            child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
           ),
           const SizedBox(width: 8),
           Text(
@@ -1560,9 +1571,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 min: 0.0,
                 max: _videoDurationSeconds,
                 onChanged: (val) {
-                  setState(() => _currentTimelinePosition = val);
+                  setState(() {
+                    _currentTimelinePosition = val;
+                  });
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
-                  _applyGrade();
+                },
+                onChangeEnd: (val) {
+                  _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
+                    _applyGrade();
+                  });
                 },
               ),
             ),
@@ -1678,7 +1695,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              if (hasMedia)
+                              // 1. Live Native Video Playing Surface
+                              if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
+                                FittedBox(
+                                  fit: BoxFit.cover,
+                                  child: SizedBox(
+                                    width: _controller!.value.size.width,
+                                    height: _controller!.value.size.height,
+                                    child: VideoPlayer(_controller!),
+                                  ),
+                                ),
+
+                              // 2. Graded Vulkan Static Composite (Displayed when Paused, Scrubbing, or Grading Image)
+                              if (!_isPlaying && hasMedia)
                                 FittedBox(
                                   fit: BoxFit.cover,
                                   child: SizedBox(
@@ -1687,7 +1716,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     child: RawImage(image: _processedStaticImage),
                                   ),
                                 )
-                              else
+                              else if (!_isPlaying && !hasMedia)
                                 const Center(
                                   child: CircularProgressIndicator(color: Colors.white38),
                                 ),
