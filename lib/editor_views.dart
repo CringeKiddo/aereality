@@ -1445,12 +1445,15 @@ class EditorViews {
   static Future<void> exportPresetToFile(BuildContext context, ProjectData project) async {
     final scaffold = ScaffoldMessenger.of(context);
     try {
-      final safeName = project.name.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final rawName = project.mediaPath.isNotEmpty
+          ? project.mediaPath.split('/').last.split('.').first
+          : 'AEReality_Grade';
+      final safeName = rawName.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
 
       final Map<String, dynamic> ccData = {
         'generator': 'AEReality Shaderly 2026',
         'format_version': '1.0',
-        'project_name': project.name,
+        'project_name': rawName,
         'tonemap_mode': project.tonemapMode,
         'layers': project.layers.map((l) => {
           'name': l.name,
@@ -1486,7 +1489,7 @@ class EditorViews {
 
       final StringBuffer xmlBuffer = StringBuffer();
       xmlBuffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
-      xmlBuffer.writeln('<AERealityColorCorrection name="${project.name}" version="1.0">');
+      xmlBuffer.writeln('<AERealityColorCorrection name="$rawName" version="1.0">');
       xmlBuffer.writeln('  <TonemapMode>${project.tonemapMode}</TonemapMode>');
       xmlBuffer.writeln('  <Layers count="${project.layers.length}">');
       for (final l in project.layers) {
