@@ -91,7 +91,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 1. PRESETS TAB (Tap-To-Toggle + BSL Atmospheric Overlay)
+  // 1. PRESETS TAB (Tap-To-Toggle + BSL Atmospheric Overlay + Export CC Button)
   // ---------------------------------------------------------------------------
   static Widget buildPresetsTab({
     required BuildContext context,
@@ -143,25 +143,35 @@ class EditorViews {
         ),
 
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            ElevatedButton.icon(
-              onPressed: onSavePreset,
-              icon: const Icon(Icons.bookmark_add_rounded, size: 16, color: Colors.black),
-              label: const Text('SAVE CC', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: accent,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: onSavePreset,
+                icon: const Icon(Icons.bookmark_add_rounded, size: 16, color: Colors.black),
+                label: const Text('SAVE CC', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
               ),
             ),
-            OutlinedButton.icon(
-              onPressed: onImportPreset,
-              icon: Icon(Icons.file_open_rounded, size: 16, color: accent),
-              label: Text('IMPORT JSON/XML', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold)),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: accent),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: onImportPreset,
+                icon: Icon(Icons.file_open_rounded, size: 16, color: accent),
+                label: Text('IMPORT CC', style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: accent),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
               ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: Icon(Icons.file_download_outlined, color: accent),
+              tooltip: 'Export CC as JSON / XML',
+              onPressed: () => exportPresetToFile(context, project),
             ),
           ],
         ),
@@ -412,7 +422,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. BASIC TAB
+  // 4. BASIC TAB (Includes Restored Hue/Color Rotate Slider)
   // ---------------------------------------------------------------------------
   static Widget buildBasicGradingTab({
     required BuildContext context,
@@ -426,6 +436,7 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Exposure', val: cur.brightness, min: -0.8, max: 0.8, onChanged: (v) { cur.brightness = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Contrast', val: cur.contrast, min: 0.2, max: 2.5, onChanged: (v) { cur.contrast = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Saturation', val: cur.saturation, min: 0.0, max: 2.5, onChanged: (v) { cur.saturation = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Hue / Color Rotate', val: cur.hue, min: -3.14159, max: 3.14159, onChanged: (v) { cur.hue = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Gamma', val: cur.gamma, min: 0.2, max: 2.5, onChanged: (v) { cur.gamma = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Sharpness', val: cur.sharpness, min: 0.0, max: 2.0, onChanged: (v) { cur.sharpness = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Temperature', val: cur.temperature, min: 2000.0, max: 12000.0, onChanged: (v) { cur.temperature = v; onChanged(); }, onEnded: onEnded),
@@ -500,7 +511,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 7. GLOWS & FLARES TAB (Gaussian Multi-Octave Bloom & Sensitive Sapphire Core)
+  // 7. GLOWS & FLARES TAB
   // ---------------------------------------------------------------------------
   static Widget buildGlowsAndFlaresTab({
     required BuildContext context,
@@ -732,13 +743,13 @@ class EditorViews {
         id: 'bsl_atmospheric_overlay_layer',
         name: 'BSL Atmospheric Mist',
         blendMode: LayerBlendMode.screen,
-        opacity: 0.70,
-        bslaGodRays: 0.45,
-        bslaFogDensity: 0.35,
-        bslaBloomHaze: 0.50,
-        bslFogScatter: 0.40,
-        deepGlowIntensity: 0.25,
-        deepGlowRadius: 0.60,
+        opacity: 0.65,
+        bslaGodRays: 0.35,
+        bslaFogDensity: 0.28,
+        bslaBloomHaze: 0.40,
+        bslFogScatter: 0.32,
+        deepGlowIntensity: 0.22,
+        deepGlowRadius: 0.55,
       ));
     }
   }
@@ -757,7 +768,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // FULL PRESET ENGINE (CLEAN COLOR GRADES - ZERO FORCED INK LINES)
+  // FULL PRESET ENGINE (ADEVOB / CONQUESTOR METALLIC LOOK - ZERO BLOWOUT)
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
     project.layers.clear();
@@ -767,35 +778,35 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'goku_base',
           name: 'Base Grade',
-          contrast: 1.55,
-          saturation: 0.95,
-          brightness: 0.02,
-          temperature: 7200.0,
-          sharpness: 0.65,
-          shadows: -0.15,
-          highlights: 0.25,
-          blackCrush: 0.04,
+          contrast: 1.35,
+          saturation: 1.05,
+          brightness: 0.01,
+          temperature: 6800.0,
+          sharpness: 0.55,
+          shadows: -0.12,
+          highlights: 0.15,
+          blackCrush: 0.03,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.05,
-          cosmoCleanHighlight: 0.40,
+          vignette: 0.04,
+          cosmoCleanHighlight: 0.45,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.16, 0.46, 0.88, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'goku_specular_core',
           name: 'Specular Golden Core',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.80,
-          deepGlowIntensity: 0.45,
-          deepGlowRadius: 0.45,
-          deepGlowThreshold: 0.45,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.75,
+          deepGlowIntensity: 0.38,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.55,
           edgeGlowTint: 1.0,
-          sapphireGlowWidth: 0.45,
-          sapphireGlowThreshold: 0.60,
-          thinStreakIntensity: 0.35,
-          thinStreakWidth: 0.65,
-          thinStreakOpacity: 0.85,
+          sapphireGlowWidth: 0.35,
+          sapphireGlowThreshold: 0.65,
+          thinStreakIntensity: 0.28,
+          thinStreakWidth: 0.55,
+          thinStreakOpacity: 0.80,
         ));
         break;
 
@@ -803,31 +814,31 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'desat_base',
           name: 'Base Grade',
-          contrast: 1.62,
-          saturation: 0.48,
-          brightness: -0.03,
-          temperature: 7600.0,
-          sharpness: 0.75,
-          shadows: -0.20,
-          highlights: 0.18,
-          blackCrush: 0.06,
+          contrast: 1.40,
+          saturation: 0.52,
+          brightness: -0.02,
+          temperature: 7400.0,
+          sharpness: 0.68,
+          shadows: -0.15,
+          highlights: 0.12,
+          blackCrush: 0.04,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.06,
+          vignette: 0.05,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.13, 0.44, 0.82, 0.98],
+          curveMaster: [0.02, 0.15, 0.48, 0.82, 0.98],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'desat_ice_glow',
           name: 'Ice Cyan Specular',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.72,
-          deepGlowIntensity: 0.40,
-          deepGlowRadius: 0.42,
-          deepGlowThreshold: 0.48,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.68,
+          deepGlowIntensity: 0.32,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.58,
           edgeGlowTint: 2.0,
-          sapphireGlowWidth: 0.35,
-          sapphireGlowThreshold: 0.58,
+          sapphireGlowWidth: 0.28,
+          sapphireGlowThreshold: 0.65,
         ));
         break;
 
@@ -835,32 +846,32 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'yamato_base',
           name: 'Base Grade',
-          contrast: 1.48,
-          saturation: 0.94,
-          temperature: 7800.0,
-          sharpness: 0.68,
-          shadows: -0.15,
-          highlights: 0.22,
+          contrast: 1.32,
+          saturation: 0.92,
+          temperature: 7600.0,
+          sharpness: 0.58,
+          shadows: -0.12,
+          highlights: 0.15,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
-          mblMojoTealOrange: 0.35,
-          curveMaster: [0.0, 0.18, 0.50, 0.86, 1.0],
+          mblMojoTealOrange: 0.28,
+          curveMaster: [0.0, 0.19, 0.51, 0.84, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'yamato_frost',
           name: 'Frost Edge Bloom',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
-          deepGlowIntensity: 0.48,
-          deepGlowRadius: 0.50,
-          deepGlowThreshold: 0.40,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.72,
+          deepGlowIntensity: 0.35,
+          deepGlowRadius: 0.45,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 2.0,
-          sapphireGlowWidth: 0.50,
-          sapphireGlowThreshold: 0.55,
-          thinStreakIntensity: 0.30,
-          thinStreakWidth: 0.55,
-          thinStreakOpacity: 0.85,
+          sapphireGlowWidth: 0.38,
+          sapphireGlowThreshold: 0.60,
+          thinStreakIntensity: 0.22,
+          thinStreakWidth: 0.48,
+          thinStreakOpacity: 0.75,
         ));
         break;
 
@@ -868,30 +879,30 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'suguru_base',
           name: 'Base Grade',
-          contrast: 1.68,
-          saturation: 0.82,
-          temperature: 6100.0,
-          shadows: -0.25,
-          blackCrush: 0.08,
+          contrast: 1.45,
+          saturation: 0.85,
+          temperature: 6200.0,
+          shadows: -0.18,
+          blackCrush: 0.06,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.12, 0.42, 0.80, 1.0],
+          curveMaster: [0.0, 0.14, 0.46, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'suguru_curse_blood',
           name: 'Blood Crimson Core',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.84,
-          halationRadius: 0.35,
-          halationWarmth: 0.90,
-          deepGlowIntensity: 0.52,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.76,
+          halationRadius: 0.25,
+          halationWarmth: 0.75,
+          deepGlowIntensity: 0.38,
           edgeGlowTint: 4.0,
-          sapphireGlowWidth: 0.50,
-          sapphireGlowThreshold: 0.55,
-          thinStreakIntensity: 0.35,
-          thinStreakWidth: 0.70,
-          thinStreakOpacity: 0.88,
+          sapphireGlowWidth: 0.38,
+          sapphireGlowThreshold: 0.60,
+          thinStreakIntensity: 0.28,
+          thinStreakWidth: 0.55,
+          thinStreakOpacity: 0.80,
         ));
         break;
 
@@ -899,30 +910,30 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'hms_base',
           name: 'Base Grade',
-          contrast: 1.38,
-          saturation: 1.15,
-          temperature: 5200.0,
-          sharpness: 0.55,
-          shadows: -0.10,
-          highlights: 0.15,
-          vignette: 0.08,
+          contrast: 1.28,
+          saturation: 1.08,
+          temperature: 5400.0,
+          sharpness: 0.48,
+          shadows: -0.08,
+          highlights: 0.12,
+          vignette: 0.06,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          cosmoCleanHighlight: 0.35,
+          cosmoCleanHighlight: 0.40,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.20, 0.52, 0.85, 1.0],
+          curveMaster: [0.02, 0.22, 0.54, 0.84, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'hms_amber_haze',
           name: 'Sunset Amber Bloom',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.78,
-          deepGlowIntensity: 0.42,
-          deepGlowRadius: 0.55,
-          deepGlowThreshold: 0.42,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.70,
+          deepGlowIntensity: 0.32,
+          deepGlowRadius: 0.48,
+          deepGlowThreshold: 0.50,
           edgeGlowTint: 3.0,
-          bslaBloomHaze: 0.40,
-          thinStreakIntensity: 0.25,
+          bslaBloomHaze: 0.30,
+          thinStreakIntensity: 0.20,
         ));
         break;
 
@@ -930,29 +941,29 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'rin_base',
           name: 'Base Grade',
-          contrast: 1.72,
-          saturation: 0.15,
-          brightness: -0.02,
-          sharpness: 0.85,
-          shadows: -0.28,
-          highlights: 0.28,
-          blackCrush: 0.08,
+          contrast: 1.48,
+          saturation: 0.20,
+          brightness: -0.01,
+          sharpness: 0.72,
+          shadows: -0.20,
+          highlights: 0.18,
+          blackCrush: 0.05,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.10, 0.45, 0.90, 1.0],
+          curveMaster: [0.0, 0.12, 0.48, 0.86, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'rin_silver_bloom',
           name: 'Silver Peak Bloom',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.85,
-          deepGlowIntensity: 0.55,
-          deepGlowRadius: 0.42,
-          deepGlowThreshold: 0.48,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.74,
+          deepGlowIntensity: 0.38,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.56,
           edgeGlowTint: 0.0,
-          sapphireGlowWidth: 0.55,
-          sapphireGlowThreshold: 0.58,
+          sapphireGlowWidth: 0.42,
+          sapphireGlowThreshold: 0.62,
         ));
         break;
 
@@ -960,28 +971,28 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'sukuna_base',
           name: 'Base Grade',
-          contrast: 1.60,
-          saturation: 0.90,
-          sharpness: 0.75,
-          shadows: -0.22,
-          blackCrush: 0.08,
+          contrast: 1.42,
+          saturation: 0.92,
+          sharpness: 0.65,
+          shadows: -0.16,
+          blackCrush: 0.06,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.08,
+          vignette: 0.06,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.14, 0.45, 0.84, 1.0],
+          curveMaster: [0.0, 0.16, 0.48, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'sukuna_curse_rays',
           name: 'Blood Streaks & Rays',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
-          deepGlowIntensity: 0.48,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.74,
+          deepGlowIntensity: 0.36,
           edgeGlowTint: 4.0,
-          thinStreakIntensity: 0.42,
-          thinStreakWidth: 0.75,
-          thinStreakOpacity: 0.90,
-          copiedChromaShift: 0.35,
+          thinStreakIntensity: 0.32,
+          thinStreakWidth: 0.60,
+          thinStreakOpacity: 0.80,
+          copiedChromaShift: 0.28,
         ));
         break;
 
@@ -989,12 +1000,12 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'toji_base',
           name: 'Base Grade',
-          contrast: 1.52,
-          saturation: 0.70,
+          contrast: 1.38,
+          saturation: 0.72,
           temperature: 7100.0,
-          sharpness: 0.80,
-          shadows: -0.20,
-          blackCrush: 0.06,
+          sharpness: 0.70,
+          shadows: -0.16,
+          blackCrush: 0.05,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
@@ -1003,39 +1014,38 @@ class EditorViews {
           id: 'toji_acutance',
           name: 'Steel Acutance',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.75,
-          contrast: 1.30,
-          sharpness: 0.45,
-          deepGlowIntensity: 0.25,
+          opacity: 0.68,
+          contrast: 1.20,
+          sharpness: 0.35,
+          deepGlowIntensity: 0.20,
           edgeGlowTint: 2.0,
         ));
         break;
-
-      case 'eren':
+        case 'eren':
         project.layers.add(AdjustmentLayer(
           id: 'eren_base',
           name: 'Base Grade',
-          contrast: 1.44,
-          saturation: 1.10,
-          temperature: 5500.0,
-          shadows: -0.15,
-          highlights: 0.22,
+          contrast: 1.32,
+          saturation: 1.05,
+          temperature: 5600.0,
+          shadows: -0.12,
+          highlights: 0.15,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
-          mblMojoTealOrange: 0.35,
+          mblMojoTealOrange: 0.28,
         ));
         project.layers.add(AdjustmentLayer(
           id: 'eren_sun',
           name: 'Sunflare Volumetrics',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.78,
-          deepGlowIntensity: 0.45,
-          deepGlowRadius: 0.52,
-          deepGlowThreshold: 0.42,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.70,
+          deepGlowIntensity: 0.34,
+          deepGlowRadius: 0.45,
+          deepGlowThreshold: 0.50,
           edgeGlowTint: 1.0,
-          bslaGodRays: 0.45,
-          thinStreakIntensity: 0.30,
+          bslaGodRays: 0.32,
+          thinStreakIntensity: 0.22,
         ));
         break;
 
@@ -1043,12 +1053,12 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'makima_base',
           name: 'Base Grade',
-          contrast: 1.25,
-          saturation: 1.05,
-          temperature: 6100.0,
-          sharpness: 0.45,
-          cosmoCleanHighlight: 0.55,
-          highlights: 0.12,
+          contrast: 1.20,
+          saturation: 1.02,
+          temperature: 6200.0,
+          sharpness: 0.40,
+          cosmoCleanHighlight: 0.50,
+          highlights: 0.10,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
@@ -1056,13 +1066,13 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'makima_bloom',
           name: 'Pastel Peach Glow',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.76,
-          deepGlowIntensity: 0.40,
-          deepGlowRadius: 0.58,
-          deepGlowThreshold: 0.38,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.68,
+          deepGlowIntensity: 0.30,
+          deepGlowRadius: 0.48,
+          deepGlowThreshold: 0.48,
           edgeGlowTint: 3.0,
-          bslaBloomHaze: 0.38,
+          bslaBloomHaze: 0.28,
         ));
         break;
 
@@ -1070,31 +1080,31 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'yuta_base',
           name: 'Base Grade',
-          contrast: 1.40,
-          saturation: 0.80,
+          contrast: 1.32,
+          saturation: 0.82,
           brightness: 0.01,
-          temperature: 6400.0,
-          sharpness: 0.56,
-          shadows: -0.12,
-          highlights: 0.18,
-          blackCrush: 0.04,
+          temperature: 6500.0,
+          sharpness: 0.52,
+          shadows: -0.10,
+          highlights: 0.14,
+          blackCrush: 0.03,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           vignette: 0.04,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.17, 0.48, 0.85, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'yuta_ivory_bloom',
           name: 'Ivory Bloom',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.76,
-          deepGlowIntensity: 0.38,
-          deepGlowRadius: 0.45,
-          deepGlowThreshold: 0.48,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.68,
+          deepGlowIntensity: 0.30,
+          deepGlowRadius: 0.40,
+          deepGlowThreshold: 0.54,
           edgeGlowTint: 1.0,
-          thinStreakIntensity: 0.24,
-          thinStreakOpacity: 0.80,
+          thinStreakIntensity: 0.18,
+          thinStreakOpacity: 0.72,
         ));
         break;
 
@@ -1102,28 +1112,28 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'okkotsu_base',
           name: 'Base Grade',
-          contrast: 1.28,
-          saturation: 0.82,
-          brightness: -0.02,
+          contrast: 1.25,
+          saturation: 0.84,
+          brightness: -0.01,
           temperature: 7200.0,
-          sharpness: 0.48,
-          shadows: -0.12,
+          sharpness: 0.45,
+          shadows: -0.10,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.05,
+          vignette: 0.04,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.48, 0.85, 1.0],
+          curveMaster: [0.0, 0.19, 0.50, 0.84, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'okkotsu_rim',
           name: 'Specular Rim',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.68,
-          deepGlowIntensity: 0.28,
-          deepGlowRadius: 0.42,
-          deepGlowThreshold: 0.50,
-          thinStreakIntensity: 0.15,
-          thinStreakOpacity: 0.70,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.62,
+          deepGlowIntensity: 0.22,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.58,
+          thinStreakIntensity: 0.12,
+          thinStreakOpacity: 0.65,
         ));
         break;
 
@@ -1131,27 +1141,27 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'artoria_base',
           name: 'Base Grade',
-          contrast: 1.48,
-          saturation: 0.98,
-          temperature: 6300.0,
-          sharpness: 0.68,
-          shadows: -0.16,
-          highlights: 0.25,
+          contrast: 1.35,
+          saturation: 0.96,
+          temperature: 6400.0,
+          sharpness: 0.58,
+          shadows: -0.12,
+          highlights: 0.18,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.15, 0.48, 0.88, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'artoria_gold',
           name: 'Royal Gold Glint',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.80,
-          deepGlowIntensity: 0.45,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.72,
+          deepGlowIntensity: 0.35,
           edgeGlowTint: 1.0,
-          copiedStarGlint: 0.48,
-          sapphireGlowWidth: 0.45,
-          sapphireGlowThreshold: 0.60,
+          copiedStarGlint: 0.38,
+          sapphireGlowWidth: 0.35,
+          sapphireGlowThreshold: 0.65,
         ));
         break;
 
@@ -1159,10 +1169,10 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'deku_base',
           name: 'Base Grade',
-          contrast: 1.35,
-          saturation: 1.20,
-          sharpness: 0.60,
-          shadows: -0.10,
+          contrast: 1.26,
+          saturation: 1.15,
+          sharpness: 0.52,
+          shadows: -0.08,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
@@ -1170,13 +1180,13 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'deku_emerald',
           name: 'Emerald Aura & Mist',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.75,
-          deepGlowIntensity: 0.42,
-          deepGlowRadius: 0.52,
-          deepGlowThreshold: 0.40,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.68,
+          deepGlowIntensity: 0.32,
+          deepGlowRadius: 0.45,
+          deepGlowThreshold: 0.48,
           edgeGlowTint: 2.0,
-          bslaBloomHaze: 0.45,
+          bslaBloomHaze: 0.35,
         ));
         break;
 
@@ -1184,12 +1194,12 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'raiden_base',
           name: 'Base Grade',
-          contrast: 1.55,
-          saturation: 1.05,
+          contrast: 1.40,
+          saturation: 1.02,
           temperature: 7500.0,
-          sharpness: 0.78,
-          shadows: -0.20,
-          blackCrush: 0.06,
+          sharpness: 0.68,
+          shadows: -0.16,
+          blackCrush: 0.05,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
@@ -1197,14 +1207,14 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'raiden_electro',
           name: 'Electro Violet Glow',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
-          deepGlowIntensity: 0.50,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.74,
+          deepGlowIntensity: 0.38,
           edgeGlowTint: 5.0,
-          copiedChromaShift: 0.40,
-          copiedEdgeRays: 0.45,
-          sapphireGlowWidth: 0.45,
-          sapphireGlowThreshold: 0.58,
+          copiedChromaShift: 0.32,
+          copiedEdgeRays: 0.36,
+          sapphireGlowWidth: 0.36,
+          sapphireGlowThreshold: 0.64,
         ));
         break;
 
@@ -1212,10 +1222,10 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'atmo_base',
           name: 'Base Grade',
-          contrast: 1.15,
-          saturation: 0.85,
+          contrast: 1.12,
+          saturation: 0.88,
           temperature: 6700.0,
-          shadows: 0.05,
+          shadows: 0.04,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
@@ -1223,13 +1233,13 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'atmo_fog',
           name: 'Liminal Volumetric Fog',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.80,
-          bslaFogDensity: 0.45,
-          bslaBloomHaze: 0.55,
-          bslFogScatter: 0.48,
-          deepGlowIntensity: 0.32,
-          deepGlowRadius: 0.65,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.72,
+          bslaFogDensity: 0.35,
+          bslaBloomHaze: 0.42,
+          bslFogScatter: 0.36,
+          deepGlowIntensity: 0.24,
+          deepGlowRadius: 0.55,
         ));
         break;
 
@@ -1237,31 +1247,31 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'conq_base',
           name: 'Base Grade',
-          contrast: 1.48,
-          saturation: 1.12,
-          brightness: 0.02,
-          temperature: 7000.0,
-          sharpness: 0.72,
-          shadows: -0.15,
-          highlights: 0.20,
+          contrast: 1.36,
+          saturation: 1.08,
+          brightness: 0.01,
+          temperature: 7200.0,
+          sharpness: 0.65,
+          shadows: -0.14,
+          highlights: 0.16,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.05,
+          vignette: 0.04,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.86, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'conq_glow',
           name: 'Cyan Teal Rim',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.85,
-          deepGlowIntensity: 0.48,
-          deepGlowRadius: 0.50,
-          deepGlowThreshold: 0.40,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.75,
+          deepGlowIntensity: 0.36,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 2.0,
-          thinStreakIntensity: 0.30,
-          thinStreakWidth: 0.65,
-          thinStreakOpacity: 0.88,
+          thinStreakIntensity: 0.24,
+          thinStreakWidth: 0.52,
+          thinStreakOpacity: 0.80,
         ));
         break;
 
@@ -1269,29 +1279,29 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'vint_base',
           name: 'Base Grade',
-          contrast: 1.25,
-          saturation: 0.86,
-          temperature: 5600.0,
-          shadows: 0.04,
-          highlights: -0.04,
+          contrast: 1.20,
+          saturation: 0.90,
+          temperature: 5700.0,
+          shadows: 0.03,
+          highlights: -0.02,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.08,
+          vignette: 0.06,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.03, 0.24, 0.49, 0.80, 0.96],
+          curveMaster: [0.03, 0.25, 0.50, 0.80, 0.96],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'vint_grain',
           name: 'Halation & Grain',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.76,
-          deepGlowIntensity: 0.32,
-          deepGlowRadius: 0.55,
-          deepGlowThreshold: 0.45,
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.68,
+          deepGlowIntensity: 0.25,
+          deepGlowRadius: 0.48,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 1.0,
-          halationRadius: 0.30,
-          halationWarmth: 0.85,
-          filmGrain: 0.14,
+          halationRadius: 0.24,
+          halationWarmth: 0.75,
+          filmGrain: 0.12,
         ));
         break;
 
@@ -1299,17 +1309,29 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'noir_base',
           name: 'Base Grade',
-          contrast: 1.85,
+          contrast: 1.65,
           saturation: 0.0,
-          brightness: -0.04,
-          sharpness: 0.85,
-          shadows: -0.35,
-          blackCrush: 0.12,
+          brightness: -0.03,
+          sharpness: 0.75,
+          shadows: -0.28,
+          blackCrush: 0.09,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          vignette: 0.12,
+          vignette: 0.10,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.08, 0.40, 0.88, 1.0],
+          curveMaster: [0.0, 0.10, 0.45, 0.88, 1.0],
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'noir_specular',
+          name: 'Monochrome Specular',
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.72,
+          deepGlowIntensity: 0.32,
+          deepGlowRadius: 0.35,
+          deepGlowThreshold: 0.65,
+          edgeGlowTint: 0.0,
+          sapphireGlowWidth: 0.32,
+          sapphireGlowThreshold: 0.68,
         ));
         break;
 
@@ -1317,26 +1339,31 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'choso_base',
           name: 'Base Grade',
-          contrast: 1.62,
-          saturation: 0.85,
+          contrast: 1.44,
+          saturation: 0.88,
           temperature: 6300.0,
-          sharpness: 0.75,
-          shadows: -0.25,
-          blackCrush: 0.08,
+          sharpness: 0.62,
+          shadows: -0.16,
+          blackCrush: 0.05,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
+          curveMaster: [0.0, 0.15, 0.48, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'choso_blood',
-          name: 'Crimson Blood Glow',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
-          deepGlowIntensity: 0.52,
+          name: 'Blood Crimson Core',
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.76,
+          deepGlowIntensity: 0.38,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 4.0,
-          halationRadius: 0.35,
-          halationWarmth: 0.90,
-          thinStreakIntensity: 0.38,
+          sapphireGlowWidth: 0.36,
+          sapphireGlowThreshold: 0.62,
+          thinStreakIntensity: 0.26,
+          thinStreakWidth: 0.50,
+          thinStreakOpacity: 0.80,
         ));
         break;
 
@@ -1344,64 +1371,160 @@ class EditorViews {
         project.layers.add(AdjustmentLayer(
           id: 'yoruichi_base',
           name: 'Base Grade',
-          contrast: 1.50,
-          saturation: 1.15,
-          temperature: 7000.0,
-          sharpness: 0.72,
-          shadows: -0.18,
+          contrast: 1.38,
+          saturation: 1.12,
+          temperature: 7200.0,
+          sharpness: 0.64,
+          shadows: -0.12,
+          highlights: 0.15,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
           blendMode: LayerBlendMode.normal,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'yoruichi_flash',
-          name: 'Violet Flash Glow',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.82,
-          deepGlowIntensity: 0.50,
+          id: 'yoruichi_lightning',
+          name: 'Flash Goddess Violet',
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.75,
+          deepGlowIntensity: 0.36,
+          deepGlowRadius: 0.44,
+          deepGlowThreshold: 0.52,
           edgeGlowTint: 5.0,
-          sapphireGlowWidth: 0.45,
-          sapphireGlowThreshold: 0.58,
+          copiedChromaShift: 0.26,
+          sapphireGlowWidth: 0.35,
+          sapphireGlowThreshold: 0.62,
+          thinStreakIntensity: 0.25,
+          thinStreakWidth: 0.52,
+          thinStreakOpacity: 0.80,
         ));
         break;
 
       case 'gojo':
+      default:
         project.layers.add(AdjustmentLayer(
           id: 'gojo_base',
           name: 'Base Grade',
-          contrast: 1.65,
-          saturation: 1.05,
-          temperature: 8200.0,
-          sharpness: 0.88,
-          shadows: -0.22,
-          highlights: 0.28,
-          blackCrush: 0.06,
+          contrast: 1.38,
+          saturation: 0.95,
+          brightness: 0.01,
+          temperature: 7500.0,
+          sharpness: 0.65,
+          shadows: -0.14,
+          highlights: 0.16,
+          blackCrush: 0.03,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
+          vignette: 0.04,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.15, 0.48, 0.88, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'gojo_infinity_glow',
-          name: 'Six Eyes Cyan Bloom',
-          blendMode: LayerBlendMode.screen,
-          opacity: 0.88,
-          deepGlowIntensity: 0.58,
-          deepGlowRadius: 0.48,
-          deepGlowThreshold: 0.40,
+          id: 'gojo_infinity_bloom',
+          name: 'Infinity Cyan Bloom',
+          blendMode: LayerBlendMode.softLight,
+          opacity: 0.78,
+          deepGlowIntensity: 0.40,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.50,
           edgeGlowTint: 2.0,
-          sapphireGlowWidth: 0.60,
-          sapphireGlowThreshold: 0.55,
-          thinStreakIntensity: 0.40,
-          thinStreakWidth: 0.70,
-          thinStreakOpacity: 0.90,
+          sapphireGlowWidth: 0.38,
+          sapphireGlowThreshold: 0.60,
+          thinStreakIntensity: 0.28,
+          thinStreakWidth: 0.55,
+          thinStreakOpacity: 0.80,
         ));
         break;
-
-      default:
-        clearPresetToNeutral(project);
     }
+
     project.activeLayerIndex = 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // EXPORT PRESET AS JSON / XML ACTION
+  // ---------------------------------------------------------------------------
+  static Future<void> exportPresetToFile(BuildContext context, ProjectData project) async {
+    final scaffold = ScaffoldMessenger.of(context);
+    try {
+      final safeName = project.name.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+
+      final Map<String, dynamic> ccData = {
+        'generator': 'AEReality Shaderly 2026',
+        'format_version': '1.0',
+        'project_name': project.name,
+        'tonemap_mode': project.tonemapMode,
+        'layers': project.layers.map((l) => {
+          'name': l.name,
+          'opacity': l.opacity,
+          'blend_mode': l.blendMode.index,
+          'brightness': l.brightness,
+          'contrast': l.contrast,
+          'saturation': l.saturation,
+          'hue': l.hue,
+          'sharpness': l.sharpness,
+          'temperature': l.temperature,
+          'highlights': l.highlights,
+          'shadows': l.shadows,
+          'black_crush': l.blackCrush,
+          'deep_glow_intensity': l.deepGlowIntensity,
+          'deep_glow_radius': l.deepGlowRadius,
+          'deep_glow_threshold': l.deepGlowThreshold,
+          'edge_glow_tint': l.edgeGlowTint,
+          'sapphire_glow_width': l.sapphireGlowWidth,
+          'sapphire_glow_threshold': l.sapphireGlowThreshold,
+          'thin_streak_intensity': l.thinStreakIntensity,
+          'thin_streak_width': l.thinStreakWidth,
+          'thin_streak_opacity': l.thinStreakOpacity,
+          'bsla_god_rays': l.bslaGodRays,
+          'bsla_fog_density': l.bslaFogDensity,
+          'bsla_bloom_haze': l.bslaBloomHaze,
+          'curve_master': l.curveMaster,
+          'curve_red': l.curveRed,
+          'curve_green': l.curveGreen,
+          'curve_blue': l.curveBlue,
+        }).toList(),
+      };
+
+      final StringBuffer xmlBuffer = StringBuffer();
+      xmlBuffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
+      xmlBuffer.writeln('<AERealityColorCorrection name="${project.name}" version="1.0">');
+      xmlBuffer.writeln('  <TonemapMode>${project.tonemapMode}</TonemapMode>');
+      xmlBuffer.writeln('  <Layers count="${project.layers.length}">');
+      for (final l in project.layers) {
+        xmlBuffer.writeln('    <Layer name="${l.name}">');
+        xmlBuffer.writeln('      <Opacity>${l.opacity}</Opacity>');
+        xmlBuffer.writeln('      <Brightness>${l.brightness}</Brightness>');
+        xmlBuffer.writeln('      <Contrast>${l.contrast}</Contrast>');
+        xmlBuffer.writeln('      <Saturation>${l.saturation}</Saturation>');
+        xmlBuffer.writeln('      <Hue>${l.hue}</Hue>');
+        xmlBuffer.writeln('      <DeepGlow intensity="${l.deepGlowIntensity}" radius="${l.deepGlowRadius}" threshold="${l.deepGlowThreshold}" />');
+        xmlBuffer.writeln('      <AmanaiFlare intensity="${l.thinStreakIntensity}" width="${l.thinStreakWidth}" opacity="${l.thinStreakOpacity}" />');
+        xmlBuffer.writeln('    </Layer>');
+      }
+      xmlBuffer.writeln('  </Layers>');
+      xmlBuffer.writeln('</AERealityColorCorrection>');
+
+      Directory targetDir = Directory('/storage/emulated/0/Download');
+      if (!targetDir.existsSync()) {
+        targetDir = await getApplicationDocumentsDirectory();
+      }
+
+      final jsonFile = File('${targetDir.path}/AEReality_${safeName}_CC.json');
+      await jsonFile.writeAsString(const JsonEncoder.withIndent('  ').convert(ccData));
+
+      final xmlFile = File('${targetDir.path}/AEReality_${safeName}_CC.xml');
+      await xmlFile.writeAsString(xmlBuffer.toString());
+
+      scaffold.showSnackBar(SnackBar(
+        backgroundColor: const Color(0xFF101016),
+        content: Text('CC exported as .JSON and .XML to Downloads!', style: TextStyle(color: gCustomAccentColor.value, fontWeight: FontWeight.bold)),
+        duration: const Duration(seconds: 3),
+      ));
+    } catch (e) {
+      scaffold.showSnackBar(SnackBar(
+        backgroundColor: Colors.redAccent,
+        content: Text('Failed to export CC: $e'),
+      ));
+    }
   }
 
   // ---------------------------------------------------------------------------
