@@ -406,6 +406,19 @@ class ProjectData {
   int activeLayerIndex;
   double tonemapMode;
 
+  // --- Isolated Text Suite Bounding Region & Stylization ---
+  bool textSuiteEnabled;
+  double textBoxX;
+  double textBoxY;
+  double textBoxW;
+  double textBoxH;
+  double textBevelDepth;
+  double textChromeIntensity;
+  double textSpecularGlint;
+  double textContactShadow;
+  double textLumaThreshold;
+  double textMetallicTint;
+
   ProjectData({
     required this.mediaPath,
     this.isImage = false,
@@ -413,6 +426,17 @@ class ProjectData {
     List<AdjustmentLayer>? layers,
     this.activeLayerIndex = 0,
     this.tonemapMode = 0.0,
+    this.textSuiteEnabled = false,
+    this.textBoxX = 0.15,
+    this.textBoxY = 0.40,
+    this.textBoxW = 0.70,
+    this.textBoxH = 0.20,
+    this.textBevelDepth = 1.0,
+    this.textChromeIntensity = 1.2,
+    this.textSpecularGlint = 1.0,
+    this.textContactShadow = 0.8,
+    this.textLumaThreshold = 0.65,
+    this.textMetallicTint = 0.0,
   }) : layers = layers ?? [];
 
   AdjustmentLayer get currentLayer {
@@ -434,6 +458,17 @@ class ProjectData {
       layers: layers.map((l) => l.clone()).toList(),
       activeLayerIndex: activeLayerIndex,
       tonemapMode: tonemapMode,
+      textSuiteEnabled: textSuiteEnabled,
+      textBoxX: textBoxX,
+      textBoxY: textBoxY,
+      textBoxW: textBoxW,
+      textBoxH: textBoxH,
+      textBevelDepth: textBevelDepth,
+      textChromeIntensity: textChromeIntensity,
+      textSpecularGlint: textSpecularGlint,
+      textContactShadow: textContactShadow,
+      textLumaThreshold: textLumaThreshold,
+      textMetallicTint: textMetallicTint,
     );
   }
 
@@ -445,6 +480,17 @@ class ProjectData {
       'layers': layers.map((l) => l.toJson()).toList(),
       'activeLayerIndex': activeLayerIndex,
       'tonemapMode': tonemapMode,
+      'textSuiteEnabled': textSuiteEnabled,
+      'textBoxX': textBoxX,
+      'textBoxY': textBoxY,
+      'textBoxW': textBoxW,
+      'textBoxH': textBoxH,
+      'textBevelDepth': textBevelDepth,
+      'textChromeIntensity': textChromeIntensity,
+      'textSpecularGlint': textSpecularGlint,
+      'textContactShadow': textContactShadow,
+      'textLumaThreshold': textLumaThreshold,
+      'textMetallicTint': textMetallicTint,
     };
   }
 
@@ -459,6 +505,17 @@ class ProjectData {
           [],
       activeLayerIndex: json['activeLayerIndex'] ?? 0,
       tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
+      textSuiteEnabled: json['textSuiteEnabled'] ?? false,
+      textBoxX: (json['textBoxX'] as num?)?.toDouble() ?? 0.15,
+      textBoxY: (json['textBoxY'] as num?)?.toDouble() ?? 0.40,
+      textBoxW: (json['textBoxW'] as num?)?.toDouble() ?? 0.70,
+      textBoxH: (json['textBoxH'] as num?)?.toDouble() ?? 0.20,
+      textBevelDepth: (json['textBevelDepth'] as num?)?.toDouble() ?? 1.0,
+      textChromeIntensity: (json['textChromeIntensity'] as num?)?.toDouble() ?? 1.2,
+      textSpecularGlint: (json['textSpecularGlint'] as num?)?.toDouble() ?? 1.0,
+      textContactShadow: (json['textContactShadow'] as num?)?.toDouble() ?? 0.8,
+      textLumaThreshold: (json['textLumaThreshold'] as num?)?.toDouble() ?? 0.65,
+      textMetallicTint: (json['textMetallicTint'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
