@@ -244,12 +244,12 @@ class EditorViews {
       },
       {
         'mode': 1.0,
-        'title': 'Shaderly Tonemapper 1 (ACES Filmic)',
+        'title': 'Shaderly Tonemapper 1 (ACES Filmic Studio)',
         'desc': 'Academy Color Encoding System curve with cinematic toe and rich highlight rolloff.',
       },
       {
         'mode': 2.0,
-        'title': 'Shaderly Tonemapper 2 (AgX Dynamic)',
+        'title': 'Shaderly Tonemapper 2 (AgX Dynamic Metal)',
         'desc': 'Modern perceptual dynamic range tonemapper protecting saturated highlight values.',
       },
     ];
@@ -1440,7 +1440,120 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // EXPORT PRESET AS JSON / XML ACTION
+  // 10. NEW: TEXT SUITE TAB (Isolated Bounding Region & Chrome Chisel Suite)
+  // ---------------------------------------------------------------------------
+  static Widget buildTextSuiteTab({
+    required BuildContext context,
+    required ProjectData project,
+    required VoidCallback onChanged,
+  }) {
+    final accent = gCustomAccentColor.value;
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: project.textSuiteEnabled ? accent.withOpacity(0.18) : const Color(0xFF14141C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: project.textSuiteEnabled ? accent : Colors.white10,
+              width: project.textSuiteEnabled ? 1.8 : 1.0,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.text_fields_rounded, color: project.textSuiteEnabled ? accent : Colors.white54, size: 24),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Enable Isolated Text Suite', style: TextStyle(color: project.textSuiteEnabled ? Colors.white : Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+                      const Text('Draggable & resizable boundary mask', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                    ],
+                  ),
+                ],
+              ),
+              Switch(
+                value: project.textSuiteEnabled,
+                activeColor: accent,
+                onChanged: (val) {
+                  project.textSuiteEnabled = val;
+                  onChanged();
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        if (!project.textSuiteEnabled)
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(color: const Color(0xFF101014), borderRadius: BorderRadius.circular(10)),
+            child: const Center(
+              child: Text(
+                'Toggle Text Suite above to display the on-screen draggable bounding box.\nOnly pixels inside the box are stylized—0% of the video footage is touched.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.4),
+              ),
+            ),
+          )
+        else ...[
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Text('METALLIC CHISEL & BEVEL CONTROLS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          ),
+          buildSliderRow(context: context, title: 'Metallic Bevel Depth', val: project.textBevelDepth, min: 0.0, max: 2.0, onChanged: (v) { project.textBevelDepth = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Chrome Horizon Reflection', val: project.textChromeIntensity, min: 0.0, max: 2.0, onChanged: (v) { project.textChromeIntensity = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Specular Edge Glint', val: project.textSpecularGlint, min: 0.0, max: 2.0, onChanged: (v) { project.textSpecularGlint = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Grounding Contact Shadow', val: project.textContactShadow, min: 0.0, max: 1.0, onChanged: (v) { project.textContactShadow = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Text Luma Threshold', val: project.textLumaThreshold, min: 0.20, max: 0.95, onChanged: (v) { project.textLumaThreshold = v; onChanged(); }),
+
+          const SizedBox(height: 10),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Text('METALLIC TINT OVERLAY', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          ),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                {'id': 0.0, 'name': 'Polished Chrome (Silver)'},
+                {'id': 1.0, 'name': 'Liquid Gold'},
+                {'id': 2.0, 'name': 'Anodized Cyan'},
+                {'id': 3.0, 'name': 'Blood Crimson'},
+                {'id': 4.0, 'name': 'Steel Violet'},
+              ].map((t) {
+                final isSel = project.textMetallicTint == t['id'];
+                return ChoiceChip(
+                  label: Text(t['name'] as String),
+                  selected: isSel,
+                  selectedColor: accent,
+                  labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                  onSelected: (s) {
+                    if (s) {
+                      project.textMetallicTint = t['id'] as double;
+                      onChanged();
+                    }
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // EXPORT PRESET AS JSON / XML ACTION (TOLERANT SAFE DUMP)
   // ---------------------------------------------------------------------------
   static Future<void> exportPresetToFile(BuildContext context, ProjectData project) async {
     final scaffold = ScaffoldMessenger.of(context);
@@ -1455,6 +1568,19 @@ class EditorViews {
         'format_version': '1.0',
         'project_name': rawName,
         'tonemap_mode': project.tonemapMode,
+        'text_suite': {
+          'enabled': project.textSuiteEnabled,
+          'box_x': project.textBoxX,
+          'box_y': project.textBoxY,
+          'box_w': project.textBoxW,
+          'box_h': project.textBoxH,
+          'bevel_depth': project.textBevelDepth,
+          'chrome_intensity': project.textChromeIntensity,
+          'specular_glint': project.textSpecularGlint,
+          'contact_shadow': project.textContactShadow,
+          'luma_threshold': project.textLumaThreshold,
+          'metallic_tint': project.textMetallicTint,
+        },
         'layers': project.layers.map((l) => {
           'name': l.name,
           'opacity': l.opacity,
@@ -1531,7 +1657,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // PRESET SAVE / IMPORT HELPERS
+  // PRESET SAVE / IMPORT HELPERS (TOLERANT PARSER WITH FALLBACKS)
   // ---------------------------------------------------------------------------
   static Future<void> saveCurrentAsPreset(BuildContext context, ProjectData project, List<CustomPresetItem> customPresets) async {
     final controller = TextEditingController(text: 'My Custom Grade');
@@ -1578,30 +1704,58 @@ class EditorViews {
 
   static Future<void> importPresetFromFile(BuildContext context, ProjectData project) async {
     try {
-      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'xml', 'txt'],
+      );
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
         final content = await file.readAsString();
-        final Map<String, dynamic> data = jsonDecode(content);
+        
+        dynamic decoded;
+        try {
+          decoded = jsonDecode(content);
+        } catch (_) {
+          decoded = null;
+        }
 
-        if (data.containsKey('layers')) {
-          final List<dynamic> layerList = data['layers'];
-          project.layers.clear();
-          for (var l in layerList) {
-            project.layers.add(AdjustmentLayer.fromJson(l));
+        if (decoded is Map<String, dynamic>) {
+          if (decoded.containsKey('layers') && decoded['layers'] is List) {
+            project.layers.clear();
+            for (var l in decoded['layers']) {
+              if (l is Map<String, dynamic>) {
+                project.layers.add(AdjustmentLayer.fromJson(l));
+              }
+            }
           }
-          if (data.containsKey('tonemapMode')) {
-            project.tonemapMode = (data['tonemapMode'] as num).toDouble();
+          if (decoded.containsKey('tonemap_mode') || decoded.containsKey('tonemapMode')) {
+            project.tonemapMode = ((decoded['tonemap_mode'] ?? decoded['tonemapMode']) as num).toDouble();
+          }
+          if (decoded.containsKey('text_suite') && decoded['text_suite'] is Map<String, dynamic>) {
+            final ts = decoded['text_suite'] as Map<String, dynamic>;
+            project.textSuiteEnabled = ts['enabled'] == true;
+            project.textBoxX = (ts['box_x'] as num?)?.toDouble() ?? 0.15;
+            project.textBoxY = (ts['box_y'] as num?)?.toDouble() ?? 0.40;
+            project.textBoxW = (ts['box_w'] as num?)?.toDouble() ?? 0.70;
+            project.textBoxH = (ts['box_h'] as num?)?.toDouble() ?? 0.20;
+            project.textBevelDepth = (ts['bevel_depth'] as num?)?.toDouble() ?? 1.0;
+            project.textChromeIntensity = (ts['chrome_intensity'] as num?)?.toDouble() ?? 1.2;
+            project.textSpecularGlint = (ts['specular_glint'] as num?)?.toDouble() ?? 1.0;
+            project.textContactShadow = (ts['contact_shadow'] as num?)?.toDouble() ?? 0.8;
+            project.textLumaThreshold = (ts['luma_threshold'] as num?)?.toDouble() ?? 0.65;
+            project.textMetallicTint = (ts['metallic_tint'] as num?)?.toDouble() ?? 0.0;
           }
           project.activeLayerIndex = 0;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Loaded preset successfully!'), backgroundColor: Colors.green),
           );
+        } else {
+          throw Exception('File is not a valid AEReality JSON preset.');
         }
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Invalid preset file: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text('Failed to load preset: $e'), backgroundColor: Colors.red),
       );
     }
   }
@@ -1639,7 +1793,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 10. EXPORT SUITE (Hardware MediaCodec & Direct-to-Downloads Path)
+  // 11. EXPORT SUITE (Hardware MediaCodec & Direct-to-Downloads Path)
   // ---------------------------------------------------------------------------
   static void showExportSheet({
     required BuildContext context,
@@ -1874,6 +2028,9 @@ class EditorViews {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // ASYNCHRONOUS NON-BLOCKING EXPORT ENGINE (ANR CRASH PROOF)
+  // ---------------------------------------------------------------------------
   static Future<void> executeVideoExport({
     required BuildContext context,
     required ProjectData project,
@@ -2059,7 +2216,9 @@ class EditorViews {
 
         progressNotifier.value = (i + 1) / totalFrames;
         statusNotifier.value = 'Grading frames: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
-        await Future.delayed(const Duration(milliseconds: 1));
+        
+        // Prevent UI thread lock / Android ANR popup
+        await Future.delayed(Duration.zero);
       }
 
       if (isCancelled) return;
@@ -2128,6 +2287,98 @@ class EditorViews {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
       }
     }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// INTERACTIVE DRAGGABLE & STRETCHABLE TEXT BOUNDING BOX OVERLAY
+// -----------------------------------------------------------------------------
+class DraggableTextBoundingBox extends StatefulWidget {
+  final ProjectData project;
+  final Size containerSize;
+  final VoidCallback onUpdated;
+
+  const DraggableTextBoundingBox({
+    Key? key,
+    required this.project,
+    required this.containerSize,
+    required this.onUpdated,
+  }) : super(key: key);
+
+  @override
+  State<DraggableTextBoundingBox> createState() => _DraggableTextBoundingBoxState();
+}
+
+class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.project.textSuiteEnabled) return const SizedBox.shrink();
+
+    final accent = gCustomAccentColor.value;
+    final parentW = widget.containerSize.width;
+    final parentH = widget.containerSize.height;
+
+    final left = widget.project.textBoxX * parentW;
+    final top = widget.project.textBoxY * parentH;
+    final width = widget.project.textBoxW * parentW;
+    final height = widget.project.textBoxH * parentH;
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: math.max(40, width),
+      height: math.max(30, height),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Drag Body
+          GestureDetector(
+            onPanUpdate: (details) {
+              setState(() {
+                widget.project.textBoxX = (widget.project.textBoxX + details.delta.dx / parentW).clamp(0.0, 1.0 - widget.project.textBoxW);
+                widget.project.textBoxY = (widget.project.textBoxY + details.delta.dy / parentH).clamp(0.0, 1.0 - widget.project.textBoxH);
+              });
+              widget.onUpdated();
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: accent, width: 1.8),
+                color: accent.withOpacity(0.12),
+              ),
+              child: Center(
+                child: Text(
+                  'TEXT SUITE MASK (${(widget.project.textBoxW * 100).toInt()}% x ${(widget.project.textBoxH * 100).toInt()}%)',
+                  style: TextStyle(color: accent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                ),
+              ),
+            ),
+          ),
+          // Resize Handle (Bottom-Right)
+          Positioned(
+            right: -8,
+            bottom: -8,
+            child: GestureDetector(
+              onPanUpdate: (details) {
+                setState(() {
+                  widget.project.textBoxW = (widget.project.textBoxW + details.delta.dx / parentW).clamp(0.1, 1.0 - widget.project.textBoxX);
+                  widget.project.textBoxH = (widget.project.textBoxH + details.delta.dy / parentH).clamp(0.05, 1.0 - widget.project.textBoxY);
+                });
+                widget.onUpdated();
+              },
+              child: Container(
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.black, width: 2),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
