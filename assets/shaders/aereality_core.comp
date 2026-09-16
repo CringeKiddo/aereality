@@ -31,7 +31,7 @@ struct LayerData {
     // Offset 8..11 (16 bytes)
     float hue;                    // -3.14159 to +3.14159 (Hue / Color shift)
     float temperature;            // Kelvin (2000 to 12000)
-    float deepGlowIntensity;      // 0.0 to 2.0 (Real Gaussian Multi-Octave Bloom)
+    float deepGlowIntensity;      // 0.0 to 2.0 (Continuous Multi-Octave Bloom)
     float deepGlowRadius;         // 0.0 to 1.0 (Bloom Spread)
 
     // Offset 12..15 (16 bytes)
@@ -41,7 +41,7 @@ struct LayerData {
     float thinStreakWidth;        // 0.05 to 2.0 (Amanai Flare Width)
 
     // Offset 16..19 (16 bytes)
-    float lineChromaStrength;     // 0.0 to 1.0 (Line-art Chromatic Aberration)
+    float lineChromaStrength;     // 0.0 to 1.0 (True Edge-Normal Chromatic Aberration)
     float volRaysLength;          // 0.0 to 1.0 (Volumetric Light Rays)
     float volRaysDecay;           // 0.70 to 0.98
     float shadows;                // -1.0 to 1.0
@@ -127,7 +127,16 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_copiedStarGlint;      // 4-Point Star Sparkle Glint
     float u_horizontalRamp;       // Glow & Flares: Horizontal Ramp
     float u_ditherStrength;       // Anti-Banding TPDF Dither Strength
-    float padU0, padU1, padU2, padU3, padU4, padU5, padU6;
+    
+    // Text Suite Parameters (Dedicated Isolated Region)
+    float u_textSuiteEnabled;     // 1.0 if enabled
+    float u_textBoxX;             // Normalized X [0.0..1.0]
+    float u_textBoxY;             // Normalized Y [0.0..1.0]
+    float u_textBoxW;             // Normalized Width [0.0..1.0]
+    float u_textBoxH;             // Normalized Height [0.0..1.0]
+    float u_textBevelDepth;       // Bevel depth
+    float u_textChromeIntensity;  // Metallic reflection strength
+
     LayerData layers[4];
 };
 
@@ -156,9 +165,9 @@ vec3 linearToSRGB(vec3 c) {
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 }
 
-// Adevob-style Highlight Compression Curve (Soft Knee - prevents white clipping blowout)
+// Adevob-style Highlight Compression Curve (Soft Knee - preserves rich highlight textures)
 vec3 compressShoulder(vec3 c) {
-    return c / (vec3(1.0) + c * 0.35);
+    return c / (vec3(1.0) + c * 0.28);
 }
 
 vec3 tonemapACES(vec3 x) {
@@ -174,7 +183,9 @@ vec3 tonemapACES(vec3 x) {
 
 vec3 tonemapAgX(vec3 x) {
     vec3 lin = sRGBToLinear(clamp(x, 0.0, 10.0));
-    vec3 mapped = lin / (lin + vec3(0.18)) * 1.18;
+    // AgX Pearlescent curve - protects saturated highlights from clipping to flat white
+    vec3 mapped = (lin * (lin + vec3(0.0245786)) - vec3(0.000090537)) /
+                  (lin * (0.983729 * lin + vec3(0.4329510)) + vec3(0.238081));
     return linearToSRGB(clamp(mapped, 0.0, 1.0));
 }
 
@@ -300,7 +311,7 @@ void main() {
     vec4 basePixel = unpackRGBA(in_pixels[pixelIndex]);
     vec3 currentComposite = basePixel.rgb;
 
-    // Sobel line detection for anime line-art boundaries
+    // Sobel line detection & Edge Normal vectors
     float gx = 0.0, gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
@@ -314,6 +325,7 @@ void main() {
         }
     }
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
+    vec2 edgeNormal = (lineEdge > 0.05) ? normalize(vec2(gx, gy)) : vec2(0.0);
 
     int totalLayers = int(clamp(u_layerCount, 0.0, 4.0));
 
@@ -352,15 +364,14 @@ void main() {
             }
         }
 
-        // 2. Line-Art Chromatic Aberration
-        if (L.lineChromaStrength > 0.001) {
+        // 2. TRUE EDGE-NORMAL CHROMATIC ABERRATION (Targeted to silhouette lines, NOT canvas center)
+        if (L.lineChromaStrength > 0.001 && lineEdge > 0.05) {
             float edgeFactor = smoothstep(0.08, 0.35, lineEdge);
-            vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
-            ivec2 shift = ivec2(normalize(uv + vec2(0.0001)) * (L.lineChromaStrength * 4.0) * edgeFactor);
+            ivec2 shift = ivec2(edgeNormal * (L.lineChromaStrength * 3.5));
             ivec2 rCoord = clamp(coord + shift, ivec2(0), ivec2(width - 1, height - 1));
             ivec2 bCoord = clamp(coord - shift, ivec2(0), ivec2(width - 1, height - 1));
-            layerColor.r = mix(layerColor.r, unpackRGBA(in_pixels[rCoord.y * width + rCoord.x]).r, edgeFactor * 0.75);
-            layerColor.b = mix(layerColor.b, unpackRGBA(in_pixels[bCoord.y * width + bCoord.x]).b, edgeFactor * 0.75);
+            layerColor.r = mix(layerColor.r, unpackRGBA(in_pixels[rCoord.y * width + rCoord.x]).r, edgeFactor * 0.85);
+            layerColor.b = mix(layerColor.b, unpackRGBA(in_pixels[bCoord.y * width + bCoord.x]).b, edgeFactor * 0.85);
         }
 
         // 3. RGB Directional Warp Shift
@@ -372,7 +383,7 @@ void main() {
             layerColor.b = unpackRGBA(in_pixels[bCoord.y * width + bCoord.x]).b;
         }
 
-        // 4. REAL BILATERAL EDGE-PRESERVING DENOISE (CLEANS ARTIFACTS WITHOUT BLURRING EDGES)
+        // 4. REAL BILATERAL EDGE-PRESERVING DENOISE
         if (L.denoise > 0.01) {
             vec3 centerCol = layerColor;
             vec3 denoiseSum = centerCol;
@@ -417,7 +428,7 @@ void main() {
             }
         }
 
-        // 6. High-Pass Anime Acutance Sharpness (Adevob crisp lines)
+        // 6. High-Pass Anime Acutance Sharpness (Adevob steel lines)
         if (L.sharpness > 0.01) {
             vec3 blur = vec3(0.0);
             blur += unpackRGBA(in_pixels[clamp(coord.y - 1, 0, height - 1) * width + coord.x]).rgb;
@@ -494,7 +505,7 @@ void main() {
         layerColor.g = evalCatmullRom(layerColor.g, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
         layerColor.b = evalCatmullRom(layerColor.b, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
 
-        // 14. Saturation & Full RGB Hue Shift (Restored Color Slider)
+        // 14. Saturation & Full RGB Hue Shift
         luma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
         layerColor = mix(vec3(luma), layerColor, L.saturation);
 
@@ -512,14 +523,12 @@ void main() {
 
         // =====================================================================
         // 15. SAPPHIRE S_EDGERAYS (CONQUESTOR & ADEVOB SPECULAR RIM GLOW)
-        // Spreads and blooms only slightly around hair, body, and character silhouettes
         // =====================================================================
         if (u_copiedEdgeRays > 0.01) {
             vec3 edgeBloom = vec3(0.0);
             float edgeWeight = 0.0;
             float rayRadius = max(1.5, u_copiedEdgeRays * 5.0);
 
-            // 8-directional tight sampling around outlines
             for (int r = 1; r <= 3; r++) {
                 float d = float(r) * (rayRadius / 3.0);
                 float w = exp(-float(r) * 0.85);
@@ -536,7 +545,6 @@ void main() {
                 edgeWeight += w * 4.0;
             }
 
-            // Only blooms on the outer edges and specular rims, NEVER drawing flat lines inside face
             float rimFactor = smoothstep(0.08, 0.40, lineEdge) * smoothstep(0.40, 0.90, luma);
             vec3 specularRim = (edgeBloom / max(edgeWeight, 0.001)) * (u_copiedEdgeRays * 1.15) * rimFactor;
             layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(specularRim, 0.0, 0.85));
@@ -562,7 +570,8 @@ void main() {
         }
 
         // =====================================================================
-        // 17. TRUE GAUSSIAN MULTI-OCTAVE DEEP GLOW (SPREADS SMOOTHLY WITHOUT BLOWOUT)
+        // 17. CONTINUOUS MULTI-OCTAVE DEEP GLOW (ELIMINATES GHOST DUPLICATES)
+        // Uses smooth Golden-Ratio spiral sampling with true Gaussian continuous falloff
         // =====================================================================
         if (L.deepGlowIntensity > 0.01) {
             vec3 glowTint = vec3(1.0);
@@ -572,42 +581,41 @@ void main() {
             else if (L.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30); // Blood Crimson
             else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45); // Electro Violet
 
-            // Multi-Octave Gaussian radii: Core (tight), Body (medium), Aura (wide spreading)
-            float baseSigma = max(2.0, L.deepGlowRadius * 36.0);
-            float thresh = clamp(L.deepGlowThreshold, 0.25, 0.90);
+            float maxRadius = max(3.0, L.deepGlowRadius * 48.0);
+            float thresh = clamp(L.deepGlowThreshold, 0.20, 0.90);
 
             vec3 gaussianAccum = vec3(0.0);
             float totalWeight = 0.0;
 
-            // 16-sample multi-tier radial Gaussian disc
-            for (int tier = 1; tier <= 4; tier++) {
-                float tierRadius = baseSigma * (float(tier) * 0.5);
-                float tierWeight = exp(-float(tier) * 0.65);
+            // 32-sample continuous Fermat spiral disc (prevents grid ghosting)
+            const float goldenAngle = 2.39996323;
+            for (int s = 1; s <= 32; s++) {
+                float rNorm = sqrt(float(s) / 32.0);
+                float radius = rNorm * maxRadius;
+                float theta = float(s) * goldenAngle;
+                
+                ivec2 offset = ivec2(cos(theta) * radius, sin(theta) * radius);
+                ivec2 sc = clamp(coord + offset, ivec2(0), ivec2(width - 1, height - 1));
+                vec3 scCol = unpackRGBA(in_pixels[sc.y * width + sc.x]).rgb;
+                float scLuma = dot(scCol, vec3(0.2126, 0.7152, 0.0722));
 
-                for (int a = 0; a < 4; a++) {
-                    float ang = float(a) * 1.5707963 + float(tier) * 0.392;
-                    ivec2 offset = ivec2(cos(ang) * tierRadius, sin(ang) * tierRadius);
-                    ivec2 sc = clamp(coord + offset, ivec2(0), ivec2(width - 1, height - 1));
-                    vec3 scCol = unpackRGBA(in_pixels[sc.y * width + sc.x]).rgb;
-                    float scLuma = dot(scCol, vec3(0.2126, 0.7152, 0.0722));
-
-                    // Soft-knee threshold gate: smooth rolloff, zero blowout
-                    float knee = smoothstep(thresh, thresh + 0.22, scLuma);
-                    gaussianAccum += scCol * knee * tierWeight;
-                    totalWeight += tierWeight;
-                }
+                float knee = smoothstep(thresh, thresh + 0.20, scLuma);
+                float w = exp(-2.5 * rNorm * rNorm); // True Gaussian continuous weight
+                gaussianAccum += scCol * knee * w;
+                totalWeight += w;
             }
 
             if (totalWeight > 0.001) {
-                vec3 bloomSignal = (gaussianAccum / totalWeight) * (L.deepGlowIntensity * 1.25) * glowTint;
-                // Soft-shoulder compression ensures highlights remain clean and metallic
+                vec3 bloomSignal = (gaussianAccum / totalWeight) * (L.deepGlowIntensity * 1.35) * glowTint;
+                // Preserve dark manga ink lines from getting fogged over
+                bloomSignal *= (1.0 - lineEdge * 0.65);
                 bloomSignal = compressShoulder(bloomSignal);
                 layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(bloomSignal, 0.0, 0.88));
             }
         }
 
         // =====================================================================
-        // 18. SAPPHIRE S_GLOW (SPECULAR CORE COMPRESSION)
+        // 18. SAPPHIRE S_GLOW (SPECULAR FREQUENCY CORE)
         // =====================================================================
         if (L.sapphireGlowWidth > 0.01) {
             float sRad = max(2.0, L.sapphireGlowWidth * 16.0);
@@ -642,37 +650,37 @@ void main() {
         }
 
         // =====================================================================
-        // 19. AMANAI OPTICAL ANAMORPHIC FLARES (COLOR COPY FROM HIGHLIGHTS)
-        // Shoots clean horizontal streaks that inherit the exact highlight color
+        // 19. AMANAI OPTICAL ANAMORPHIC FLARES (SMOOTH TAPERED BEAM - NO BOXES)
         // =====================================================================
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            int maxRadius = int(clamp(L.thinStreakWidth * float(width) * 0.35, 20.0, 260.0));
+            float halfSpan = clamp(L.thinStreakWidth * float(width) * 0.30, 20.0, 240.0);
             vec3 flareAccum = vec3(0.0);
             float totalW = 0.0;
 
-            for (int dx = -maxRadius; dx <= maxRadius; dx += 5) {
-                ivec2 sourceCoord = clamp(coord + ivec2(dx, 0), ivec2(0), ivec2(width - 1, height - 1));
-                vec3 srcCol = unpackRGBA(in_pixels[sourceCoord.y * width + sourceCoord.x]).rgb;
+            // Logarithmic geometric progression avoids rectangular stepping
+            for (int s = -24; s <= 24; s++) {
+                float normX = float(s) / 24.0;
+                float pixelDist = sign(normX) * pow(abs(normX), 1.6) * halfSpan;
+                ivec2 sc = clamp(coord + ivec2(int(pixelDist), 0), ivec2(0), ivec2(width - 1, height - 1));
+                vec3 srcCol = unpackRGBA(in_pixels[sc.y * width + sc.x]).rgb;
                 float srcLuma = dot(srcCol, vec3(0.2126, 0.7152, 0.0722));
 
-                // Only highlights cast horizontal streaks
-                float highlightEnergy = smoothstep(0.62, 0.94, srcLuma);
+                float highlightEnergy = smoothstep(0.70, 0.98, srcLuma);
                 if (highlightEnergy > 0.001) {
-                    float normDist = abs(float(dx)) / float(maxRadius);
-                    float falloff = exp(-normDist * 4.8);
+                    float falloff = exp(-3.8 * abs(normX));
                     flareAccum += srcCol * highlightEnergy * falloff;
                     totalW += falloff;
                 }
             }
 
             if (totalW > 0.001) {
-                vec3 flareBeam = (flareAccum / totalW) * (L.thinStreakIntensity * 2.2) * L.thinStreakOpacity;
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(flareBeam, 0.0, 0.88));
+                vec3 flareBeam = (flareAccum / totalW) * (L.thinStreakIntensity * 2.0) * L.thinStreakOpacity;
+                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(flareBeam, 0.0, 0.85));
             }
         }
 
         // =====================================================================
-        // 20. SILDURS VIBRANT EXTREME GOD RAYS (RADIAL VOLUMETRICS)
+        // 20. VOLUMETRICS & GOD RAYS
         // =====================================================================
         if (L.bslaGodRays > 0.01) {
             vec2 sunPos = vec2(float(width) * 0.5, float(height) * 0.08);
@@ -698,9 +706,7 @@ void main() {
             layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(radiantShafts * warmSun, 0.0, 0.85));
         }
 
-        // =====================================================================
-        // 21. VOLUMETRIC FOG & LIMINAL ATMOSPHERE
-        // =====================================================================
+        // 21. Volumetric Fog
         if (L.bslaFogDensity > 0.01) {
             vec2 uv = vec2(coord) / vec2(width, height);
             float fogAlt = smoothstep(1.0 - L.bslaFogDepth, 0.0, uv.y);
@@ -759,22 +765,62 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
-    // 27. 3D LUT APPLICATION
+    // =========================================================================
+    // 27. ISOLATED TEXT SUITE: CHROME CHISEL & METALLIC HORIZON
+    // ONLY hits pixels inside the user's draggable box — 0% of anime footage touched!
+    // =========================================================================
+    if (u_textSuiteEnabled > 0.5) {
+        vec2 normCoord = vec2(coord) / vec2(width, height);
+        bool inBox = (normCoord.x >= u_textBoxX && normCoord.x <= (u_textBoxX + u_textBoxW) &&
+                      normCoord.y >= u_textBoxY && normCoord.y <= (u_textBoxY + u_textBoxH));
+
+        if (inBox) {
+            float textLuma = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
+            // High-contrast text glyph threshold
+            float textMask = smoothstep(0.55, 0.80, textLuma) * smoothstep(0.10, 0.45, lineEdge);
+
+            if (textMask > 0.01) {
+                // 3D Chisel Bevel normal
+                vec3 N = normalize(vec3(edgeNormal.x * u_textBevelDepth, edgeNormal.y * u_textBevelDepth, 1.0));
+                vec3 L_dir = normalize(vec3(0.35, -0.65, 0.65)); // Overhead key light
+                float NdotL = max(0.0, dot(N, L_dir));
+
+                // M-shaped double-peak chrome horizon reflection
+                float reflY = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+                float chromeReflection = sin(reflY * 6.28318) * 0.5 + 0.5;
+                chromeReflection = pow(chromeReflection, 2.2) * u_textChromeIntensity;
+
+                // Specular edge peak
+                vec3 V = vec3(0.0, 0.0, 1.0);
+                vec3 H = normalize(L_dir + V);
+                float spec = pow(max(0.0, dot(N, H)), 24.0) * 1.5;
+
+                vec3 chromeColor = mix(vec3(0.12, 0.14, 0.16), vec3(0.92, 0.95, 1.05), chromeReflection);
+                chromeColor += vec3(spec);
+
+                // Blend onto text only
+                currentComposite = mix(currentComposite, chromeColor, textMask * 0.88);
+            }
+        }
+    }
+
+    // 28. 3D LUT APPLICATION
     if (u_hasLut > 0.5) {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
-    // 28. MASTER TONEMAPPING
+    // 29. MASTER TONEMAPPING (True AgX / ACES)
     if (u_tonemapMode == 1.0) {
         currentComposite = tonemapACES(currentComposite);
     } else if (u_tonemapMode == 2.0) {
         currentComposite = tonemapAgX(currentComposite);
     }
 
-    // 29. ANTI-BANDING DITHERING (TPDF Dither)
+    // 30. TRIANGULAR PROBABILITY DENSITY FUNCTION (TPDF) DITHER
+    // Eliminates all 8-bit banding steps across flat gradients and darks
     if (u_ditherStrength > 0.01) {
-        float r1 = hash12(vec2(coord));
-        float r2 = hash12(vec2(coord) + vec2(19.17, 37.43));
+        float r1 = hash12(vec2(coord) + vec2(u_time * 5.17, u_time * 11.23));
+        float r2 = hash12(vec2(coord) + vec2(u_time * 17.31, u_time * 29.47));
         float tpdfDither = ((r1 + r2) - 1.0) / 255.0 * u_ditherStrength;
         currentComposite += vec3(tpdfDither);
     }
