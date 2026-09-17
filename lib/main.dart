@@ -452,6 +452,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
@@ -826,7 +827,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
-
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -1190,6 +1190,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[10] = _cur.copiedStarGlint;
     uniforms[11] = _cur.horizontalRamp;
     uniforms[12] = _ditherStrength;
+
+    // --- Offsets 13..19: Isolated Text Suite Uniforms ---
+    uniforms[13] = _project.textSuiteEnabled ? 1.0 : 0.0;
+    uniforms[14] = _project.textBoxX;
+    uniforms[15] = _project.textBoxY;
+    uniforms[16] = _project.textBoxW;
+    uniforms[17] = _project.textBoxH;
+    uniforms[18] = _project.textBevelDepth;
+    uniforms[19] = _project.textChromeIntensity;
 
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
@@ -1593,6 +1602,91 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // INTERACTIVE TEXT SUITE DRAGGABLE & RESIZABLE BOUNDING BOX OVERLAY
+  // ---------------------------------------------------------------------------
+  Widget _buildTextSuiteBoundingBoxOverlay(BoxConstraints constraints) {
+    if (!_project.textSuiteEnabled) return const SizedBox.shrink();
+
+    final accent = gCustomAccentColor.value;
+    final parentW = constraints.maxWidth;
+    final parentH = constraints.maxHeight;
+
+    final left = _project.textBoxX * parentW;
+    final top = _project.textBoxY * parentH;
+    final width = _project.textBoxW * parentW;
+    final height = _project.textBoxH * parentH;
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: width,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // The Draggable Box Body
+          GestureDetector(
+            onPanUpdate: (details) {
+              setState(() {
+                _project.textBoxX = (_project.textBoxX + (details.delta.dx / parentW)).clamp(0.0, 1.0 - _project.textBoxW);
+                _project.textBoxY = (_project.textBoxY + (details.delta.dy / parentH)).clamp(0.0, 1.0 - _project.textBoxH);
+              });
+              _applyGrade();
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: accent, width: 1.5),
+                color: accent.withOpacity(0.08),
+              ),
+              child: Stack(
+                children: [
+                  Positioned(
+                    top: 2,
+                    left: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(3)),
+                      child: Text(
+                        'TEXT SUITE BOX',
+                        style: TextStyle(color: accent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.6),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Bottom-Right Corner Resize Handle
+          Positioned(
+            right: -8,
+            bottom: -8,
+            child: GestureDetector(
+              onPanUpdate: (details) {
+                setState(() {
+                  _project.textBoxW = (_project.textBoxW + (details.delta.dx / parentW)).clamp(0.08, 1.0 - _project.textBoxX);
+                  _project.textBoxH = (_project.textBoxH + (details.delta.dy / parentH)).clamp(0.04, 1.0 - _project.textBoxY);
+                });
+                _applyGrade();
+              },
+              child: Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.black, width: 2),
+                ),
+                child: const Icon(Icons.open_in_full_rounded, size: 10, color: Colors.black),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
@@ -1607,7 +1701,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               elevation: 0,
               title: Row(
                 children: [
-                  // BUTTON: SAVE PROJECT (Replaces "Shaderly" text)
+                  // BUTTON: SAVE PROJECT
                   ElevatedButton.icon(
                     onPressed: _isSavingProject ? null : _manualSaveProject,
                     icon: _isSavingProject
@@ -1646,6 +1740,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   icon: const Icon(Icons.video_library_rounded, color: Colors.white70),
                   tooltip: 'Switch Media',
                   onPressed: _switchMediaFile,
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.title_rounded,
+                    color: _project.textSuiteEnabled ? accent : Colors.white70,
+                  ),
+                  tooltip: 'Text Suite Chrome Box',
+                  onPressed: () {
+                    _pushUndoSnapshot();
+                    setState(() => _project.textSuiteEnabled = !_project.textSuiteEnabled);
+                    _applyGrade();
+                    _autoSaveProject();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(_project.textSuiteEnabled
+                            ? 'Text Suite Enabled: Drag the bounding box over your text'
+                            : 'Text Suite Disabled'),
+                        duration: const Duration(milliseconds: 900),
+                      ),
+                    );
+                  },
                 ),
                 IconButton(
                   icon: const Icon(Icons.undo_rounded, color: Colors.white70),
@@ -1691,37 +1806,44 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     child: Center(
                       child: AspectRatio(
                         aspectRatio: _getAspectRatioValue(_project.aspectRatio),
-                        child: ClipRect(
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              // 1. Live Native Video Playing Surface
-                              if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
-                                FittedBox(
-                                  fit: BoxFit.cover,
-                                  child: SizedBox(
-                                    width: _controller!.value.size.width,
-                                    height: _controller!.value.size.height,
-                                    child: VideoPlayer(_controller!),
-                                  ),
-                                ),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            return ClipRect(
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  // 1. Live Native Video Playing Surface
+                                  if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
+                                    FittedBox(
+                                      fit: BoxFit.cover,
+                                      child: SizedBox(
+                                        width: _controller!.value.size.width,
+                                        height: _controller!.value.size.height,
+                                        child: VideoPlayer(_controller!),
+                                      ),
+                                    ),
 
-                              // 2. Graded Vulkan Static Composite (Displayed when Paused, Scrubbing, or Grading Image)
-                              if (!_isPlaying && hasMedia)
-                                FittedBox(
-                                  fit: BoxFit.cover,
-                                  child: SizedBox(
-                                    width: _renderWidth.toDouble(),
-                                    height: _renderHeight.toDouble(),
-                                    child: RawImage(image: _processedStaticImage),
-                                  ),
-                                )
-                              else if (!_isPlaying && !hasMedia)
-                                const Center(
-                                  child: CircularProgressIndicator(color: Colors.white38),
-                                ),
-                            ],
-                          ),
+                                  // 2. Graded Vulkan Static Composite (Displayed when Paused, Scrubbing, or Grading Image)
+                                  if (!_isPlaying && hasMedia)
+                                    FittedBox(
+                                      fit: BoxFit.cover,
+                                      child: SizedBox(
+                                        width: _renderWidth.toDouble(),
+                                        height: _renderHeight.toDouble(),
+                                        child: RawImage(image: _processedStaticImage),
+                                      ),
+                                    )
+                                  else if (!_isPlaying && !hasMedia)
+                                    const Center(
+                                      child: CircularProgressIndicator(color: Colors.white38),
+                                    ),
+
+                                  // 3. Isolated Text Suite Draggable Box Overlay
+                                  _buildTextSuiteBoundingBoxOverlay(constraints),
+                                ],
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ),
