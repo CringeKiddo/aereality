@@ -1,6 +1,6 @@
 // ==========================================
 // lib/models.dart
-// Master Data Models & Layer State for Shaderly
+// 100% COMPLETE FILE - Master Data Models & Layer State for Shaderly
 // ==========================================
 
 import 'dart:convert';
@@ -16,6 +16,61 @@ enum LayerBlendMode {
   overlay,
   softLight,
   multiply,
+}
+
+/// Represents an isolated timeline clip region where a custom CC/Preset is applied.
+class TimelineClipSegment {
+  String id;
+  String name;
+  double startTime; // Seconds
+  double endTime;   // Seconds
+  List<AdjustmentLayer> layers;
+  double tonemapMode;
+  bool isEnabled;
+
+  TimelineClipSegment({
+    required this.id,
+    required this.name,
+    required this.startTime,
+    required this.endTime,
+    List<AdjustmentLayer>? layers,
+    this.tonemapMode = 0.0,
+    this.isEnabled = true,
+  }) : layers = layers ?? [];
+
+  TimelineClipSegment clone() {
+    return TimelineClipSegment(
+      id: id,
+      name: name,
+      startTime: startTime,
+      endTime: endTime,
+      layers: layers.map((l) => l.clone()).toList(),
+      tonemapMode: tonemapMode,
+      isEnabled: isEnabled,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'startTime': startTime,
+    'endTime': endTime,
+    'layers': layers.map((l) => l.toJson()).toList(),
+    'tonemapMode': tonemapMode,
+    'isEnabled': isEnabled,
+  };
+
+  factory TimelineClipSegment.fromJson(Map<String, dynamic> json) => TimelineClipSegment(
+    id: json['id'] ?? 'seg_${DateTime.now().millisecondsSinceEpoch}',
+    name: json['name'] ?? 'Segment',
+    startTime: (json['startTime'] as num?)?.toDouble() ?? 0.0,
+    endTime: (json['endTime'] as num?)?.toDouble() ?? 5.0,
+    layers: (json['layers'] as List<dynamic>?)
+        ?.map((l) => AdjustmentLayer.fromJson(l))
+        .toList() ?? [],
+    tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
+    isEnabled: json['isEnabled'] ?? true,
+  );
 }
 
 class AdjustmentLayer {
@@ -39,6 +94,13 @@ class AdjustmentLayer {
   double highlights;
   double blackCrush;
 
+  // Split Toning Engine
+  double splitToneShadowHue;  // 0.0 to 1.0 (Color wheel hue)
+  double splitToneShadowSat;  // 0.0 to 1.0
+  double splitToneHighHue;    // 0.0 to 1.0
+  double splitToneHighSat;    // 0.0 to 1.0
+  double splitToneBalance;    // -1.0 to 1.0 (Pivot)
+
   // Stylistic Cel & Edges
   double darkOutlines;
   double edgeDarken;
@@ -61,11 +123,18 @@ class AdjustmentLayer {
   double sapphireGlowWidth;
   double sapphireGlowThreshold;
 
+  // New CapCut / AE Soft Gaussian Saturated Bloom ("Shaderly Glow")
+  double shaderlyGlowIntensity;
+  double shaderlyGlowRadius;
+  double shaderlyGlowThreshold;
+  double shaderlyGlowTint;
+
   // Video Flares
   int videoFlareType;
   double thinStreakIntensity;
   double thinStreakWidth;
   double thinStreakOpacity;
+  double thinStreakSoftness; // 0.0 = Crisp, 1.0 = Wide Gaussian Spread
   double lineChromaStrength;
   double centerAura;
   double horizontalRamp;
@@ -128,6 +197,11 @@ class AdjustmentLayer {
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.blackCrush = 0.0,
+    this.splitToneShadowHue = 0.55, // Default Cool Cyan/Blue Shadow
+    this.splitToneShadowSat = 0.0,
+    this.splitToneHighHue = 0.10,   // Default Warm Amber Highlight
+    this.splitToneHighSat = 0.0,
+    this.splitToneBalance = 0.0,
     this.darkOutlines = 0.0,
     this.edgeDarken = 0.0,
     this.vignette = 0.0,
@@ -144,10 +218,15 @@ class AdjustmentLayer {
     this.edgeGlowTint = 0.0,
     this.sapphireGlowWidth = 0.0,
     this.sapphireGlowThreshold = 0.70,
+    this.shaderlyGlowIntensity = 0.0,
+    this.shaderlyGlowRadius = 0.45,
+    this.shaderlyGlowThreshold = 0.50,
+    this.shaderlyGlowTint = 0.0,
     this.videoFlareType = 0,
     this.thinStreakIntensity = 0.0,
     this.thinStreakWidth = 0.50,
     this.thinStreakOpacity = 0.80,
+    this.thinStreakSoftness = 0.50,
     this.lineChromaStrength = 0.0,
     this.centerAura = 0.0,
     this.horizontalRamp = 0.0,
@@ -201,6 +280,11 @@ class AdjustmentLayer {
       shadows: shadows,
       highlights: highlights,
       blackCrush: blackCrush,
+      splitToneShadowHue: splitToneShadowHue,
+      splitToneShadowSat: splitToneShadowSat,
+      splitToneHighHue: splitToneHighHue,
+      splitToneHighSat: splitToneHighSat,
+      splitToneBalance: splitToneBalance,
       darkOutlines: darkOutlines,
       edgeDarken: edgeDarken,
       vignette: vignette,
@@ -217,10 +301,15 @@ class AdjustmentLayer {
       edgeGlowTint: edgeGlowTint,
       sapphireGlowWidth: sapphireGlowWidth,
       sapphireGlowThreshold: sapphireGlowThreshold,
+      shaderlyGlowIntensity: shaderlyGlowIntensity,
+      shaderlyGlowRadius: shaderlyGlowRadius,
+      shaderlyGlowThreshold: shaderlyGlowThreshold,
+      shaderlyGlowTint: shaderlyGlowTint,
       videoFlareType: videoFlareType,
       thinStreakIntensity: thinStreakIntensity,
       thinStreakWidth: thinStreakWidth,
       thinStreakOpacity: thinStreakOpacity,
+      thinStreakSoftness: thinStreakSoftness,
       lineChromaStrength: lineChromaStrength,
       centerAura: centerAura,
       horizontalRamp: horizontalRamp,
@@ -272,6 +361,11 @@ class AdjustmentLayer {
       'shadows': shadows,
       'highlights': highlights,
       'blackCrush': blackCrush,
+      'splitToneShadowHue': splitToneShadowHue,
+      'splitToneShadowSat': splitToneShadowSat,
+      'splitToneHighHue': splitToneHighHue,
+      'splitToneHighSat': splitToneHighSat,
+      'splitToneBalance': splitToneBalance,
       'darkOutlines': darkOutlines,
       'edgeDarken': edgeDarken,
       'vignette': vignette,
@@ -288,10 +382,15 @@ class AdjustmentLayer {
       'edgeGlowTint': edgeGlowTint,
       'sapphireGlowWidth': sapphireGlowWidth,
       'sapphireGlowThreshold': sapphireGlowThreshold,
+      'shaderlyGlowIntensity': shaderlyGlowIntensity,
+      'shaderlyGlowRadius': shaderlyGlowRadius,
+      'shaderlyGlowThreshold': shaderlyGlowThreshold,
+      'shaderlyGlowTint': shaderlyGlowTint,
       'videoFlareType': videoFlareType,
       'thinStreakIntensity': thinStreakIntensity,
       'thinStreakWidth': thinStreakWidth,
       'thinStreakOpacity': thinStreakOpacity,
+      'thinStreakSoftness': thinStreakSoftness,
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
       'horizontalRamp': horizontalRamp,
@@ -343,6 +442,11 @@ class AdjustmentLayer {
       shadows: (json['shadows'] as num?)?.toDouble() ?? 0.0,
       highlights: (json['highlights'] as num?)?.toDouble() ?? 0.0,
       blackCrush: (json['blackCrush'] as num?)?.toDouble() ?? 0.0,
+      splitToneShadowHue: (json['splitToneShadowHue'] as num?)?.toDouble() ?? 0.55,
+      splitToneShadowSat: (json['splitToneShadowSat'] as num?)?.toDouble() ?? 0.0,
+      splitToneHighHue: (json['splitToneHighHue'] as num?)?.toDouble() ?? 0.10,
+      splitToneHighSat: (json['splitToneHighSat'] as num?)?.toDouble() ?? 0.0,
+      splitToneBalance: (json['splitToneBalance'] as num?)?.toDouble() ?? 0.0,
       darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
       edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
       vignette: (json['vignette'] as num?)?.toDouble() ?? 0.0,
@@ -359,10 +463,15 @@ class AdjustmentLayer {
       edgeGlowTint: (json['edgeGlowTint'] as num?)?.toDouble() ?? 0.0,
       sapphireGlowWidth: (json['sapphireGlowWidth'] as num?)?.toDouble() ?? 0.0,
       sapphireGlowThreshold: (json['sapphireGlowThreshold'] as num?)?.toDouble() ?? 0.70,
+      shaderlyGlowIntensity: (json['shaderlyGlowIntensity'] as num?)?.toDouble() ?? 0.0,
+      shaderlyGlowRadius: (json['shaderlyGlowRadius'] as num?)?.toDouble() ?? 0.45,
+      shaderlyGlowThreshold: (json['shaderlyGlowThreshold'] as num?)?.toDouble() ?? 0.50,
+      shaderlyGlowTint: (json['shaderlyGlowTint'] as num?)?.toDouble() ?? 0.0,
       videoFlareType: json['videoFlareType'] ?? 0,
       thinStreakIntensity: (json['thinStreakIntensity'] as num?)?.toDouble() ?? 0.0,
       thinStreakWidth: (json['thinStreakWidth'] as num?)?.toDouble() ?? 0.50,
       thinStreakOpacity: (json['thinStreakOpacity'] as num?)?.toDouble() ?? 0.80,
+      thinStreakSoftness: (json['thinStreakSoftness'] as num?)?.toDouble() ?? 0.50,
       lineChromaStrength: (json['lineChromaStrength'] as num?)?.toDouble() ?? 0.0,
       centerAura: (json['centerAura'] as num?)?.toDouble() ?? 0.0,
       horizontalRamp: (json['horizontalRamp'] as num?)?.toDouble() ?? 0.0,
@@ -404,7 +513,7 @@ class ProjectData {
   String aspectRatio;
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
-  double tonemapMode;
+  double tonemapMode; // 0=Off, 1=Shaderly Filmic 1, 2=Shaderly AgX 2
 
   // --- Isolated Text Suite Bounding Region & Stylization ---
   bool textSuiteEnabled;
@@ -418,6 +527,13 @@ class ProjectData {
   double textContactShadow;
   double textLumaThreshold;
   double textMetallicTint;
+
+  // --- Timeline Optimizer / Multiple Range Placer ---
+  bool enableTimelineSegments;
+  List<TimelineClipSegment> timelineSegments;
+
+  // --- Master Dither Strength ---
+  double ditherStrength;
 
   ProjectData({
     required this.mediaPath,
@@ -437,7 +553,11 @@ class ProjectData {
     this.textContactShadow = 0.8,
     this.textLumaThreshold = 0.65,
     this.textMetallicTint = 0.0,
-  }) : layers = layers ?? [];
+    this.enableTimelineSegments = false,
+    List<TimelineClipSegment>? timelineSegments,
+    this.ditherStrength = 1.0,
+  })  : layers = layers ?? [],
+        timelineSegments = timelineSegments ?? [];
 
   AdjustmentLayer get currentLayer {
     if (layers.isEmpty) {
@@ -469,6 +589,9 @@ class ProjectData {
       textContactShadow: textContactShadow,
       textLumaThreshold: textLumaThreshold,
       textMetallicTint: textMetallicTint,
+      enableTimelineSegments: enableTimelineSegments,
+      timelineSegments: timelineSegments.map((s) => s.clone()).toList(),
+      ditherStrength: ditherStrength,
     );
   }
 
@@ -491,6 +614,9 @@ class ProjectData {
       'textContactShadow': textContactShadow,
       'textLumaThreshold': textLumaThreshold,
       'textMetallicTint': textMetallicTint,
+      'enableTimelineSegments': enableTimelineSegments,
+      'timelineSegments': timelineSegments.map((s) => s.toJson()).toList(),
+      'ditherStrength': ditherStrength,
     };
   }
 
@@ -516,6 +642,12 @@ class ProjectData {
       textContactShadow: (json['textContactShadow'] as num?)?.toDouble() ?? 0.8,
       textLumaThreshold: (json['textLumaThreshold'] as num?)?.toDouble() ?? 0.65,
       textMetallicTint: (json['textMetallicTint'] as num?)?.toDouble() ?? 0.0,
+      enableTimelineSegments: json['enableTimelineSegments'] ?? false,
+      timelineSegments: (json['timelineSegments'] as List<dynamic>?)
+              ?.map((s) => TimelineClipSegment.fromJson(s))
+              .toList() ??
+          [],
+      ditherStrength: (json['ditherStrength'] as num?)?.toDouble() ?? 1.0,
     );
   }
 }
@@ -646,7 +778,7 @@ class ProjectManager {
 
   static Future<void> saveProject(StoredProject project) async {
     final list = await loadProjects();
-    list.removeWhere((p) => p.id == project.id);
+    list.removeWhere((p) => p.id == project.id || p.name == project.name);
     list.insert(0, project);
     await saveProjects(list);
   }
@@ -655,7 +787,7 @@ class ProjectManager {
     try {
       final file = await _getFile('saved_projects.json');
       final content = jsonEncode(list.map((p) => p.toJson()).toList());
-      await file.writeAsString(content);
+      await file.writeAsString(content, flush: true);
     } catch (_) {}
   }
 
@@ -675,7 +807,7 @@ class ProjectManager {
     try {
       final file = await _getFile('custom_presets.json');
       final content = jsonEncode(list.map((p) => p.toJson()).toList());
-      await file.writeAsString(content);
+      await file.writeAsString(content, flush: true);
     } catch (_) {}
   }
 
@@ -695,7 +827,7 @@ class ProjectManager {
     try {
       final file = await _getFile('active_luts.json');
       final content = jsonEncode(list.map((p) => p.toJson()).toList());
-      await file.writeAsString(content);
+      await file.writeAsString(content, flush: true);
     } catch (_) {}
   }
 }
