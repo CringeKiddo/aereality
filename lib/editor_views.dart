@@ -1,7 +1,6 @@
 // =============================================================================
-// AEReality / Shaderly - Editor Views & Export Suite (Part 1/2)
+// AEReality / Shaderly - Editor Views & Export Suite (Part 1/3)
 // True 32-Bit Float Linear Pipeline - Presets, Sliders, Tabs & HW MediaCodec
-// 100% Complete File - Zero Code Omissions
 // =============================================================================
 
 import 'dart:async';
@@ -983,8 +982,7 @@ class EditorViews {
           shaderlyGlowTint: 2.0,
         ));
         break;
-
-      // 9. NEW 1:1 AE REPLICATE: JJK
+        // 9. NEW 1:1 AE REPLICATE: JJK
       case 'jjk':
         project.layers.add(AdjustmentLayer(
           id: 'jjk_base',
@@ -1316,6 +1314,71 @@ class EditorViews {
 
     project.activeLayerIndex = 0;
   }
+
+  // ---------------------------------------------------------------------------
+  // UNSHARP MASK DRAWER & PRESET HELPERS (CALLED DIRECTLY FROM MAIN.DART)
+  // ---------------------------------------------------------------------------
+  static void showUnsharpMaskDrawer(BuildContext context, AdjustmentLayer cur, VoidCallback onUpdated) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF101016),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModal) => Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('UNSHARP MASK', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              buildSliderRow(context: context, title: 'Amount', val: cur.unsharpAmount, min: 0.0, max: 2.0, onChanged: (v) { setModal(() => cur.unsharpAmount = v); onUpdated(); }),
+              buildSliderRow(context: context, title: 'Radius', val: cur.unsharpRadius, min: 0.0, max: 5.0, onChanged: (v) { setModal(() => cur.unsharpRadius = v); onUpdated(); }),
+              buildSliderRow(context: context, title: 'Threshold', val: cur.unsharpThreshold, min: 0.0, max: 0.5, onChanged: (v) { setModal(() => cur.unsharpThreshold = v); onUpdated(); }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static void applyBslOverlay({required ProjectData project, required bool active}) {
+    project.layers.removeWhere((l) => l.id == 'bsl_atmospheric_overlay_layer');
+    if (active) {
+      project.layers.add(AdjustmentLayer(
+        id: 'bsl_atmospheric_overlay_layer',
+        name: 'BSL Atmospheric Mist',
+        blendMode: LayerBlendMode.screen,
+        opacity: 0.65,
+        bslaGodRays: 0.35,
+        bslaFogDensity: 0.28,
+        bslaBloomHaze: 0.40,
+        bslFogScatter: 0.32,
+        deepGlowIntensity: 0.22,
+        deepGlowRadius: 0.55,
+      ));
+    }
+  }
+
+  static void clearPresetToNeutral(ProjectData project) {
+    project.layers.clear();
+    project.layers.add(AdjustmentLayer(
+      id: 'neutral_base',
+      name: 'Base Grade',
+      contrast: 1.0,
+      saturation: 1.0,
+      brightness: 0.0,
+      blendMode: LayerBlendMode.normal,
+    ));
+    project.activeLayerIndex = 0;
+  }
+
   // ---------------------------------------------------------------------------
   // 10. TIMELINE OPTIMIZER TAB (Multiple In/Out Segment Range Placer)
   // ---------------------------------------------------------------------------
@@ -1700,7 +1763,6 @@ class EditorViews {
       ));
     }
   }
-
   // ---------------------------------------------------------------------------
   // PRESET SAVE / IMPORT HELPERS
   // ---------------------------------------------------------------------------
