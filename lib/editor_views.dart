@@ -724,70 +724,6 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // UNSHARP MASK DRAWER
-  // ---------------------------------------------------------------------------
-  static void showUnsharpMaskDrawer(BuildContext context, AdjustmentLayer cur, VoidCallback onUpdated) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF101016),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModal) => Padding(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('UNSHARP MASK', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-                  IconButton(icon: const Icon(Icons.close, color: Colors.white38), onPressed: () => Navigator.pop(ctx)),
-                ],
-              ),
-              const SizedBox(height: 14),
-              buildSliderRow(context: context, title: 'Amount', val: cur.unsharpAmount, min: 0.0, max: 2.0, onChanged: (v) { setModal(() => cur.unsharpAmount = v); onUpdated(); }),
-              buildSliderRow(context: context, title: 'Radius', val: cur.unsharpRadius, min: 0.0, max: 5.0, onChanged: (v) { setModal(() => cur.unsharpRadius = v); onUpdated(); }),
-              buildSliderRow(context: context, title: 'Threshold', val: cur.unsharpThreshold, min: 0.0, max: 0.5, onChanged: (v) { setModal(() => cur.unsharpThreshold = v); onUpdated(); }),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static void applyBslOverlay({required ProjectData project, required bool active}) {
-    project.layers.removeWhere((l) => l.id == 'bsl_atmospheric_overlay_layer');
-    if (active) {
-      project.layers.add(AdjustmentLayer(
-        id: 'bsl_atmospheric_overlay_layer',
-        name: 'BSL Atmospheric Mist',
-        blendMode: LayerBlendMode.screen,
-        opacity: 0.65,
-        bslaGodRays: 0.35,
-        bslaFogDensity: 0.28,
-        bslaBloomHaze: 0.40,
-        bslFogScatter: 0.32,
-        deepGlowIntensity: 0.22,
-        deepGlowRadius: 0.55,
-      ));
-    }
-  }
-
-  static void clearPresetToNeutral(ProjectData project) {
-    project.layers.clear();
-    project.layers.add(AdjustmentLayer(
-      id: 'neutral_base',
-      name: 'Base Grade',
-      contrast: 1.0,
-      saturation: 1.0,
-      brightness: 0.0,
-      blendMode: LayerBlendMode.normal,
-    ));
-    project.activeLayerIndex = 0;
-  }
-
-  // ---------------------------------------------------------------------------
   // FULL PRESET OVERHAUL ENGINE (1:1 AFTER EFFECTS REPLICATION - NO CLIP CRUSH)
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
@@ -903,9 +839,9 @@ class EditorViews {
           shadows: -0.08,
           highlights: 0.12,
           blackCrush: 0.02,
-          splitToneShadowHue: 0.60, // Cool navy shadows
+          splitToneShadowHue: 0.60,
           splitToneShadowSat: 0.22,
-          splitToneHighHue: 0.12,   // Golden amber highlights
+          splitToneHighHue: 0.12,
           splitToneHighSat: 0.35,
           splitToneBalance: 0.10,
           cosmoCleanHighlight: 0.45,
@@ -920,7 +856,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.42,
           shaderlyGlowRadius: 0.48,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 1.0, // Gold
+          shaderlyGlowTint: 1.0,
         ));
         break;
 
@@ -948,7 +884,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.28,
           shaderlyGlowRadius: 0.38,
           shaderlyGlowThreshold: 0.55,
-          shaderlyGlowTint: 2.0, // Cyan
+          shaderlyGlowTint: 2.0,
         ));
         break;
 
@@ -998,9 +934,9 @@ class EditorViews {
           sharpness: 0.52,
           shadows: -0.12,
           highlights: 0.15,
-          splitToneShadowHue: 0.98, // Crimson-blood shadows
+          splitToneShadowHue: 0.98,
           splitToneShadowSat: 0.26,
-          splitToneHighHue: 0.10,   // Amber-gold highlights
+          splitToneHighHue: 0.10,
           splitToneHighSat: 0.35,
           splitToneBalance: 0.05,
           blendMode: LayerBlendMode.normal,
@@ -1014,7 +950,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.38,
           shaderlyGlowRadius: 0.45,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 3.0, // Amber
+          shaderlyGlowTint: 3.0,
         ));
         break;
 
@@ -1031,7 +967,7 @@ class EditorViews {
           highlights: 0.14,
           splitToneShadowHue: 0.60,
           splitToneShadowSat: 0.15,
-          splitToneHighHue: 0.38, // Emerald highlights
+          splitToneHighHue: 0.38,
           splitToneHighSat: 0.32,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
@@ -1059,9 +995,9 @@ class EditorViews {
           sharpness: 0.58,
           shadows: -0.16,
           blackCrush: 0.04,
-          splitToneShadowHue: 0.75, // Deep violet shadows
+          splitToneShadowHue: 0.75,
           splitToneShadowSat: 0.24,
-          splitToneHighHue: 0.50,   // Electric cyan highlights
+          splitToneHighHue: 0.50,
           splitToneHighSat: 0.28,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
@@ -1074,7 +1010,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.35,
           shaderlyGlowRadius: 0.42,
           shaderlyGlowThreshold: 0.50,
-          shaderlyGlowTint: 5.0, // Violet
+          shaderlyGlowTint: 5.0,
         ));
         break;
 
@@ -1134,7 +1070,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.40,
           shaderlyGlowRadius: 0.44,
           shaderlyGlowThreshold: 0.46,
-          shaderlyGlowTint: 2.0, // Electric Cyan
+          shaderlyGlowTint: 2.0,
         ));
         break;
 
@@ -1206,9 +1142,9 @@ class EditorViews {
           sharpness: 0.55,
           shadows: -0.10,
           highlights: 0.18,
-          splitToneShadowHue: 0.65, // Deep royal blue shadows
+          splitToneShadowHue: 0.65,
           splitToneShadowSat: 0.20,
-          splitToneHighHue: 0.14,   // Pure Gold highlights
+          splitToneHighHue: 0.14,
           splitToneHighSat: 0.40,
           splitToneBalance: 0.10,
           blendMode: LayerBlendMode.normal,
@@ -1222,7 +1158,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.38,
           shaderlyGlowRadius: 0.46,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 1.0, // Gold
+          shaderlyGlowTint: 1.0,
         ));
         break;
 
@@ -1257,6 +1193,7 @@ class EditorViews {
 
       // 16. NEW 1:1 AE REPLICATE: RUDEUS
       case 'ruedeus':
+      case 'rudeus':
         project.layers.add(AdjustmentLayer(
           id: 'rudeus_base',
           name: 'Rudeus Fantasy Dawn',
@@ -1282,7 +1219,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.32,
           shaderlyGlowRadius: 0.50,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 3.0, // Amber
+          shaderlyGlowTint: 3.0,
         ));
         break;
 
@@ -1298,9 +1235,9 @@ class EditorViews {
           shadows: -0.14,
           highlights: 0.16,
           blackCrush: 0.04,
-          splitToneShadowHue: 0.0,  // Red-orange shadows
+          splitToneShadowHue: 0.0,
           splitToneShadowSat: 0.28,
-          splitToneHighHue: 0.08,   // Vibrant orange highlights
+          splitToneHighHue: 0.08,
           splitToneHighSat: 0.38,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.0, 0.17, 0.49, 0.85, 1.0],
@@ -1313,7 +1250,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.36,
           shaderlyGlowRadius: 0.44,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 4.0, // Crimson
+          shaderlyGlowTint: 4.0,
         ));
         break;
 
@@ -1331,7 +1268,7 @@ class EditorViews {
           cosmoCleanHighlight: 0.55,
           splitToneShadowHue: 0.60,
           splitToneShadowSat: 0.12,
-          splitToneHighHue: 0.02, // Peach highlights
+          splitToneHighHue: 0.02,
           splitToneHighSat: 0.22,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.02, 0.21, 0.51, 0.83, 1.0],
@@ -1344,7 +1281,7 @@ class EditorViews {
           shaderlyGlowIntensity: 0.32,
           shaderlyGlowRadius: 0.46,
           shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 6.0, // Pink
+          shaderlyGlowTint: 6.0,
         ));
         break;
 
@@ -1380,7 +1317,7 @@ class EditorViews {
     project.activeLayerIndex = 0;
   }
   // ---------------------------------------------------------------------------
-  // 10. NEW: TIMELINE OPTIMIZER TAB (Multiple In/Out Segment Range Placer)
+  // 10. TIMELINE OPTIMIZER TAB (Multiple In/Out Segment Range Placer)
   // ---------------------------------------------------------------------------
   static Widget buildTimelineOptimizerTab({
     required BuildContext context,
@@ -1765,7 +1702,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // PRESET SAVE / IMPORT HELPERS (Multi-Layer Intact)
+  // PRESET SAVE / IMPORT HELPERS
   // ---------------------------------------------------------------------------
   static Future<void> saveCurrentAsPreset(BuildContext context, ProjectData project, List<CustomPresetItem> customPresets) async {
     final controller = TextEditingController(text: 'My Custom Grade');
@@ -1939,7 +1876,7 @@ class EditorViews {
   }) {
     String selectedFormat = 'PNG';
     String selectedRes = '2K';
-    double imageQuality = 100.0; // 1 to 100 for JPG/WEBP
+    double imageQuality = 100.0;
 
     final formats = ['PNG', 'JPG', 'WEBP'];
     final resolutions = ['Native', '720p', '1080p', '2K', '4K'];
@@ -2146,7 +2083,7 @@ class EditorViews {
         encodedFile = Uint8List.fromList(img.encodeJpg(outputImg, quality: quality));
         ext = 'jpg';
       } else {
-        encodedFile = Uint8List.fromList(img.encodePng(outputImg)); // WebP fallback lossless
+        encodedFile = Uint8List.fromList(img.encodePng(outputImg));
         ext = 'webp';
       }
 
@@ -2413,7 +2350,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 15. FAST-START HARDWARE VIDEO EXPORT ENGINE (ZERO PRE-EXPORT STALL)
+  // 15. FAST-START HARDWARE VIDEO EXPORT ENGINE
   // ---------------------------------------------------------------------------
   static Future<void> executeVideoExport({
     required BuildContext context,
@@ -2539,7 +2476,6 @@ class EditorViews {
 
       statusNotifier.value = 'Extracting $outW x $outH frames fast...';
       
-      // FAST START FIX: -compression_level 1 writes frames instantly without Android I/O freeze
       activeSession = await FFmpegKit.execute(
         '-hide_banner -i "${project.mediaPath}" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -compression_level 1 -y "${framesDir.path}/frame_%05d.png"',
       );
@@ -2571,7 +2507,6 @@ class EditorViews {
         final currentTime = i / targetFps.toDouble();
         uniforms[0] = currentTime;
 
-        // TIMELINE SEGMENTS CHECK: If user restricted CC to specific ranges
         bool applyCurrentCc = true;
         if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
           applyCurrentCc = project.timelineSegments.any((seg) =>
@@ -2607,7 +2542,6 @@ class EditorViews {
             );
           }
         } else {
-          // Untouched frame outside user segment range
           gradedImg = decoded;
         }
 
@@ -2619,7 +2553,6 @@ class EditorViews {
         progressNotifier.value = (i + 1) / totalFrames;
         statusNotifier.value = 'Grading frames: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
         
-        // Prevent UI thread freeze / ANR
         await Future.delayed(Duration.zero);
       }
 
@@ -2651,7 +2584,6 @@ class EditorViews {
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       
-      // Destination: Direct to Downloads folder
       Directory destDir = Directory('/storage/emulated/0/Download');
       if (!await destDir.exists()) {
         try {
@@ -2666,7 +2598,6 @@ class EditorViews {
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
       final finalOutputFile = File('${destDir.path}/$fileName');
 
-      // AUDIO MUXING FIX: Ensures output is ALWAYS the video container, never converting to an mp3
       if (hasAudio) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
         await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest "${finalOutputFile.path}"');
@@ -2674,7 +2605,6 @@ class EditorViews {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
 
-      // MODAL PROGRESS FREEZE FIX: Safely dismiss dialog context
       if (!isCancelled && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
       }
@@ -2740,7 +2670,6 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // Drag Body
           GestureDetector(
             onPanUpdate: (details) {
               setState(() {
@@ -2762,7 +2691,6 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
               ),
             ),
           ),
-          // Resize Handle (Bottom-Right)
           Positioned(
             right: -8,
             bottom: -8,
@@ -2850,8 +2778,8 @@ class SplineCurvePainter extends CustomPainter {
     double p2 = (idx == 0) ? p[1] : (idx == 1) ? p[2] : (idx == 2) ? p[3] : p[4];
     double p3 = (idx == 0) ? p[2] : (idx == 1) ? p[3] : (idx == 2) ? p[4] : p[4];
 
-    float m1 = clamp(0.5 * (p2 - p0), -1.2, 1.2);
-    float m2 = clamp(0.5 * (p3 - p1), -1.2, 1.2);
+    double m1 = (0.5 * (p2 - p0)).clamp(-1.2, 1.2);
+    double m2 = (0.5 * (p3 - p1)).clamp(-1.2, 1.2);
 
     double t2 = t * t;
     double t3 = t2 * t;
