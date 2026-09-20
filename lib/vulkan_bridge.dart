@@ -1,6 +1,6 @@
 // ==========================================
 // lib/vulkan_bridge.dart
-// COMPLETE & EXHAUSTIVE 32-BIT VULKAN FFI BRIDGE
+// 100% COMPLETE & EXHAUSTIVE 32-BIT VULKAN FFI BRIDGE
 // ==========================================
 
 import 'dart:ffi' as ffi;
@@ -308,11 +308,11 @@ Uint16List processImage16(
 
 Uint8List _cpuFallbackGrade(Uint8List inBytes, int w, int h, Float32List uniforms) {
   final out = Uint8List.fromList(inBytes);
-  if (uniforms.length < 25) return out;
+  if (uniforms.length < 35) return out;
 
-  final double b = uniforms[23] * 255.0;
-  final double s = uniforms[24];
-  final double c = uniforms[25];
+  final double b = uniforms[31] * 255.0; // Offset based on layer packing
+  final double s = uniforms[32];
+  final double c = uniforms[33];
 
   for (int i = 0; i < out.length; i += 4) {
     double r = out[i].toDouble() + b;
