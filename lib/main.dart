@@ -134,7 +134,6 @@ class _HomeScreenState extends State<HomeScreen> {
           final outThumb = '${tempDir.path}/thumb_${p.id}.jpg';
           final thumbFile = File(outThumb);
           if (!await thumbFile.exists()) {
-            // Fast seek placed before -i prevents startup stall
             await FFmpegKit.execute(
               '-hide_banner -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=160:-1 -q:v 4 -y "$outThumb"',
             );
@@ -817,6 +816,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                             AdjustmentLayer(
                               id: 'layer_clean_base',
                               name: 'Base Grade',
+                              opacity: 1.0, // <-- Explicit full opacity
                               blendMode: LayerBlendMode.normal,
                               contrast: 1.0,
                               saturation: 1.0,
@@ -1226,9 +1226,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[18] = _project.textBevelDepth;
     uniforms[19] = _project.textChromeIntensity;
 
+    // Offsets 20..27: New Shaderly Glow & Split Toning Global Uniforms (Matches GLSL UniformBlock)
+    uniforms[20] = _cur.shaderlyGlowIntensity;
+    uniforms[21] = _cur.shaderlyGlowRadius;
+    uniforms[22] = _cur.shaderlyGlowThreshold;
+    uniforms[23] = _cur.splitToneShadowHue;
+    uniforms[24] = _cur.splitToneShadowSat;
+    uniforms[25] = _cur.splitToneHighHue;
+    uniforms[26] = _cur.splitToneHighSat;
+    uniforms[27] = _cur.splitToneBalance;
+
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
-      final offset = 20 + (l * 64);
+      // Offset 28 + (l * 64): Perfectly aligns with `LayerData layers[4]` in GLSL
+      final offset = 28 + (l * 64);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1337,6 +1348,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _project.layers.add(AdjustmentLayer(
         id: 'layer_${DateTime.now().millisecondsSinceEpoch}',
         name: 'Layer $newIndex',
+        opacity: 1.0,
         blendMode: LayerBlendMode.screen,
       ));
       _project.activeLayerIndex = _project.layers.length - 1;
@@ -1370,6 +1382,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _project.layers[_project.activeLayerIndex] = AdjustmentLayer(
         id: _cur.id,
         name: _cur.name,
+        opacity: 1.0,
         blendMode: _cur.blendMode,
       );
       _selectedPresetName = null;
