@@ -2567,7 +2567,7 @@ class EditorViews {
         if (decoded == null) continue;
 
         final currentTime = i / targetFps.toDouble();
-        uniforms[0] = currentTime;
+      
 
         bool applyCurrentCc = true;
         if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
