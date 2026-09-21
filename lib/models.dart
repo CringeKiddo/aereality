@@ -63,7 +63,7 @@ class TimelineClipSegment {
   factory TimelineClipSegment.fromJson(Map<String, dynamic> json) => TimelineClipSegment(
     id: json['id'] ?? 'seg_${DateTime.now().millisecondsSinceEpoch}',
     name: json['name'] ?? 'Segment',
-    startTime: (json['startTime'] as num?)?.toDouble() ?? 0.0,
+    startTime: (json['startTime'] as num?)?.toDouble() ?? 1.0,
     endTime: (json['endTime'] as num?)?.toDouble() ?? 5.0,
     layers: (json['layers'] as List<dynamic>?)
         ?.map((l) => AdjustmentLayer.fromJson(l))
@@ -77,7 +77,7 @@ class AdjustmentLayer {
   String id;
   String name;
   bool isEnabled;
-  double opacity;
+  double opacity = 1.0;
   LayerBlendMode blendMode;
 
   // Basic Grading
