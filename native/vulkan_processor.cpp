@@ -14,6 +14,14 @@
 
 namespace {
 
+// Push constant struct to direct the compute shader on which Dual Kawase pass to execute
+struct ComputePushConstants {
+    int32_t passIndex;   // 0: Main+Prefilter, 1: Down1, 2: Down2, 3: Up1, 4: Up0, 5: Composite
+    int32_t passWidth;
+    int32_t passHeight;
+    float passRadius;
+};
+
 struct VulkanContext {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -32,7 +40,14 @@ struct VulkanContext {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence computeFence = VK_NULL_HANDLE;
 
-    // Buffers: 0:Input, 1:Output, 2:UBO, 3:3D LUT Table
+    // Buffers:
+    // Binding 0: Input Image (Full Res)
+    // Binding 1: Output Image (Full Res)
+    // Binding 2: Uniform Buffer (UBO)
+    // Binding 3: 3D LUT Table
+    // Binding 4: Dual Kawase Pyramid Level 0 (1/2 Resolution)
+    // Binding 5: Dual Kawase Pyramid Level 1 (1/4 Resolution)
+    // Binding 6: Dual Kawase Pyramid Level 2 (1/8 Resolution)
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
@@ -41,6 +56,14 @@ struct VulkanContext {
     VkDeviceMemory uboMemory = VK_NULL_HANDLE;
     VkBuffer lutBuffer = VK_NULL_HANDLE;
     VkDeviceMemory lutMemory = VK_NULL_HANDLE;
+
+    // Dual Kawase Hierarchy Buffers
+    VkBuffer kawaseL0Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory kawaseL0Memory = VK_NULL_HANDLE;
+    VkBuffer kawaseL1Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory kawaseL1Memory = VK_NULL_HANDLE;
+    VkBuffer kawaseL2Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory kawaseL2Memory = VK_NULL_HANDLE;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
@@ -95,38 +118,25 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
 void cleanupBuffers() {
     if (gVk.device == VK_NULL_HANDLE) return;
 
-    if (gVk.inBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(gVk.device, gVk.inBuffer, nullptr);
-        gVk.inBuffer = VK_NULL_HANDLE;
-    }
-    if (gVk.inMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(gVk.device, gVk.inMemory, nullptr);
-        gVk.inMemory = VK_NULL_HANDLE;
-    }
-    if (gVk.outBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(gVk.device, gVk.outBuffer, nullptr);
-        gVk.outBuffer = VK_NULL_HANDLE;
-    }
-    if (gVk.outMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(gVk.device, gVk.outMemory, nullptr);
-        gVk.outMemory = VK_NULL_HANDLE;
-    }
-    if (gVk.uboBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(gVk.device, gVk.uboBuffer, nullptr);
-        gVk.uboBuffer = VK_NULL_HANDLE;
-    }
-    if (gVk.uboMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(gVk.device, gVk.uboMemory, nullptr);
-        gVk.uboMemory = VK_NULL_HANDLE;
-    }
-    if (gVk.lutBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(gVk.device, gVk.lutBuffer, nullptr);
-        gVk.lutBuffer = VK_NULL_HANDLE;
-    }
-    if (gVk.lutMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(gVk.device, gVk.lutMemory, nullptr);
-        gVk.lutMemory = VK_NULL_HANDLE;
-    }
+    auto safeDestroy = [](VkBuffer& buf, VkDeviceMemory& mem) {
+        if (buf != VK_NULL_HANDLE) {
+            vkDestroyBuffer(gVk.device, buf, nullptr);
+            buf = VK_NULL_HANDLE;
+        }
+        if (mem != VK_NULL_HANDLE) {
+            vkFreeMemory(gVk.device, mem, nullptr);
+            mem = VK_NULL_HANDLE;
+        }
+    };
+
+    safeDestroy(gVk.inBuffer, gVk.inMemory);
+    safeDestroy(gVk.outBuffer, gVk.outMemory);
+    safeDestroy(gVk.uboBuffer, gVk.uboMemory);
+    safeDestroy(gVk.lutBuffer, gVk.lutMemory);
+    safeDestroy(gVk.kawaseL0Buffer, gVk.kawaseL0Memory);
+    safeDestroy(gVk.kawaseL1Buffer, gVk.kawaseL1Memory);
+    safeDestroy(gVk.kawaseL2Buffer, gVk.kawaseL2Memory);
+
     gVk.allocatedPixelCapacity = 0;
 }
 
@@ -140,6 +150,14 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     VkDeviceSize pixelBufferSize = requiredPixels * sizeof(uint32_t);
     VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes (UniformBlock + 4x LayerData)
     VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 98,304 floats (393,216 bytes)
+
+    // Dual Kawase Downsampled Pyramid Buffer Sizes:
+    // L0: 1/4 pixel count (half width * half height)
+    // L1: 1/16 pixel count
+    // L2: 1/64 pixel count
+    VkDeviceSize l0Size = (requiredPixels / 4 + 16) * sizeof(uint32_t);
+    VkDeviceSize l1Size = (requiredPixels / 16 + 16) * sizeof(uint32_t);
+    VkDeviceSize l2Size = (requiredPixels / 64 + 16) * sizeof(uint32_t);
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -161,27 +179,32 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.lutBuffer, gVk.lutMemory);
 
-    VkDescriptorBufferInfo inBufferInfo{};
-    inBufferInfo.buffer = gVk.inBuffer;
-    inBufferInfo.offset = 0;
-    inBufferInfo.range = pixelBufferSize;
+    // Fast Device-Local Memory for Intermediate Kawase Pyramid Passes
+    createBuffer(gVk.device, gVk.physicalDevice, l0Size,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.kawaseL0Buffer, gVk.kawaseL0Memory);
 
-    VkDescriptorBufferInfo outBufferInfo{};
-    outBufferInfo.buffer = gVk.outBuffer;
-    outBufferInfo.offset = 0;
-    outBufferInfo.range = pixelBufferSize;
+    createBuffer(gVk.device, gVk.physicalDevice, l1Size,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.kawaseL1Buffer, gVk.kawaseL1Memory);
 
-    VkDescriptorBufferInfo uboBufferInfo{};
-    uboBufferInfo.buffer = gVk.uboBuffer;
-    uboBufferInfo.offset = 0;
-    uboBufferInfo.range = uboBufferSize;
+    createBuffer(gVk.device, gVk.physicalDevice, l2Size,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.kawaseL2Buffer, gVk.kawaseL2Memory);
 
-    VkDescriptorBufferInfo lutBufferInfo{};
-    lutBufferInfo.buffer = gVk.lutBuffer;
-    lutBufferInfo.offset = 0;
-    lutBufferInfo.range = lutBufferSize;
+    // Set up descriptor bindings for all 7 buffers
+    VkDescriptorBufferInfo inBufferInfo{gVk.inBuffer, 0, pixelBufferSize};
+    VkDescriptorBufferInfo outBufferInfo{gVk.outBuffer, 0, pixelBufferSize};
+    VkDescriptorBufferInfo uboBufferInfo{gVk.uboBuffer, 0, uboBufferSize};
+    VkDescriptorBufferInfo lutBufferInfo{gVk.lutBuffer, 0, lutBufferSize};
+    VkDescriptorBufferInfo l0BufferInfo{gVk.kawaseL0Buffer, 0, l0Size};
+    VkDescriptorBufferInfo l1BufferInfo{gVk.kawaseL1Buffer, 0, l1Size};
+    VkDescriptorBufferInfo l2BufferInfo{gVk.kawaseL2Buffer, 0, l2Size};
 
-    VkWriteDescriptorSet descriptorWrites[4]{};
+    VkWriteDescriptorSet descriptorWrites[7]{};
 
     descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[0].dstSet = gVk.descriptorSet;
@@ -211,10 +234,31 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     descriptorWrites[3].descriptorCount = 1;
     descriptorWrites[3].pBufferInfo = &lutBufferInfo;
 
-    vkUpdateDescriptorSets(gVk.device, 4, descriptorWrites, 0, nullptr);
+    descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[4].dstSet = gVk.descriptorSet;
+    descriptorWrites[4].dstBinding = 4;
+    descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[4].descriptorCount = 1;
+    descriptorWrites[4].pBufferInfo = &l0BufferInfo;
+
+    descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[5].dstSet = gVk.descriptorSet;
+    descriptorWrites[5].dstBinding = 5;
+    descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[5].descriptorCount = 1;
+    descriptorWrites[5].pBufferInfo = &l1BufferInfo;
+
+    descriptorWrites[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[6].dstSet = gVk.descriptorSet;
+    descriptorWrites[6].dstBinding = 6;
+    descriptorWrites[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[6].descriptorCount = 1;
+    descriptorWrites[6].pBufferInfo = &l2BufferInfo;
+
+    vkUpdateDescriptorSets(gVk.device, 7, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels.", requiredPixels);
+    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels with Dual Kawase.", requiredPixels);
     return true;
 }
 
@@ -321,7 +365,7 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
             for (int l = 0; l < std::min(layerCount, 4); l++) {
-                int off = 20 + (l * 64);
+                int off = 32 + (l * 64);
                 if (ubo[off + 0] < 0.5f) continue;
 
                 float opacity = ubo[off + 1];
@@ -400,9 +444,9 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     // 1. Create Vulkan Instance
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "ShaderlyCore";
+    appInfo.pApplicationName = "ShaderlyDualKawase";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "ShaderlyCompute";
+    appInfo.pEngineName = "DualKawaseVulkan";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
@@ -479,9 +523,9 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
 
-    // 5. Descriptor Set Layout for 4 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT)
-    VkDescriptorSetLayoutBinding bindings[4]{};
-    for (int b = 0; b < 4; b++) {
+    // 5. Descriptor Set Layout for 7 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT, 4=L0, 5=L1, 6=L2)
+    VkDescriptorSetLayoutBinding bindings[7]{};
+    for (int b = 0; b < 7; b++) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
@@ -490,16 +534,23 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 4;
+    layoutInfo.bindingCount = 7;
     layoutInfo.pBindings = bindings;
 
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
-    // 6. Pipeline Layout
+    // 6. Pipeline Layout with Push Constants
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(ComputePushConstants);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &gVk.descriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
 
@@ -517,7 +568,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     // 8. Descriptor Pool & Allocate Set
     VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 4;
+    poolSizes[0].descriptorCount = 7;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -557,7 +608,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
 
     gVk.isInitialized = true;
-    LOGI("Shaderly Vulkan Compute Pipeline Initialized Successfully.");
+    LOGI("Shaderly Dual Kawase Vulkan Compute Pipeline Initialized Successfully.");
     return 1;
 }
 
@@ -598,7 +649,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
         vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
 
-    // 4. Record and Dispatch Compute Shader
+    // 4. Record Multi-Pass Dual Kawase Command Buffer
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -608,9 +659,61 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
 
-    uint32_t groupCountX = (outWidth + 15) / 16;
-    uint32_t groupCountY = (outHeight + 15) / 16;
-    vkCmdDispatch(gVk.commandBuffer, groupCountX, groupCountY, 1);
+    auto insertBarrier = []() {
+        VkMemoryBarrier memoryBarrier{};
+        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(gVk.commandBuffer,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
+    };
+
+    int32_t wL0 = std::max(1, outWidth / 2);
+    int32_t hL0 = std::max(1, outHeight / 2);
+    int32_t wL1 = std::max(1, outWidth / 4);
+    int32_t hL1 = std::max(1, outHeight / 4);
+    int32_t wL2 = std::max(1, outWidth / 8);
+    int32_t hL2 = std::max(1, outHeight / 8);
+
+    ComputePushConstants pc{};
+
+    // PASS 0: Main Color Grade + Highlight Prefilter -> writes Output & Level 0
+    pc = {0, outWidth, outHeight, 1.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 1: Kawase Downsample (L0 -> L1)
+    pc = {1, wL1, hL1, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 2: Kawase Downsample (L1 -> L2)
+    pc = {2, wL2, hL2, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 3: Kawase Upsample (L2 -> L1)
+    pc = {3, wL1, hL1, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 4: Kawase Upsample (L1 -> L0)
+    pc = {4, wL0, hL0, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 5: Master Composite & Dual Kawase Light Wrap (L0 + Output -> Final Composite)
+    pc = {5, outWidth, outHeight, 1.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
+
     vkEndCommandBuffer(gVk.commandBuffer);
 
     // 5. Submit with Fence Synchronization
