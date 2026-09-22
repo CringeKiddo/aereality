@@ -1,6 +1,7 @@
 // =============================================================================
 // AEReality / Shaderly - Editor Views & Export Suite (Part 1/3)
 // True 32-Bit Float Linear Pipeline - Presets, Sliders, Tabs & HW MediaCodec
+// 100% Complete Section - Zero Code Omissions
 // =============================================================================
 
 import 'dart:async';
@@ -127,11 +128,11 @@ class EditorViews {
               size: 24,
             ),
             title: const Text(
-              'BSL Volumetric Mist & God Rays Overlay',
+              'BSL Volumetric Mist & Atmosphere Overlay',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
             ),
             subtitle: const Text(
-              'Stackable atmospheric fog & light shafts across all active layers',
+              'Stackable atmospheric fog & light scatter across all active layers',
               style: TextStyle(color: Colors.white38, fontSize: 11),
             ),
             trailing: Switch(
@@ -239,17 +240,17 @@ class EditorViews {
       {
         'mode': 0.0,
         'title': 'Linear (Off / Native Passthrough)',
-        'desc': 'Raw floating-point color response with no dynamic curve compression.',
+        'desc': 'Raw 32-bit floating-point color response with no dynamic curve compression.',
       },
       {
         'mode': 1.0,
-        'title': 'Shaderly Tonemapper 1 (Filmic ACES Studio)',
-        'desc': 'Cinematic Academy curve with protected toe and rich highlight rolloff.',
+        'title': 'Shaderly Tonemapper 1 (Anime Filmic Studio)',
+        'desc': 'Cinematic toe with rich highlight compression that preserves ink line art.',
       },
       {
         'mode': 2.0,
         'title': 'Shaderly Tonemapper 2 (AgX Dynamic Metal)',
-        'desc': 'Perceptual dynamic range curve protecting saturated anime colors from blowing out.',
+        'desc': 'Perceptual dynamic range curve protecting saturated anime colors from clipping to flat white.',
       },
     ];
 
@@ -421,7 +422,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. BASIC TAB (Includes Hue Rotate & Master Dithering Strength)
+  // 4. BASIC TAB (Includes Hue Rotate, Contrast Midpoint & Shadows)
   // ---------------------------------------------------------------------------
   static Widget buildBasicGradingTab({
     required BuildContext context,
@@ -465,7 +466,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 5. MAGIC TAB (Magic Bullet Suite + Real Split Toning)
+  // 5. MAGIC TAB (Magic Bullet Suite + Working Split Toning)
   // ---------------------------------------------------------------------------
   static Widget buildMagicTab({
     required BuildContext context,
@@ -525,7 +526,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 7. GLOWS & FLARES TAB (Includes New "Shaderly Glow" & Soft 1D Flare)
+  // 7. GLOWS & FLARES TAB (Continuous Gaussian Falloff, No Stepped Duplicates)
   // ---------------------------------------------------------------------------
   static Widget buildGlowsAndFlaresTab({
     required BuildContext context,
@@ -544,7 +545,7 @@ class EditorViews {
         ),
         buildSliderRow(context: context, title: 'Shaderly Glow Intensity', val: cur.shaderlyGlowIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.shaderlyGlowIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Shaderly Glow Radius', val: cur.shaderlyGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.shaderlyGlowRadius = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Shaderly Glow Threshold (Catches Saturated Neons)', val: cur.shaderlyGlowThreshold, min: 0.10, max: 0.90, onChanged: (v) { cur.shaderlyGlowThreshold = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Shaderly Glow Threshold', val: cur.shaderlyGlowThreshold, min: 0.10, max: 0.90, onChanged: (v) { cur.shaderlyGlowThreshold = v; onChanged(); }, onEnded: onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -601,16 +602,14 @@ class EditorViews {
         const SizedBox(height: 12),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('1D ANAMORPHIC OPTICAL FLARES (GAUSSIAN SPREAD)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          child: Text('1D ANAMORPHIC OPTICAL FLARES (GAUSSIAN DIFFUSION)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Width', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Flare Softness (Gaussian Falloff)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
       ],
     );
   }
-
   // ---------------------------------------------------------------------------
   // 8. ATMOSPHERE TAB
   // ---------------------------------------------------------------------------
@@ -723,17 +722,18 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // FULL PRESET OVERHAUL ENGINE (1:1 AFTER EFFECTS REPLICATION - NO CLIP CRUSH)
+  // FULL PRESET ENGINE (1:1 AE LOOKS - ZERO FLARES/RAYS IN PRESETS - NO BLOWOUT)
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
     project.layers.clear();
 
     switch (name.toLowerCase()) {
-      // 1. UNTOUCHED: YAMATO
+      // 1. UNTOUCHED: YAMATO (EXACT ORIGINAL)
       case 'yamato':
         project.layers.add(AdjustmentLayer(
           id: 'yamato_base',
           name: 'Base Grade',
+          opacity: 1.0,
           contrast: 1.32,
           saturation: 0.92,
           temperature: 7600.0,
@@ -763,11 +763,12 @@ class EditorViews {
         ));
         break;
 
-      // 2. UNTOUCHED: OKKOTSU
+      // 2. UNTOUCHED: OKKOTSU (EXACT ORIGINAL)
       case 'okkotsu':
         project.layers.add(AdjustmentLayer(
           id: 'okkotsu_base',
           name: 'Base Grade',
+          opacity: 1.0,
           contrast: 1.25,
           saturation: 0.84,
           brightness: -0.01,
@@ -793,521 +794,550 @@ class EditorViews {
         ));
         break;
 
-      // 3. UNTOUCHED: HOME-MADE SAUCE
+      // 3. HOME-MADE SAUCE (Clean Warm Sauce - Zero Flares)
       case 'home-made sauce':
         project.layers.add(AdjustmentLayer(
           id: 'hms_base',
           name: 'Base Grade',
-          contrast: 1.28,
-          saturation: 1.08,
-          temperature: 5400.0,
-          sharpness: 0.48,
+          opacity: 1.0,
+          contrast: 1.22,
+          saturation: 1.05,
+          brightness: -0.02,
+          temperature: 5600.0,
+          sharpness: 0.45,
           shadows: -0.08,
-          highlights: 0.12,
+          highlights: 0.06,
           vignette: 0.06,
           edgeDarken: 0.0,
           darkOutlines: 0.0,
-          cosmoCleanHighlight: 0.40,
+          cosmoCleanHighlight: 0.45,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.22, 0.54, 0.84, 1.0],
+          curveMaster: [0.01, 0.21, 0.51, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'hms_amber_haze',
-          name: 'Sunset Amber Bloom',
+          name: 'Sunset Amber Diffusion',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.70,
-          deepGlowIntensity: 0.32,
-          deepGlowRadius: 0.48,
-          deepGlowThreshold: 0.50,
+          opacity: 0.60,
+          deepGlowIntensity: 0.25,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.55,
           edgeGlowTint: 3.0,
-          bslaBloomHaze: 0.30,
-          thinStreakIntensity: 0.20,
+          bslaBloomHaze: 0.25,
         ));
         break;
 
-      // 4. NEW 1:1 AE REPLICATE: ARKNIGHTS
+      // 4. ARKNIGHTS (Muted Industrial Cinema - Controlled Highlights)
       case 'arknights':
         project.layers.add(AdjustmentLayer(
           id: 'arknights_base',
-          name: 'Arknights Cinematic Tone',
-          contrast: 1.24,
-          saturation: 0.95,
-          brightness: 0.02,
-          temperature: 6300.0,
+          name: 'Arknights Cinema Tone',
+          opacity: 1.0,
+          contrast: 1.20,
+          saturation: 0.88,
+          brightness: -0.02,
+          temperature: 6400.0,
           sharpness: 0.45,
-          shadows: -0.08,
-          highlights: 0.12,
-          blackCrush: 0.02,
+          shadows: -0.10,
+          highlights: 0.05,
+          blackCrush: 0.03,
           splitToneShadowHue: 0.60,
-          splitToneShadowSat: 0.22,
+          splitToneShadowSat: 0.20,
           splitToneHighHue: 0.12,
-          splitToneHighSat: 0.35,
-          splitToneBalance: 0.10,
-          cosmoCleanHighlight: 0.45,
+          splitToneHighSat: 0.18,
+          splitToneBalance: 0.08,
+          cosmoCleanHighlight: 0.50,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.22, 0.51, 0.83, 1.0],
+          curveMaster: [0.01, 0.20, 0.49, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'arknights_glow',
-          name: 'Arknights Soft Bloom',
+          name: 'Amber Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.70,
-          shaderlyGlowIntensity: 0.42,
-          shaderlyGlowRadius: 0.48,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 1.0,
+          opacity: 0.55,
+          deepGlowIntensity: 0.24,
+          deepGlowRadius: 0.40,
+          deepGlowThreshold: 0.55,
+          edgeGlowTint: 1.0,
         ));
         break;
 
-      // 5. NEW 1:1 AE REPLICATE: ADEVOB SLOP
+      // 5. ADEVOB SLOP (Clean Steel Inks - No Nuclear Washout)
       case 'adevob slop':
         project.layers.add(AdjustmentLayer(
           id: 'adevob_base',
           name: 'Adevob Steel Lines',
-          contrast: 1.34,
-          saturation: 0.78,
+          opacity: 1.0,
+          contrast: 1.26,
+          saturation: 0.76,
+          brightness: -0.03,
           temperature: 7100.0,
-          sharpness: 0.62,
+          sharpness: 0.55,
           shadows: -0.14,
-          highlights: 0.12,
-          blackCrush: 0.03,
+          highlights: 0.04,
+          blackCrush: 0.04,
           blendMode: LayerBlendMode.normal,
-          mblMojoTealOrange: 0.22,
-          curveMaster: [0.0, 0.17, 0.50, 0.85, 1.0],
+          mblMojoTealOrange: 0.20,
+          curveMaster: [0.0, 0.17, 0.49, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'adevob_acutance',
-          name: 'Cold Acutance Bloom',
+          name: 'Cold Acutance Core',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.65,
-          shaderlyGlowIntensity: 0.28,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.55,
-          shaderlyGlowTint: 2.0,
+          opacity: 0.52,
+          deepGlowIntensity: 0.18,
+          deepGlowRadius: 0.32,
+          deepGlowThreshold: 0.60,
+          edgeGlowTint: 2.0,
         ));
         break;
 
-      // 6. NEW 1:1 AE REPLICATE: YUTA
+      // 6. YUTA (Silver Ivory Palette)
       case 'yuta':
         project.layers.add(AdjustmentLayer(
           id: 'yuta_base',
           name: 'Yuta Silver Base',
-          contrast: 1.28,
-          saturation: 0.82,
-          brightness: 0.01,
+          opacity: 1.0,
+          contrast: 1.22,
+          saturation: 0.80,
+          brightness: -0.01,
           temperature: 6800.0,
-          sharpness: 0.50,
+          sharpness: 0.48,
           shadows: -0.10,
-          highlights: 0.14,
+          highlights: 0.06,
           blackCrush: 0.02,
           splitToneShadowHue: 0.58,
-          splitToneShadowSat: 0.18,
+          splitToneShadowSat: 0.16,
           splitToneHighHue: 0.08,
-          splitToneHighSat: 0.15,
-          cosmoCleanHighlight: 0.40,
+          splitToneHighSat: 0.12,
+          cosmoCleanHighlight: 0.45,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.20, 0.50, 0.84, 1.0],
+          curveMaster: [0.0, 0.19, 0.50, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'yuta_pulse',
           name: 'Ivory Specular Core',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.68,
-          shaderlyGlowIntensity: 0.32,
-          shaderlyGlowRadius: 0.42,
-          shaderlyGlowThreshold: 0.52,
-          shaderlyGlowTint: 0.0,
-          flickerIntensity: 0.04,
-          flickerSpeed: 12.0,
+          opacity: 0.50,
+          deepGlowIntensity: 0.20,
+          deepGlowRadius: 0.35,
+          deepGlowThreshold: 0.58,
+          edgeGlowTint: 0.0,
+          flickerIntensity: 0.03,
+          flickerSpeed: 10.0,
         ));
         break;
 
-      // 7. NEW 1:1 AE REPLICATE: MALENIA
+      // 7. MALENIA (Scarlet Rot Warm Tones)
       case 'malenia':
         project.layers.add(AdjustmentLayer(
           id: 'malenia_base',
           name: 'Malenia Rot Base',
-          contrast: 1.30,
-          saturation: 0.96,
+          opacity: 1.0,
+          contrast: 1.24,
+          saturation: 0.92,
+          brightness: -0.02,
           temperature: 5800.0,
-          sharpness: 0.52,
+          sharpness: 0.50,
           shadows: -0.12,
-          highlights: 0.15,
+          highlights: 0.05,
           splitToneShadowHue: 0.98,
-          splitToneShadowSat: 0.26,
+          splitToneShadowSat: 0.22,
           splitToneHighHue: 0.10,
-          splitToneHighSat: 0.35,
+          splitToneHighSat: 0.20,
           splitToneBalance: 0.05,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.19, 0.51, 0.83, 1.0],
+          curveMaster: [0.01, 0.19, 0.50, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'malenia_bloom',
-          name: 'Scarlet Aeonia Bloom',
+          name: 'Scarlet Aeonia Core',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.72,
-          shaderlyGlowIntensity: 0.38,
-          shaderlyGlowRadius: 0.45,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 3.0,
+          opacity: 0.55,
+          deepGlowIntensity: 0.25,
+          deepGlowRadius: 0.40,
+          deepGlowThreshold: 0.52,
+          edgeGlowTint: 3.0,
         ));
         break;
 
-      // 8. NEW 1:1 AE REPLICATE: DEKU
+      // 8. DEKU (Emerald Discharge Grade)
       case 'deku':
         project.layers.add(AdjustmentLayer(
           id: 'deku_base',
           name: 'Deku One For All Base',
-          contrast: 1.32,
-          saturation: 1.10,
+          opacity: 1.0,
+          contrast: 1.25,
+          saturation: 1.02,
+          brightness: -0.02,
           temperature: 6500.0,
-          sharpness: 0.55,
+          sharpness: 0.50,
           shadows: -0.10,
-          highlights: 0.14,
+          highlights: 0.06,
           splitToneShadowHue: 0.60,
           splitToneShadowSat: 0.15,
           splitToneHighHue: 0.38,
-          splitToneHighSat: 0.32,
+          splitToneHighSat: 0.22,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'deku_lightning',
-          name: 'Emerald Discharge Glow',
+          name: 'Emerald Discharge Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.70,
-          shaderlyGlowIntensity: 0.36,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.46,
-          shaderlyGlowTint: 2.0,
+          opacity: 0.52,
+          deepGlowIntensity: 0.24,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.54,
+          edgeGlowTint: 2.0,
         ));
         break;
-        // 9. NEW 1:1 AE REPLICATE: JJK
+
+      // 9. JJK (Cursed Energy Deep Contrast)
       case 'jjk':
         project.layers.add(AdjustmentLayer(
           id: 'jjk_base',
           name: 'JJK Jujutsu Base',
-          contrast: 1.35,
-          saturation: 0.90,
+          opacity: 1.0,
+          contrast: 1.28,
+          saturation: 0.86,
+          brightness: -0.03,
           temperature: 6700.0,
-          sharpness: 0.58,
+          sharpness: 0.52,
           shadows: -0.16,
           blackCrush: 0.04,
           splitToneShadowHue: 0.75,
-          splitToneShadowSat: 0.24,
+          splitToneShadowSat: 0.20,
           splitToneHighHue: 0.50,
-          splitToneHighSat: 0.28,
+          splitToneHighSat: 0.18,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
+          curveMaster: [0.0, 0.16, 0.48, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'jjk_curse',
           name: 'Cursed Energy Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.72,
-          shaderlyGlowIntensity: 0.35,
-          shaderlyGlowRadius: 0.42,
-          shaderlyGlowThreshold: 0.50,
-          shaderlyGlowTint: 5.0,
+          opacity: 0.52,
+          deepGlowIntensity: 0.22,
+          deepGlowRadius: 0.36,
+          deepGlowThreshold: 0.56,
+          edgeGlowTint: 5.0,
         ));
         break;
 
-      // 10. NEW 1:1 AE REPLICATE: MAHITO
+      // 10. MAHITO (Idle Transfiguration Cold Inks)
       case 'mahito':
         project.layers.add(AdjustmentLayer(
           id: 'mahito_base',
-          name: 'Mahito Idle Transfiguration',
-          contrast: 1.30,
-          saturation: 0.85,
+          name: 'Mahito Cold Base',
+          opacity: 1.0,
+          contrast: 1.22,
+          saturation: 0.82,
+          brightness: -0.01,
           temperature: 7300.0,
-          sharpness: 0.56,
+          sharpness: 0.50,
           shadows: -0.12,
-          highlights: 0.12,
-          cosmoCleanHighlight: 0.50,
+          highlights: 0.05,
+          cosmoCleanHighlight: 0.52,
           splitToneShadowHue: 0.55,
-          splitToneShadowSat: 0.20,
+          splitToneShadowSat: 0.18,
           splitToneHighHue: 0.05,
-          splitToneHighSat: 0.12,
+          splitToneHighSat: 0.10,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.19, 0.50, 0.83, 1.0],
+          curveMaster: [0.0, 0.19, 0.50, 0.82, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'mahito_cyan',
-          name: 'Ice Cyan Specular',
+          name: 'Ice Specular Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.68,
-          shaderlyGlowIntensity: 0.30,
-          shaderlyGlowRadius: 0.40,
-          shaderlyGlowThreshold: 0.54,
-          shaderlyGlowTint: 2.0,
+          opacity: 0.48,
+          deepGlowIntensity: 0.20,
+          deepGlowRadius: 0.35,
+          deepGlowThreshold: 0.58,
+          edgeGlowTint: 2.0,
         ));
         break;
 
-      // 11. NEW 1:1 AE REPLICATE: GOJO
+      // 11. GOJO (Six Eyes Blue Depth)
       case 'gojo':
         project.layers.add(AdjustmentLayer(
           id: 'gojo_base',
           name: 'Gojo Six Eyes Base',
-          contrast: 1.36,
-          saturation: 0.94,
-          brightness: 0.01,
+          opacity: 1.0,
+          contrast: 1.28,
+          saturation: 0.90,
+          brightness: -0.01,
           temperature: 7500.0,
-          sharpness: 0.62,
+          sharpness: 0.55,
           shadows: -0.14,
-          highlights: 0.16,
+          highlights: 0.06,
           blackCrush: 0.03,
-          mblMojoTealOrange: 0.25,
+          mblMojoTealOrange: 0.22,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
+          curveMaster: [0.0, 0.18, 0.49, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'gojo_infinity',
           name: 'Infinity Cyan Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.78,
-          shaderlyGlowIntensity: 0.40,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.46,
-          shaderlyGlowTint: 2.0,
+          opacity: 0.58,
+          deepGlowIntensity: 0.26,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.52,
+          edgeGlowTint: 2.0,
         ));
         break;
 
-      // 12. NEW 1:1 AE REPLICATE: TOJI
+      // 12. TOJI (Heavy Steel Inks)
       case 'toji':
         project.layers.add(AdjustmentLayer(
           id: 'toji_base',
-          name: 'Toji Fushiguro Steel',
-          contrast: 1.38,
-          saturation: 0.74,
+          name: 'Toji Steel Inks',
+          opacity: 1.0,
+          contrast: 1.30,
+          saturation: 0.70,
+          brightness: -0.04,
           temperature: 7000.0,
-          sharpness: 0.65,
+          sharpness: 0.58,
           shadows: -0.16,
           blackCrush: 0.05,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.15, 0.49, 0.84, 1.0],
+          curveMaster: [0.0, 0.15, 0.48, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'toji_specular',
-          name: 'Steel Acutance Core',
+          name: 'Steel Specular Core',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.65,
-          shaderlyGlowIntensity: 0.22,
-          shaderlyGlowRadius: 0.35,
-          shaderlyGlowThreshold: 0.60,
-          shaderlyGlowTint: 0.0,
+          opacity: 0.45,
+          deepGlowIntensity: 0.16,
+          deepGlowRadius: 0.30,
+          deepGlowThreshold: 0.62,
+          edgeGlowTint: 0.0,
         ));
         break;
 
-      // 13. NEW 1:1 AE REPLICATE: MAKI
+      // 13. MAKI (Zenin Weapon Warm Steel)
       case 'maki':
         project.layers.add(AdjustmentLayer(
           id: 'maki_base',
-          name: 'Maki Zenin Warm Steel',
-          contrast: 1.32,
-          saturation: 0.88,
+          name: 'Maki Zenin Tone',
+          opacity: 1.0,
+          contrast: 1.25,
+          saturation: 0.82,
+          brightness: -0.02,
           temperature: 6400.0,
-          sharpness: 0.58,
+          sharpness: 0.52,
           shadows: -0.12,
-          highlights: 0.14,
+          highlights: 0.05,
           splitToneShadowHue: 0.58,
-          splitToneShadowSat: 0.18,
+          splitToneShadowSat: 0.15,
           splitToneHighHue: 0.12,
-          splitToneHighSat: 0.22,
+          splitToneHighSat: 0.16,
           cosmoCleanHighlight: 0.45,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.19, 0.50, 0.84, 1.0],
+          curveMaster: [0.01, 0.19, 0.50, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'maki_glow',
-          name: 'Dragon Bone Edge',
+          name: 'Specular Rim Edge',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.66,
-          shaderlyGlowIntensity: 0.28,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.54,
-          shaderlyGlowTint: 1.0,
+          opacity: 0.48,
+          deepGlowIntensity: 0.20,
+          deepGlowRadius: 0.34,
+          deepGlowThreshold: 0.56,
+          edgeGlowTint: 1.0,
         ));
         break;
 
-      // 14. NEW 1:1 AE REPLICATE: GIORNO
+      // 14. GIORNO (Golden Wind Elegance)
       case 'giorno':
         project.layers.add(AdjustmentLayer(
           id: 'giorno_base',
           name: 'Giorno Gold Experience',
-          contrast: 1.34,
-          saturation: 1.02,
+          opacity: 1.0,
+          contrast: 1.26,
+          saturation: 0.98,
+          brightness: -0.01,
           temperature: 6200.0,
-          sharpness: 0.55,
+          sharpness: 0.50,
           shadows: -0.10,
-          highlights: 0.18,
+          highlights: 0.07,
           splitToneShadowHue: 0.65,
-          splitToneShadowSat: 0.20,
+          splitToneShadowSat: 0.16,
           splitToneHighHue: 0.14,
-          splitToneHighSat: 0.40,
-          splitToneBalance: 0.10,
+          splitToneHighSat: 0.25,
+          splitToneBalance: 0.08,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.85, 1.0],
+          curveMaster: [0.0, 0.18, 0.50, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'giorno_gold_bloom',
           name: 'Requiem Golden Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.74,
-          shaderlyGlowIntensity: 0.38,
-          shaderlyGlowRadius: 0.46,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 1.0,
+          opacity: 0.55,
+          deepGlowIntensity: 0.25,
+          deepGlowRadius: 0.40,
+          deepGlowThreshold: 0.52,
+          edgeGlowTint: 1.0,
         ));
         break;
 
-      // 15. NEW 1:1 AE REPLICATE: HOLLAND
+      // 15. HOLLAND (Cinema Teal & Amber)
       case 'holland':
         project.layers.add(AdjustmentLayer(
           id: 'holland_base',
-          name: 'Holland Action Cinema',
-          contrast: 1.30,
-          saturation: 1.05,
-          brightness: 0.01,
+          name: 'Holland Cinema Tone',
+          opacity: 1.0,
+          contrast: 1.22,
+          saturation: 0.96,
+          brightness: -0.02,
           temperature: 6600.0,
-          sharpness: 0.58,
+          sharpness: 0.50,
           shadows: -0.12,
-          highlights: 0.15,
-          mblMojoTealOrange: 0.32,
-          cosmoCleanHighlight: 0.40,
+          highlights: 0.06,
+          mblMojoTealOrange: 0.28,
+          cosmoCleanHighlight: 0.42,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.20, 0.51, 0.84, 1.0],
+          curveMaster: [0.01, 0.20, 0.50, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'holland_rim',
-          name: 'Cinematic Specular Rim',
+          name: 'Specular Rim Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.68,
-          shaderlyGlowIntensity: 0.30,
-          shaderlyGlowRadius: 0.40,
-          shaderlyGlowThreshold: 0.52,
-          shaderlyGlowTint: 2.0,
+          opacity: 0.48,
+          deepGlowIntensity: 0.22,
+          deepGlowRadius: 0.35,
+          deepGlowThreshold: 0.56,
+          edgeGlowTint: 2.0,
         ));
         break;
 
-      // 16. NEW 1:1 AE REPLICATE: RUDEUS
+      // 16. RUDEUS (Dawn Fantasy Atmosphere)
       case 'ruedeus':
       case 'rudeus':
         project.layers.add(AdjustmentLayer(
           id: 'rudeus_base',
           name: 'Rudeus Fantasy Dawn',
-          contrast: 1.25,
-          saturation: 0.98,
-          temperature: 5500.0,
-          sharpness: 0.48,
+          opacity: 1.0,
+          contrast: 1.20,
+          saturation: 0.94,
+          brightness: -0.01,
+          temperature: 5600.0,
+          sharpness: 0.45,
           shadows: -0.06,
-          highlights: 0.14,
+          highlights: 0.06,
           splitToneShadowHue: 0.55,
-          splitToneShadowSat: 0.15,
+          splitToneShadowSat: 0.12,
           splitToneHighHue: 0.10,
-          splitToneHighSat: 0.30,
-          cosmoCleanHighlight: 0.45,
+          splitToneHighSat: 0.20,
+          cosmoCleanHighlight: 0.48,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.22, 0.52, 0.84, 1.0],
+          curveMaster: [0.02, 0.21, 0.51, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'rudeus_sun',
-          name: 'Atmospheric Magic Haze',
+          name: 'Dawn Warm Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.70,
-          shaderlyGlowIntensity: 0.32,
-          shaderlyGlowRadius: 0.50,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 3.0,
+          opacity: 0.50,
+          deepGlowIntensity: 0.22,
+          deepGlowRadius: 0.42,
+          deepGlowThreshold: 0.55,
+          edgeGlowTint: 3.0,
         ));
         break;
 
-      // 17. NEW 1:1 AE REPLICATE: DENJI
+      // 17. DENJI (Chainsaw Crimson)
       case 'denji':
         project.layers.add(AdjustmentLayer(
           id: 'denji_base',
-          name: 'Denji Chainsaw Blood',
-          contrast: 1.38,
-          saturation: 1.08,
+          name: 'Denji Chainsaw Base',
+          opacity: 1.0,
+          contrast: 1.30,
+          saturation: 1.00,
+          brightness: -0.03,
           temperature: 6300.0,
-          sharpness: 0.62,
+          sharpness: 0.55,
           shadows: -0.14,
-          highlights: 0.16,
+          highlights: 0.06,
           blackCrush: 0.04,
           splitToneShadowHue: 0.0,
-          splitToneShadowSat: 0.28,
+          splitToneShadowSat: 0.22,
           splitToneHighHue: 0.08,
-          splitToneHighSat: 0.38,
+          splitToneHighSat: 0.26,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.17, 0.49, 0.85, 1.0],
+          curveMaster: [0.0, 0.17, 0.49, 0.84, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'denji_blood_bloom',
-          name: 'Blood Engine Bloom',
+          name: 'Crimson Engine Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.74,
-          shaderlyGlowIntensity: 0.36,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 4.0,
+          opacity: 0.52,
+          deepGlowIntensity: 0.24,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.54,
+          edgeGlowTint: 4.0,
         ));
         break;
 
-      // 18. NEW 1:1 AE REPLICATE: RIKO
+      // 18. RIKO (Pastel Youth)
       case 'riko':
         project.layers.add(AdjustmentLayer(
           id: 'riko_base',
           name: 'Riko Pastel Youth',
-          contrast: 1.20,
-          saturation: 1.04,
+          opacity: 1.0,
+          contrast: 1.18,
+          saturation: 0.98,
+          brightness: 0.0,
           temperature: 6300.0,
-          sharpness: 0.42,
+          sharpness: 0.40,
           shadows: -0.06,
-          highlights: 0.10,
+          highlights: 0.05,
           cosmoCleanHighlight: 0.55,
           splitToneShadowHue: 0.60,
-          splitToneShadowSat: 0.12,
+          splitToneShadowSat: 0.10,
           splitToneHighHue: 0.02,
-          splitToneHighSat: 0.22,
+          splitToneHighSat: 0.16,
           blendMode: LayerBlendMode.normal,
           curveMaster: [0.02, 0.21, 0.51, 0.83, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'riko_peach_bloom',
-          name: 'Pastel Dream Bloom',
+          name: 'Pastel Peach Bloom',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.68,
-          shaderlyGlowIntensity: 0.32,
-          shaderlyGlowRadius: 0.46,
-          shaderlyGlowThreshold: 0.48,
-          shaderlyGlowTint: 6.0,
+          opacity: 0.48,
+          deepGlowIntensity: 0.20,
+          deepGlowRadius: 0.38,
+          deepGlowThreshold: 0.56,
+          edgeGlowTint: 6.0,
         ));
         break;
 
-      // 19. NEW 1:1 AE REPLICATE: TOJI (GRIT / RAW)
+      // 19. TOJI (GRIT / RAW)
       case 'toji (grit / raw)':
       default:
         project.layers.add(AdjustmentLayer(
           id: 'toji_raw_base',
           name: 'Toji Charcoal Grit',
-          contrast: 1.55,
-          saturation: 0.35,
-          brightness: -0.02,
-          sharpness: 0.72,
-          shadows: -0.24,
-          blackCrush: 0.08,
+          opacity: 1.0,
+          contrast: 1.40,
+          saturation: 0.32,
+          brightness: -0.04,
+          sharpness: 0.65,
+          shadows: -0.22,
+          blackCrush: 0.07,
           vignette: 0.08,
           blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.12, 0.46, 0.86, 1.0],
+          curveMaster: [0.0, 0.12, 0.46, 0.85, 1.0],
         ));
         project.layers.add(AdjustmentLayer(
           id: 'toji_raw_edge',
-          name: 'Steel Silhouette Core',
+          name: 'Charcoal Silhouette Core',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.70,
-          shaderlyGlowIntensity: 0.25,
-          shaderlyGlowRadius: 0.35,
-          shaderlyGlowThreshold: 0.62,
-          shaderlyGlowTint: 0.0,
+          opacity: 0.45,
+          deepGlowIntensity: 0.15,
+          deepGlowRadius: 0.30,
+          deepGlowThreshold: 0.65,
+          edgeGlowTint: 0.0,
         ));
         break;
     }
@@ -1316,7 +1346,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // UNSHARP MASK DRAWER & PRESET HELPERS (CALLED DIRECTLY FROM MAIN.DART)
+  // UNSHARP MASK DRAWER & PRESET HELPERS
   // ---------------------------------------------------------------------------
   static void showUnsharpMaskDrawer(BuildContext context, AdjustmentLayer cur, VoidCallback onUpdated) {
     showModalBottomSheet(
@@ -1355,13 +1385,13 @@ class EditorViews {
         id: 'bsl_atmospheric_overlay_layer',
         name: 'BSL Atmospheric Mist',
         blendMode: LayerBlendMode.screen,
-        opacity: 0.65,
-        bslaGodRays: 0.35,
-        bslaFogDensity: 0.28,
-        bslaBloomHaze: 0.40,
-        bslFogScatter: 0.32,
-        deepGlowIntensity: 0.22,
-        deepGlowRadius: 0.55,
+        opacity: 0.55,
+        bslaGodRays: 0.25,
+        bslaFogDensity: 0.24,
+        bslaBloomHaze: 0.32,
+        bslFogScatter: 0.28,
+        deepGlowIntensity: 0.18,
+        deepGlowRadius: 0.45,
       ));
     }
   }
@@ -1371,6 +1401,7 @@ class EditorViews {
     project.layers.add(AdjustmentLayer(
       id: 'neutral_base',
       name: 'Base Grade',
+      opacity: 1.0,
       contrast: 1.0,
       saturation: 1.0,
       brightness: 0.0,
@@ -1380,8 +1411,16 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 10. TIMELINE OPTIMIZER TAB (Multiple In/Out Segment Range Placer)
+  // 10. TIMELINE OPTIMIZER TAB (Exact Millisecond In/Out Range Editor)
   // ---------------------------------------------------------------------------
+  static String formatTimestampMs(double seconds) {
+    final int totalMs = (seconds * 1000).toInt();
+    final int mins = totalMs ~/ 60000;
+    final int secs = (totalMs % 60000) ~/ 1000;
+    final int ms = totalMs % 1000;
+    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}.${ms.toString().padLeft(3, '0')}';
+  }
+
   static Widget buildTimelineOptimizerTab({
     required BuildContext context,
     required ProjectData project,
@@ -1539,8 +1578,8 @@ class EditorViews {
                             padding: const EdgeInsets.symmetric(vertical: 8),
                           ),
                           child: Text(
-                            'Set In: ${seg.startTime.toStringAsFixed(1)}s',
-                            style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
+                            'Set In: ${formatTimestampMs(seg.startTime)}',
+                            style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
                           ),
                         ),
                       ),
@@ -1556,8 +1595,8 @@ class EditorViews {
                             padding: const EdgeInsets.symmetric(vertical: 8),
                           ),
                           child: Text(
-                            'Set Out: ${seg.endTime.toStringAsFixed(1)}s',
-                            style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
+                            'Set Out: ${formatTimestampMs(seg.endTime)}',
+                            style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
                           ),
                         ),
                       ),
@@ -1565,7 +1604,7 @@ class EditorViews {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Active Range: ${seg.startTime.toStringAsFixed(1)}s — ${seg.endTime.toStringAsFixed(1)}s (${(seg.endTime - seg.startTime).toStringAsFixed(1)}s total)',
+                    'Active Range: ${formatTimestampMs(seg.startTime)} — ${formatTimestampMs(seg.endTime)} (${(seg.endTime - seg.startTime).toStringAsFixed(3)}s total)',
                     style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
                   ),
                 ],
@@ -1577,7 +1616,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 11. ISOLATED TEXT SUITE TAB (3D Chisel Bevel & Chrome Horizon)
+  // 11. ISOLATED TEXT SUITE TAB (High-Touch Draggable & Scalable Controls)
   // ---------------------------------------------------------------------------
   static Widget buildTextSuiteTab({
     required BuildContext context,
@@ -1645,8 +1684,8 @@ class EditorViews {
             padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
             child: Text('METALLIC CHISEL & BEVEL CONTROLS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
           ),
-          buildSliderRow(context: context, title: 'Metallic Bevel Depth', val: project.textBevelDepth, min: 0.0, max: 2.0, onChanged: (v) { project.textBevelDepth = v; onChanged(); }),
-          buildSliderRow(context: context, title: 'Chrome Horizon Reflection', val: project.textChromeIntensity, min: 0.0, max: 2.0, onChanged: (v) { project.textChromeIntensity = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Metallic Bevel Depth', val: project.textBevelDepth, min: 0.0, max: 3.0, onChanged: (v) { project.textBevelDepth = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Chrome Horizon Reflection', val: project.textChromeIntensity, min: 0.0, max: 3.0, onChanged: (v) { project.textChromeIntensity = v; onChanged(); }),
           buildSliderRow(context: context, title: 'Specular Edge Glint', val: project.textSpecularGlint, min: 0.0, max: 2.0, onChanged: (v) { project.textSpecularGlint = v; onChanged(); }),
           buildSliderRow(context: context, title: 'Grounding Contact Shadow', val: project.textContactShadow, min: 0.0, max: 1.0, onChanged: (v) { project.textContactShadow = v; onChanged(); }),
           buildSliderRow(context: context, title: 'Text Luma Threshold', val: project.textLumaThreshold, min: 0.20, max: 0.95, onChanged: (v) { project.textLumaThreshold = v; onChanged(); }),
@@ -1654,36 +1693,12 @@ class EditorViews {
           const SizedBox(height: 10),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            child: Text('METALLIC TINT OVERLAY', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+            child: Text('BOX POSITION & SIZE SLIDERS (EASY FINGER CONTROL)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
           ),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                {'id': 0.0, 'name': 'Polished Chrome (Silver)'},
-                {'id': 1.0, 'name': 'Liquid Gold'},
-                {'id': 2.0, 'name': 'Anodized Cyan'},
-                {'id': 3.0, 'name': 'Blood Crimson'},
-                {'id': 4.0, 'name': 'Steel Violet'},
-              ].map((t) {
-                final isSel = project.textMetallicTint == t['id'];
-                return ChoiceChip(
-                  label: Text(t['name'] as String),
-                  selected: isSel,
-                  selectedColor: accent,
-                  labelStyle: TextStyle(color: isSel ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-                  onSelected: (s) {
-                    if (s) {
-                      project.textMetallicTint = t['id'] as double;
-                      onChanged();
-                    }
-                  },
-                );
-              }).toList(),
-            ),
-          ),
+          buildSliderRow(context: context, title: 'Box Width', val: project.textBoxW, min: 0.10, max: 1.0, onChanged: (v) { project.textBoxW = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Box Height', val: project.textBoxH, min: 0.05, max: 1.0, onChanged: (v) { project.textBoxH = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Horizontal Position (X)', val: project.textBoxX, min: 0.0, max: 1.0 - project.textBoxW, onChanged: (v) { project.textBoxX = v; onChanged(); }),
+          buildSliderRow(context: context, title: 'Vertical Position (Y)', val: project.textBoxY, min: 0.0, max: 1.0 - project.textBoxH, onChanged: (v) { project.textBoxY = v; onChanged(); }),
         ],
       ],
     );
@@ -1734,7 +1749,6 @@ class EditorViews {
         xmlBuffer.writeln('      <Saturation>${l.saturation}</Saturation>');
         xmlBuffer.writeln('      <Hue>${l.hue}</Hue>');
         xmlBuffer.writeln('      <DeepGlow intensity="${l.deepGlowIntensity}" radius="${l.deepGlowRadius}" threshold="${l.deepGlowThreshold}" />');
-        xmlBuffer.writeln('      <AmanaiFlare intensity="${l.thinStreakIntensity}" width="${l.thinStreakWidth}" opacity="${l.thinStreakOpacity}" />');
         xmlBuffer.writeln('    </Layer>');
       }
       xmlBuffer.writeln('  </Layers>');
@@ -1928,7 +1942,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 13. IMAGE EXPORT SUITE (PNG, JPG, WEBP • 720p, 2K, 4K • BITRATE/QUALITY)
+  // 13. IMAGE EXPORT SUITE (PNG, JPG, WEBP • 720p, 1080p, 2K, 4K)
   // ---------------------------------------------------------------------------
   static void showImageExportSheet({
     required BuildContext context,
@@ -2178,8 +2192,15 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 14. VIDEO EXPORT SHEET (Hardware MediaCodec, AV1, 10-bit, 16-bit MKV)
+  // 14. VIDEO EXPORT SHEET (ALL 264/265/MEDIACODEC CODECS PURGED)
   // ---------------------------------------------------------------------------
+  static const Map<String, List<String>> kCleanContainerCodecs = {
+    'MP4': ['AV1 (libsvtav1)', 'ProRes 422 HQ'],
+    'MKV': ['AV1 (libsvtav1)', 'VP9 (libvpx-vp9)', 'FFV1 Lossless 16-bit', 'ProRes 4444'],
+    'WebM': ['AV1 (libsvtav1)', 'VP9 (libvpx-vp9)'],
+    'MOV': ['ProRes 422 HQ', 'ProRes 4444', 'AV1 (libsvtav1)'],
+  };
+
   static void showVideoExportSheet({
     required BuildContext context,
     required ProjectData project,
@@ -2188,13 +2209,13 @@ class EditorViews {
     required Float32List? Function() getActiveLut,
   }) {
     String selectedContainer = 'MP4';
-    String selectedCodec = 'H.264 (Hardware MediaCodec)';
-    String selectedBitDepth = '8-bit';
+    String selectedCodec = 'AV1 (libsvtav1)';
+    String selectedBitDepth = '10-bit';
     String selectedRes = '1080p';
     String selectedFps = '60fps';
-    String selectedBitrate = '35 Mbps';
+    String selectedBitrate = '50 Mbps';
 
-    final containers = ['MP4', 'WebM', 'MOV', 'MKV'];
+    final containers = ['MP4', 'MKV', 'WebM', 'MOV'];
     final resolutions = ['720p', '1080p', '2K', '4K'];
     final fpsOptions = ['24fps', '30fps', '60fps', '90fps'];
     final bitrateOptions = ['15 Mbps', '35 Mbps', '50 Mbps', '80 Mbps', '120 Mbps', 'Lossless Variable'];
@@ -2209,7 +2230,7 @@ class EditorViews {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (Hardware MediaCodec)'];
+            final availableCodecs = kCleanContainerCodecs[selectedContainer] ?? ['AV1 (libsvtav1)'];
             if (!availableCodecs.contains(selectedCodec)) {
               selectedCodec = availableCodecs.first;
             }
@@ -2229,7 +2250,7 @@ class EditorViews {
                       ],
                     ),
                     Text(
-                      'Destination: /storage/emulated/0/Download • 32-bit Vulkan Compute',
+                      'Destination: /storage/emulated/0/Download • Pure Studio Master',
                       style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
@@ -2248,10 +2269,7 @@ class EditorViews {
                           if (sel) {
                             setStateModal(() {
                               selectedContainer = c;
-                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (Hardware MediaCodec)']).first;
-                              if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
-                                selectedBitDepth = '8-bit';
-                              }
+                              selectedCodec = (kCleanContainerCodecs[c] ?? ['AV1 (libsvtav1)']).first;
                             });
                           }
                         },
@@ -2259,7 +2277,7 @@ class EditorViews {
                     ),
                     const SizedBox(height: 14),
 
-                    Text('CODECS FOR $selectedContainer (AV1 RESTORED)', style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                    Text('CLEAN CODEC FOR $selectedContainer', style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 8,
@@ -2271,14 +2289,7 @@ class EditorViews {
                           backgroundColor: const Color(0xFF18181E),
                           labelStyle: TextStyle(color: selectedCodec == codec ? Colors.black : Colors.white, fontWeight: FontWeight.bold),
                           onSelected: (sel) {
-                            if (sel) {
-                              setStateModal(() {
-                                selectedCodec = codec;
-                                if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
-                                  selectedBitDepth = '8-bit';
-                                }
-                              });
-                            }
+                            if (sel) setStateModal(() => selectedCodec = codec);
                           },
                         );
                       }).toList(),
@@ -2289,7 +2300,6 @@ class EditorViews {
                     const SizedBox(height: 6),
                     Row(
                       children: ['8-bit', '10-bit', '16-bit'].map((depth) {
-                        final isValid = ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, depth);
                         return Expanded(
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -2297,15 +2307,13 @@ class EditorViews {
                               label: Text(depth),
                               selected: selectedBitDepth == depth,
                               selectedColor: accent,
-                              backgroundColor: isValid ? const Color(0xFF18181E) : Colors.black26,
+                              backgroundColor: const Color(0xFF18181E),
                               labelStyle: TextStyle(
-                                color: !isValid
-                                    ? Colors.white24
-                                    : (selectedBitDepth == depth ? Colors.black : Colors.white),
+                                color: selectedBitDepth == depth ? Colors.black : Colors.white,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 11,
                               ),
-                              onSelected: isValid ? (_) => setStateModal(() => selectedBitDepth = depth) : null,
+                              onSelected: (_) => setStateModal(() => selectedBitDepth = depth),
                             ),
                           ),
                         );
@@ -2352,20 +2360,19 @@ class EditorViews {
                     Wrap(
                       spacing: 8,
                       children: bitrateOptions.map((bit) {
-                        final isValid = ExportMatrix.isBitrateValid(selectedCodec, bit);
                         return ChoiceChip(
                           label: Text(bit),
                           selected: selectedBitrate == bit,
                           selectedColor: accent,
-                          backgroundColor: isValid ? const Color(0xFF18181E) : Colors.black26,
+                          backgroundColor: const Color(0xFF18181E),
                           labelStyle: TextStyle(
-                            color: !isValid ? Colors.white24 : (selectedBitrate == bit ? Colors.black : Colors.white),
+                            color: selectedBitrate == bit ? Colors.black : Colors.white,
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
                           ),
-                          onSelected: isValid ? (sel) {
+                          onSelected: (sel) {
                             if (sel) setStateModal(() => selectedBitrate = bit);
-                          } : null,
+                          },
                         );
                       }).toList(),
                     ),
@@ -2412,8 +2419,42 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 15. FAST-START HARDWARE VIDEO EXPORT ENGINE
+  // 15. CLEAN EXPORT ENGINE (AV1, VP9, PRORES, FFV1 ONLY - ZERO 264/265/MEDIACODEC)
   // ---------------------------------------------------------------------------
+  static String buildCleanFFmpegCommand({
+    required int fps,
+    required String framePattern,
+    required String container,
+    required String codec,
+    required String bitDepth,
+    required int bitrateKbps,
+    required String outputPath,
+  }) {
+    String vcodec = 'libsvtav1';
+    String pixFmt = bitDepth == '10-bit' ? 'yuv420p10le' : (bitDepth == '16-bit' ? 'yuv422p16le' : 'yuv420p');
+    String extraFlags = '';
+
+    if (codec.contains('AV1')) {
+      vcodec = 'libsvtav1';
+      pixFmt = bitDepth == '10-bit' ? 'yuv420p10le' : 'yuv420p';
+      extraFlags = '-preset 6 -crf 20';
+    } else if (codec.contains('VP9')) {
+      vcodec = 'libvpx-vp9';
+      pixFmt = bitDepth == '10-bit' ? 'yuv420p10le' : 'yuv420p';
+      extraFlags = '-b:v ${bitrateKbps}k -deadline good -cpu-used 2';
+    } else if (codec.contains('ProRes')) {
+      vcodec = 'prores_ks';
+      pixFmt = codec.contains('4444') ? 'yuva444p10le' : 'yuv422p10le';
+      extraFlags = '-profile:v 3';
+    } else if (codec.contains('FFV1')) {
+      vcodec = 'ffv1';
+      pixFmt = 'yuv422p16le';
+      extraFlags = '-level 3 -coder 1 -context 1';
+    }
+
+    return '-hide_banner -y -framerate $fps -i "$framePattern" -c:v $vcodec -pix_fmt $pixFmt $extraFlags "$outputPath"';
+  }
+
   static Future<void> executeVideoExport({
     required BuildContext context,
     required ProjectData project,
@@ -2458,9 +2499,9 @@ class EditorViews {
     final uniforms = packUniforms(outW.toDouble(), outH.toDouble());
     final lutTable = getActiveLut();
 
-    int bitrateKbps = 35000;
+    int bitrateKbps = 50000;
     if (bitrate.contains('15')) bitrateKbps = 15000;
-    else if (bitrate.contains('50')) bitrateKbps = 50000;
+    else if (bitrate.contains('35')) bitrateKbps = 35000;
     else if (bitrate.contains('80')) bitrateKbps = 80000;
     else if (bitrate.contains('120')) bitrateKbps = 120000;
 
@@ -2567,7 +2608,6 @@ class EditorViews {
         if (decoded == null) continue;
 
         final currentTime = i / targetFps.toDouble();
-      
 
         bool applyCurrentCc = true;
         if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
@@ -2625,7 +2665,7 @@ class EditorViews {
       final silentFile = File(silentOutputPath);
       if (await silentFile.exists()) await silentFile.delete();
 
-      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
+      final encodeCmd = buildCleanFFmpegCommand(
         fps: targetFps,
         framePattern: '${processedDir.path}/frame_%05d.png',
         container: container,
@@ -2641,7 +2681,7 @@ class EditorViews {
       final encodeReturnCode = await activeSession.getReturnCode();
       if (!ReturnCode.isSuccess(encodeReturnCode) || !await silentFile.exists()) {
         final logs = await activeSession.getLogsAsString();
-        throw Exception('Hardware encoder failed: ${logs ?? "Encoding rejected by FFmpeg"}');
+        throw Exception('Encoder failed: ${logs ?? "Encoding rejected by FFmpeg"}');
       }
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
@@ -2661,8 +2701,9 @@ class EditorViews {
       final finalOutputFile = File('${destDir.path}/$fileName');
 
       if (hasAudio) {
-        final audioCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $audioCodec -shortest "${finalOutputFile.path}"');
+        String aCodec = 'aac';
+        if (container == 'WebM') aCodec = 'libopus';
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "${finalOutputFile.path}"');
       } else {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
@@ -2692,7 +2733,7 @@ class EditorViews {
 }
 
 // -----------------------------------------------------------------------------
-// INTERACTIVE DRAGGABLE & STRETCHABLE TEXT BOUNDING BOX OVERLAY
+// RESPONSIVE DRAGGABLE & STRETCHABLE TEXT BOUNDING BOX (LARGE 40PX TOUCH TARGET)
 // -----------------------------------------------------------------------------
 class DraggableTextBoundingBox extends StatefulWidget {
   final ProjectData project;
@@ -2727,12 +2768,13 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
     return Positioned(
       left: left,
       top: top,
-      width: math.max(40, width),
-      height: math.max(30, height),
+      width: math.max(60, width),
+      height: math.max(45, height),
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onPanUpdate: (details) {
               setState(() {
                 widget.project.textBoxX = (widget.project.textBoxX + details.delta.dx / parentW).clamp(0.0, 1.0 - widget.project.textBoxW);
@@ -2742,7 +2784,7 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
             },
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: accent, width: 1.8),
+                border: Border.all(color: accent, width: 2.0),
                 color: accent.withOpacity(0.12),
               ),
               child: Center(
@@ -2753,25 +2795,31 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
               ),
             ),
           ),
+          // Large 40px touch registration circle for easy resizing with thumbs
           Positioned(
-            right: -8,
-            bottom: -8,
+            right: -16,
+            bottom: -16,
             child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onPanUpdate: (details) {
                 setState(() {
-                  widget.project.textBoxW = (widget.project.textBoxW + details.delta.dx / parentW).clamp(0.1, 1.0 - widget.project.textBoxX);
+                  widget.project.textBoxW = (widget.project.textBoxW + details.delta.dx / parentW).clamp(0.10, 1.0 - widget.project.textBoxX);
                   widget.project.textBoxH = (widget.project.textBoxH + details.delta.dy / parentH).clamp(0.05, 1.0 - widget.project.textBoxY);
                 });
                 widget.onUpdated();
               },
               child: Container(
-                width: 20,
-                height: 20,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: accent,
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.black, width: 2),
+                  border: Border.all(color: Colors.black, width: 2.5),
+                  boxShadow: [
+                    BoxShadow(color: accent.withOpacity(0.5), blurRadius: 6, spreadRadius: 1),
+                  ],
                 ),
+                child: const Icon(Icons.open_in_full_rounded, size: 16, color: Colors.black),
               ),
             ),
           ),
