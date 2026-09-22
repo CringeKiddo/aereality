@@ -118,7 +118,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Fast lightweight thumbnail loader (No blocking multi-second FFmpeg stalls)
   Future<void> _generateThumbnails(List<StoredProject> projects) async {
     final tempDir = await getTemporaryDirectory();
     for (final p in projects) {
@@ -135,7 +134,6 @@ class _HomeScreenState extends State<HomeScreen> {
           final outThumb = '${tempDir.path}/thumb_${p.id}.jpg';
           final thumbFile = File(outThumb);
           if (!await thumbFile.exists()) {
-            // Ultra-fast low-res seek so home screen never freezes
             await FFmpegKit.execute(
               '-hide_banner -y -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=120:-1 -q:v 6 "$outThumb"',
             );
@@ -860,12 +858,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
-// =============================================================================
-// AEReality / Shaderly - Master Studio Interface (Part 2/2)
-// True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
-// 100% Complete Section - Zero Code Omissions
-// =============================================================================
-
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -1181,7 +1173,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return match.first.table;
   }
 
-  // Instant zero-stall project saving
   Future<void> _manualSaveProject() async {
     if (_project.mediaPath.isEmpty) return;
     setState(() => _isSavingProject = true);
@@ -1246,7 +1237,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[18] = _project.textBevelDepth;
     uniforms[19] = _project.textChromeIntensity;
 
-    // Offsets 20..27: Global Glow & Split Toning Uniforms (Matches GLSL UniformBlock)
+    // Offsets 20..27: Global Glow & Split Toning Uniforms
     uniforms[20] = _cur.shaderlyGlowIntensity;
     uniforms[21] = _cur.shaderlyGlowRadius;
     uniforms[22] = _cur.shaderlyGlowThreshold;
@@ -1255,7 +1246,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[25] = _cur.splitToneHighHue;
     uniforms[26] = _cur.splitToneHighSat;
     uniforms[27] = _cur.splitToneBalance;
-    uniforms[28] = 0.0;
+
+    // Offset 28: Bit-depth mode dynamic link (Prevents 10-bit & 16-bit rainbow static)
+    uniforms[28] = gEnginePrecision.toDouble();
     uniforms[29] = 0.0;
     uniforms[30] = 0.0;
     uniforms[31] = 0.0;
@@ -1645,7 +1638,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   setState(() {
                     _currentTimelinePosition = val;
                   });
-                  // Seek in real-time as finger drags across the slider
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
                   if (!gGradeActiveFrameOnly) {
                     _applyGrade();
@@ -1814,7 +1806,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       ),
                                     ),
 
-                                  // 2. Graded Vulkan Static Composite (Governed by gGradeActiveFrameOnly)
+                                  // 2. Graded Vulkan Static Composite
                                   if (hasMedia && (gGradeActiveFrameOnly ? !_isPlaying : true))
                                     FittedBox(
                                       fit: BoxFit.cover,
