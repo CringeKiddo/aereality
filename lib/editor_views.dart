@@ -2497,6 +2497,14 @@ class EditorViews {
     outH = math.max(16, ((outH + 15) ~/ 16) * 16);
 
     final uniforms = packUniforms(outW.toDouble(), outH.toDouble());
+    // Direct hardware bit-depth flag for Vulkan Compute Shader
+    if (bitDepth == '10-bit') {
+      uniforms[28] = 1.0;
+    } else if (bitDepth == '16-bit') {
+      uniforms[28] = 2.0;
+    } else {
+      uniforms[28] = 0.0;
+    }
     final lutTable = getActiveLut();
 
     int bitrateKbps = 50000;
