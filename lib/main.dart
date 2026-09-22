@@ -1247,8 +1247,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[26] = _cur.splitToneHighSat;
     uniforms[27] = _cur.splitToneBalance;
 
-    // Offset 28: Bit-depth mode dynamic link (Prevents 10-bit & 16-bit rainbow static)
-    uniforms[28] = gEnginePrecision.toDouble();
+    // For live UI preview, ALWAYS render in 8-bit RGBA8888 so Flutter can display it.
+    // High-bit depth (10-bit / 16-bit) is only used during file rendering in editor_views.dart!
+    uniforms[28] = 0.0;
     uniforms[29] = 0.0;
     uniforms[30] = 0.0;
     uniforms[31] = 0.0;
