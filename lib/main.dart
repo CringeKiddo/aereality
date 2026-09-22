@@ -139,14 +139,15 @@ class _HomeScreenState extends State<HomeScreen> {
             if (mounted) setState(() => _thumbnails[p.id] = bytes);
           } else {
             // Ultra-fast low-res seek so home screen never freezes
-            FFmpegKit.execute(
+            FFmpegKit.executeAsync(
               '-hide_banner -y -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=120:-1 -q:v 6 "$outThumb"',
-            ).then((session) async {
-              if (await thumbFile.exists() && mounted) {
-                final bytes = await thumbFile.readAsBytes();
-                setState(() => _thumbnails[p.id] = bytes);
-              }
-            });
+              (session) async {
+                if (await thumbFile.exists() && mounted) {
+                  final bytes = await thumbFile.readAsBytes();
+                  setState(() => _thumbnails[p.id] = bytes);
+                }
+              },
+            );
           }
         } catch (_) {}
       }
