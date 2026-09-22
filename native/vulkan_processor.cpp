@@ -16,7 +16,7 @@ namespace {
 
 // Push constant struct to direct the compute shader on which Dual Kawase pass to execute
 struct ComputePushConstants {
-    int32_t passIndex;   // 0: Main+Prefilter, 1: Down1, 2: Down2, 3: Up1, 4: Up0, 5: Composite
+    int32_t passIndex;   // 0: Main, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite
     int32_t passWidth;
     int32_t passHeight;
     float passRadius;
@@ -679,38 +679,48 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
 
     ComputePushConstants pc{};
 
-    // PASS 0: Main Color Grade + Highlight Prefilter -> writes Output & Level 0
+    // =========================================================================
+    // THE 7-PASS DUAL KAWASE PIPELINE DISPATCH SEQUENCE
+    // =========================================================================
+
+    // PASS 0: Main Color Grade -> writes OutputBuffer
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 1: Kawase Downsample (L0 -> L1)
-    pc = {1, wL1, hL1, 1.5f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // PASS 2: Kawase Downsample (L1 -> L2)
-    pc = {2, wL2, hL2, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
-    insertBarrier();
-
-    // PASS 3: Kawase Upsample (L2 -> L1)
-    pc = {3, wL1, hL1, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // PASS 4: Kawase Upsample (L1 -> L0)
-    pc = {4, wL0, hL0, 1.5f};
+    // PASS 1: Prefilter from OutputBuffer -> writes Kawase Level 0 (Half-Res)
+    pc = {1, wL0, hL0, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 5: Master Composite & Dual Kawase Light Wrap (L0 + Output -> Final Composite)
-    pc = {5, outWidth, outHeight, 1.0f};
+    // PASS 2: Downsample L0 -> L1 (Quarter-Res)
+    pc = {2, wL1, hL1, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 3: Downsample L1 -> L2 (Eighth-Res)
+    pc = {3, wL2, hL2, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 4: Upsample L2 -> L1
+    pc = {4, wL1, hL1, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 5: Upsample L1 -> L0
+    pc = {5, wL0, hL0, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
+    insertBarrier();
+
+    // PASS 6: Master Composite (OutputBuffer + Bilinear L0 + Bilinear L2 -> Final Output)
+    pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
 
