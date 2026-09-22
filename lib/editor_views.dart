@@ -227,7 +227,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. TONEMAPPERS TAB
+  // 2. TONEMAPPERS TAB (Updated with Khronos PBR Neutral)
   // ---------------------------------------------------------------------------
   static Widget buildTonemappersTab({
     required BuildContext context,
@@ -249,8 +249,8 @@ class EditorViews {
       },
       {
         'mode': 2.0,
-        'title': 'Shaderly Tonemapper 2 (AgX Dynamic Metal)',
-        'desc': 'Perceptual dynamic range curve protecting saturated anime colors from clipping to flat white.',
+        'title': 'Khronos PBR Neutral (Zero Highlight Clipping)',
+        'desc': 'Industry-standard color-accurate tonemapper preserving pure saturation without blown white patches.',
       },
     ];
 
@@ -464,7 +464,6 @@ class EditorViews {
       ],
     );
   }
-
   // ---------------------------------------------------------------------------
   // 5. MAGIC TAB (Magic Bullet Suite + Working Split Toning)
   // ---------------------------------------------------------------------------
@@ -610,6 +609,7 @@ class EditorViews {
       ],
     );
   }
+
   // ---------------------------------------------------------------------------
   // 8. ATMOSPHERE TAB
   // ---------------------------------------------------------------------------
@@ -1344,7 +1344,6 @@ class EditorViews {
 
     project.activeLayerIndex = 0;
   }
-
   // ---------------------------------------------------------------------------
   // UNSHARP MASK DRAWER & PRESET HELPERS
   // ---------------------------------------------------------------------------
@@ -1777,6 +1776,7 @@ class EditorViews {
       ));
     }
   }
+
   // ---------------------------------------------------------------------------
   // PRESET SAVE / IMPORT HELPERS
   // ---------------------------------------------------------------------------
@@ -2140,6 +2140,8 @@ class EditorViews {
       final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
 
       final uniforms = packUniforms(targetW.toDouble(), targetH.toDouble());
+      // For images, output is always direct 8-bit RGBA so PNG/JPG encoders function perfectly
+      uniforms[28] = 0.0;
       final lutTable = getActiveLut();
 
       final gradedBytes = processImage(rawBytes, targetW, targetH, targetW, targetH, uniforms, lutTable: lutTable);
@@ -2192,7 +2194,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 14. VIDEO EXPORT SHEET (ALL 264/265/MEDIACODEC CODECS PURGED)
+  // 14. VIDEO EXPORT SHEET
   // ---------------------------------------------------------------------------
   static const Map<String, List<String>> kCleanContainerCodecs = {
     'MP4': ['AV1 (libsvtav1)', 'ProRes 422 HQ'],
@@ -2419,7 +2421,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 15. CLEAN EXPORT ENGINE (AV1, VP9, PRORES, FFV1 ONLY - ZERO 264/265/MEDIACODEC)
+  // 15. NATIVE HIGH-BIT DEPTH CLEAN EXPORT ENGINE
   // ---------------------------------------------------------------------------
   static String buildCleanFFmpegCommand({
     required int fps,
@@ -2429,6 +2431,8 @@ class EditorViews {
     required String bitDepth,
     required int bitrateKbps,
     required String outputPath,
+    int width = 1920,
+    int height = 1080,
   }) {
     String vcodec = 'libsvtav1';
     String pixFmt = bitDepth == '10-bit' ? 'yuv420p10le' : (bitDepth == '16-bit' ? 'yuv422p16le' : 'yuv420p');
@@ -2452,7 +2456,12 @@ class EditorViews {
       extraFlags = '-level 3 -coder 1 -context 1';
     }
 
-    return '-hide_banner -y -framerate $fps -i "$framePattern" -c:v $vcodec -pix_fmt $pixFmt $extraFlags "$outputPath"';
+    final bool isHighBit = (bitDepth == '10-bit' || bitDepth == '16-bit');
+    final String inputFormat = isHighBit
+        ? '-f rawvideo -pix_fmt rgba64le -s ${width}x${height}'
+        : '';
+
+    return '-hide_banner -y $inputFormat -framerate $fps -i "$framePattern" -c:v $vcodec -pix_fmt $pixFmt $extraFlags "$outputPath"';
   }
 
   static Future<void> executeVideoExport({
@@ -2497,10 +2506,16 @@ class EditorViews {
     outH = math.max(16, ((outH + 15) ~/ 16) * 16);
 
     final uniforms = packUniforms(outW.toDouble(), outH.toDouble());
-    // Keep shader output in standard RGBA buffer so Dart PNG encoder doesn't mangle bit stride.
-    // FFmpeg's -pix_fmt yuv420p10le / yuv422p16le handles the true high-bit depth video encoding!
-    uniforms[28] = 0.0;
+    // Direct hardware bit-depth flag for Vulkan Compute Shader
+    if (bitDepth == '10-bit') {
+      uniforms[28] = 1.0;
+    } else if (bitDepth == '16-bit') {
+      uniforms[28] = 2.0;
+    } else {
+      uniforms[28] = 0.0;
+    }
     final lutTable = getActiveLut();
+
     int bitrateKbps = 50000;
     if (bitrate.contains('15')) bitrateKbps = 15000;
     else if (bitrate.contains('35')) bitrateKbps = 35000;
@@ -2510,7 +2525,7 @@ class EditorViews {
     int targetFps = int.parse(fps.replaceAll('fps', ''));
     String containerExt = container.toLowerCase();
 
-    final bool is16Bit = bitDepth == '16-bit';
+    final bool isHighBit = (bitDepth == '10-bit' || bitDepth == '16-bit');
     final progressNotifier = ValueNotifier<double>(0.0);
     final accent = gCustomAccentColor.value;
     final statusNotifier = ValueNotifier<String>('Initializing 32-bit Vulkan Engine: 0%');
@@ -2617,25 +2632,46 @@ class EditorViews {
               seg.isEnabled && currentTime >= seg.startTime && currentTime <= seg.endTime);
         }
 
-        img.Image gradedImg;
-        if (applyCurrentCc) {
-          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
-          final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
-          gradedImg = img.Image.fromBytes(
-            width: outW,
-            height: outH,
-            bytes: outputRaw8.buffer,
-            numChannels: 4,
-            order: img.ChannelOrder.rgba,
-          );
-        } else {
-          gradedImg = decoded;
-        }
-
-        final pngBytes = img.encodePng(gradedImg);
         final paddedIndex = (i + 1).toString().padLeft(5, '0');
-        final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
-        await outputFile.writeAsBytes(pngBytes);
+
+        if (isHighBit) {
+          // TRUE 10-BIT / 16-BIT: Output pure binary GPU memory buffer (Zero compression loss, zero PNG bugs!)
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final rawInput16 = Uint16List(outW * outH * 4);
+          for (int px = 0; px < rawInput8.length; px++) {
+            rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
+          }
+
+          Uint16List outputRaw16;
+          if (applyCurrentCc) {
+            outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          } else {
+            outputRaw16 = rawInput16;
+          }
+
+          final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
+          await outputFile.writeAsBytes(outputRaw16.buffer.asUint8List());
+        } else {
+          // Standard 8-bit PNG Pipeline
+          img.Image gradedImg;
+          if (applyCurrentCc) {
+            final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+            final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+            gradedImg = img.Image.fromBytes(
+              width: outW,
+              height: outH,
+              bytes: outputRaw8.buffer,
+              numChannels: 4,
+              order: img.ChannelOrder.rgba,
+            );
+          } else {
+            gradedImg = decoded;
+          }
+
+          final pngBytes = img.encodePng(gradedImg);
+          final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
+          await outputFile.writeAsBytes(pngBytes);
+        }
 
         progressNotifier.value = (i + 1) / totalFrames;
         statusNotifier.value = 'Grading frames: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
@@ -2650,14 +2686,17 @@ class EditorViews {
       final silentFile = File(silentOutputPath);
       if (await silentFile.exists()) await silentFile.delete();
 
+      final String frameExt = isHighBit ? 'raw' : 'png';
       final encodeCmd = buildCleanFFmpegCommand(
         fps: targetFps,
-        framePattern: '${processedDir.path}/frame_%05d.png',
+        framePattern: '${processedDir.path}/frame_%05d.$frameExt',
         container: container,
         codec: codec,
         bitDepth: bitDepth,
         bitrateKbps: bitrateKbps,
         outputPath: silentOutputPath,
+        width: outW,
+        height: outH,
       );
       activeSession = await FFmpegKit.execute(encodeCmd);
 
