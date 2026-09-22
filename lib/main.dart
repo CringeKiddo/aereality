@@ -1,7 +1,7 @@
 // =============================================================================
 // AEReality / Shaderly - Master Studio Interface (Part 1/2)
 // True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
-// 100% Complete File - Zero Code Omissions
+// 100% Complete Section - Zero Code Omissions
 // =============================================================================
 
 import 'dart:async';
@@ -118,6 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Fast lightweight thumbnail loader (No blocking multi-second FFmpeg stalls)
   Future<void> _generateThumbnails(List<StoredProject> projects) async {
     final tempDir = await getTemporaryDirectory();
     for (final p in projects) {
@@ -133,14 +134,19 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           final outThumb = '${tempDir.path}/thumb_${p.id}.jpg';
           final thumbFile = File(outThumb);
-          if (!await thumbFile.exists()) {
-            await FFmpegKit.execute(
-              '-hide_banner -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=160:-1 -q:v 4 -y "$outThumb"',
-            );
-          }
           if (await thumbFile.exists()) {
             final bytes = await thumbFile.readAsBytes();
             if (mounted) setState(() => _thumbnails[p.id] = bytes);
+          } else {
+            // Ultra-fast low-res seek so home screen never freezes
+            FFmpegKit.execute(
+              '-hide_banner -y -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=120:-1 -q:v 6 "$outThumb"',
+            ).then((session) async {
+              if (await thumbFile.exists() && mounted) {
+                final bytes = await thumbFile.readAsBytes();
+                setState(() => _thumbnails[p.id] = bytes);
+              }
+            });
           }
         } catch (_) {}
       }
@@ -549,7 +555,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (_recent.isNotEmpty) {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: _recent.first.data, projectName: _recent.first.name)),
+                      MaterialPageRoute(
+                        builder: (_) => ProjectScreen(
+                          initialProject: _recent.first.data,
+                          projectName: _recent.first.name,
+                          projectId: _recent.first.id,
+                        ),
+                      ),
                     ).then((_) => _load());
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved projects yet.')));
@@ -631,7 +643,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => ProjectScreen(initialProject: p.data, projectName: p.name)),
+                            MaterialPageRoute(
+                              builder: (_) => ProjectScreen(
+                                initialProject: p.data,
+                                projectName: p.name,
+                                projectId: p.id,
+                              ),
+                            ),
                           ).then((_) => _load());
                         },
                       ),
@@ -804,6 +822,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a media file first')));
                     return;
                   }
+                  final newId = 'session_${DateTime.now().millisecondsSinceEpoch}';
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
@@ -816,7 +835,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                             AdjustmentLayer(
                               id: 'layer_clean_base',
                               name: 'Base Grade',
-                              opacity: 1.0, // <-- Explicit full opacity
+                              opacity: 1.0,
                               blendMode: LayerBlendMode.normal,
                               contrast: 1.0,
                               saturation: 1.0,
@@ -825,6 +844,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                           ],
                         ),
                         projectName: _projectName,
+                        projectId: newId,
                       ),
                     ),
                   );
@@ -847,17 +867,19 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 // =============================================================================
 // AEReality / Shaderly - Master Studio Interface (Part 2/2)
 // True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
-// 100% Complete File - Zero Code Omissions
+// 100% Complete Section - Zero Code Omissions
 // =============================================================================
 
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
+  final String? projectId;
 
   const ProjectScreen({
     super.key,
     this.initialProject,
     this.projectName,
+    this.projectId,
   });
 
   @override
@@ -867,6 +889,7 @@ class ProjectScreen extends StatefulWidget {
 class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
   late ProjectData _project;
   final List<ProjectData> _undoHistory = [];
+  late String _activeSessionId;
 
   VideoPlayerController? _controller;
   bool _isPlaying = false;
@@ -899,7 +922,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    // 10 Categories: PRESETS, TONEMAP, LUT, BASIC, MAGIC, COPIED STUFF, GLOW / FLARE, ATMOSPHERE, CURVES, TIMELINE
+    _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
     _tabController = TabController(length: 10, vsync: this);
     _loadShader();
 
@@ -1069,7 +1092,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           setState(() {});
           _applyGrade();
 
-          // Continuous Timeline Position Updater
+          // Continuous Timeline Position & Playback Grading Loop
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
             if (_controller != null && _controller!.value.isInitialized && _controller!.value.isPlaying && mounted) {
               final newPos = _controller!.value.position.inMilliseconds / 1000.0;
@@ -1081,7 +1104,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 _currentTimelinePosition = newPos;
               });
 
-              // If continuous grading is enabled in settings
+              // Active shader grading while playing if switch is disabled
               if (!gGradeActiveFrameOnly) {
                 _applyGrade();
               }
@@ -1113,7 +1136,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final tempDir = await getTemporaryDirectory();
         final framePath = '${tempDir.path}/tl_frame_preview.png';
 
-        // INSTANT SEEK FIX: -ss placed before -i with -noaccurate_seek seeks in <50ms
+        // Fast native seek
         await FFmpegKit.execute(
           '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
         );
@@ -1162,11 +1185,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return match.first.table;
   }
 
+  // Instant zero-stall project saving
   Future<void> _manualSaveProject() async {
     if (_project.mediaPath.isEmpty) return;
     setState(() => _isSavingProject = true);
     final proj = StoredProject(
-      id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
+      id: _activeSessionId,
       name: widget.projectName ?? 'Shaderly Session',
       mediaPath: _project.mediaPath,
       data: _project,
@@ -1188,7 +1212,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _autoSaveProject() async {
     if (_project.mediaPath.isEmpty) return;
     final proj = StoredProject(
-      id: widget.projectName ?? 'session_${DateTime.now().millisecondsSinceEpoch}',
+      id: _activeSessionId,
       name: widget.projectName ?? 'Shaderly Session',
       mediaPath: _project.mediaPath,
       data: _project,
@@ -1226,7 +1250,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[18] = _project.textBevelDepth;
     uniforms[19] = _project.textChromeIntensity;
 
-    // Offsets 20..27: New Shaderly Glow & Split Toning Global Uniforms (Matches GLSL UniformBlock)
+    // Offsets 20..27: Global Glow & Split Toning Uniforms (Matches GLSL UniformBlock)
     uniforms[20] = _cur.shaderlyGlowIntensity;
     uniforms[21] = _cur.shaderlyGlowRadius;
     uniforms[22] = _cur.shaderlyGlowThreshold;
@@ -1570,7 +1594,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ---------------------------------------------------------------------------
-  // TIMELINE SCRUBBER & LIVE PLAYBACK CONTROLLER
+  // TIMELINE SCRUBBER (EXACT MILLISECONDS + LIVE MOVING PREVIEW)
   // ---------------------------------------------------------------------------
   Widget _buildTimelineScrubber() {
     if (_project.isImage || _controller == null || !_controller!.value.isInitialized) {
@@ -1600,18 +1624,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
           ),
           const SizedBox(width: 8),
+          // Exact Millisecond Position Output
           Text(
-            '${_currentTimelinePosition.toStringAsFixed(1)}s',
-            style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
+            EditorViews.formatTimestampMs(_currentTimelinePosition),
+            style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
           ),
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                trackHeight: 2.0,
+                trackHeight: 2.5,
                 activeTrackColor: accent,
                 inactiveTrackColor: Colors.white24,
                 thumbColor: accent,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               ),
               child: Slider(
                 value: _currentTimelinePosition.clamp(0.0, _videoDurationSeconds),
@@ -1621,7 +1646,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   setState(() {
                     _currentTimelinePosition = val;
                   });
+                  // Seek in real-time as finger drags across the slider
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
+                  if (!gGradeActiveFrameOnly) {
+                    _applyGrade();
+                  }
                 },
                 onChangeEnd: (val) {
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
@@ -1632,7 +1661,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             ),
           ),
           Text(
-            '${_videoDurationSeconds.toStringAsFixed(1)}s',
+            EditorViews.formatTimestampMs(_videoDurationSeconds),
             style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
           ),
         ],
@@ -1641,87 +1670,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ---------------------------------------------------------------------------
-  // INTERACTIVE TEXT SUITE DRAGGABLE & RESIZABLE BOUNDING BOX OVERLAY
+  // TEXT SUITE OVERLAY
   // ---------------------------------------------------------------------------
   Widget _buildTextSuiteBoundingBoxOverlay(BoxConstraints constraints) {
     if (!_project.textSuiteEnabled) return const SizedBox.shrink();
 
-    final accent = gCustomAccentColor.value;
-    final parentW = constraints.maxWidth;
-    final parentH = constraints.maxHeight;
-
-    final left = _project.textBoxX * parentW;
-    final top = _project.textBoxY * parentH;
-    final width = _project.textBoxW * parentW;
-    final height = _project.textBoxH * parentH;
-
-    return Positioned(
-      left: left,
-      top: top,
-      width: width,
-      height: height,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // The Draggable Box Body
-          GestureDetector(
-            onPanUpdate: (details) {
-              setState(() {
-                _project.textBoxX = (_project.textBoxX + (details.delta.dx / parentW)).clamp(0.0, 1.0 - _project.textBoxW);
-                _project.textBoxY = (_project.textBoxY + (details.delta.dy / parentH)).clamp(0.0, 1.0 - _project.textBoxH);
-              });
-              _applyGrade();
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: accent, width: 1.5),
-                color: accent.withOpacity(0.08),
-              ),
-              child: Stack(
-                children: [
-                  Positioned(
-                    top: 2,
-                    left: 4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(3)),
-                      child: Text(
-                        'TEXT SUITE BOX',
-                        style: TextStyle(color: accent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.6),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Bottom-Right Corner Resize Handle
-          Positioned(
-            right: -8,
-            bottom: -8,
-            child: GestureDetector(
-              onPanUpdate: (details) {
-                setState(() {
-                  _project.textBoxW = (_project.textBoxW + (details.delta.dx / parentW)).clamp(0.08, 1.0 - _project.textBoxX);
-                  _project.textBoxH = (_project.textBoxH + (details.delta.dy / parentH)).clamp(0.04, 1.0 - _project.textBoxY);
-                });
-                _applyGrade();
-              },
-              child: Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: accent,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.black, width: 2),
-                ),
-                child: const Icon(Icons.open_in_full_rounded, size: 10, color: Colors.black),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return DraggableTextBoundingBox(
+      project: _project,
+      containerSize: Size(constraints.maxWidth, constraints.maxHeight),
+      onUpdated: () => _applyGrade(),
     );
   }
 
@@ -1737,7 +1694,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           : AppBar(
               backgroundColor: const Color(0xFF0F0F14),
               elevation: 0,
-              // Back Button -> Quick Save Media Player Symbol -> Switch Media -> Controls
               leading: IconButton(
                 icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70),
                 tooltip: 'Back to Home',
@@ -1746,7 +1702,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               title: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // BUTTON: QUICK-SAVE PROJECT (SINGLE MEDIA PLAYER SYMBOL)
                   IconButton(
                     icon: _isSavingProject
                         ? const SizedBox(
@@ -1860,8 +1815,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       ),
                                     ),
 
-                                  // 2. Graded Vulkan Static Composite
-                                  if (!_isPlaying && hasMedia)
+                                  // 2. Graded Vulkan Static Composite (Governed by gGradeActiveFrameOnly)
+                                  if (hasMedia && (gGradeActiveFrameOnly ? !_isPlaying : true))
                                     FittedBox(
                                       fit: BoxFit.cover,
                                       child: SizedBox(
@@ -1875,7 +1830,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       child: CircularProgressIndicator(color: Colors.white38),
                                     ),
 
-                                  // 3. Isolated Text Suite Draggable Box Overlay
+                                  // 3. Isolated Text Suite Overlay
                                   _buildTextSuiteBoundingBoxOverlay(constraints),
                                 ],
                               ),
