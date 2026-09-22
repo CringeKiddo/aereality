@@ -134,20 +134,15 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           final outThumb = '${tempDir.path}/thumb_${p.id}.jpg';
           final thumbFile = File(outThumb);
-          if (await thumbFile.exists()) {
-            final bytes = await thumbFile.readAsBytes();
-            if (mounted) setState(() => _thumbnails[p.id] = bytes);
-          } else {
+          if (!await thumbFile.exists()) {
             // Ultra-fast low-res seek so home screen never freezes
-            FFmpegKit.executeAsync(
+            await FFmpegKit.execute(
               '-hide_banner -y -ss 0.1 -noaccurate_seek -i "${p.mediaPath}" -vframes 1 -vf scale=120:-1 -q:v 6 "$outThumb"',
-              (session) async {
-                if (await thumbFile.exists() && mounted) {
-                  final bytes = await thumbFile.readAsBytes();
-                  setState(() => _thumbnails[p.id] = bytes);
-                }
-              },
             );
+          }
+          if (await thumbFile.exists() && mounted) {
+            final bytes = await thumbFile.readAsBytes();
+            setState(() => _thumbnails[p.id] = bytes);
           }
         } catch (_) {}
       }
