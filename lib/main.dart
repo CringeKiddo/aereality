@@ -1255,11 +1255,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[25] = _cur.splitToneHighHue;
     uniforms[26] = _cur.splitToneHighSat;
     uniforms[27] = _cur.splitToneBalance;
+    uniforms[28] = 0.0;
+    uniforms[29] = 0.0;
+    uniforms[30] = 0.0;
+    uniforms[31] = 0.0;
 
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
-      // Offset 28 + (l * 64): Perfectly aligns with `LayerData layers[4]` in GLSL
-      final offset = 28 + (l * 64);
+      final offset = 32 + (l * 64);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
