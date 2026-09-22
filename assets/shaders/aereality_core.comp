@@ -392,7 +392,7 @@ vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
 }
 
 // -----------------------------------------------------------------------------
-// DUAL KAWASE BLUR TIER PACKING (Packed in RGB8 inside uint)
+// DUAL KAWASE TIER SAMPLING HELPERS
 // -----------------------------------------------------------------------------
 vec3 unpackHalfFloat(uint val) {
     float r = float(val & 0xFFu) / 255.0;
@@ -408,29 +408,35 @@ uint packHalfFloat(vec3 col) {
     return (255u << 24u) | (b << 16u) | (g << 8u) | r;
 }
 
+vec3 fetchKawaseDown(int passIdx, int x, int y, int srcW, int srcH) {
+    x = clamp(x, 0, srcW - 1);
+    y = clamp(y, 0, srcH - 1);
+    int idx = y * srcW + x;
+    return (passIdx == 1) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
+}
+
+vec3 fetchKawaseUp(int passIdx, int x, int y, int srcW, int srcH) {
+    x = clamp(x, 0, srcW - 1);
+    y = clamp(y, 0, srcH - 1);
+    int idx = y * srcW + x;
+    return (passIdx == 3) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
+}
+
 // =============================================================================
 // PASS 1 & 2: DUAL KAWASE DOWNSAMPLE (5-TAP CORNER TENT FILTER)
 // =============================================================================
 void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
-    int srcW = (passIdx == 1) ? (w * 2) : (w * 2);
-    int srcH = (passIdx == 1) ? (h * 2) : (h * 2);
-
+    int srcW = w * 2;
+    int srcH = h * 2;
     ivec2 centerCoord = coord * 2;
     int rStep = max(1, int(round(radius)));
 
-    auto fetchSrc = [&](int x, int y) -> vec3 {
-        x = clamp(x, 0, srcW - 1);
-        y = clamp(y, 0, srcH - 1);
-        int idx = y * srcW + x;
-        return (passIdx == 1) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
-    };
-
     // 5-Tap Kawase Downsample: 4 * center + 4 corners
-    vec3 sum = fetchSrc(centerCoord.x, centerCoord.y) * 4.0;
-    sum += fetchSrc(centerCoord.x - rStep, centerCoord.y - rStep);
-    sum += fetchSrc(centerCoord.x + rStep, centerCoord.y - rStep);
-    sum += fetchSrc(centerCoord.x - rStep, centerCoord.y + rStep);
-    sum += fetchSrc(centerCoord.x + rStep, centerCoord.y + rStep);
+    vec3 sum = fetchKawaseDown(passIdx, centerCoord.x, centerCoord.y, srcW, srcH) * 4.0;
+    sum += fetchKawaseDown(passIdx, centerCoord.x - rStep, centerCoord.y - rStep, srcW, srcH);
+    sum += fetchKawaseDown(passIdx, centerCoord.x + rStep, centerCoord.y - rStep, srcW, srcH);
+    sum += fetchKawaseDown(passIdx, centerCoord.x - rStep, centerCoord.y + rStep, srcW, srcH);
+    sum += fetchKawaseDown(passIdx, centerCoord.x + rStep, centerCoord.y + rStep, srcW, srcH);
     sum /= 8.0;
 
     int dstIdx = coord.y * w + coord.x;
@@ -445,30 +451,22 @@ void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radiu
 // PASS 3 & 4: DUAL KAWASE UPSAMPLE (8-TAP SMOOTH TENT BLUR)
 // =============================================================================
 void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
-    int srcW = (passIdx == 3) ? (w / 2) : (w / 2);
-    int srcH = (passIdx == 3) ? (h / 2) : (h / 2);
-
+    int srcW = w / 2;
+    int srcH = h / 2;
     ivec2 srcCoord = coord / 2;
     int rStep = max(1, int(round(radius)));
 
-    auto fetchSrc = [&](int x, int y) -> vec3 {
-        x = clamp(x, 0, srcW - 1);
-        y = clamp(y, 0, srcH - 1);
-        int idx = y * srcW + x;
-        return (passIdx == 3) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
-    };
-
     // 8-Tap Kawase Upsample Filter: 4 orthogonal (weight 2) + 4 diagonals (weight 1)
     vec3 sum = vec3(0.0);
-    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y) * 2.0;
-    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y) * 2.0;
-    sum += fetchSrc(srcCoord.x, srcCoord.y - rStep) * 2.0;
-    sum += fetchSrc(srcCoord.x, srcCoord.y + rStep) * 2.0;
+    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y, srcW, srcH) * 2.0;
+    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y, srcW, srcH) * 2.0;
+    sum += fetchKawaseUp(passIdx, srcCoord.x, srcCoord.y - rStep, srcW, srcH) * 2.0;
+    sum += fetchKawaseUp(passIdx, srcCoord.x, srcCoord.y + rStep, srcW, srcH) * 2.0;
 
-    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y - rStep);
-    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y - rStep);
-    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y + rStep);
-    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y + rStep);
+    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y - rStep, srcW, srcH);
+    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y - rStep, srcW, srcH);
+    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y + rStep, srcW, srcH);
+    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y + rStep, srcW, srcH);
     sum /= 12.0;
 
     int dstIdx = coord.y * w + coord.x;
