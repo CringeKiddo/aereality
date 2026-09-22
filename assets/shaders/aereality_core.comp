@@ -32,7 +32,7 @@ layout(std430, binding = 6) buffer KawaseL2 {
 
 // Push Constants for Multi-Pass Dual Kawase Routing
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0: Main Grade + Prefilter, 1: Down1, 2: Down2, 3: Up1, 4: Up0, 5: Composite
+    int u_passIndex;   // 0: Main Grade, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -164,7 +164,7 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
 };
 
 // -----------------------------------------------------------------------------
-// BIT-DEPTH PRECISION UNPACK & PACK ENGINES (TRUE 8-BIT, 10-BIT, AND 16-BIT)
+// BIT-DEPTH PIXEL READ & WRITE (8-Bit, 10-Bit, 16-Bit Precision)
 // -----------------------------------------------------------------------------
 vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
     if (bitMode > 1.5) {
@@ -241,13 +241,18 @@ void packRGBA_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     }
 }
 
-vec3 sRGBToLinear(vec3 c) {
-    return mix(c / 12.92, pow((c + vec3(0.055)) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+vec3 unpackHalfFloat(uint val) {
+    float r = float(val & 0xFFu) / 255.0;
+    float g = float((val >> 8u) & 0xFFu) / 255.0;
+    float b = float((val >> 16u) & 0xFFu) / 255.0;
+    return vec3(r, g, b);
 }
 
-vec3 linearToSRGB(vec3 c) {
-    c = max(c, vec3(0.0));
-    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+uint packHalfFloat(vec3 col) {
+    uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
+    uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
+    uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
+    return (255u << 24u) | (b << 16u) | (g << 8u) | r;
 }
 
 vec3 compressShoulder(vec3 c) {
@@ -266,6 +271,9 @@ vec3 hueToRGB(float h) {
     return clamp(vec3(r, g, b), 0.0, 1.0);
 }
 
+// -----------------------------------------------------------------------------
+// TONEMAPPERS
+// -----------------------------------------------------------------------------
 vec3 tonemapAnimeFilmic(vec3 x) {
     x = max(vec3(0.0), x);
     vec3 a = x * (2.2 * x + vec3(0.04));
@@ -273,11 +281,25 @@ vec3 tonemapAnimeFilmic(vec3 x) {
     return clamp(a / b, 0.0, 1.0);
 }
 
-vec3 tonemapAgX(vec3 x) {
-    x = max(vec3(0.0), x);
-    vec3 mapped = (x * (x + vec3(0.024)) - vec3(0.00009)) /
-                  (x * (0.98 * x + vec3(0.43)) + vec3(0.24));
-    return clamp(mapped, 0.0, 1.0);
+// Khronos PBR Neutral Tone Mapper (Khronos Group glTF Standard)
+vec3 tonemapKhronosPbrNeutral(vec3 color) {
+    color = max(color, vec3(0.0));
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) return color;
+
+    const float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, newPeak * vec3(1.0), g);
 }
 
 vec3 sample3DLut(vec3 color, float opacity) {
@@ -392,46 +414,78 @@ vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
 }
 
 // -----------------------------------------------------------------------------
-// DUAL KAWASE TIER SAMPLING HELPERS
+// DUAL KAWASE CONTINUOUS BILINEAR SAMPLERS (Eliminates Brick Grid Lines)
 // -----------------------------------------------------------------------------
-vec3 unpackHalfFloat(uint val) {
-    float r = float(val & 0xFFu) / 255.0;
-    float g = float((val >> 8u) & 0xFFu) / 255.0;
-    float b = float((val >> 16u) & 0xFFu) / 255.0;
-    return vec3(r, g, b);
+vec3 sampleBilinearL0(vec2 uv, int w, int h) {
+    vec2 pos = uv * vec2(w - 1, h - 1);
+    ivec2 p0 = clamp(ivec2(floor(pos)), ivec2(0), ivec2(w - 1, h - 1));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
+    vec2 f = fract(pos);
+
+    vec3 c00 = unpackHalfFloat(kawase_l0[p0.y * w + p0.x]);
+    vec3 c10 = unpackHalfFloat(kawase_l0[p0.y * w + p1.x]);
+    vec3 c01 = unpackHalfFloat(kawase_l0[p1.y * w + p0.x]);
+    vec3 c11 = unpackHalfFloat(kawase_l0[p1.y * w + p1.x]);
+
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
-uint packHalfFloat(vec3 col) {
-    uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
-    uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
-    uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
-    return (255u << 24u) | (b << 16u) | (g << 8u) | r;
+vec3 sampleBilinearL2(vec2 uv, int w, int h) {
+    vec2 pos = uv * vec2(w - 1, h - 1);
+    ivec2 p0 = clamp(ivec2(floor(pos)), ivec2(0), ivec2(w - 1, h - 1));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
+    vec2 f = fract(pos);
+
+    vec3 c00 = unpackHalfFloat(kawase_l2[p0.y * w + p0.x]);
+    vec3 c10 = unpackHalfFloat(kawase_l2[p0.y * w + p1.x]);
+    vec3 c01 = unpackHalfFloat(kawase_l2[p1.y * w + p0.x]);
+    vec3 c11 = unpackHalfFloat(kawase_l2[p1.y * w + p1.x]);
+
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
+// -----------------------------------------------------------------------------
+// PASS 1: HIGHLIGHT PREFILTER TO LEVEL 0 (Continuous 4-Tap Box Kernel)
+// -----------------------------------------------------------------------------
+void executePrefilterToL0(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
+    int x0 = clamp(coord.x * 2, 0, srcW - 1);
+    int y0 = clamp(coord.y * 2, 0, srcH - 1);
+    int x1 = clamp(x0 + 1, 0, srcW - 1);
+    int y1 = clamp(y0 + 1, 0, srcH - 1);
+
+    float bitMode = u_bitDepthMode;
+    vec3 c00 = unpackOut_Dynamic(y0 * srcW + x0, bitMode).rgb;
+    vec3 c10 = unpackOut_Dynamic(y0 * srcW + x1, bitMode).rgb;
+    vec3 c01 = unpackOut_Dynamic(y1 * srcW + x0, bitMode).rgb;
+    vec3 c11 = unpackOut_Dynamic(y1 * srcW + x1, bitMode).rgb;
+
+    vec3 avg = (c00 + c10 + c01 + c11) * 0.25;
+    float lumaVal = dot(avg, vec3(0.2126, 0.7152, 0.0722));
+
+    LayerData L = layers[0];
+    float thresh = clamp(L.deepGlowThreshold, 0.10, 0.90);
+    float knee = smoothstep(thresh, thresh + 0.22, lumaVal);
+
+    vec3 prefilter = avg * knee;
+    kawase_l0[coord.y * l0W + coord.x] = packHalfFloat(prefilter);
+}
+
+// -----------------------------------------------------------------------------
+// PASS 2 & 3: DUAL KAWASE DOWNSAMPLE (5-TAP CORNER FILTER)
+// -----------------------------------------------------------------------------
 vec3 fetchKawaseDown(int passIdx, int x, int y, int srcW, int srcH) {
     x = clamp(x, 0, srcW - 1);
     y = clamp(y, 0, srcH - 1);
     int idx = y * srcW + x;
-    return (passIdx == 1) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
+    return (passIdx == 2) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
 }
 
-vec3 fetchKawaseUp(int passIdx, int x, int y, int srcW, int srcH) {
-    x = clamp(x, 0, srcW - 1);
-    y = clamp(y, 0, srcH - 1);
-    int idx = y * srcW + x;
-    return (passIdx == 3) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
-}
-
-// =============================================================================
-// PASS 1 & 2: DUAL KAWASE DOWNSAMPLE (5-TAP CORNER TENT FILTER)
-// =============================================================================
 void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
     int srcW = w * 2;
     int srcH = h * 2;
     ivec2 centerCoord = coord * 2;
     int rStep = max(1, int(round(radius)));
 
-    // 5-Tap Kawase Downsample: 4 * center + 4 corners
     vec3 sum = fetchKawaseDown(passIdx, centerCoord.x, centerCoord.y, srcW, srcH) * 4.0;
     sum += fetchKawaseDown(passIdx, centerCoord.x - rStep, centerCoord.y - rStep, srcW, srcH);
     sum += fetchKawaseDown(passIdx, centerCoord.x + rStep, centerCoord.y - rStep, srcW, srcH);
@@ -440,23 +494,29 @@ void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radiu
     sum /= 8.0;
 
     int dstIdx = coord.y * w + coord.x;
-    if (passIdx == 1) {
+    if (passIdx == 2) {
         kawase_l1[dstIdx] = packHalfFloat(sum);
     } else {
         kawase_l2[dstIdx] = packHalfFloat(sum);
     }
 }
 
-// =============================================================================
-// PASS 3 & 4: DUAL KAWASE UPSAMPLE (8-TAP SMOOTH TENT BLUR)
-// =============================================================================
+// -----------------------------------------------------------------------------
+// PASS 4 & 5: DUAL KAWASE UPSAMPLE (8-TAP TENT FILTER)
+// -----------------------------------------------------------------------------
+vec3 fetchKawaseUp(int passIdx, int x, int y, int srcW, int srcH) {
+    x = clamp(x, 0, srcW - 1);
+    y = clamp(y, 0, srcH - 1);
+    int idx = y * srcW + x;
+    return (passIdx == 4) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
+}
+
 void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
     int srcW = w / 2;
     int srcH = h / 2;
     ivec2 srcCoord = coord / 2;
     int rStep = max(1, int(round(radius)));
 
-    // 8-Tap Kawase Upsample Filter: 4 orthogonal (weight 2) + 4 diagonals (weight 1)
     vec3 sum = vec3(0.0);
     sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y, srcW, srcH) * 2.0;
     sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y, srcW, srcH) * 2.0;
@@ -470,7 +530,7 @@ void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius)
     sum /= 12.0;
 
     int dstIdx = coord.y * w + coord.x;
-    if (passIdx == 3) {
+    if (passIdx == 4) {
         vec3 existing = unpackHalfFloat(kawase_l1[dstIdx]);
         kawase_l1[dstIdx] = packHalfFloat(mix(existing, sum, 0.50));
     } else {
@@ -479,20 +539,21 @@ void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius)
     }
 }
 
-// =============================================================================
-// PASS 5: MASTER COMPOSITE (Dual Kawase Cloud + Color Grade + Line Protection)
-// =============================================================================
+// -----------------------------------------------------------------------------
+// PASS 6: MASTER MULTI-GLOW RECONSTRUCTION & COMPOSITE
+// -----------------------------------------------------------------------------
 void executeKawaseComposite(ivec2 coord, int width, int height) {
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
     vec4 gradedPixel = unpackOut_Dynamic(pixelIndex, bitMode);
     vec3 finalCol = gradedPixel.rgb;
 
-    int l0X = clamp(coord.x / 2, 0, (width / 2) - 1);
-    int l0Y = clamp(coord.y / 2, 0, (height / 2) - 1);
-    vec3 bloomCloud = unpackHalfFloat(kawase_l0[l0Y * (width / 2) + l0X]);
-
+    vec2 uv = vec2(coord) / vec2(width, height);
     LayerData L = layers[0];
+
+    // Smooth Continuous Bilinear Sampling across Pyramid Tiers (No Nearest Grids)
+    vec3 tightBloom = sampleBilinearL0(uv, width / 2, height / 2);      // Level 0 (Tight highlight wrap)
+    vec3 wideAtmosphere = sampleBilinearL2(uv, width / 8, height / 8);  // Level 2 (Deep cinematic falloff)
 
     // Compute Sobel line edge so ink lines stay 100% sharp and clean
     float resScale = float(max(width, height)) / 720.0;
@@ -501,15 +562,14 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             ivec2 c = clamp(coord + ivec2(x * edgeStep, y * edgeStep), ivec2(0), ivec2(width - 1, height - 1));
-            vec4 p = unpackOut_Dynamic(c.y * width + c.x, bitMode);
-            float lum = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
+            float lum = dot(unpackOut_Dynamic(c.y * width + c.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
             gx += lum * float(x) * ((y == 0) ? 2.0 : 1.0);
             gy += lum * float(y) * ((x == 0) ? 2.0 : 1.0);
         }
     }
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
 
-    // Apply Tint
+    // Dynamic Tint Profiles
     vec3 glowTint = vec3(1.0);
     if (L.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
     else if (L.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
@@ -518,20 +578,31 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
     else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
     else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
 
-    // 1. DUAL KAWASE CONTINUOUS BLOOM COMPOSITE (Zero Ghost Duplicates)
-    float totalGlowWeight = L.deepGlowIntensity + u_shaderlyGlowIntensity + L.sapphireGlowWidth;
-    if (totalGlowWeight > 0.01) {
-        vec3 finalBloom = bloomCloud * glowTint * (totalGlowWeight * 1.25);
-        // Light wraps AROUND the character, ink line is never washed out
-        finalBloom *= (1.0 - lineEdge * 0.65);
-        finalBloom = compressShoulder(finalBloom);
+    // 1. DEEP GLOW: Wide Atmospheric Inverse-Square Bloom with Line Protection
+    if (L.deepGlowIntensity > 0.01) {
+        float deepFalloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.5);
+        vec3 deepBloom = wideAtmosphere * glowTint * (L.deepGlowIntensity * 1.4 * deepFalloff);
+        deepBloom *= (1.0 - lineEdge * 0.60);
+        finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(compressShoulder(deepBloom), 0.0, 0.85));
+    }
 
-        finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(finalBloom, 0.0, 0.88));
+    // 2. SHADERLY SOFT BLOOM: Localized Soft-Knee Skin Tone Wrap
+    if (u_shaderlyGlowIntensity > 0.01) {
+        vec3 softBloom = tightBloom * (u_shaderlyGlowIntensity * 1.25);
+        softBloom *= (1.0 - lineEdge * 0.40);
+        finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(compressShoulder(softBloom), 0.0, 0.80));
+    }
+
+    // 3. SAPPHIRE S_GLOW: Specular Edge Acutance
+    if (L.sapphireGlowWidth > 0.01) {
+        float specularEdgeMask = smoothstep(0.12, 0.45, lineEdge);
+        vec3 sGlow = tightBloom * specularEdgeMask * (L.sapphireGlowWidth * 1.6);
+        finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(compressShoulder(sGlow), 0.0, 0.85));
     }
 
     // Master Tonemapping
     if (u_tonemapMode == 1.0) finalCol = tonemapAnimeFilmic(finalCol);
-    else if (u_tonemapMode == 2.0) finalCol = tonemapAgX(finalCol);
+    else if (u_tonemapMode == 2.0) finalCol = tonemapKhronosPbrNeutral(finalCol);
 
     // Adaptive Dither
     if (u_ditherStrength > 0.01) {
@@ -544,7 +615,7 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
 }
 
 // =============================================================================
-// MAIN ENTRY POINT
+// MAIN DISPATCH ROUTER
 // =============================================================================
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
@@ -553,20 +624,22 @@ void main() {
 
     if (coord.x >= width || coord.y >= height) return;
 
-    // Route to the appropriate Dual Kawase Pass
-    if (u_passIndex == 1 || u_passIndex == 2) {
+    if (u_passIndex == 1) {
+        executePrefilterToL0(coord, width, height, int(u_imgWidth), int(u_imgHeight));
+        return;
+    } else if (u_passIndex == 2 || u_passIndex == 3) {
         executeKawaseDownsample(u_passIndex, coord, width, height, u_passRadius);
         return;
-    } else if (u_passIndex == 3 || u_passIndex == 4) {
+    } else if (u_passIndex == 4 || u_passIndex == 5) {
         executeKawaseUpsample(u_passIndex, coord, width, height, u_passRadius);
         return;
-    } else if (u_passIndex == 5) {
+    } else if (u_passIndex == 6) {
         executeKawaseComposite(coord, width, height);
         return;
     }
 
     // -------------------------------------------------------------------------
-    // PASS 0: FULL COLOR GRADE PIPELINE (100% OF YOUR ORIGINAL FILTERS INTACT)
+    // PASS 0: FULL COLOR GRADE PIPELINE (100% OF ORIGINAL FILTERS INTACT)
     // -------------------------------------------------------------------------
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
@@ -599,7 +672,7 @@ void main() {
 
         vec3 layerColor = currentComposite;
 
-        // 1. TILT-SHIFT DEPTH OF FIELD
+        // 1. Tilt-Shift Depth of Field
         if (L.depthOfField > 0.01) {
             float normY = float(coord.y) / float(height);
             float dofDist = abs(normY - L.dofFocus);
@@ -620,7 +693,7 @@ void main() {
             }
         }
 
-        // 2. EDGE CHROMATIC ABERRATION
+        // 2. Edge Chromatic Aberration
         if (L.lineChromaStrength > 0.001 && lineEdge > 0.05) {
             float edgeFactor = smoothstep(0.08, 0.35, lineEdge);
             ivec2 shift = ivec2(edgeNormal * (L.lineChromaStrength * 3.0 * resScale));
@@ -639,7 +712,7 @@ void main() {
             layerColor.b = unpackRGBA_Dynamic(bCoord.y * width + bCoord.x, bitMode).b;
         }
 
-        // 4. REAL WIDE BILATERAL DENOISE
+        // 4. Real Wide Bilateral Denoise
         if (L.denoise > 0.01) {
             vec3 centerCol = layerColor;
             vec3 denoiseSum = centerCol;
@@ -697,7 +770,7 @@ void main() {
             layerColor += detail * (L.sharpness * 1.5);
         }
 
-        // 7. Sobel Cel Line Darkeners
+        // 7. Cel Line Darkeners
         if (L.darkOutlines > 0.01) {
             float outlineFactor = smoothstep(0.12, 0.40, lineEdge);
             layerColor = mix(layerColor, vec3(0.0), outlineFactor * L.darkOutlines * 0.75);
@@ -714,9 +787,7 @@ void main() {
         }
 
         // 9. Exposure, Contrast & Shadows
-        if (abs(L.brightness) > 0.001) {
-            layerColor *= pow(2.0, L.brightness * 1.4);
-        }
+        if (abs(L.brightness) > 0.001) layerColor *= pow(2.0, L.brightness * 1.4);
         layerColor = (layerColor - 0.18) * L.contrast + 0.18;
 
         if (L.blackCrush > 0.01) {
@@ -724,11 +795,8 @@ void main() {
         }
 
         float luma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-        float sWeight = 1.0 - smoothstep(0.0, 0.45, luma);
-        layerColor += layerColor * (L.shadows * sWeight * 0.30);
-
-        float hWeight = smoothstep(0.55, 1.0, luma);
-        layerColor += layerColor * (L.highlights * hWeight * 0.30);
+        layerColor += layerColor * (L.shadows * (1.0 - smoothstep(0.0, 0.45, luma)) * 0.30);
+        layerColor += layerColor * (L.highlights * smoothstep(0.55, 1.0, luma) * 0.30);
         layerColor = pow(max(layerColor, vec3(0.0)), vec3(1.0 / max(L.gamma, 0.001)));
 
         // 10. Magic Mojo II
@@ -752,11 +820,10 @@ void main() {
         if (L.cosmoCleanHighlight > 0.01) {
             float faceMask = smoothstep(0.50, 0.85, luma) * (1.0 - lineEdge);
             float skinLuma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-            vec3 neutralHighlight = mix(layerColor, vec3(skinLuma), 0.30);
-            layerColor = mix(layerColor, neutralHighlight, faceMask * L.cosmoCleanHighlight * 0.45);
+            layerColor = mix(layerColor, mix(layerColor, vec3(skinLuma), 0.30), faceMask * L.cosmoCleanHighlight * 0.45);
         }
 
-        // 13. Spline Curves
+        // 13. Spline Curves (Catmull-Rom)
         layerColor.r = evalCatmullRom(layerColor.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
         layerColor.g = mix(layerColor.g, L.curveG2, 0.15 * (L.curveG2 - 0.5));
         layerColor.b = mix(layerColor.b, L.curveB2, 0.15 * (L.curveB2 - 0.5));
@@ -780,18 +847,16 @@ void main() {
             layerColor = clamp(hueMat * layerColor, 0.0, 1.0);
         }
 
-        // 15. SPLIT TONING
+        // 15. Split Toning
         if (u_splitToneShadowSat > 0.01 || u_splitToneHighSat > 0.01) {
             vec3 sTint = hueToRGB(u_splitToneShadowHue);
             vec3 hTint = hueToRGB(u_splitToneHighHue);
             float pivot = clamp(0.5 + u_splitToneBalance * 0.35, 0.1, 0.9);
-            float sFac = smoothstep(pivot, 0.0, luma) * u_splitToneShadowSat * 0.65;
-            float hFac = smoothstep(pivot, 1.0, luma) * u_splitToneHighSat * 0.65;
-            layerColor = mix(layerColor, layerColor * (sTint * 1.6 + vec3(0.1)), sFac);
-            layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), hFac);
+            layerColor = mix(layerColor, layerColor * (sTint * 1.6 + vec3(0.1)), smoothstep(pivot, 0.0, luma) * u_splitToneShadowSat * 0.65);
+            layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), smoothstep(pivot, 1.0, luma) * u_splitToneHighSat * 0.65);
         }
 
-        // 16. 4-POINT STAR SPARKLE GLINT
+        // 16. 4-Point Star Sparkle Glint
         if (u_copiedStarGlint > 0.01 && luma > 0.72) {
             float glint = 0.0;
             int gSpan = int(clamp(u_copiedStarGlint * 16.0 * resScale, 4.0, 24.0));
@@ -806,41 +871,38 @@ void main() {
             layerColor += vec3(glint);
         }
 
-        // 17. REAL 1D ANAMORPHIC FLARES
+        // =====================================================================
+        // 17. TRUE OPTICAL ANAMORPHIC FLARES (Smooth Exponential Falloff)
+        // =====================================================================
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            float halfSpan = clamp(L.thinStreakWidth * float(width) * 0.35, 30.0, float(width) * 0.5);
+            float halfSpan = clamp(L.thinStreakWidth * float(width) * 0.40, 40.0, float(width) * 0.5);
             vec3 flareAccum = vec3(0.0);
             float totalW = 0.0;
-            float vRadius = max(1.0, 2.5 * resScale);
+            vec3 anamorphicCyan = vec3(0.70, 0.90, 1.15); // Glass coating tint
 
             for (int s = -24; s <= 24; s++) {
                 float normX = float(s) / 24.0;
                 float pixelDist = normX * halfSpan;
-                float falloffX = exp(-2.8 * normX * normX);
+                float falloffX = exp(-3.0 * normX * normX);
 
-                for (int vy = -1; vy <= 1; vy++) {
-                    float falloffY = (vy == 0) ? 1.0 : 0.5;
-                    ivec2 sc = clamp(coord + ivec2(int(pixelDist), int(float(vy) * vRadius)), ivec2(0), ivec2(width - 1, height - 1));
-                    vec3 srcCol = unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb;
-                    float srcLuma = dot(srcCol, vec3(0.2126, 0.7152, 0.0722));
+                ivec2 sc = clamp(coord + ivec2(int(pixelDist), 0), ivec2(0), ivec2(width - 1, height - 1));
+                vec3 srcCol = unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb;
+                float srcLuma = dot(srcCol, vec3(0.2126, 0.7152, 0.0722));
 
-                    float highlightEnergy = smoothstep(0.70, 0.98, srcLuma);
-                    if (highlightEnergy > 0.001) {
-                        float w = falloffX * falloffY;
-                        flareAccum += srcCol * highlightEnergy * w;
-                        totalW += w;
-                    }
+                float highlightEnergy = smoothstep(0.75, 0.98, srcLuma);
+                if (highlightEnergy > 0.001) {
+                    flareAccum += srcCol * highlightEnergy * falloffX * anamorphicCyan;
+                    totalW += falloffX;
                 }
             }
 
             if (totalW > 0.001) {
-                vec3 flareBeam = (flareAccum / totalW) * (L.thinStreakIntensity * 2.2) * L.thinStreakOpacity;
-                flareBeam = compressShoulder(flareBeam);
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(flareBeam, 0.0, 0.80));
+                vec3 flareBeam = (flareAccum / totalW) * (L.thinStreakIntensity * 2.5) * L.thinStreakOpacity;
+                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(compressShoulder(flareBeam), 0.0, 0.85));
             }
         }
 
-        // 18. VOLUMETRIC GOD RAYS
+        // 18. Volumetric God Rays
         if (L.bslaGodRays > 0.01) {
             vec2 sunPos = vec2(float(width) * 0.5, float(height) * 0.05);
             vec2 rayDir = normalize(vec2(coord) - sunPos + vec2(0.001));
@@ -864,8 +926,7 @@ void main() {
 
             if (rayWeight > 0.001) {
                 vec3 radiantShafts = (rayAccum / rayWeight) * (L.bslaGodRays * 2.0);
-                vec3 warmSun = vec3(1.15, 1.05, 0.85);
-                radiantShafts = compressShoulder(radiantShafts * warmSun);
+                radiantShafts = compressShoulder(radiantShafts * vec3(1.15, 1.05, 0.85));
                 layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(radiantShafts, 0.0, 0.75));
             }
         }
@@ -903,27 +964,20 @@ void main() {
         // 23. Radial & Boxed Vignettes
         if (L.vignette > 0.01) {
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
-            float dist = length(uv);
-            float vig = smoothstep(0.75, 0.15, dist * (0.7 + L.vignette * 0.8));
-            layerColor *= clamp(vig, 0.0, 1.0);
+            layerColor *= clamp(smoothstep(0.75, 0.15, length(uv) * (0.7 + L.vignette * 0.8)), 0.0, 1.0);
         }
         if (L.vignetteBoxed > 0.01) {
             vec2 uv = abs((vec2(coord) / vec2(width, height)) - 0.5) * 2.0;
-            float boxDist = max(uv.x, uv.y);
-            float boxVig = smoothstep(0.95, 0.20, boxDist * (0.7 + L.vignetteBoxed * 0.8));
-            layerColor *= clamp(boxVig, 0.0, 1.0);
+            layerColor *= clamp(smoothstep(0.95, 0.20, max(uv.x, uv.y) * (0.7 + L.vignetteBoxed * 0.8)), 0.0, 1.0);
         }
 
         // 24. Centre Aura & Horizontal Ramp
         vec2 uv = vec2(coord) / vec2(width, height);
         if (L.centerAura > 0.01) {
-            float dist = length(uv - 0.5);
-            float aura = smoothstep(0.60, 0.0, dist) * L.centerAura * 0.30;
-            layerColor += vec3(aura);
+            layerColor += vec3(smoothstep(0.60, 0.0, length(uv - 0.5)) * L.centerAura * 0.30);
         }
         if (u_horizontalRamp > 0.01) {
-            float ramp = smoothstep(0.35, 0.65, uv.y) * u_horizontalRamp * 0.30;
-            layerColor *= (1.0 + ramp);
+            layerColor *= (1.0 + smoothstep(0.35, 0.65, uv.y) * u_horizontalRamp * 0.30);
         }
 
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
@@ -942,19 +996,14 @@ void main() {
             if (textMask > 0.01) {
                 vec3 N = normalize(vec3(edgeNormal.x * (u_textBevelDepth * resScale), edgeNormal.y * (u_textBevelDepth * resScale), 1.0));
                 vec3 L_dir = normalize(vec3(0.35, -0.65, 0.65));
-                float NdotL = max(0.0, dot(N, L_dir));
-
                 float reflY = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-                float chromeReflection = sin(reflY * 6.28318) * 0.5 + 0.5;
-                chromeReflection = pow(chromeReflection, 2.0) * u_textChromeIntensity;
+                float chromeReflection = pow(sin(reflY * 6.28318) * 0.5 + 0.5, 2.0) * u_textChromeIntensity;
 
                 vec3 V = vec3(0.0, 0.0, 1.0);
                 vec3 H = normalize(L_dir + V);
                 float spec = pow(max(0.0, dot(N, H)), 24.0) * 1.8;
 
-                vec3 chromeColor = mix(vec3(0.12, 0.14, 0.18), vec3(0.95, 0.98, 1.05), chromeReflection);
-                chromeColor += vec3(spec);
-
+                vec3 chromeColor = mix(vec3(0.12, 0.14, 0.18), vec3(0.95, 0.98, 1.05), chromeReflection) + vec3(spec);
                 currentComposite = mix(currentComposite, chromeColor, textMask * 0.90);
             }
         }
@@ -965,24 +1014,6 @@ void main() {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
-    // Write base composite to OutputBuffer
+    // Write base composite to OutputBuffer for next pass
     packRGBA_Dynamic(pixelIndex, vec4(currentComposite, basePixel.a), bitMode);
-
-    // -------------------------------------------------------------------------
-    // WRITE TO DUAL KAWASE LEVEL 0 BUFFER (Prefilter Highlights & Edge Outward Rays)
-    // -------------------------------------------------------------------------
-    if ((coord.x % 2 == 0) && (coord.y % 2 == 0)) {
-        int l0Idx = (coord.y / 2) * (width / 2) + (coord.x / 2);
-        float lumaVal = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
-
-        // Soft-knee highlight threshold for Deep Glow & Soft Bloom
-        float thresh = clamp(layers[0].deepGlowThreshold, 0.15, 0.88);
-        float knee = smoothstep(thresh, thresh + 0.20, lumaVal);
-
-        // Sapphire S_Glow and S_EdgeRays: Outward edge radiance
-        float edgeRadiance = smoothstep(0.10, 0.40, lineEdge) * smoothstep(0.35, 0.85, lumaVal) * (u_copiedEdgeRays * 1.4);
-
-        vec3 prefilterGlow = currentComposite * max(knee, edgeRadiance);
-        kawase_l0[l0Idx] = packHalfFloat(prefilterGlow);
-    }
 }
