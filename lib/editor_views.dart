@@ -2619,32 +2619,15 @@ class EditorViews {
 
         img.Image gradedImg;
         if (applyCurrentCc) {
-          if (is16Bit) {
-            final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
-            final rawInput16 = Uint16List(outW * outH * 4);
-            for (int px = 0; px < rawInput8.length; px++) {
-              rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
-            }
-            final outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms, lutTable: lutTable);
-            gradedImg = img.Image.fromBytes(
-              width: outW,
-              height: outH,
-              bytes: outputRaw16.buffer,
-              numChannels: 4,
-              format: img.Format.uint16,
-              order: img.ChannelOrder.rgba,
-            );
-          } else {
-            final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
-            final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
-            gradedImg = img.Image.fromBytes(
-              width: outW,
-              height: outH,
-              bytes: outputRaw8.buffer,
-              numChannels: 4,
-              order: img.ChannelOrder.rgba,
-            );
-          }
+          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+          gradedImg = img.Image.fromBytes(
+            width: outW,
+            height: outH,
+            bytes: outputRaw8.buffer,
+            numChannels: 4,
+            order: img.ChannelOrder.rgba,
+          );
         } else {
           gradedImg = decoded;
         }
