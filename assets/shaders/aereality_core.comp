@@ -1,11 +1,14 @@
 #version 450
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
+// =============================================================================
+// STORAGE BUFFER BINDINGS
+// =============================================================================
 layout(std430, binding = 0) readonly buffer InputBuffer {
     uint in_pixels[];
 };
 
-layout(std430, binding = 1) writeonly buffer OutputBuffer {
+layout(std430, binding = 1) buffer OutputBuffer {
     uint out_pixels[];
 };
 
@@ -14,6 +17,30 @@ layout(std430, binding = 3) readonly buffer LutBuffer {
     float lut_table[];
 };
 
+// Dual Kawase Downsampled Pyramid Storage Buffers
+layout(std430, binding = 4) buffer KawaseL0 {
+    uint kawase_l0[]; // 1/2 resolution
+};
+
+layout(std430, binding = 5) buffer KawaseL1 {
+    uint kawase_l1[]; // 1/4 resolution
+};
+
+layout(std430, binding = 6) buffer KawaseL2 {
+    uint kawase_l2[]; // 1/8 resolution
+};
+
+// Push Constants for Multi-Pass Dual Kawase Routing
+layout(push_constant) uniform PushConsts {
+    int u_passIndex;   // 0: Main Grade + Prefilter, 1: Down1, 2: Down2, 3: Up1, 4: Up0, 5: Composite
+    int u_passWidth;
+    int u_passHeight;
+    float u_passRadius;
+};
+
+// =============================================================================
+// UNIFORM STRUCTURES (Exact 1:1 match with main.dart and vulkan_processor.cpp)
+// =============================================================================
 struct LayerData {
     float isEnabled;              // Offset 0
     float opacity;                // Offset 1
@@ -141,7 +168,6 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
 // -----------------------------------------------------------------------------
 vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
     if (bitMode > 1.5) {
-        // TRUE 16-BIT MODE (Unpacks two consecutive 32-bit uints into 4x 16-bit floats: RG in word0, BA in word1)
         uint word0 = in_pixels[pixelIndex * 2];
         uint word1 = in_pixels[pixelIndex * 2 + 1];
         float r = float(word0 & 0xFFFFu) / 65535.0;
@@ -150,7 +176,6 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
         float a = float((word1 >> 16u) & 0xFFFFu) / 65535.0;
         return vec4(r, g, b, a);
     } else if (bitMode > 0.5) {
-        // TRUE 10-BIT MODE (RGB10A2: 10 bits R, 10 bits G, 10 bits B, 2 bits A)
         uint val = in_pixels[pixelIndex];
         float r = float(val & 0x3FFu) / 1023.0;
         float g = float((val >> 10u) & 0x3FFu) / 1023.0;
@@ -158,8 +183,33 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
         float a = float((val >> 30u) & 0x3u) / 3.0;
         return vec4(r, g, b, a);
     } else {
-        // STANDARD 8-BIT RGBA8 MODE
         uint val = in_pixels[pixelIndex];
+        float r = float(val & 0xFFu) / 255.0;
+        float g = float((val >> 8u) & 0xFFu) / 255.0;
+        float b = float((val >> 16u) & 0xFFu) / 255.0;
+        float a = float((val >> 24u) & 0xFFu) / 255.0;
+        return vec4(r, g, b, a);
+    }
+}
+
+vec4 unpackOut_Dynamic(int pixelIndex, float bitMode) {
+    if (bitMode > 1.5) {
+        uint word0 = out_pixels[pixelIndex * 2];
+        uint word1 = out_pixels[pixelIndex * 2 + 1];
+        float r = float(word0 & 0xFFFFu) / 65535.0;
+        float g = float((word0 >> 16u) & 0xFFFFu) / 65535.0;
+        float b = float(word1 & 0xFFFFu) / 65535.0;
+        float a = float((word1 >> 16u) & 0xFFFFu) / 65535.0;
+        return vec4(r, g, b, a);
+    } else if (bitMode > 0.5) {
+        uint val = out_pixels[pixelIndex];
+        float r = float(val & 0x3FFu) / 1023.0;
+        float g = float((val >> 10u) & 0x3FFu) / 1023.0;
+        float b = float((val >> 20u) & 0x3FFu) / 1023.0;
+        float a = float((val >> 30u) & 0x3u) / 3.0;
+        return vec4(r, g, b, a);
+    } else {
+        uint val = out_pixels[pixelIndex];
         float r = float(val & 0xFFu) / 255.0;
         float g = float((val >> 8u) & 0xFFu) / 255.0;
         float b = float((val >> 16u) & 0xFFu) / 255.0;
@@ -170,7 +220,6 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
 
 void packRGBA_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     if (bitMode > 1.5) {
-        // TRUE 16-BIT MODE (Packs into two consecutive 32-bit uints: 65,536 quantization levels)
         uint r = uint(clamp(col.r * 65535.0 + 0.5, 0.0, 65535.0));
         uint g = uint(clamp(col.g * 65535.0 + 0.5, 0.0, 65535.0));
         uint b = uint(clamp(col.b * 65535.0 + 0.5, 0.0, 65535.0));
@@ -178,14 +227,12 @@ void packRGBA_Dynamic(int pixelIndex, vec4 col, float bitMode) {
         out_pixels[pixelIndex * 2] = (g << 16u) | r;
         out_pixels[pixelIndex * 2 + 1] = (a << 16u) | b;
     } else if (bitMode > 0.5) {
-        // TRUE 10-BIT MODE (RGB10A2: 1,024 quantization levels per color channel)
         uint r = uint(clamp(col.r * 1023.0 + 0.5, 0.0, 1023.0));
         uint g = uint(clamp(col.g * 1023.0 + 0.5, 0.0, 1023.0));
         uint b = uint(clamp(col.b * 1023.0 + 0.5, 0.0, 1023.0));
         uint a = uint(clamp(col.a * 3.0 + 0.5, 0.0, 3.0));
         out_pixels[pixelIndex] = (a << 30u) | (b << 20u) | (g << 10u) | r;
     } else {
-        // STANDARD 8-BIT RGBA8 MODE
         uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
         uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
         uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
@@ -203,12 +250,10 @@ vec3 linearToSRGB(vec3 c) {
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 }
 
-// Optical highlight shoulder - compresses super-bright pixels smoothly without flat clipping
 vec3 compressShoulder(vec3 c) {
     return c / (vec3(1.0) + c * 0.35);
 }
 
-// Interleaved Gradient Noise for artifact-free TPDF dither
 float interleavedGradientNoise(vec2 screenPos) {
     vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(screenPos, magic.xy)));
@@ -221,7 +266,6 @@ vec3 hueToRGB(float h) {
     return clamp(vec3(r, g, b), 0.0, 1.0);
 }
 
-// Perceptual Anime Filmic Tone Mapping (replaces muddy ACES)
 vec3 tonemapAnimeFilmic(vec3 x) {
     x = max(vec3(0.0), x);
     vec3 a = x * (2.2 * x + vec3(0.04));
@@ -229,7 +273,6 @@ vec3 tonemapAnimeFilmic(vec3 x) {
     return clamp(a / b, 0.0, 1.0);
 }
 
-// Dynamic AgX curve protecting high-saturation anime neon
 vec3 tonemapAgX(vec3 x) {
     x = max(vec3(0.0), x);
     vec3 mapped = (x * (x + vec3(0.024)) - vec3(0.00009)) /
@@ -348,19 +391,190 @@ vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
     return mix(baseCol, clamp(result, 0.0, 1.0), clamp(opacity, 0.0, 1.0));
 }
 
+// -----------------------------------------------------------------------------
+// DUAL KAWASE BLUR TIER PACKING (Packed in RGB8 inside uint)
+// -----------------------------------------------------------------------------
+vec3 unpackHalfFloat(uint val) {
+    float r = float(val & 0xFFu) / 255.0;
+    float g = float((val >> 8u) & 0xFFu) / 255.0;
+    float b = float((val >> 16u) & 0xFFu) / 255.0;
+    return vec3(r, g, b);
+}
+
+uint packHalfFloat(vec3 col) {
+    uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
+    uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
+    uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
+    return (255u << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
+// =============================================================================
+// PASS 1 & 2: DUAL KAWASE DOWNSAMPLE (5-TAP CORNER TENT FILTER)
+// =============================================================================
+void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
+    int srcW = (passIdx == 1) ? (w * 2) : (w * 2);
+    int srcH = (passIdx == 1) ? (h * 2) : (h * 2);
+
+    ivec2 centerCoord = coord * 2;
+    int rStep = max(1, int(round(radius)));
+
+    auto fetchSrc = [&](int x, int y) -> vec3 {
+        x = clamp(x, 0, srcW - 1);
+        y = clamp(y, 0, srcH - 1);
+        int idx = y * srcW + x;
+        return (passIdx == 1) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
+    };
+
+    // 5-Tap Kawase Downsample: 4 * center + 4 corners
+    vec3 sum = fetchSrc(centerCoord.x, centerCoord.y) * 4.0;
+    sum += fetchSrc(centerCoord.x - rStep, centerCoord.y - rStep);
+    sum += fetchSrc(centerCoord.x + rStep, centerCoord.y - rStep);
+    sum += fetchSrc(centerCoord.x - rStep, centerCoord.y + rStep);
+    sum += fetchSrc(centerCoord.x + rStep, centerCoord.y + rStep);
+    sum /= 8.0;
+
+    int dstIdx = coord.y * w + coord.x;
+    if (passIdx == 1) {
+        kawase_l1[dstIdx] = packHalfFloat(sum);
+    } else {
+        kawase_l2[dstIdx] = packHalfFloat(sum);
+    }
+}
+
+// =============================================================================
+// PASS 3 & 4: DUAL KAWASE UPSAMPLE (8-TAP SMOOTH TENT BLUR)
+// =============================================================================
+void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
+    int srcW = (passIdx == 3) ? (w / 2) : (w / 2);
+    int srcH = (passIdx == 3) ? (h / 2) : (h / 2);
+
+    ivec2 srcCoord = coord / 2;
+    int rStep = max(1, int(round(radius)));
+
+    auto fetchSrc = [&](int x, int y) -> vec3 {
+        x = clamp(x, 0, srcW - 1);
+        y = clamp(y, 0, srcH - 1);
+        int idx = y * srcW + x;
+        return (passIdx == 3) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
+    };
+
+    // 8-Tap Kawase Upsample Filter: 4 orthogonal (weight 2) + 4 diagonals (weight 1)
+    vec3 sum = vec3(0.0);
+    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y) * 2.0;
+    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y) * 2.0;
+    sum += fetchSrc(srcCoord.x, srcCoord.y - rStep) * 2.0;
+    sum += fetchSrc(srcCoord.x, srcCoord.y + rStep) * 2.0;
+
+    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y - rStep);
+    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y - rStep);
+    sum += fetchSrc(srcCoord.x - rStep, srcCoord.y + rStep);
+    sum += fetchSrc(srcCoord.x + rStep, srcCoord.y + rStep);
+    sum /= 12.0;
+
+    int dstIdx = coord.y * w + coord.x;
+    if (passIdx == 3) {
+        vec3 existing = unpackHalfFloat(kawase_l1[dstIdx]);
+        kawase_l1[dstIdx] = packHalfFloat(mix(existing, sum, 0.50));
+    } else {
+        vec3 existing = unpackHalfFloat(kawase_l0[dstIdx]);
+        kawase_l0[dstIdx] = packHalfFloat(mix(existing, sum, 0.50));
+    }
+}
+
+// =============================================================================
+// PASS 5: MASTER COMPOSITE (Dual Kawase Cloud + Color Grade + Line Protection)
+// =============================================================================
+void executeKawaseComposite(ivec2 coord, int width, int height) {
+    int pixelIndex = coord.y * width + coord.x;
+    float bitMode = u_bitDepthMode;
+    vec4 gradedPixel = unpackOut_Dynamic(pixelIndex, bitMode);
+    vec3 finalCol = gradedPixel.rgb;
+
+    int l0X = clamp(coord.x / 2, 0, (width / 2) - 1);
+    int l0Y = clamp(coord.y / 2, 0, (height / 2) - 1);
+    vec3 bloomCloud = unpackHalfFloat(kawase_l0[l0Y * (width / 2) + l0X]);
+
+    LayerData L = layers[0];
+
+    // Compute Sobel line edge so ink lines stay 100% sharp and clean
+    float resScale = float(max(width, height)) / 720.0;
+    int edgeStep = max(1, int(round(resScale)));
+    float gx = 0.0, gy = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            ivec2 c = clamp(coord + ivec2(x * edgeStep, y * edgeStep), ivec2(0), ivec2(width - 1, height - 1));
+            vec4 p = unpackOut_Dynamic(c.y * width + c.x, bitMode);
+            float lum = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
+            gx += lum * float(x) * ((y == 0) ? 2.0 : 1.0);
+            gy += lum * float(y) * ((x == 0) ? 2.0 : 1.0);
+        }
+    }
+    float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
+
+    // Apply Tint
+    vec3 glowTint = vec3(1.0);
+    if (L.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
+    else if (L.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
+    else if (L.edgeGlowTint == 3.0) glowTint = vec3(1.25, 0.85, 0.40);
+    else if (L.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30);
+    else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
+    else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
+
+    // 1. DUAL KAWASE CONTINUOUS BLOOM COMPOSITE (Zero Ghost Duplicates)
+    float totalGlowWeight = L.deepGlowIntensity + u_shaderlyGlowIntensity + L.sapphireGlowWidth;
+    if (totalGlowWeight > 0.01) {
+        vec3 finalBloom = bloomCloud * glowTint * (totalGlowWeight * 1.25);
+        // Light wraps AROUND the character, ink line is never washed out
+        finalBloom *= (1.0 - lineEdge * 0.65);
+        finalBloom = compressShoulder(finalBloom);
+
+        finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(finalBloom, 0.0, 0.88));
+    }
+
+    // Master Tonemapping
+    if (u_tonemapMode == 1.0) finalCol = tonemapAnimeFilmic(finalCol);
+    else if (u_tonemapMode == 2.0) finalCol = tonemapAgX(finalCol);
+
+    // Adaptive Dither
+    if (u_ditherStrength > 0.01) {
+        float ign = interleavedGradientNoise(vec2(coord));
+        float quantStep = bitMode > 1.5 ? (1.0 / 65535.0) : (bitMode > 0.5 ? (1.0 / 1023.0) : (1.0 / 255.0));
+        finalCol = clamp(finalCol + vec3((ign - 0.5) * quantStep * (u_ditherStrength * 3.5)), 0.0, 1.0);
+    }
+
+    packRGBA_Dynamic(pixelIndex, vec4(finalCol, gradedPixel.a), bitMode);
+}
+
+// =============================================================================
+// MAIN ENTRY POINT
+// =============================================================================
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-    int width = int(u_imgWidth > 0.0 ? u_imgWidth : gl_NumWorkGroups.x * gl_WorkGroupSize.x);
-    int height = int(u_imgHeight > 0.0 ? u_imgHeight : gl_NumWorkGroups.y * gl_WorkGroupSize.y);
+    int width = u_passWidth;
+    int height = u_passHeight;
 
     if (coord.x >= width || coord.y >= height) return;
 
+    // Route to the appropriate Dual Kawase Pass
+    if (u_passIndex == 1 || u_passIndex == 2) {
+        executeKawaseDownsample(u_passIndex, coord, width, height, u_passRadius);
+        return;
+    } else if (u_passIndex == 3 || u_passIndex == 4) {
+        executeKawaseUpsample(u_passIndex, coord, width, height, u_passRadius);
+        return;
+    } else if (u_passIndex == 5) {
+        executeKawaseComposite(coord, width, height);
+        return;
+    }
+
+    // -------------------------------------------------------------------------
+    // PASS 0: FULL COLOR GRADE PIPELINE (100% OF YOUR ORIGINAL FILTERS INTACT)
+    // -------------------------------------------------------------------------
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
     vec4 basePixel = unpackRGBA_Dynamic(pixelIndex, bitMode);
     vec3 currentComposite = basePixel.rgb;
 
-    // Adaptive Sobel: Scales with resolution so 1080p/4K exports retain thick bevels & ink edges
     float resScale = float(max(width, height)) / 720.0;
     int edgeStep = max(1, int(round(resScale)));
 
@@ -380,21 +594,6 @@ void main() {
     vec2 edgeNormal = (lineEdge > 0.05) ? normalize(vec2(gx, gy)) : vec2(0.0);
 
     int totalLayers = int(clamp(u_layerCount, 0.0, 4.0));
-
-    if (totalLayers <= 0) {
-        if (u_hasLut > 0.5) currentComposite = sample3DLut(currentComposite, u_lutOpacity);
-        if (u_tonemapMode == 1.0) currentComposite = tonemapAnimeFilmic(currentComposite);
-        else if (u_tonemapMode == 2.0) currentComposite = tonemapAgX(currentComposite);
-        
-        if (u_ditherStrength > 0.01) {
-            float ign = interleavedGradientNoise(vec2(coord));
-            float quantStep = bitMode > 1.5 ? (1.0 / 65535.0) : (bitMode > 0.5 ? (1.0 / 1023.0) : (1.0 / 255.0));
-            float dither = (ign - 0.5) * quantStep * (u_ditherStrength * 3.5);
-            currentComposite = clamp(currentComposite + vec3(dither), 0.0, 1.0);
-        }
-        packRGBA_Dynamic(pixelIndex, vec4(currentComposite, basePixel.a), bitMode);
-        return;
-    }
 
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
@@ -594,34 +793,7 @@ void main() {
             layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), hFac);
         }
 
-        // 16. SAPPHIRE S_EDGERAYS
-        if (u_copiedEdgeRays > 0.01) {
-            vec3 edgeBloom = vec3(0.0);
-            float edgeWeight = 0.0;
-            float rayRadius = max(1.5, u_copiedEdgeRays * 4.5 * resScale);
-
-            for (int r = 1; r <= 3; r++) {
-                float d = float(r) * (rayRadius / 3.0);
-                float w = exp(-float(r) * 0.85);
-
-                ivec2 pE = clamp(coord + ivec2(int(d), 0), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pW = clamp(coord - ivec2(int(d), 0), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pN = clamp(coord + ivec2(0, int(d)), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pS = clamp(coord - ivec2(0, int(d)), ivec2(0), ivec2(width - 1, height - 1));
-
-                edgeBloom += unpackRGBA_Dynamic(pE.y * width + pE.x, bitMode).rgb * w;
-                edgeBloom += unpackRGBA_Dynamic(pW.y * width + pW.x, bitMode).rgb * w;
-                edgeBloom += unpackRGBA_Dynamic(pN.y * width + pN.x, bitMode).rgb * w;
-                edgeBloom += unpackRGBA_Dynamic(pS.y * width + pS.x, bitMode).rgb * w;
-                edgeWeight += w * 4.0;
-            }
-
-            float rimFactor = smoothstep(0.08, 0.40, lineEdge) * smoothstep(0.40, 0.90, luma);
-            vec3 specularRim = (edgeBloom / max(edgeWeight, 0.001)) * (u_copiedEdgeRays * 1.10) * rimFactor;
-            layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(specularRim, 0.0, 0.80));
-        }
-
-        // 17. 4-POINT STAR SPARKLE GLINT
+        // 16. 4-POINT STAR SPARKLE GLINT
         if (u_copiedStarGlint > 0.01 && luma > 0.72) {
             float glint = 0.0;
             int gSpan = int(clamp(u_copiedStarGlint * 16.0 * resScale, 4.0, 24.0));
@@ -636,122 +808,7 @@ void main() {
             layerColor += vec3(glint);
         }
 
-        // 18. TRUE CONTINUOUS DIFFUSION DEEP GLOW
-        if (L.deepGlowIntensity > 0.01) {
-            vec3 glowTint = vec3(1.0);
-            if (L.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
-            else if (L.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
-            else if (L.edgeGlowTint == 3.0) glowTint = vec3(1.25, 0.85, 0.40);
-            else if (L.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30);
-            else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
-            else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
-
-            float maxRadius = max(4.0, L.deepGlowRadius * 48.0 * resScale);
-            float thresh = clamp(L.deepGlowThreshold, 0.20, 0.90);
-            vec3 gaussianAccum = vec3(0.0);
-            float totalWeight = 0.0;
-
-            const float goldenAngle = 2.39996323;
-            float jitter = interleavedGradientNoise(vec2(coord)) * 0.35;
-            for (int s = 1; s <= 28; s++) {
-                float rNorm = sqrt((float(s) + jitter) / 28.0);
-                float radius = rNorm * maxRadius;
-                float theta = float(s) * goldenAngle;
-                
-                ivec2 offset = ivec2(cos(theta) * radius, sin(theta) * radius);
-                ivec2 sc = clamp(coord + offset, ivec2(0), ivec2(width - 1, height - 1));
-                vec3 scCol = unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb;
-                float scLuma = dot(scCol, vec3(0.2126, 0.7152, 0.0722));
-
-                float knee = smoothstep(thresh, thresh + 0.18, scLuma);
-                float w = exp(-2.2 * rNorm * rNorm);
-                gaussianAccum += scCol * knee * w;
-                totalWeight += w;
-            }
-
-            if (totalWeight > 0.001) {
-                vec3 bloomSignal = (gaussianAccum / totalWeight) * (L.deepGlowIntensity * 1.35) * glowTint;
-                bloomSignal *= (1.0 - lineEdge * 0.45);
-                bloomSignal = compressShoulder(bloomSignal);
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(bloomSignal, 0.0, 0.85));
-            }
-        }
-
-        // 19. SHADERLY SOFT BLOOM
-        if (u_shaderlyGlowIntensity > 0.01) {
-            float maxR = max(4.0, u_shaderlyGlowRadius * 40.0 * resScale);
-            float thr = clamp(u_shaderlyGlowThreshold, 0.15, 0.85);
-            vec3 bloomSum = vec3(0.0);
-            float wSum = 0.0;
-
-            const vec2 poissonDisc[16] = vec2[](
-                vec2(-0.326, -0.406), vec2(-0.840, -0.074),
-                vec2(-0.696,  0.457), vec2(-0.203,  0.621),
-                vec2( 0.962, -0.195), vec2( 0.473, -0.480),
-                vec2( 0.519,  0.767), vec2( 0.185, -0.893),
-                vec2( 0.507,  0.064), vec2( 0.896,  0.412),
-                vec2(-0.322, -0.933), vec2(-0.792, -0.598),
-                vec2(-0.024, -0.210), vec2( 0.220,  0.340),
-                vec2(-0.380,  0.180), vec2( 0.080,  0.000)
-            );
-
-            for (int s = 0; s < 16; s++) {
-                vec2 off = poissonDisc[s] * maxR;
-                ivec2 sc = clamp(coord + ivec2(off), ivec2(0), ivec2(width - 1, height - 1));
-                vec3 scCol = unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb;
-                float scLum = dot(scCol, vec3(0.2126, 0.7152, 0.0722));
-                float scMax = max(scCol.r, max(scCol.g, scCol.b));
-                float energy = max(scLum, scMax * 0.85);
-
-                float knee = smoothstep(thr, thr + 0.20, energy);
-                float distNorm = length(poissonDisc[s]);
-                float w = exp(-2.0 * distNorm * distNorm);
-                bloomSum += scCol * knee * w;
-                wSum += w;
-            }
-
-            if (wSum > 0.001) {
-                vec3 softBloom = (bloomSum / wSum) * (u_shaderlyGlowIntensity * 1.30);
-                softBloom *= (1.0 - lineEdge * 0.40);
-                softBloom = compressShoulder(softBloom);
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(softBloom, 0.0, 0.80));
-            }
-        }
-
-        // 20. SAPPHIRE S_GLOW SPECULAR CORE
-        if (L.sapphireGlowWidth > 0.01) {
-            float sRad = max(2.0, L.sapphireGlowWidth * 16.0 * resScale);
-            float sKnee = clamp(L.sapphireGlowThreshold, 0.30, 0.88);
-            vec3 sGlowAccum = vec3(0.0);
-            float sWeightTotal = 0.0;
-
-            for (int step = 1; step <= 5; step++) {
-                float d = float(step) * (sRad / 5.0);
-                float w = exp(-d / (sRad * 0.5));
-                ivec2 pN = clamp(coord + ivec2(0, int(d)), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pS = clamp(coord - ivec2(0, int(d)), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pE = clamp(coord + ivec2(int(d), 0), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 pW = clamp(coord - ivec2(int(d), 0), ivec2(0), ivec2(width - 1, height - 1));
-
-                vec3 colN = unpackRGBA_Dynamic(pN.y * width + pN.x, bitMode).rgb;
-                vec3 colS = unpackRGBA_Dynamic(pS.y * width + pS.x, bitMode).rgb;
-                vec3 colE = unpackRGBA_Dynamic(pE.y * width + pE.x, bitMode).rgb;
-                vec3 colW = unpackRGBA_Dynamic(pW.y * width + pW.x, bitMode).rgb;
-
-                sGlowAccum += colN * smoothstep(sKnee, sKnee + 0.15, dot(colN, vec3(0.2126, 0.7152, 0.0722))) * w;
-                sGlowAccum += colS * smoothstep(sKnee, sKnee + 0.15, dot(colS, vec3(0.2126, 0.7152, 0.0722))) * w;
-                sGlowAccum += colE * smoothstep(sKnee, sKnee + 0.15, dot(colE, vec3(0.2126, 0.7152, 0.0722))) * w;
-                sGlowAccum += colW * smoothstep(sKnee, sKnee + 0.15, dot(colW, vec3(0.2126, 0.7152, 0.0722))) * w;
-                sWeightTotal += (w * 4.0);
-            }
-
-            if (sWeightTotal > 0.001) {
-                vec3 sCore = (sGlowAccum / sWeightTotal) * (L.sapphireGlowWidth * 1.10);
-                layerColor = 1.0 - (1.0 - layerColor) * (1.0 - clamp(sCore, 0.0, 0.85));
-            }
-        }
-
-        // 21. REAL 1D ANAMORPHIC FLARES
+        // 17. REAL 1D ANAMORPHIC FLARES
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
             float halfSpan = clamp(L.thinStreakWidth * float(width) * 0.35, 30.0, float(width) * 0.5);
             vec3 flareAccum = vec3(0.0);
@@ -785,7 +842,7 @@ void main() {
             }
         }
 
-        // 22. VOLUMETRIC GOD RAYS
+        // 18. VOLUMETRIC GOD RAYS
         if (L.bslaGodRays > 0.01) {
             vec2 sunPos = vec2(float(width) * 0.5, float(height) * 0.05);
             vec2 rayDir = normalize(vec2(coord) - sunPos + vec2(0.001));
@@ -815,7 +872,7 @@ void main() {
             }
         }
 
-        // 23. Volumetric Fog
+        // 19. Volumetric Fog
         if (L.bslaFogDensity > 0.01) {
             vec2 uv = vec2(coord) / vec2(width, height);
             float fogAlt = smoothstep(1.0 - L.bslaFogDepth, 0.0, uv.y);
@@ -824,7 +881,7 @@ void main() {
             layerColor = mix(layerColor, mistColor, clamp(fogAmount, 0.0, 0.65));
         }
 
-        // 24. Pro-Mist & Halation
+        // 20. Pro-Mist & Halation
         if (L.halationRadius > 0.01 || u_copiedProMist > 0.01) {
             float mistStrength = max(L.halationRadius, u_copiedProMist);
             float redBleed = smoothstep(0.55, 0.95, luma) * mistStrength * 0.25;
@@ -832,20 +889,20 @@ void main() {
             layerColor.g += redBleed * (0.20 + L.halationWarmth * 0.10);
         }
 
-        // 25. Film Grain
+        // 21. Film Grain
         if (L.filmGrain > 0.001) {
             float noise = (hash12(vec2(coord) + vec2(u_time * 17.13, u_time * 31.37)) - 0.5);
             layerColor += vec3(noise * L.filmGrain * 0.06);
         }
 
-        // 26. Micro-Pulse / Flicker
+        // 22. Micro-Pulse / Flicker
         if (L.flickerIntensity > 0.005) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.30);
         }
 
-        // 27. Radial & Boxed Vignettes
+        // 23. Radial & Boxed Vignettes
         if (L.vignette > 0.01) {
             vec2 uv = (vec2(coord) / vec2(width, height)) - 0.5;
             float dist = length(uv);
@@ -859,7 +916,7 @@ void main() {
             layerColor *= clamp(boxVig, 0.0, 1.0);
         }
 
-        // 28. Centre Aura & Horizontal Ramp
+        // 24. Centre Aura & Horizontal Ramp
         vec2 uv = vec2(coord) / vec2(width, height);
         if (L.centerAura > 0.01) {
             float dist = length(uv - 0.5);
@@ -874,7 +931,7 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
-    // 29. ISOLATED TEXT SUITE
+    // 25. ISOLATED TEXT SUITE METALLIC BEVEL
     if (u_textSuiteEnabled > 0.5) {
         vec2 normCoord = vec2(coord) / vec2(width, height);
         bool inBox = (normCoord.x >= u_textBoxX && normCoord.x <= (u_textBoxX + u_textBoxW) &&
@@ -905,25 +962,29 @@ void main() {
         }
     }
 
-    // 30. 3D LUT APPLICATION
+    // 26. 3D LUT APPLICATION
     if (u_hasLut > 0.5) {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
 
-    // 31. MASTER TONEMAPPING
-    if (u_tonemapMode == 1.0) {
-        currentComposite = tonemapAnimeFilmic(currentComposite);
-    } else if (u_tonemapMode == 2.0) {
-        currentComposite = tonemapAgX(currentComposite);
-    }
-
-    // 32. BIT-DEPTH ADAPTIVE TPDF DITHER (Quantization noise tailored to 8, 10, or 16-bit steps)
-    if (u_ditherStrength > 0.01) {
-        float ign = interleavedGradientNoise(vec2(coord));
-        float quantStep = bitMode > 1.5 ? (1.0 / 65535.0) : (bitMode > 0.5 ? (1.0 / 1023.0) : (1.0 / 255.0));
-        float tpdfDither = (ign - 0.5) * quantStep * (u_ditherStrength * 3.5);
-        currentComposite = clamp(currentComposite + vec3(tpdfDither), 0.0, 1.0);
-    }
-
+    // Write base composite to OutputBuffer
     packRGBA_Dynamic(pixelIndex, vec4(currentComposite, basePixel.a), bitMode);
+
+    // -------------------------------------------------------------------------
+    // WRITE TO DUAL KAWASE LEVEL 0 BUFFER (Prefilter Highlights & Edge Outward Rays)
+    // -------------------------------------------------------------------------
+    if ((coord.x % 2 == 0) && (coord.y % 2 == 0)) {
+        int l0Idx = (coord.y / 2) * (width / 2) + (coord.x / 2);
+        float lumaVal = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
+
+        // Soft-knee highlight threshold for Deep Glow & Soft Bloom
+        float thresh = clamp(layers[0].deepGlowThreshold, 0.15, 0.88);
+        float knee = smoothstep(thresh, thresh + 0.20, lumaVal);
+
+        // Sapphire S_Glow and S_EdgeRays: Outward edge radiance
+        float edgeRadiance = smoothstep(0.10, 0.40, lineEdge) * smoothstep(0.35, 0.85, lumaVal) * (u_copiedEdgeRays * 1.4);
+
+        vec3 prefilterGlow = currentComposite * max(knee, edgeRadiance);
+        kawase_l0[l0Idx] = packHalfFloat(prefilterGlow);
+    }
 }
