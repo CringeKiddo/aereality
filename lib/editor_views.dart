@@ -2166,21 +2166,45 @@ class EditorViews {
       }
 
       Directory destDir = Directory('/storage/emulated/0/Download');
-      if (!await destDir.exists()) {
-        final docs = await getApplicationDocumentsDirectory();
-        destDir = docs;
+      bool canWriteToDownloads = true;
+      try {
+        if (!destDir.existsSync()) {
+          destDir.createSync(recursive: true);
+        }
+        final testFile = File('${destDir.path}/.perm_test');
+        testFile.writeAsStringSync('test');
+        testFile.deleteSync();
+      } catch (e) {
+        canWriteToDownloads = false;
+        destDir = await getApplicationDocumentsDirectory();
       }
 
-      final outPath = '${destDir.path}/Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
-      final outFile = File(outPath);
-      await outFile.writeAsBytes(encodedFile);
+      final cleanCodec = codec.split(' ').first;
+      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
+      final finalOutputFile = File('${destDir.path}/$fileName');
 
-      if (context.mounted) {
+      if (hasAudio) {
+        String aCodec = 'aac';
+        if (container == 'WebM') aCodec = 'libopus';
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "${finalOutputFile.path}"');
+      } else {
+        await File(silentOutputPath).copy(finalOutputFile.path);
+      }
+
+      if (!isCancelled && dialogContext != null) {
+        Navigator.of(dialogContext!).pop();
+      }
+
+      if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Image Saved to Downloads:\n$outPath'),
-            backgroundColor: Colors.teal,
-            duration: const Duration(seconds: 4),
+            content: Text(
+              canWriteToDownloads
+                  ? 'Master Saved to Downloads:\n${finalOutputFile.path}'
+                  : 'Saved to App Storage (Grant "All files access" in Settings to save to Downloads):\n${finalOutputFile.path}',
+            ),
+            backgroundColor: canWriteToDownloads ? Colors.green : Colors.amber.shade900,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
