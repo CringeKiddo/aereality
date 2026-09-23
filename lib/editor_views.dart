@@ -2140,7 +2140,6 @@ class EditorViews {
       final rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
 
       final uniforms = packUniforms(targetW.toDouble(), targetH.toDouble());
-      // For images, output is always direct 8-bit RGBA so PNG/JPG encoders function perfectly
       uniforms[28] = 0.0;
       final lutTable = getActiveLut();
 
@@ -2166,45 +2165,21 @@ class EditorViews {
       }
 
       Directory destDir = Directory('/storage/emulated/0/Download');
-      bool canWriteToDownloads = true;
-      try {
-        if (!destDir.existsSync()) {
-          destDir.createSync(recursive: true);
-        }
-        final testFile = File('${destDir.path}/.perm_test');
-        testFile.writeAsStringSync('test');
-        testFile.deleteSync();
-      } catch (e) {
-        canWriteToDownloads = false;
-        destDir = await getApplicationDocumentsDirectory();
+      if (!await destDir.exists()) {
+        final docs = await getApplicationDocumentsDirectory();
+        destDir = docs;
       }
 
-      final cleanCodec = codec.split(' ').first;
-      final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final finalOutputFile = File('${destDir.path}/$fileName');
+      final outPath = '${destDir.path}/Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final outFile = File(outPath);
+      await outFile.writeAsBytes(encodedFile);
 
-      if (hasAudio) {
-        String aCodec = 'aac';
-        if (container == 'WebM') aCodec = 'libopus';
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "${finalOutputFile.path}"');
-      } else {
-        await File(silentOutputPath).copy(finalOutputFile.path);
-      }
-
-      if (!isCancelled && dialogContext != null) {
-        Navigator.of(dialogContext!).pop();
-      }
-
-      if (!isCancelled && context.mounted) {
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              canWriteToDownloads
-                  ? 'Master Saved to Downloads:\n${finalOutputFile.path}'
-                  : 'Saved to App Storage (Grant "All files access" in Settings to save to Downloads):\n${finalOutputFile.path}',
-            ),
-            backgroundColor: canWriteToDownloads ? Colors.green : Colors.amber.shade900,
-            duration: const Duration(seconds: 5),
+            content: Text('Image Saved to Downloads:\n$outPath'),
+            backgroundColor: Colors.teal,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -2530,7 +2505,6 @@ class EditorViews {
     outH = math.max(16, ((outH + 15) ~/ 16) * 16);
 
     final uniforms = packUniforms(outW.toDouble(), outH.toDouble());
-    // Direct hardware bit-depth flag for Vulkan Compute Shader
     if (bitDepth == '10-bit') {
       uniforms[28] = 1.0;
     } else if (bitDepth == '16-bit') {
@@ -2659,7 +2633,6 @@ class EditorViews {
         final paddedIndex = (i + 1).toString().padLeft(5, '0');
 
         if (isHighBit) {
-          // TRUE 10-BIT / 16-BIT: Output pure binary GPU memory buffer (Zero compression loss, zero PNG bugs!)
           final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
           final rawInput16 = Uint16List(outW * outH * 4);
           for (int px = 0; px < rawInput8.length; px++) {
@@ -2676,7 +2649,6 @@ class EditorViews {
           final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
           await outputFile.writeAsBytes(outputRaw16.buffer.asUint8List());
         } else {
-          // Standard 8-bit PNG Pipeline
           img.Image gradedImg;
           if (applyCurrentCc) {
             final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
@@ -2735,13 +2707,17 @@ class EditorViews {
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       
       Directory destDir = Directory('/storage/emulated/0/Download');
-      if (!await destDir.exists()) {
-        try {
-          await destDir.create(recursive: true);
-        } catch (_) {
-          final extDir = await getExternalStorageDirectory();
-          destDir = extDir ?? dir;
+      bool canWriteToDownloads = true;
+      try {
+        if (!destDir.existsSync()) {
+          destDir.createSync(recursive: true);
         }
+        final testFile = File('${destDir.path}/.perm_test');
+        testFile.writeAsStringSync('test');
+        testFile.deleteSync();
+      } catch (e) {
+        canWriteToDownloads = false;
+        destDir = await getApplicationDocumentsDirectory();
       }
 
       final cleanCodec = codec.split(' ').first;
@@ -2756,7 +2732,7 @@ class EditorViews {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
 
-      // Force Android MediaScanner to immediately register the video in MediaStore (Root Downloads & Gallery)
+      // Force Android MediaScanner to index the file in MediaStore
       try {
         if (Platform.isAndroid) {
           await Process.run('am', [
@@ -2776,9 +2752,13 @@ class EditorViews {
       if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Master Saved to Downloads:\n${finalOutputFile.path}'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 4),
+            content: Text(
+              canWriteToDownloads
+                  ? 'Master Saved to Downloads:\n${finalOutputFile.path}'
+                  : 'Saved to App Storage (Grant "All files access" in Settings to save directly to Downloads):\n${finalOutputFile.path}',
+            ),
+            backgroundColor: canWriteToDownloads ? Colors.green : Colors.amber.shade900,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -2856,7 +2836,6 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
               ),
             ),
           ),
-          // Large 40px touch registration circle for easy resizing with thumbs
           Positioned(
             right: -16,
             bottom: -16,
