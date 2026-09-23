@@ -2732,6 +2732,19 @@ class EditorViews {
         await File(silentOutputPath).copy(finalOutputFile.path);
       }
 
+      // Force Android MediaScanner to immediately register the video in MediaStore (Root Downloads & Gallery)
+      try {
+        if (Platform.isAndroid) {
+          await Process.run('am', [
+            'broadcast',
+            '-a',
+            'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
+            '-d',
+            'file://${finalOutputFile.path}',
+          ]);
+        }
+      } catch (_) {}
+
       if (!isCancelled && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
       }
