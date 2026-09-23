@@ -281,7 +281,6 @@ vec3 tonemapAnimeFilmic(vec3 x) {
     return clamp(a / b, 0.0, 1.0);
 }
 
-// Khronos PBR Neutral Tone Mapper (Khronos Group glTF Standard)
 vec3 tonemapKhronosPbrNeutral(vec3 color) {
     color = max(color, vec3(0.0));
     const float startCompression = 0.8 - 0.04;
@@ -414,83 +413,80 @@ vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
 }
 
 // -----------------------------------------------------------------------------
-// DUAL KAWASE CONTINUOUS BILINEAR SAMPLERS (Eliminates Brick Grid Lines)
+// CONTINUOUS BILINEAR SAMPLERS (No Integer Grid Aliasing)
 // -----------------------------------------------------------------------------
-vec3 sampleBilinearL0(vec2 uv, int w, int h) {
-    vec2 pos = uv * vec2(w - 1, h - 1);
-    ivec2 p0 = clamp(ivec2(floor(pos)), ivec2(0), ivec2(w - 1, h - 1));
+vec3 sampleBilinearBuffer(int passLevel, vec2 uv, int w, int h) {
+    vec2 pos = clamp(uv * vec2(w, h) - 0.5, vec2(0.0), vec2(w - 1, h - 1));
+    ivec2 p0 = ivec2(floor(pos));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
     vec2 f = fract(pos);
 
-    vec3 c00 = unpackHalfFloat(kawase_l0[p0.y * w + p0.x]);
-    vec3 c10 = unpackHalfFloat(kawase_l0[p0.y * w + p1.x]);
-    vec3 c01 = unpackHalfFloat(kawase_l0[p1.y * w + p0.x]);
-    vec3 c11 = unpackHalfFloat(kawase_l0[p1.y * w + p1.x]);
+    vec3 c00, c10, c01, c11;
+    if (passLevel == 0) {
+        c00 = unpackHalfFloat(kawase_l0[p0.y * w + p0.x]);
+        c10 = unpackHalfFloat(kawase_l0[p0.y * w + p1.x]);
+        c01 = unpackHalfFloat(kawase_l0[p1.y * w + p0.x]);
+        c11 = unpackHalfFloat(kawase_l0[p1.y * w + p1.x]);
+    } else if (passLevel == 1) {
+        c00 = unpackHalfFloat(kawase_l1[p0.y * w + p0.x]);
+        c10 = unpackHalfFloat(kawase_l1[p0.y * w + p1.x]);
+        c01 = unpackHalfFloat(kawase_l1[p1.y * w + p0.x]);
+        c11 = unpackHalfFloat(kawase_l1[p1.y * w + p1.x]);
+    } else {
+        c00 = unpackHalfFloat(kawase_l2[p0.y * w + p0.x]);
+        c10 = unpackHalfFloat(kawase_l2[p0.y * w + p1.x]);
+        c01 = unpackHalfFloat(kawase_l2[p1.y * w + p0.x]);
+        c11 = unpackHalfFloat(kawase_l2[p1.y * w + p1.x]);
+    }
 
     return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
-vec3 sampleBilinearL2(vec2 uv, int w, int h) {
-    vec2 pos = uv * vec2(w - 1, h - 1);
-    ivec2 p0 = clamp(ivec2(floor(pos)), ivec2(0), ivec2(w - 1, h - 1));
-    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
-    vec2 f = fract(pos);
-
-    vec3 c00 = unpackHalfFloat(kawase_l2[p0.y * w + p0.x]);
-    vec3 c10 = unpackHalfFloat(kawase_l2[p0.y * w + p1.x]);
-    vec3 c01 = unpackHalfFloat(kawase_l2[p1.y * w + p0.x]);
-    vec3 c11 = unpackHalfFloat(kawase_l2[p1.y * w + p1.x]);
-
-    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
-}
-
 // -----------------------------------------------------------------------------
-// PASS 1: HIGHLIGHT PREFILTER TO LEVEL 0 (Continuous 4-Tap Box Kernel)
+// PASS 1: HIGHLIGHT PREFILTER TO LEVEL 0 (Continuous 4-Point Subpixel Kernel)
 // -----------------------------------------------------------------------------
 void executePrefilterToL0(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
-    int x0 = clamp(coord.x * 2, 0, srcW - 1);
-    int y0 = clamp(coord.y * 2, 0, srcH - 1);
-    int x1 = clamp(x0 + 1, 0, srcW - 1);
-    int y1 = clamp(y0 + 1, 0, srcH - 1);
+    vec2 invSrc = 1.0 / vec2(srcW, srcH);
+    vec2 centerUV = (vec2(coord) + 0.5) / vec2(l0W, l0H);
 
     float bitMode = u_bitDepthMode;
-    vec3 c00 = unpackOut_Dynamic(y0 * srcW + x0, bitMode).rgb;
-    vec3 c10 = unpackOut_Dynamic(y0 * srcW + x1, bitMode).rgb;
-    vec3 c01 = unpackOut_Dynamic(y1 * srcW + x0, bitMode).rgb;
-    vec3 c11 = unpackOut_Dynamic(y1 * srcW + x1, bitMode).rgb;
+    // Sample 4 staggered subpixel positions for smooth non-blocky thresholding
+    vec2 o = invSrc * 0.5;
+    ivec2 c0 = clamp(ivec2((centerUV - o) * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
+    ivec2 c1 = clamp(ivec2((centerUV + vec2(o.x, -o.y)) * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
+    ivec2 c2 = clamp(ivec2((centerUV + vec2(-o.x, o.y)) * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
+    ivec2 c3 = clamp(ivec2((centerUV + o) * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
 
-    vec3 avg = (c00 + c10 + c01 + c11) * 0.25;
+    vec3 s0 = unpackOut_Dynamic(c0.y * srcW + c0.x, bitMode).rgb;
+    vec3 s1 = unpackOut_Dynamic(c1.y * srcW + c1.x, bitMode).rgb;
+    vec3 s2 = unpackOut_Dynamic(c2.y * srcW + c2.x, bitMode).rgb;
+    vec3 s3 = unpackOut_Dynamic(c3.y * srcW + c3.x, bitMode).rgb;
+    vec3 avg = (s0 + s1 + s2 + s3) * 0.25;
+
     float lumaVal = dot(avg, vec3(0.2126, 0.7152, 0.0722));
-
     LayerData L = layers[0];
     float thresh = clamp(L.deepGlowThreshold, 0.10, 0.90);
-    float knee = smoothstep(thresh, thresh + 0.22, lumaVal);
+    float knee = smoothstep(thresh, thresh + 0.25, lumaVal);
 
-    vec3 prefilter = avg * knee;
-    kawase_l0[coord.y * l0W + coord.x] = packHalfFloat(prefilter);
+    kawase_l0[coord.y * l0W + coord.x] = packHalfFloat(avg * knee);
 }
 
 // -----------------------------------------------------------------------------
-// PASS 2 & 3: DUAL KAWASE DOWNSAMPLE (5-TAP CORNER FILTER)
+// PASS 2 & 3: CONTINUOUS DOWNSAMPLE (Diagonal Subpixel Blend)
 // -----------------------------------------------------------------------------
-vec3 fetchKawaseDown(int passIdx, int x, int y, int srcW, int srcH) {
-    x = clamp(x, 0, srcW - 1);
-    y = clamp(y, 0, srcH - 1);
-    int idx = y * srcW + x;
-    return (passIdx == 2) ? unpackHalfFloat(kawase_l0[idx]) : unpackHalfFloat(kawase_l1[idx]);
-}
-
 void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
+    int srcLevel = (passIdx == 2) ? 0 : 1;
     int srcW = w * 2;
     int srcH = h * 2;
-    ivec2 centerCoord = coord * 2;
-    int rStep = max(1, int(round(radius)));
+    vec2 uv = (vec2(coord) + 0.5) / vec2(w, h);
+    vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.5);
 
-    vec3 sum = fetchKawaseDown(passIdx, centerCoord.x, centerCoord.y, srcW, srcH) * 4.0;
-    sum += fetchKawaseDown(passIdx, centerCoord.x - rStep, centerCoord.y - rStep, srcW, srcH);
-    sum += fetchKawaseDown(passIdx, centerCoord.x + rStep, centerCoord.y - rStep, srcW, srcH);
-    sum += fetchKawaseDown(passIdx, centerCoord.x - rStep, centerCoord.y + rStep, srcW, srcH);
-    sum += fetchKawaseDown(passIdx, centerCoord.x + rStep, centerCoord.y + rStep, srcW, srcH);
+    // Continuous 5-tap diagonal kernel with subpixel bilinear filtering
+    vec3 sum = sampleBilinearBuffer(srcLevel, uv, srcW, srcH) * 4.0;
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(-texel.x, -texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2( texel.x, -texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(-texel.x,  texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2( texel.x,  texel.y), srcW, srcH);
     sum /= 8.0;
 
     int dstIdx = coord.y * w + coord.x;
@@ -502,40 +498,34 @@ void executeKawaseDownsample(int passIdx, ivec2 coord, int w, int h, float radiu
 }
 
 // -----------------------------------------------------------------------------
-// PASS 4 & 5: DUAL KAWASE UPSAMPLE (8-TAP TENT FILTER)
+// PASS 4 & 5: CONTINUOUS UPSAMPLE (9-Tap Gaussian Kernel)
 // -----------------------------------------------------------------------------
-vec3 fetchKawaseUp(int passIdx, int x, int y, int srcW, int srcH) {
-    x = clamp(x, 0, srcW - 1);
-    y = clamp(y, 0, srcH - 1);
-    int idx = y * srcW + x;
-    return (passIdx == 4) ? unpackHalfFloat(kawase_l2[idx]) : unpackHalfFloat(kawase_l1[idx]);
-}
-
 void executeKawaseUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
+    int srcLevel = (passIdx == 4) ? 2 : 1;
     int srcW = w / 2;
     int srcH = h / 2;
-    ivec2 srcCoord = coord / 2;
-    int rStep = max(1, int(round(radius)));
+    vec2 uv = (vec2(coord) + 0.5) / vec2(w, h);
+    vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.5);
 
     vec3 sum = vec3(0.0);
-    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y, srcW, srcH) * 2.0;
-    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y, srcW, srcH) * 2.0;
-    sum += fetchKawaseUp(passIdx, srcCoord.x, srcCoord.y - rStep, srcW, srcH) * 2.0;
-    sum += fetchKawaseUp(passIdx, srcCoord.x, srcCoord.y + rStep, srcW, srcH) * 2.0;
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(-texel.x, 0.0), srcW, srcH) * 2.0;
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2( texel.x, 0.0), srcW, srcH) * 2.0;
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(0.0, -texel.y), srcW, srcH) * 2.0;
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(0.0,  texel.y), srcW, srcH) * 2.0;
 
-    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y - rStep, srcW, srcH);
-    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y - rStep, srcW, srcH);
-    sum += fetchKawaseUp(passIdx, srcCoord.x - rStep, srcCoord.y + rStep, srcW, srcH);
-    sum += fetchKawaseUp(passIdx, srcCoord.x + rStep, srcCoord.y + rStep, srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(-texel.x, -texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2( texel.x, -texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2(-texel.x,  texel.y), srcW, srcH);
+    sum += sampleBilinearBuffer(srcLevel, uv + vec2( texel.x,  texel.y), srcW, srcH);
     sum /= 12.0;
 
     int dstIdx = coord.y * w + coord.x;
     if (passIdx == 4) {
         vec3 existing = unpackHalfFloat(kawase_l1[dstIdx]);
-        kawase_l1[dstIdx] = packHalfFloat(mix(existing, sum, 0.50));
+        kawase_l1[dstIdx] = packHalfFloat(mix(existing, sum, 0.55));
     } else {
         vec3 existing = unpackHalfFloat(kawase_l0[dstIdx]);
-        kawase_l0[dstIdx] = packHalfFloat(mix(existing, sum, 0.50));
+        kawase_l0[dstIdx] = packHalfFloat(mix(existing, sum, 0.55));
     }
 }
 
@@ -548,14 +538,14 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
     vec4 gradedPixel = unpackOut_Dynamic(pixelIndex, bitMode);
     vec3 finalCol = gradedPixel.rgb;
 
-    vec2 uv = vec2(coord) / vec2(width, height);
+    vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
     LayerData L = layers[0];
 
-    // Smooth Continuous Bilinear Sampling across Pyramid Tiers (No Nearest Grids)
-    vec3 tightBloom = sampleBilinearL0(uv, width / 2, height / 2);      // Level 0 (Tight highlight wrap)
-    vec3 wideAtmosphere = sampleBilinearL2(uv, width / 8, height / 8);  // Level 2 (Deep cinematic falloff)
+    // Smooth continuous bilinear sampling across pyramid tiers
+    vec3 tightBloom = sampleBilinearBuffer(0, uv, width / 2, height / 2);
+    vec3 wideAtmosphere = sampleBilinearBuffer(2, uv, width / 8, height / 8);
 
-    // Compute Sobel line edge so ink lines stay 100% sharp and clean
+    // Ink line protection mask
     float resScale = float(max(width, height)) / 720.0;
     int edgeStep = max(1, int(round(resScale)));
     float gx = 0.0, gy = 0.0;
@@ -578,7 +568,7 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
     else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
     else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
 
-    // 1. DEEP GLOW: Wide Atmospheric Inverse-Square Bloom with Line Protection
+    // 1. DEEP GLOW: Wide atmospheric falloff without grid artifacts
     if (L.deepGlowIntensity > 0.01) {
         float deepFalloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.5);
         vec3 deepBloom = wideAtmosphere * glowTint * (L.deepGlowIntensity * 1.4 * deepFalloff);
@@ -586,14 +576,14 @@ void executeKawaseComposite(ivec2 coord, int width, int height) {
         finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(compressShoulder(deepBloom), 0.0, 0.85));
     }
 
-    // 2. SHADERLY SOFT BLOOM: Localized Soft-Knee Skin Tone Wrap
+    // 2. SHADERLY SOFT BLOOM: Localized skin tone wrap
     if (u_shaderlyGlowIntensity > 0.01) {
         vec3 softBloom = tightBloom * (u_shaderlyGlowIntensity * 1.25);
         softBloom *= (1.0 - lineEdge * 0.40);
         finalCol = 1.0 - (1.0 - finalCol) * (1.0 - clamp(compressShoulder(softBloom), 0.0, 0.80));
     }
 
-    // 3. SAPPHIRE S_GLOW: Specular Edge Acutance
+    // 3. SAPPHIRE S_GLOW: Specular edge acutance
     if (L.sapphireGlowWidth > 0.01) {
         float specularEdgeMask = smoothstep(0.12, 0.45, lineEdge);
         vec3 sGlow = tightBloom * specularEdgeMask * (L.sapphireGlowWidth * 1.6);
@@ -639,7 +629,7 @@ void main() {
     }
 
     // -------------------------------------------------------------------------
-    // PASS 0: FULL COLOR GRADE PIPELINE (100% OF ORIGINAL FILTERS INTACT)
+    // PASS 0: FULL COLOR GRADE PIPELINE (100% UNTOUCHED ORIGINAL FILTERS)
     // -------------------------------------------------------------------------
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
@@ -871,14 +861,12 @@ void main() {
             layerColor += vec3(glint);
         }
 
-        // =====================================================================
-        // 17. TRUE OPTICAL ANAMORPHIC FLARES (Smooth Exponential Falloff)
-        // =====================================================================
+        // 17. TRUE OPTICAL ANAMORPHIC FLARES
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
             float halfSpan = clamp(L.thinStreakWidth * float(width) * 0.40, 40.0, float(width) * 0.5);
             vec3 flareAccum = vec3(0.0);
             float totalW = 0.0;
-            vec3 anamorphicCyan = vec3(0.70, 0.90, 1.15); // Glass coating tint
+            vec3 anamorphicCyan = vec3(0.70, 0.90, 1.15);
 
             for (int s = -24; s <= 24; s++) {
                 float normX = float(s) / 24.0;
