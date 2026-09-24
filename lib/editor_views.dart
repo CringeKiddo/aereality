@@ -2706,31 +2706,26 @@ class EditorViews {
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       
-      Directory destDir = Directory('/storage/emulated/0/Download');
-      bool canWriteToDownloads = true;
-      try {
-        if (!destDir.existsSync()) {
-          destDir.createSync(recursive: true);
-        }
-        final testFile = File('${destDir.path}/.perm_test');
-        testFile.writeAsStringSync('test');
-        testFile.deleteSync();
-      } catch (e) {
-        canWriteToDownloads = false;
-        destDir = await getApplicationDocumentsDirectory();
+      // Direct root Downloads path - exactly as it was when it worked
+      final Directory destDir = Directory('/storage/emulated/0/Download');
+      if (!destDir.existsSync()) {
+        destDir.createSync(recursive: true);
       }
 
       final cleanCodec = codec.split(' ').first;
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final finalOutputFile = File('${destDir.path}/$fileName');
+      final finalOutputPath = '${destDir.path}/$fileName';
 
+      // Let FFmpeg write directly to the final destination so Android doesn't block Dart file-copy
       if (hasAudio) {
         String aCodec = 'aac';
         if (container == 'WebM') aCodec = 'libopus';
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "${finalOutputFile.path}"');
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$finalOutputPath"');
       } else {
-        await File(silentOutputPath).copy(finalOutputFile.path);
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -c:v copy "$finalOutputPath"');
       }
+
+      final finalOutputFile = File(finalOutputPath);
 
       // Force Android MediaScanner to index the file in MediaStore
       try {
