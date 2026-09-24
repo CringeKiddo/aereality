@@ -2747,13 +2747,9 @@ class EditorViews {
       if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              canWriteToDownloads
-                  ? 'Master Saved to Downloads:\n${finalOutputFile.path}'
-                  : 'Saved to App Storage (Grant "All files access" in Settings to save directly to Downloads):\n${finalOutputFile.path}',
-            ),
-            backgroundColor: canWriteToDownloads ? Colors.green : Colors.amber.shade900,
-            duration: const Duration(seconds: 5),
+            content: Text('Master Saved to Downloads:\n${finalOutputFile.path}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
