@@ -231,6 +231,42 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
 }
 
 // =============================================================================
+// CATMULL-ROM SPLINE EVALUATION (OVERLOADED TO GUARANTEE STRICT MATCHING)
+// =============================================================================
+float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) {
+    x = clamp(x, 0.0, 1.0);
+    float seg = x * 4.0;
+    int idx = int(floor(seg));
+    if (idx >= 4) return p4;
+    float t = seg - float(idx);
+
+    float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
+    float cp1 = (idx == 0) ? p0 : (idx == 1) ? p1 : (idx == 2) ? p2 : p3;
+    float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
+    float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
+
+    float m1 = clamp(0.5 * (cp2 - cp0), -1.2, 1.2);
+    float m2 = clamp(0.5 * (cp3 - cp1), -1.2, 1.2);
+    float t2 = t * t;
+    float t3 = t2 * t;
+
+    float h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    float h10 = t3 - 2.0 * t2 + t;
+    float h01 = -2.0 * t3 + 3.0 * t2;
+    float h11 = t3 - t2;
+
+    return clamp(h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2, 0.0, 1.0);
+}
+
+vec3 evalCatmullRom(vec3 c, float p0, float p1, float p2, float p3, float p4) {
+    return vec3(
+        evalCatmullRom(c.r, p0, p1, p2, p3, p4),
+        evalCatmullRom(c.g, p0, p1, p2, p3, p4),
+        evalCatmullRom(c.b, p0, p1, p2, p3, p4)
+    );
+}
+
+// =============================================================================
 // BIT-DEPTH PIXEL READ & WRITE (8-Bit, 10-Bit, 16-Bit Precision)
 // =============================================================================
 vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
@@ -895,7 +931,7 @@ void main() {
             lab.z += warmMask * L.mblMojoTealOrange * 0.035;   // Orange (positive b)
         }
 
-        // 11. Deep Teal (NEW)
+        // 11. Deep Teal
         if (u_deepTeal > 0.01) {
             float deepShadowMask = clamp(1.0 - lab.x * 2.0, 0.0, 1.0);
             lab.z -= deepShadowMask * u_deepTeal * 0.055;
@@ -916,7 +952,8 @@ void main() {
         }
 
         // 14. Spline Curves (Oklab Lightness & Chroma)
-        lab.x = evalCatmullRom(lab.x, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
+        // Explicit 6-argument float invocation
+        lab.x = evalCatmullRom(float(lab.x), float(L.curveM0), float(L.curveM1), float(L.curveM2), float(L.curveM3), float(L.curveM4));
         lab.y = mix(lab.y, lab.y * (L.curveG2 * 2.0), 0.20);
         lab.z = mix(lab.z, lab.z * (L.curveB2 * 2.0), 0.20);
 
