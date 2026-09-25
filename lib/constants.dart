@@ -200,7 +200,7 @@ class ExportMatrix {
       vcodec = 'libvpx-vp9';
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
       final profile = is10 ? '-profile:v 2' : '-profile:v 0';
-      // Automatically injects +0.3 unsharp acutance snap for VP9 as specified
+      // Automatically injects +0.3 unsharp acutance snap for VP9 anime lines
       filterChain = 'unsharp=5:5:0.3:5:5:0.0,';
       codecFlags = '-c:v $vcodec -deadline good -cpu-used 2 -crf 20 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
     } else if (codec.contains('ProRes')) {
