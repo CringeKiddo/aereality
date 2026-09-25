@@ -1,12 +1,13 @@
 // =============================================================================
-// AEReality - Constants, Globals, Palettes, Enums & Hardware MediaCodec Export Matrix
-// 100% Complete File - True 32-Bit Float Linear Pipeline
+// AEReality - Constants, Globals, Palettes, Enums & Master Clean Export Matrix
+// True 32-Bit Linear Pipeline • Zero H.264/H.265/MediaCodec dependencies
+// 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
 import 'package:flutter/material.dart';
 
 // -----------------------------------------------------------------------------
-// YouTube Channel Constant (Required by main.dart)
+// YouTube Channel Constant
 // -----------------------------------------------------------------------------
 const String kMyYouTubeChannel = 'https://youtube.com/@cringekiddo';
 
@@ -23,7 +24,7 @@ const Color kBorderDark = Color(0xFF222230);
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kCyanAccent);
 
 // -----------------------------------------------------------------------------
-// Global Engine & Performance Settings (Required by main.dart)
+// Global Engine & Performance Settings
 // -----------------------------------------------------------------------------
 enum EnginePrecision {
   fp16,
@@ -39,8 +40,7 @@ enum PerformancePreset {
 // Global Preview Scale (1.0 = Native 100%, 0.75 = 75%, 0.5 = 50%, 0.25 = 25% Draft)
 double gPreviewScale = 1.0;
 
-// Global Vulkan Engine Compute Precision as INT for initVulkan(shaderBytes, gEnginePrecision)
-// 0 = FP16, 1 = FP32 (Defaults to 1 for full 32-bit linear precision)
+// Global Vulkan Engine Compute Precision (1 = FP32 for full 32-bit linear precision)
 int gEnginePrecision = 1;
 
 // Global Toggle: Grade Active Scrub Frame only vs Continuous Frame Grading
@@ -70,7 +70,7 @@ class AnimePalette {
 }
 
 // -----------------------------------------------------------------------------
-// Preset Category Styles & Color Accents (Clean - No Subtitle Descriptions)
+// Preset Category Styles & Color Accents
 // -----------------------------------------------------------------------------
 class PresetStyle {
   final String name;
@@ -84,12 +84,9 @@ class PresetStyle {
 
 // Comprehensive Anime Presets Definition Map (Clean Title Only)
 const List<PresetStyle> kAnimePresetStyles = [
-  // 1. Kept Untouched:
   PresetStyle(name: 'Yamato', accent: AnimePalette.yamatoIce),
   PresetStyle(name: 'Okkotsu', accent: AnimePalette.silverWhite),
   PresetStyle(name: 'Home-Made Sauce', accent: Color(0xFFFF6F61)),
-
-  // 2. New 1:1 After Effects Inspired Presets from Links:
   PresetStyle(name: 'Arknights', accent: AnimePalette.arknightsAmber),
   PresetStyle(name: 'Adevob Slop', accent: AnimePalette.tojiSteel),
   PresetStyle(name: 'Yuta', accent: AnimePalette.silverWhite),
@@ -109,67 +106,64 @@ const List<PresetStyle> kAnimePresetStyles = [
 ];
 
 // -----------------------------------------------------------------------------
-// Robust Export Matrix & Universal FFmpeg Command Builder
-// AV1 Reinstated + VP9 Sharpness Addition (+0.3) + Hardware MediaCodec Support
+// Master Clean Export Matrix Engine (AV1, VP9, ProRes, FFV1)
+// Zero MediaCodec / Zero H.264/H.265 / Complete 16-Bit & 10-Bit Matrix
 // -----------------------------------------------------------------------------
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
     'MP4': [
-      'H.264 (Hardware MediaCodec)',
-      'H.264 (libx264 UltraFast)',
-      'HEVC (libx265 Fast)',
-      'HEVC (Hardware MediaCodec)',
-      'AV1 (libaom-av1)',
+      'AV1 (libsvtav1 Master)',
+      'ProRes 422 HQ (10-bit)',
     ],
     'MKV': [
       'FFV1 (16-bit Lossless)',
-      'H.264 (libx264 UltraFast)',
-      'HEVC (libx265 Fast)',
-      'VP9 (libvpx-vp9 Fast)',
-      'AV1 (libaom-av1)',
+      'AV1 (libsvtav1 Master)',
+      'VP9 (libvpx-vp9 Sharp)',
+      'ProRes 4444 (16-bit)',
     ],
     'MOV': [
       'ProRes 422 HQ (10-bit)',
       'ProRes 4444 (16-bit)',
-      'H.264 (libx264 UltraFast)',
-      'HEVC (libx265 Fast)',
+      'AV1 (libsvtav1 Master)',
     ],
     'WebM': [
-      'VP9 (libvpx-vp9 Fast)',
-      'AV1 (libaom-av1)',
-      'VP8 (libvpx)',
+      'AV1 (libsvtav1 Master)',
+      'VP9 (libvpx-vp9 Sharp)',
     ],
   };
 
-  static bool isBitDepthValid(String container, String codec, String depth) {
-    if (depth == '16-bit') {
-      return codec.contains('FFV1') || codec.contains('ProRes 4444') || container == 'MKV';
+  /// Validates whether a specific bit-depth is supported by the chosen codec & container
+  static bool isBitDepthValid(String container, String codec, String bitDepth) {
+    if (bitDepth == '16-bit') {
+      // True 16-bit master formats
+      if (codec.contains('FFV1') && container == 'MKV') return true;
+      if (codec.contains('4444') && (container == 'MOV' || container == 'MKV')) return true;
+      return false; // 16-bit is disabled for AV1, VP9, and ProRes 422
     }
-    if (depth == '10-bit') {
-      return codec.contains('HEVC') ||
-          codec.contains('VP9') ||
-          codec.contains('AV1') ||
-          codec.contains('ProRes') ||
-          codec.contains('FFV1');
+    if (bitDepth == '10-bit') {
+      // 10-bit master profile formats
+      if (codec.contains('AV1')) return true;
+      if (codec.contains('VP9')) return true;
+      if (codec.contains('ProRes')) return true;
+      if (codec.contains('FFV1')) return true;
+      return false;
     }
-    return true; // 8-bit is universally supported
+    // 8-bit is universally supported
+    return true;
   }
 
+  /// Validates bitrate compatibility (Lossless FFV1 / ProRes don't use fixed lossy bitrates)
   static bool isBitrateValid(String codec, String bitrate) {
-    if (bitrate == 'Lossless Variable') {
-      return codec.contains('FFV1') ||
-          codec.contains('ProRes') ||
-          codec.contains('libx264') ||
-          codec.contains('libx265') ||
-          codec.contains('VP9');
+    if (codec.contains('FFV1') || codec.contains('ProRes')) {
+      return bitrate == 'Lossless Variable';
     }
     return true;
   }
 
+  /// Container-appropriate audio stream codec
   static String getAudioCodec(String container) {
     switch (container.toUpperCase()) {
       case 'WEBM':
-        return 'libopus -b:a 192k';
       case 'MKV':
         return 'libopus -b:a 192k';
       case 'MOV':
@@ -180,6 +174,7 @@ class ExportMatrix {
     }
   }
 
+  /// Builds clean, high-performance FFmpeg encoding command string
   static String buildFFmpegEncodeCommand({
     required int fps,
     required String framePattern,
@@ -188,63 +183,51 @@ class ExportMatrix {
     required String bitDepth,
     required int bitrateKbps,
     required String outputPath,
+    int width = 1920,
+    int height = 1080,
   }) {
+    final bool is10 = bitDepth == '10-bit';
+    final bool is16 = bitDepth == '16-bit';
     String vcodec;
-    String extraFlags = '';
-    String pixFmt = 'yuv420p';
+    String codecFlags;
     String filterChain = '';
 
-    if (bitDepth == '10-bit') {
-      pixFmt = 'yuv420p10le';
-    } else if (bitDepth == '16-bit') {
-      pixFmt = 'gbrp16le';
-    }
-
-    if (codec.contains('Hardware MediaCodec')) {
-      if (codec.contains('HEVC')) {
-        vcodec = 'hevc_mediacodec';
-      } else {
-        vcodec = 'h264_mediacodec';
-      }
-      pixFmt = 'yuv420p'; // MediaCodec strictly expects standard NV12/YUV420P
-      extraFlags = '-b:v ${bitrateKbps}k -maxrate ${(bitrateKbps * 1.2).toInt()}k -bufsize ${bitrateKbps * 2}k';
-    } else if (codec.contains('libx265') || (codec.contains('HEVC') && !codec.contains('MediaCodec'))) {
-      vcodec = 'libx265';
-      extraFlags = '-preset ultrafast -threads 4 -b:v ${bitrateKbps}k -tag:v hvc1';
-      if (bitDepth == '10-bit') {
-        extraFlags += ' -profile:v main10';
-      }
-    } else if (codec.contains('VP9') || codec.contains('libvpx-vp9')) {
+    if (codec.contains('AV1')) {
+      vcodec = 'libsvtav1';
+      final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
+      codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt $pixFmt -b:v ${bitrateKbps}k';
+    } else if (codec.contains('VP9')) {
       vcodec = 'libvpx-vp9';
-      // Added +0.3 sharpness boost filter automatically for VP9 as requested
+      final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
+      final profile = is10 ? '-profile:v 2' : '-profile:v 0';
+      // Automatically injects +0.3 unsharp acutance snap for VP9 as specified
       filterChain = 'unsharp=5:5:0.3:5:5:0.0,';
-      extraFlags = '-deadline realtime -cpu-used 8 -b:v ${bitrateKbps}k -threads 4';
-      if (bitDepth == '10-bit') {
-        extraFlags += ' -profile:v 2';
-      }
-    } else if (codec.contains('AV1') || codec.contains('libaom-av1')) {
-      vcodec = 'libaom-av1';
-      extraFlags = '-cpu-used 8 -crf 24 -b:v ${bitrateKbps}k -threads 4 -strict experimental';
-    } else if (codec.contains('FFV1')) {
-      vcodec = 'ffv1';
-      pixFmt = bitDepth == '16-bit' ? 'gbrp16le' : (bitDepth == '10-bit' ? 'yuv420p10le' : 'yuv420p');
-      extraFlags = '-level 3 -threads 4';
+      codecFlags = '-c:v $vcodec -deadline good -cpu-used 2 -crf 20 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
     } else if (codec.contains('ProRes')) {
       vcodec = 'prores_ks';
       if (codec.contains('4444')) {
-        pixFmt = 'yuva444p10le';
-        extraFlags = '-profile:v 4 -vendor apl0';
+        final pixFmt = is16 ? 'yuva444p16le' : 'yuva444p10le';
+        codecFlags = '-c:v $vcodec -profile:v 4 -vendor apl0 -pix_fmt $pixFmt';
       } else {
-        pixFmt = 'yuv422p10le';
-        extraFlags = '-profile:v 3 -vendor apl0';
+        codecFlags = '-c:v $vcodec -profile:v 3 -vendor apl0 -pix_fmt yuv422p10le';
       }
+    } else if (codec.contains('FFV1')) {
+      vcodec = 'ffv1';
+      final pixFmt = is16 ? 'yuv422p16le' : (is10 ? 'yuv420p10le' : 'yuv420p');
+      codecFlags = '-c:v $vcodec -level 3 -coder 1 -context 1 -pix_fmt $pixFmt';
     } else {
-      // Standard Software H.264
-      vcodec = 'libx264';
-      extraFlags = '-preset ultrafast -tune animation -threads 4 -b:v ${bitrateKbps}k';
+      vcodec = 'libsvtav1';
+      codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt yuv420p -b:v ${bitrateKbps}k';
     }
 
-    // Explicit framerate before -i prevents frame stalls, format filter ensures clean YUV output
-    return '-hide_banner -loglevel error -y -framerate $fps -i "$framePattern" -vf "${filterChain}format=$pixFmt" -c:v $vcodec -pix_fmt $pixFmt $extraFlags "$outputPath"';
+    final String inputFormat = is16
+        ? '-f rawvideo -pix_fmt rgba64le -s ${width}x${height}'
+        : '';
+
+    final String filterArg = filterChain.isNotEmpty
+        ? '-vf "${filterChain.substring(0, filterChain.length - 1)}"'
+        : '';
+
+    return '-hide_banner -loglevel error -y $inputFormat -framerate $fps -i "$framePattern" $filterArg $codecFlags "$outputPath"';
   }
 }
