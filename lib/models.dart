@@ -1,7 +1,8 @@
-// ==========================================
-// lib/models.dart
-// 100% COMPLETE FILE - Master Data Models & Layer State for Shaderly
-// ==========================================
+// =============================================================================
+// AEReality / Shaderly - Master Data Models & Layer State
+// True 32-Bit Linear RGB + Oklab Pipeline • 3-Segment Timeline Architecture
+// 100% Complete File - Zero Feature Omissions
+// =============================================================================
 
 import 'dart:convert';
 import 'dart:io';
@@ -18,7 +19,8 @@ enum LayerBlendMode {
   multiply,
 }
 
-/// Represents an isolated timeline clip region where a custom CC/Preset is applied.
+/// Represents an isolated timeline clip region (up to 3 sequential layers)
+/// where a custom CC/Preset is applied exclusively to that time range.
 class TimelineClipSegment {
   String id;
   String name;
@@ -27,6 +29,8 @@ class TimelineClipSegment {
   List<AdjustmentLayer> layers;
   double tonemapMode;
   bool isEnabled;
+  double deepTeal;
+  double magicCurves;
 
   TimelineClipSegment({
     required this.id,
@@ -36,7 +40,11 @@ class TimelineClipSegment {
     List<AdjustmentLayer>? layers,
     this.tonemapMode = 0.0,
     this.isEnabled = true,
-  }) : layers = layers ?? [];
+    this.deepTeal = 0.0,
+    this.magicCurves = 0.0,
+  }) : layers = layers ?? [
+          AdjustmentLayer(id: 'seg_base_${DateTime.now().millisecondsSinceEpoch}', name: 'Base Grade')
+        ];
 
   TimelineClipSegment clone() {
     return TimelineClipSegment(
@@ -47,6 +55,8 @@ class TimelineClipSegment {
       layers: layers.map((l) => l.clone()).toList(),
       tonemapMode: tonemapMode,
       isEnabled: isEnabled,
+      deepTeal: deepTeal,
+      magicCurves: magicCurves,
     );
   }
 
@@ -58,18 +68,22 @@ class TimelineClipSegment {
     'layers': layers.map((l) => l.toJson()).toList(),
     'tonemapMode': tonemapMode,
     'isEnabled': isEnabled,
+    'deepTeal': deepTeal,
+    'magicCurves': magicCurves,
   };
 
   factory TimelineClipSegment.fromJson(Map<String, dynamic> json) => TimelineClipSegment(
     id: json['id'] ?? 'seg_${DateTime.now().millisecondsSinceEpoch}',
     name: json['name'] ?? 'Segment',
-    startTime: (json['startTime'] as num?)?.toDouble() ?? 1.0,
-    endTime: (json['endTime'] as num?)?.toDouble() ?? 5.0,
+    startTime: (json['startTime'] as num?)?.toDouble() ?? 0.0,
+    endTime: (json['endTime'] as num?)?.toDouble() ?? 4.0,
     layers: (json['layers'] as List<dynamic>?)
         ?.map((l) => AdjustmentLayer.fromJson(l))
         .toList() ?? [],
     tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
     isEnabled: json['isEnabled'] ?? true,
+    deepTeal: (json['deepTeal'] as num?)?.toDouble() ?? 0.0,
+    magicCurves: (json['magicCurves'] as num?)?.toDouble() ?? 0.0,
   );
 }
 
@@ -77,7 +91,7 @@ class AdjustmentLayer {
   String id;
   String name;
   bool isEnabled;
-  double opacity = 1.0;
+  double opacity;
   LayerBlendMode blendMode;
 
   // Basic Grading
@@ -123,7 +137,7 @@ class AdjustmentLayer {
   double sapphireGlowWidth;
   double sapphireGlowThreshold;
 
-  // New CapCut / AE Soft Gaussian Saturated Bloom ("Shaderly Glow")
+  // Soft Gaussian Saturated Bloom ("Shaderly Glow")
   double shaderlyGlowIntensity;
   double shaderlyGlowRadius;
   double shaderlyGlowThreshold;
@@ -134,7 +148,7 @@ class AdjustmentLayer {
   double thinStreakIntensity;
   double thinStreakWidth;
   double thinStreakOpacity;
-  double thinStreakSoftness; // 0.0 = Crisp, 1.0 = Wide Gaussian Spread
+  double thinStreakSoftness;
   double lineChromaStrength;
   double centerAura;
   double horizontalRamp;
@@ -174,12 +188,17 @@ class AdjustmentLayer {
   double mblColoristaLift;
   double mblColoristaGamma;
   double mblColoristaGain;
+  double deepTeal;             // Magic Bullets Deep Teal
+  double magicCurves;          // Magic Bullets S-Curve
 
   // Copied Stuff Category (After Effects Style FX)
   double copiedChromaShift;
   double copiedEdgeRays;
   double copiedProMist;
   double copiedStarGlint;
+
+  // Soft Edge Glow Halo
+  double edgeHaloRadius;
 
   AdjustmentLayer({
     required this.id,
@@ -197,9 +216,9 @@ class AdjustmentLayer {
     this.shadows = 0.0,
     this.highlights = 0.0,
     this.blackCrush = 0.0,
-    this.splitToneShadowHue = 0.55, // Default Cool Cyan/Blue Shadow
+    this.splitToneShadowHue = 0.55,
     this.splitToneShadowSat = 0.0,
-    this.splitToneHighHue = 0.10,   // Default Warm Amber Highlight
+    this.splitToneHighHue = 0.10,
     this.splitToneHighSat = 0.0,
     this.splitToneBalance = 0.0,
     this.darkOutlines = 0.0,
@@ -254,10 +273,13 @@ class AdjustmentLayer {
     this.mblColoristaLift = 0.0,
     this.mblColoristaGamma = 0.0,
     this.mblColoristaGain = 0.0,
+    this.deepTeal = 0.0,
+    this.magicCurves = 0.0,
     this.copiedChromaShift = 0.0,
     this.copiedEdgeRays = 0.0,
     this.copiedProMist = 0.0,
     this.copiedStarGlint = 0.0,
+    this.edgeHaloRadius = 0.50,
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveRed = curveRed ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveGreen = curveGreen ?? [0.0, 0.25, 0.50, 0.75, 1.0],
@@ -337,10 +359,13 @@ class AdjustmentLayer {
       mblColoristaLift: mblColoristaLift,
       mblColoristaGamma: mblColoristaGamma,
       mblColoristaGain: mblColoristaGain,
+      deepTeal: deepTeal,
+      magicCurves: magicCurves,
       copiedChromaShift: copiedChromaShift,
       copiedEdgeRays: copiedEdgeRays,
       copiedProMist: copiedProMist,
       copiedStarGlint: copiedStarGlint,
+      edgeHaloRadius: edgeHaloRadius,
     );
   }
 
@@ -418,10 +443,13 @@ class AdjustmentLayer {
       'mblColoristaLift': mblColoristaLift,
       'mblColoristaGamma': mblColoristaGamma,
       'mblColoristaGain': mblColoristaGain,
+      'deepTeal': deepTeal,
+      'magicCurves': magicCurves,
       'copiedChromaShift': copiedChromaShift,
       'copiedEdgeRays': copiedEdgeRays,
       'copiedProMist': copiedProMist,
       'copiedStarGlint': copiedStarGlint,
+      'edgeHaloRadius': edgeHaloRadius,
     };
   }
 
@@ -499,10 +527,13 @@ class AdjustmentLayer {
       mblColoristaLift: (json['mblColoristaLift'] as num?)?.toDouble() ?? 0.0,
       mblColoristaGamma: (json['mblColoristaGamma'] as num?)?.toDouble() ?? 0.0,
       mblColoristaGain: (json['mblColoristaGain'] as num?)?.toDouble() ?? 0.0,
+      deepTeal: (json['deepTeal'] as num?)?.toDouble() ?? 0.0,
+      magicCurves: (json['magicCurves'] as num?)?.toDouble() ?? 0.0,
       copiedChromaShift: (json['copiedChromaShift'] as num?)?.toDouble() ?? 0.0,
       copiedEdgeRays: (json['copiedEdgeRays'] as num?)?.toDouble() ?? 0.0,
       copiedProMist: (json['copiedProMist'] as num?)?.toDouble() ?? 0.0,
       copiedStarGlint: (json['copiedStarGlint'] as num?)?.toDouble() ?? 0.0,
+      edgeHaloRadius: (json['edgeHaloRadius'] as num?)?.toDouble() ?? 0.50,
     );
   }
 }
@@ -513,9 +544,9 @@ class ProjectData {
   String aspectRatio;
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
-  double tonemapMode; // 0=Off, 1=Shaderly Filmic 1, 2=Shaderly AgX 2
+  double tonemapMode; // 0=Linear, 1=Shaderly AgX Anime, 2=Khronos Neutral
 
-  // --- Isolated Text Suite Bounding Region & Stylization ---
+  // Isolated Text Suite
   bool textSuiteEnabled;
   double textBoxX;
   double textBoxY;
@@ -528,12 +559,17 @@ class ProjectData {
   double textLumaThreshold;
   double textMetallicTint;
 
-  // --- Timeline Optimizer / Multiple Range Placer ---
+  // Timeline Optimizer / Up to 3 Layer Clip Regions
   bool enableTimelineSegments;
   List<TimelineClipSegment> timelineSegments;
+  int activeTimelineSegmentIndex;
 
-  // --- Master Dither Strength ---
+  // Master Dither Strength
   double ditherStrength;
+
+  // Global Project Magic Bullets
+  double deepTeal;
+  double magicCurves;
 
   ProjectData({
     required this.mediaPath,
@@ -555,7 +591,10 @@ class ProjectData {
     this.textMetallicTint = 0.0,
     this.enableTimelineSegments = false,
     List<TimelineClipSegment>? timelineSegments,
+    this.activeTimelineSegmentIndex = 0,
     this.ditherStrength = 1.0,
+    this.deepTeal = 0.0,
+    this.magicCurves = 0.0,
   })  : layers = layers ?? [],
         timelineSegments = timelineSegments ?? [];
 
@@ -591,7 +630,10 @@ class ProjectData {
       textMetallicTint: textMetallicTint,
       enableTimelineSegments: enableTimelineSegments,
       timelineSegments: timelineSegments.map((s) => s.clone()).toList(),
+      activeTimelineSegmentIndex: activeTimelineSegmentIndex,
       ditherStrength: ditherStrength,
+      deepTeal: deepTeal,
+      magicCurves: magicCurves,
     );
   }
 
@@ -616,7 +658,10 @@ class ProjectData {
       'textMetallicTint': textMetallicTint,
       'enableTimelineSegments': enableTimelineSegments,
       'timelineSegments': timelineSegments.map((s) => s.toJson()).toList(),
+      'activeTimelineSegmentIndex': activeTimelineSegmentIndex,
       'ditherStrength': ditherStrength,
+      'deepTeal': deepTeal,
+      'magicCurves': magicCurves,
     };
   }
 
@@ -647,7 +692,10 @@ class ProjectData {
               ?.map((s) => TimelineClipSegment.fromJson(s))
               .toList() ??
           [],
+      activeTimelineSegmentIndex: json['activeTimelineSegmentIndex'] ?? 0,
       ditherStrength: (json['ditherStrength'] as num?)?.toDouble() ?? 1.0,
+      deepTeal: (json['deepTeal'] as num?)?.toDouble() ?? 0.0,
+      magicCurves: (json['magicCurves'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
