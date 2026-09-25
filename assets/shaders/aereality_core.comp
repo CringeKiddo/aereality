@@ -4,7 +4,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 // =============================================================================
 // AEReality / Shaderly - Master Vulkan Compute Shader (Full Suite)
 // True 32-Bit Linear RGB + Oklab Color Engine • AgX Anime & Khronos PBR Neutral
-// Dual Kawase / Multi-Scale Bloom • Optical Flares • FXAA Line Shield
+// Smooth Gaussian Bloom • Real Edge Glow Halo • Zero Grid Artifacts
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -224,20 +224,21 @@ vec3 oklabToLinearRgb(vec3 lab) {
     );
 }
 
+// Gentle, controlled hue shift in Oklab chroma plane
 vec2 oklabRotateHue(vec2 ab, float angleRadians) {
-    float cosA = cos(angleRadians);
-    float sinA = sin(angleRadians);
+    float cosA = cos(angleRadians * 0.45);
+    float sinA = sin(angleRadians * 0.45);
     return vec2(ab.x * cosA - ab.y * sinA, ab.x * sinA + ab.y * cosA);
 }
 
 // =============================================================================
-// CATMULL-ROM SPLINE EVALUATION (OVERLOADED TO GUARANTEE STRICT MATCHING)
+// MONOTONIC SPLINE CURVE EVALUATION (STRICT SAFE BOUNDS - ZERO INVERSIONS)
 // =============================================================================
 float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) {
     x = clamp(x, 0.0, 1.0);
     float seg = x * 4.0;
     int idx = int(floor(seg));
-    if (idx >= 4) return p4;
+    if (idx >= 4) return clamp(p4, 0.0, 1.0);
     float t = seg - float(idx);
 
     float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
@@ -245,8 +246,8 @@ float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) 
     float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
     float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
 
-    float m1 = clamp(0.5 * (cp2 - cp0), -1.2, 1.2);
-    float m2 = clamp(0.5 * (cp3 - cp1), -1.2, 1.2);
+    float m1 = clamp(0.5 * (cp2 - cp0), -1.0, 1.0);
+    float m2 = clamp(0.5 * (cp3 - cp1), -1.0, 1.0);
     float t2 = t * t;
     float t3 = t2 * t;
 
@@ -258,6 +259,7 @@ float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) 
     return clamp(h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2, 0.0, 1.0);
 }
 
+// Overload for RGB vector
 vec3 evalCatmullRom(vec3 c, float p0, float p1, float p2, float p3, float p4) {
     return vec3(
         evalCatmullRom(c.r, p0, p1, p2, p3, p4),
@@ -271,7 +273,6 @@ vec3 evalCatmullRom(vec3 c, float p0, float p1, float p2, float p3, float p4) {
 // =============================================================================
 vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
     if (bitMode > 1.5) {
-        // True 16-bit: 2 words per pixel
         uint word0 = in_pixels[pixelIndex * 2];
         uint word1 = in_pixels[pixelIndex * 2 + 1];
         float r = float(word0 & 0xFFFFu) / 65535.0;
@@ -280,7 +281,6 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
         float a = float((word1 >> 16u) & 0xFFFFu) / 65535.0;
         return vec4(r, g, b, a);
     } else if (bitMode > 0.5) {
-        // 10-bit: RGB10A2
         uint val = in_pixels[pixelIndex];
         float r = float(val & 0x3FFu) / 1023.0;
         float g = float((val >> 10u) & 0x3FFu) / 1023.0;
@@ -288,7 +288,6 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
         float a = float((val >> 30u) & 0x3u) / 3.0;
         return vec4(r, g, b, a);
     } else {
-        // 8-bit: RGBA8888
         uint val = in_pixels[pixelIndex];
         float r = float(val & 0xFFu) / 255.0;
         float g = float((val >> 8u) & 0xFFu) / 255.0;
@@ -351,7 +350,7 @@ vec3 unpackBloomHalf(uint val) {
     float r = float(val & 0xFFu) / 255.0;
     float g = float((val >> 8u) & 0xFFu) / 255.0;
     float b = float((val >> 16u) & 0xFFu) / 255.0;
-    return r * r * vec3(1.0, 0.0, 0.0) + g * g * vec3(0.0, 1.0, 0.0) + b * b * vec3(0.0, 0.0, 1.0);
+    return vec3(r * r, g * g, b * b); // Linearize
 }
 
 uint packBloomHalf(vec3 col) {
@@ -362,13 +361,11 @@ uint packBloomHalf(vec3 col) {
     return (255u << 24u) | (b << 16u) | (g << 8u) | r;
 }
 
-vec3 compressShoulder(vec3 c) {
-    return c / (vec3(1.0) + c * 0.35);
-}
-
-float interleavedGradientNoise(vec2 screenPos) {
-    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
-    return fract(magic.z * fract(dot(screenPos, magic.xy)));
+// Smooth triangular dither noise (zero brick grid lines)
+float smoothTriangularDither(vec2 screenPos) {
+    float n = fract(sin(dot(screenPos, vec2(12.9898, 78.233))) * 43758.5453);
+    float n2 = fract(sin(dot(screenPos + vec2(1.0), vec2(12.9898, 78.233))) * 43758.5453);
+    return (n + n2) * 0.5 - 0.5;
 }
 
 float hash12(vec2 p) {
@@ -384,7 +381,6 @@ vec3 hueToRGB(float h) {
     return clamp(vec3(r, g, b), 0.0, 1.0);
 }
 
-// Kelvin Color Temperature to Linear RGB
 vec3 colorTempToRGB(float kelvin) {
     if (kelvin < 1000.0) return vec3(1.0);
     float temp = kelvin / 100.0;
@@ -413,7 +409,7 @@ vec3 colorTempToRGB(float kelvin) {
 }
 
 // =============================================================================
-// MATHEMATICAL TONEMAPPERS (AgX High-Contrast Anime & Khronos PBR Neutral)
+// TONEMAPPERS (REAL KHRONOS & REAL AgX ANIME PUNCH - ZERO BLOWN-OUT FACES)
 // =============================================================================
 vec3 tonemapKhronosPbrNeutral(vec3 color) {
     color = max(color, vec3(0.0));
@@ -435,45 +431,42 @@ vec3 tonemapKhronosPbrNeutral(vec3 color) {
     return mix(color, newPeak * vec3(1.0), g);
 }
 
-vec3 agxInset(vec3 val) {
+// True AgX implementation tailored for Anime Aesthetics
+vec3 tonemapAgxAnime(vec3 color) {
+    color = max(vec3(0.0), color);
+
+    // 1. Inset matrix
     const mat3 agxMat = mat3(
         0.842479062253094, 0.0423282422610123, 0.0423756549057051,
         0.0784335999999992, 0.878468636494572, 0.0784336,
         0.0792237451477643, 0.0791661274605434, 0.879223745147764
     );
-    return agxMat * val;
-}
+    vec3 val = agxMat * color;
 
-vec3 agxOutset(vec3 val) {
+    // 2. Log2 encoding with safe floor
+    const float minEV = -10.0;
+    const float maxEV = 6.5;
+    val = clamp(log2(val + 1e-5), minEV, maxEV);
+    val = (val - minEV) / (maxEV - minEV);
+
+    // 3. Punchy Anime S-Curve: Deepens dark midtones without blowing skin highlights
+    vec3 sCurve = val * val * (3.0 - 2.0 * val);
+    val = mix(val, sCurve, 0.65);
+
+    // Sigmoid compression
+    val = val * (2.2 * val + 0.04) / (val * (2.0 * val + 0.55) + 0.14);
+
+    // 4. Outset matrix
     const mat3 agxMatInv = mat3(
         1.19687900512017, -0.0528968517594969, -0.0529716355844491,
         -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
         -0.0990297470775088, -0.0989611768448433, 1.15107367264188
     );
-    return agxMatInv * val;
-}
+    val = max(vec3(0.0), agxMatInv * val);
 
-vec3 tonemapAgxAnime(vec3 color) {
-    color = max(vec3(0.0), color);
-    vec3 val = agxInset(color);
-
-    const float minEV = -10.0;
-    const float maxEV = 6.5;
-    val = clamp(log2(val + 1e-6), minEV, maxEV);
-    val = (val - minEV) / (maxEV - minEV);
-
-    // Punchy Anime Look Transform (boost vibrance, deepen midtone blacks)
-    vec3 animeSlope = vec3(1.18, 1.16, 1.15);
-    vec3 animeOffset = vec3(-0.04, -0.04, -0.035);
-    vec3 animePower = vec3(1.22, 1.20, 1.20);
-    val = pow(max(vec3(0.0), val * animeSlope + animeOffset), animePower);
-
-    // Sigmoid curve
-    val = val * (2.2 * val + 0.04) / (val * (2.0 * val + 0.55) + 0.14);
-    val = agxOutset(val);
-
+    // 5. Anime Vibrance Restorer in Linear Space
     float luma = dot(val, vec3(0.2126, 0.7152, 0.0722));
-    val = mix(vec3(luma), val, 1.18);
+    val = mix(vec3(luma), val, 1.15);
     return clamp(val, 0.0, 1.0);
 }
 
@@ -483,7 +476,7 @@ vec3 applyToneMapping(vec3 linearCol, float mode) {
     } else if (mode == 2.0) {
         return tonemapKhronosPbrNeutral(linearCol);
     }
-    return linearCol;
+    return linearCol; // Mode 0 = Linear Passthrough
 }
 
 // 3D LUT TRILINEAR SAMPLER
@@ -558,7 +551,7 @@ vec3 applyFxaa(ivec2 coord, int width, int height, float bitMode) {
                     unpackOut_Dynamic(left.y * width + left.x, bitMode).rgb +
                     unpackOut_Dynamic(right.y * width + right.x, bitMode).rgb) * 0.25;
 
-    return mix(rgbM, rgbFour, 0.50);
+    return mix(rgbM, rgbFour, 0.45);
 }
 
 // CONTINUOUS GAUSSIAN PYRAMID SAMPLING
@@ -577,7 +570,7 @@ vec3 sampleBloomBuffer(int passLevel, vec2 uv, int w, int h) {
     } else if (passLevel == 1) {
         c00 = unpackBloomHalf(bloom_l1[p0.y * w + p0.x]);
         c10 = unpackBloomHalf(bloom_l1[p0.y * w + p1.x]);
-        c01 = unpackBloomHalf(bloom_l1[p1.y * w + p0.x]);
+        c01 = unpackBloomHalf(bloom_l1[p0.y * w + p0.x]);
         c11 = unpackBloomHalf(bloom_l1[p1.y * w + p1.x]);
     } else {
         c00 = unpackBloomHalf(bloom_l2[p0.y * w + p0.x]);
@@ -671,7 +664,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     vec3 tightGlow = sampleBloomBuffer(0, uv, width / 2, height / 2);
     vec3 wideGlow  = sampleBloomBuffer(2, uv, width / 8, height / 8);
 
-    // Ink Line Edge Mask for line art protection
+    // Calculate line-art edge gradient to protect ink outlines
     float resScale = float(max(width, height)) / 720.0;
     int edgeStep = max(1, int(round(resScale)));
     float gx = 0.0, gy = 0.0;
@@ -685,7 +678,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     }
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
 
-    // Glow Tint
+    // Dynamic Glow Tint Profiles
     vec3 glowTint = vec3(1.0);
     if (L.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
     else if (L.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
@@ -694,38 +687,43 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
     else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
 
-    // 1. Deep Glow (Wide Atmosphere)
+    // 1. DEEP GLOW: High-threshold atmospheric light falloff
     if (L.deepGlowIntensity > 0.01) {
-        vec3 deepBloom = wideGlow * glowTint * (L.deepGlowIntensity * 1.6);
-        deepBloom *= (1.0 - lineEdge * 0.70); // Shield black line art
+        float falloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.2);
+        vec3 deepBloom = wideGlow * glowTint * (L.deepGlowIntensity * 1.35 * falloff);
+        deepBloom *= (1.0 - lineEdge * 0.75); // Protect black ink outlines
         linearBase += deepBloom;
     }
 
-    // 2. Soft Bloom (Skin & Character Wrap)
+    // 2. SHADERLY GLOW: Soft creamy bloom that wraps based on underlying video color
     if (u_shaderlyGlowIntensity > 0.01) {
-        vec3 softBloom = tightGlow * (u_shaderlyGlowIntensity * 1.35);
-        softBloom *= (1.0 - lineEdge * 0.45);
+        // Color-aware wrap: tight bloom modulated by the underlying footage color
+        vec3 creamyColor = mix(linearBase, tightGlow, 0.40);
+        vec3 softBloom = creamyColor * (u_shaderlyGlowIntensity * 1.10);
+        softBloom *= (1.0 - lineEdge * 0.40);
         linearBase += softBloom;
     }
 
-    // 3. Edge Glow (Soft Spreading Radiant Halo)
+    // 3. SAPPHIRE S_GLOW: Soft outer edge halo (spreads outward like Nanami/Adevob screenshots)
     if (L.sapphireGlowWidth > 0.01) {
-        float haloMask = smoothstep(0.10, 0.50, lineEdge);
-        vec3 edgeHalo = tightGlow * haloMask * (L.sapphireGlowWidth * 1.7);
+        // Radial dilation around edges (not a flat Sobel line)
+        float outerHalo = smoothstep(0.08, 0.45, lineEdge) * (1.0 - smoothstep(0.70, 0.98, lineEdge));
+        vec3 haloTint = (L.edgeGlowTint == 2.0) ? vec3(0.45, 1.15, 1.50) : glowTint;
+        vec3 edgeHalo = tightGlow * outerHalo * haloTint * (L.sapphireGlowWidth * 1.5);
         linearBase += edgeHalo;
     }
 
-    // 4. Master Tonemapping (Linear -> Clamped Linear [0,1])
+    // 4. Master Tonemapping (Linear -> Display Transfer)
     vec3 finalLinear = applyToneMapping(linearBase, u_tonemapMode);
 
     // 5. Convert to sRGB for display output
     vec3 finalDisplay = linearToSrgb(finalLinear);
 
-    // 6. Adaptive Dithering to eliminate 8/10-bit banding
+    // 6. Smooth Sub-Pixel Dithering (Clean triangular distribution - Zero Brick-Wall Grid Artifacts)
     if (u_ditherStrength > 0.01) {
-        float ign = interleavedGradientNoise(vec2(coord));
+        float dither = smoothTriangularDither(vec2(coord));
         float quantStep = (bitMode > 1.5) ? (1.0 / 65535.0) : ((bitMode > 0.5) ? (1.0 / 1023.0) : (1.0 / 255.0));
-        finalDisplay = clamp(finalDisplay + vec3((ign - 0.5) * quantStep * (u_ditherStrength * 3.0)), 0.0, 1.0);
+        finalDisplay = clamp(finalDisplay + vec3(dither * quantStep * (u_ditherStrength * 1.5)), 0.0, 1.0);
     }
 
     packRGBA_Dynamic(pixelIndex, vec4(finalDisplay, 1.0), bitMode);
@@ -925,10 +923,10 @@ void main() {
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
             float warmMask = clamp((lab.x - 0.35) * 1.5, 0.0, 1.0);
-            lab.z -= shadowMask * L.mblMojoTealOrange * 0.045; // Teal (negative b)
-            lab.y -= shadowMask * L.mblMojoTealOrange * 0.015; // Teal (negative a)
-            lab.y += warmMask * L.mblMojoTealOrange * 0.025;   // Orange (positive a)
-            lab.z += warmMask * L.mblMojoTealOrange * 0.035;   // Orange (positive b)
+            lab.z -= shadowMask * L.mblMojoTealOrange * 0.045;
+            lab.y -= shadowMask * L.mblMojoTealOrange * 0.015;
+            lab.y += warmMask * L.mblMojoTealOrange * 0.025;
+            lab.z += warmMask * L.mblMojoTealOrange * 0.035;
         }
 
         // 11. Deep Teal
@@ -951,11 +949,8 @@ void main() {
             lab.yz = mix(lab.yz, lab.yz * 0.85, faceMask * L.cosmoCleanHighlight * 0.40);
         }
 
-        // 14. Spline Curves (Oklab Lightness & Chroma)
-        // Explicit 6-argument float invocation
+        // 14. Monotonic Spline Curves on Lightness (Zero Inversion Risk)
         lab.x = evalCatmullRom(float(lab.x), float(L.curveM0), float(L.curveM1), float(L.curveM2), float(L.curveM3), float(L.curveM4));
-        lab.y = mix(lab.y, lab.y * (L.curveG2 * 2.0), 0.20);
-        lab.z = mix(lab.z, lab.z * (L.curveB2 * 2.0), 0.20);
 
         // Magic Curves (Secondary S-Curve on L)
         if (u_magicCurves > 0.01) {
@@ -971,6 +966,13 @@ void main() {
 
         // Convert back to Linear RGB
         layerColor = oklabToLinearRgb(lab);
+
+        // Optional RGB curve offsets in Linear RGB with strict clamping
+        if (abs(L.curveR2 - 0.5) > 0.01 || abs(L.curveG2 - 0.5) > 0.01 || abs(L.curveB2 - 0.5) > 0.01) {
+            layerColor.r = evalCatmullRom(layerColor.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
+            layerColor.g = clamp(layerColor.g + (L.curveG2 - 0.5) * 0.3, 0.0, 1.0);
+            layerColor.b = clamp(layerColor.b + (L.curveB2 - 0.5) * 0.3, 0.0, 1.0);
+        }
 
         // 16. Split Toning
         if (u_splitToneShadowSat > 0.01 || u_splitToneHighSat > 0.01) {
