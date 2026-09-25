@@ -14,9 +14,9 @@
 
 namespace {
 
-// Push constant struct to direct the compute shader on which Dual Kawase pass to execute
+// Push constants matching aereality_core.comp layout
 struct ComputePushConstants {
-    int32_t passIndex;   // 0: Main, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite
+    int32_t passIndex;   // 0: Grade & FXAA, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite
     int32_t passWidth;
     int32_t passHeight;
     float passRadius;
@@ -40,14 +40,14 @@ struct VulkanContext {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence computeFence = VK_NULL_HANDLE;
 
-    // Buffers:
-    // Binding 0: Input Image (Full Res)
-    // Binding 1: Output Image (Full Res)
+    // Storage Buffers:
+    // Binding 0: Input Image (Up to 16-bit 64bpp)
+    // Binding 1: Output Image (Up to 16-bit 64bpp)
     // Binding 2: Uniform Buffer (UBO)
     // Binding 3: 3D LUT Table
-    // Binding 4: Dual Kawase Pyramid Level 0 (1/2 Resolution)
-    // Binding 5: Dual Kawase Pyramid Level 1 (1/4 Resolution)
-    // Binding 6: Dual Kawase Pyramid Level 2 (1/8 Resolution)
+    // Binding 4: Bloom L0 (1/2 Resolution)
+    // Binding 5: Bloom L1 (1/4 Resolution)
+    // Binding 6: Bloom L2 (1/8 Resolution)
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
@@ -57,13 +57,12 @@ struct VulkanContext {
     VkBuffer lutBuffer = VK_NULL_HANDLE;
     VkDeviceMemory lutMemory = VK_NULL_HANDLE;
 
-    // Dual Kawase Hierarchy Buffers
-    VkBuffer kawaseL0Buffer = VK_NULL_HANDLE;
-    VkDeviceMemory kawaseL0Memory = VK_NULL_HANDLE;
-    VkBuffer kawaseL1Buffer = VK_NULL_HANDLE;
-    VkDeviceMemory kawaseL1Memory = VK_NULL_HANDLE;
-    VkBuffer kawaseL2Buffer = VK_NULL_HANDLE;
-    VkDeviceMemory kawaseL2Memory = VK_NULL_HANDLE;
+    VkBuffer bloomL0Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory bloomL0Memory = VK_NULL_HANDLE;
+    VkBuffer bloomL1Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory bloomL1Memory = VK_NULL_HANDLE;
+    VkBuffer bloomL2Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory bloomL2Memory = VK_NULL_HANDLE;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
@@ -95,7 +94,7 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan buffer!");
+        LOGE("Failed to create Vulkan buffer of size: %llu", (unsigned long long)size);
         return;
     }
 
@@ -108,7 +107,7 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
     allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
 
     if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        LOGE("Failed to allocate Vulkan memory!");
+        LOGE("Failed to allocate Vulkan memory of size: %llu", (unsigned long long)memRequirements.size);
         return;
     }
 
@@ -133,9 +132,9 @@ void cleanupBuffers() {
     safeDestroy(gVk.outBuffer, gVk.outMemory);
     safeDestroy(gVk.uboBuffer, gVk.uboMemory);
     safeDestroy(gVk.lutBuffer, gVk.lutMemory);
-    safeDestroy(gVk.kawaseL0Buffer, gVk.kawaseL0Memory);
-    safeDestroy(gVk.kawaseL1Buffer, gVk.kawaseL1Memory);
-    safeDestroy(gVk.kawaseL2Buffer, gVk.kawaseL2Memory);
+    safeDestroy(gVk.bloomL0Buffer, gVk.bloomL0Memory);
+    safeDestroy(gVk.bloomL1Buffer, gVk.bloomL1Memory);
+    safeDestroy(gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
     gVk.allocatedPixelCapacity = 0;
 }
@@ -147,17 +146,15 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
 
     cleanupBuffers();
 
-    VkDeviceSize pixelBufferSize = requiredPixels * sizeof(uint32_t);
-    VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes (UniformBlock + 4x LayerData)
-    VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 98,304 floats (393,216 bytes)
+    // 8 bytes per pixel allocates enough space for true 16-bit RGBA (R16G16B16A16 = 2 uint32 words per pixel).
+    // This completely eliminates the VRAM out-of-bounds metallic paste artifact.
+    VkDeviceSize pixelBufferSize = requiredPixels * 8; 
+    VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes
+    VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 393,216 bytes
 
-    // Dual Kawase Downsampled Pyramid Buffer Sizes:
-    // L0: 1/4 pixel count (half width * half height)
-    // L1: 1/16 pixel count
-    // L2: 1/64 pixel count
-    VkDeviceSize l0Size = (requiredPixels / 4 + 16) * sizeof(uint32_t);
-    VkDeviceSize l1Size = (requiredPixels / 16 + 16) * sizeof(uint32_t);
-    VkDeviceSize l2Size = (requiredPixels / 64 + 16) * sizeof(uint32_t);
+    VkDeviceSize l0Size = ((requiredPixels / 4) + 64) * sizeof(uint32_t);
+    VkDeviceSize l1Size = ((requiredPixels / 16) + 64) * sizeof(uint32_t);
+    VkDeviceSize l2Size = ((requiredPixels / 64) + 64) * sizeof(uint32_t);
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -179,30 +176,30 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.lutBuffer, gVk.lutMemory);
 
-    // Fast Device-Local Memory for Intermediate Kawase Pyramid Passes
+    // Fast Device-Local Memory for Bloom Pyramid Passes
     createBuffer(gVk.device, gVk.physicalDevice, l0Size,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                 gVk.kawaseL0Buffer, gVk.kawaseL0Memory);
+                 gVk.bloomL0Buffer, gVk.bloomL0Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l1Size,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                 gVk.kawaseL1Buffer, gVk.kawaseL1Memory);
+                 gVk.bloomL1Buffer, gVk.bloomL1Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l2Size,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                 gVk.kawaseL2Buffer, gVk.kawaseL2Memory);
+                 gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
-    // Set up descriptor bindings for all 7 buffers
+    // Set up descriptor bindings for all 7 storage buffers
     VkDescriptorBufferInfo inBufferInfo{gVk.inBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo outBufferInfo{gVk.outBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo uboBufferInfo{gVk.uboBuffer, 0, uboBufferSize};
     VkDescriptorBufferInfo lutBufferInfo{gVk.lutBuffer, 0, lutBufferSize};
-    VkDescriptorBufferInfo l0BufferInfo{gVk.kawaseL0Buffer, 0, l0Size};
-    VkDescriptorBufferInfo l1BufferInfo{gVk.kawaseL1Buffer, 0, l1Size};
-    VkDescriptorBufferInfo l2BufferInfo{gVk.kawaseL2Buffer, 0, l2Size};
+    VkDescriptorBufferInfo l0BufferInfo{gVk.bloomL0Buffer, 0, l0Size};
+    VkDescriptorBufferInfo l1BufferInfo{gVk.bloomL1Buffer, 0, l1Size};
+    VkDescriptorBufferInfo l2BufferInfo{gVk.bloomL2Buffer, 0, l2Size};
 
     VkWriteDescriptorSet descriptorWrites[7]{};
 
@@ -258,97 +255,23 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     vkUpdateDescriptorSets(gVk.device, 7, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Vulkan Pixel Buffer Capacity for %zu pixels with Dual Kawase.", requiredPixels);
+    LOGI("Allocated Safe 64bpp Vulkan Buffers for %zu pixels.", requiredPixels);
     return true;
 }
 
-// Catmull-Rom Spline Evaluator for CPU Fallback Mode
-float evalSplineCPU(float x, float p0, float p1, float p2, float p3, float p4) {
-    x = std::max(0.0f, std::min(1.0f, x));
-    float seg = x * 4.0f;
-    int idx = static_cast<int>(std::floor(seg));
-    if (idx >= 4) return p4;
-    float t = seg - static_cast<float>(idx);
-
-    float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
-    float cp1 = (idx == 0) ? p0 : (idx == 1) ? p1 : (idx == 2) ? p2 : p3;
-    float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
-    float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
-
-    float m1 = 0.5f * (cp2 - cp0);
-    float m2 = 0.5f * (cp3 - cp1);
-
-    float t2 = t * t;
-    float t3 = t2 * t;
-
-    float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-    float h10 = t3 - 2.0f * t2 + t;
-    float h01 = -2.0f * t3 + 3.0f * t2;
-    float h11 = t3 - t2;
-
-    return std::max(0.0f, std::min(1.0f, h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2));
+// 32-bit Floating Point CPU Fallback (sRGB <-> Linear)
+float cpuSrgbToLinear(float c) {
+    return (c <= 0.04045f) ? (c / 12.92f) : std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
 
-// Trilinear 3D LUT Fallback Sampler
-void sample3DLutCPU(float& r, float& g, float& b, const float* lutTable, float opacity) {
-    if (opacity <= 0.001f || lutTable == nullptr) return;
-
-    float rCoord = std::max(0.0f, std::min(1.0f, r)) * 31.0f;
-    float gCoord = std::max(0.0f, std::min(1.0f, g)) * 31.0f;
-    float bCoord = std::max(0.0f, std::min(1.0f, b)) * 31.0f;
-
-    int r0 = static_cast<int>(std::floor(rCoord));
-    int g0 = static_cast<int>(std::floor(gCoord));
-    int b0 = static_cast<int>(std::floor(bCoord));
-
-    int r1 = std::min(31, r0 + 1);
-    int g1 = std::min(31, g0 + 1);
-    int b1 = std::min(31, b0 + 1);
-
-    float fr = rCoord - r0;
-    float fg = gCoord - g0;
-    float fb = bCoord - b0;
-
-    auto getLut = [&](int cr, int cg, int cb, int ch) -> float {
-        int index = (cb * 1024 + cg * 32 + cr) * 3 + ch;
-        return lutTable[index];
-    };
-
-    float outRGB[3] = {0.0f, 0.0f, 0.0f};
-
-    for (int ch = 0; ch < 3; ch++) {
-        float c000 = getLut(r0, g0, b0, ch);
-        float c100 = getLut(r1, g0, b0, ch);
-        float c010 = getLut(r0, g1, b0, ch);
-        float c110 = getLut(r1, g1, b0, ch);
-        float c001 = getLut(r0, g0, b1, ch);
-        float c101 = getLut(r1, g0, b1, ch);
-        float c011 = getLut(r0, g1, b1, ch);
-        float c111 = getLut(r1, g1, b1, ch);
-
-        float c00 = c000 * (1.0f - fr) + c100 * fr;
-        float c10 = c010 * (1.0f - fr) + c110 * fr;
-        float c01 = c001 * (1.0f - fr) + c101 * fr;
-        float c11 = c011 * (1.0f - fr) + c111 * fr;
-
-        float c0 = c00 * (1.0f - fg) + c10 * fg;
-        float c1 = c01 * (1.0f - fg) + c11 * fg;
-
-        outRGB[ch] = c0 * (1.0f - fb) + c1 * fb;
-    }
-
-    r = r * (1.0f - opacity) + outRGB[0] * opacity;
-    g = g * (1.0f - opacity) + outRGB[1] * opacity;
-    b = b * (1.0f - opacity) + outRGB[2] * opacity;
+float cpuLinearToSrgb(float c) {
+    c = std::max(0.0f, std::min(1.0f, c));
+    return (c <= 0.0031308f) ? (c * 12.92f) : (1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f);
 }
 
-// 32-bit Floating Point CPU Fallback Grading Pipeline
-void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h, const float* ubo, const float* lutTable = nullptr) {
+void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h, const float* ubo) {
     int layerCount = static_cast<int>(ubo[1]);
-    float hasLut = ubo[5];
-    float lutOpacity = ubo[6];
-
-    if (layerCount <= 0 && hasLut <= 0.001f) {
+    if (layerCount <= 0) {
         std::memcpy(dst, src, w * h * sizeof(uint32_t));
         return;
     }
@@ -359,9 +282,9 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             int idx = y * w + x;
             uint32_t pixel = src[idx];
 
-            float r = (pixel & 0xFF) / 255.0f;
-            float g = ((pixel >> 8) & 0xFF) / 255.0f;
-            float b = ((pixel >> 16) & 0xFF) / 255.0f;
+            float r = cpuSrgbToLinear((pixel & 0xFF) / 255.0f);
+            float g = cpuSrgbToLinear(((pixel >> 8) & 0xFF) / 255.0f);
+            float b = cpuSrgbToLinear(((pixel >> 16) & 0xFF) / 255.0f);
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
             for (int l = 0; l < std::min(layerCount, 4); l++) {
@@ -369,61 +292,28 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
                 if (ubo[off + 0] < 0.5f) continue;
 
                 float opacity = ubo[off + 1];
-                int mode = static_cast<int>(ubo[off + 2]);
                 float brightness = ubo[off + 3];
                 float saturation = ubo[off + 4];
                 float contrast = ubo[off + 5];
-                float gamma = std::max(0.001f, ubo[off + 7]);
 
-                float lr = r + brightness;
-                float lg = g + brightness;
-                float lb = b + brightness;
+                float lr = (r + brightness - 0.18f) * contrast + 0.18f;
+                float lg = (g + brightness - 0.18f) * contrast + 0.18f;
+                float lb = (b + brightness - 0.18f) * contrast + 0.18f;
 
-                // 0.18 Mid-Gray Pivot Contrast
-                lr = (lr - 0.18f) * contrast + 0.18f;
-                lg = (lg - 0.18f) * contrast + 0.18f;
-                lb = (lb - 0.18f) * contrast + 0.18f;
-
-                // Spline Curves
-                lr = evalSplineCPU(lr, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-                lg = evalSplineCPU(lg, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-                lb = evalSplineCPU(lb, ubo[off + 38], ubo[off + 39], ubo[off + 40], ubo[off + 41], ubo[off + 42]);
-
-                // Gamma
-                lr = std::pow(std::max(0.0f, lr), 1.0f / gamma);
-                lg = std::pow(std::max(0.0f, lg), 1.0f / gamma);
-                lb = std::pow(std::max(0.0f, lb), 1.0f / gamma);
-
-                // Saturation
-                float luma = 0.299f * lr + 0.587f * lg + 0.114f * lb;
+                float luma = 0.2126f * lr + 0.7152f * lg + 0.0722f * lb;
                 lr = luma + saturation * (lr - luma);
                 lg = luma + saturation * (lg - luma);
                 lb = luma + saturation * (lb - luma);
 
-                // Blend Modes
-                if (mode == 1) { // Screen
-                    r = 1.0f - (1.0f - r) * (1.0f - lr * opacity);
-                    g = 1.0f - (1.0f - g) * (1.0f - lg * opacity);
-                    b = 1.0f - (1.0f - b) * (1.0f - lb * opacity);
-                } else if (mode == 2) { // Linear Add
-                    r = std::min(1.0f, r + lr * opacity);
-                    g = std::min(1.0f, g + lg * opacity);
-                    b = std::min(1.0f, b + lb * opacity);
-                } else { // Normal
-                    r = r * (1.0f - opacity) + lr * opacity;
-                    g = g * (1.0f - opacity) + lg * opacity;
-                    b = b * (1.0f - opacity) + lb * opacity;
-                }
+                r = r * (1.0f - opacity) + lr * opacity;
+                g = g * (1.0f - opacity) + lg * opacity;
+                b = b * (1.0f - opacity) + lb * opacity;
             }
 
-            if (hasLut > 0.5f && lutTable != nullptr) {
-                sample3DLutCPU(r, g, b, lutTable, lutOpacity);
-            }
-
-            uint32_t ur = static_cast<uint32_t>(std::max(0.0f, std::min(255.0f, r * 255.0f)));
-            uint32_t ug = static_cast<uint32_t>(std::max(0.0f, std::min(255.0f, g * 255.0f)));
-            uint32_t ub = static_cast<uint32_t>(std::max(0.0f, std::min(255.0f, b * 255.0f)));
-            uint32_t ua = static_cast<uint32_t>(std::max(0.0f, std::min(255.0f, a * 255.0f)));
+            uint32_t ur = static_cast<uint32_t>(cpuLinearToSrgb(r) * 255.0f + 0.5f);
+            uint32_t ug = static_cast<uint32_t>(cpuLinearToSrgb(g) * 255.0f + 0.5f);
+            uint32_t ub = static_cast<uint32_t>(cpuLinearToSrgb(b) * 255.0f + 0.5f);
+            uint32_t ua = static_cast<uint32_t>(a * 255.0f + 0.5f);
 
             dst[idx] = (ua << 24) | (ub << 16) | (ug << 8) | ur;
         }
@@ -444,9 +334,9 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     // 1. Create Vulkan Instance
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "ShaderlyDualKawase";
+    appInfo.pApplicationName = "AERealityEngine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "DualKawaseVulkan";
+    appInfo.pEngineName = "AERealityVulkan";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
@@ -455,11 +345,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     createInfo.pApplicationInfo = &appInfo;
 
     if (vkCreateInstance(&createInfo, nullptr, &gVk.instance) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan instance! Falling back to 32-bit CPU pipeline.");
+        LOGE("Failed to create Vulkan instance.");
         return 0;
     }
 
-    // 2. Pick Physical Device with Compute Queue
+    // 2. Physical Device
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
     if (deviceCount == 0) {
@@ -486,11 +376,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     }
 
     if (!foundQueue) {
-        LOGE("No compute queue family found on device.");
+        LOGE("No compute queue family found on GPU.");
         return 0;
     }
 
-    // 3. Create Logical Device
+    // 3. Logical Device
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -512,7 +402,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
 
-    // 4. Create Shader Module from SPIR-V
+    // 4. Shader Module
     VkShaderModuleCreateInfo shaderModuleInfo{};
     shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     shaderModuleInfo.codeSize = length;
@@ -523,7 +413,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
 
-    // 5. Descriptor Set Layout for 7 Storage Buffers (0=In, 1=Out, 2=UBO, 3=LUT, 4=L0, 5=L1, 6=L2)
+    // 5. Descriptor Set Layout (7 Storage Buffers)
     VkDescriptorSetLayoutBinding bindings[7]{};
     for (int b = 0; b < 7; b++) {
         bindings[b].binding = b;
@@ -536,7 +426,6 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 7;
     layoutInfo.pBindings = bindings;
-
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
     // 6. Pipeline Layout with Push Constants
@@ -551,7 +440,6 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineLayoutInfo.pSetLayouts = &gVk.descriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-
     vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
 
     // 7. Compute Pipeline
@@ -562,10 +450,9 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pipelineInfo.stage.module = gVk.shaderModule;
     pipelineInfo.stage.pName = "main";
-
     vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
 
-    // 8. Descriptor Pool & Allocate Set
+    // 8. Descriptor Pool & Set
     VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 7;
@@ -575,7 +462,6 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
-
     vkCreateDescriptorPool(gVk.device, &poolInfo, nullptr, &gVk.descriptorPool);
 
     VkDescriptorSetAllocateInfo setAllocInfo{};
@@ -583,15 +469,13 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     setAllocInfo.descriptorPool = gVk.descriptorPool;
     setAllocInfo.descriptorSetCount = 1;
     setAllocInfo.pSetLayouts = &gVk.descriptorSetLayout;
-
     vkAllocateDescriptorSets(gVk.device, &setAllocInfo, &gVk.descriptorSet);
 
-    // 9. Command Pool, Command Buffer & Fence
+    // 9. Command Pool & Fence
     VkCommandPoolCreateInfo cmdPoolInfo{};
     cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cmdPoolInfo.queueFamilyIndex = gVk.computeQueueFamilyIndex;
     cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-
     vkCreateCommandPool(gVk.device, &cmdPoolInfo, nullptr, &gVk.commandPool);
 
     VkCommandBufferAllocateInfo cmdAllocInfo{};
@@ -599,7 +483,6 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     cmdAllocInfo.commandPool = gVk.commandPool;
     cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
-
     vkAllocateCommandBuffers(gVk.device, &cmdAllocInfo, &gVk.commandBuffer);
 
     VkFenceCreateInfo fenceInfo{};
@@ -608,10 +491,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
 
     gVk.isInitialized = true;
-    LOGI("Shaderly Dual Kawase Vulkan Compute Pipeline Initialized Successfully.");
+    LOGI("AEReality 32-bit Vulkan Compute Pipeline Initialized Successfully.");
     return 1;
 }
 
+// 8-BIT & 10-BIT PROCESSING ENTRY POINT
 void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
                    uint8_t* outputBytes, int32_t outWidth, int32_t outHeight,
                    const float* uniforms, int32_t uniformCount,
@@ -623,33 +507,41 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount)) {
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
                                   reinterpret_cast<uint32_t*>(outputBytes),
-                                  outWidth, outHeight, uniforms, lutTable);
+                                  outWidth, outHeight, uniforms);
         return;
     }
 
-    // 1. Copy Input Pixels to Vulkan Staging Memory
+    size_t inputByteSize = pixelCount * sizeof(uint32_t); // 8-bit / 10-bit RGBA = 4 bytes per pixel
+
+    // 1. Upload Input Pixels
     void* mappedInput = nullptr;
-    vkMapMemory(gVk.device, gVk.inMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedInput);
-    std::memcpy(mappedInput, inputBytes, pixelCount * sizeof(uint32_t));
+    vkMapMemory(gVk.device, gVk.inMemory, 0, inputByteSize, 0, &mappedInput);
+    std::memcpy(mappedInput, inputBytes, inputByteSize);
+    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, inputByteSize};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // 2. Copy Uniforms to Vulkan UBO Memory
+    // 2. Upload Uniforms
     void* mappedUbo = nullptr;
     size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
     std::memcpy(mappedUbo, uniforms, uboCopyBytes);
+    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, uboCopyBytes};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
-    // 3. Copy 3D LUT Table if Present
+    // 3. Upload 3D LUT
     if (lutTable != nullptr && lutCount > 0) {
         void* mappedLut = nullptr;
         size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
         vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
         std::memcpy(mappedLut, lutTable, lutCopyBytes);
+        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, lutCopyBytes};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
         vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
 
-    // 4. Record Multi-Pass Dual Kawase Command Buffer
+    // 4. Record Multi-Pass Compute Commands
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -679,47 +571,43 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
 
     ComputePushConstants pc{};
 
-    // =========================================================================
-    // THE 7-PASS DUAL KAWASE PIPELINE DISPATCH SEQUENCE
-    // =========================================================================
-
-    // PASS 0: Main Color Grade -> writes OutputBuffer
+    // Pass 0: Main Color Grade + FXAA -> writes OutputBuffer
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 1: Prefilter from OutputBuffer -> writes Kawase Level 0 (Half-Res)
+    // Pass 1: Prefilter Highlights -> Bloom L0
     pc = {1, wL0, hL0, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 2: Downsample L0 -> L1 (Quarter-Res)
+    // Pass 2: Downsample L0 -> L1
     pc = {2, wL1, hL1, 1.5f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 3: Downsample L1 -> L2 (Eighth-Res)
+    // Pass 3: Downsample L1 -> L2
     pc = {3, wL2, hL2, 2.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 4: Upsample L2 -> L1
+    // Pass 4: Upsample L2 -> L1
     pc = {4, wL1, hL1, 2.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 5: Upsample L1 -> L0
+    // Pass 5: Upsample L1 -> L0
     pc = {5, wL0, hL0, 1.5f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // PASS 6: Master Composite (OutputBuffer + Bilinear L0 + Bilinear L2 -> Final Output)
+    // Pass 6: Master Composite & Tonemapping
     pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -737,47 +625,151 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
     vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
 
-    // 6. Read Back Processed Pixels
+    // 6. Read Back
     void* mappedOutput = nullptr;
-    vkMapMemory(gVk.device, gVk.outMemory, 0, pixelCount * sizeof(uint32_t), 0, &mappedOutput);
-    std::memcpy(outputBytes, mappedOutput, pixelCount * sizeof(uint32_t));
+    vkMapMemory(gVk.device, gVk.outMemory, 0, inputByteSize, 0, &mappedOutput);
+    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, inputByteSize};
+    vkInvalidateMappedMemoryRanges(gVk.device, 1, &outRange);
+    std::memcpy(outputBytes, mappedOutput, inputByteSize);
     vkUnmapMemory(gVk.device, gVk.outMemory);
 }
 
+// TRUE NATIVE 16-BIT DIRECT PROCESSING ENTRY POINT
 void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHeight,
                       uint16_t* outputBytes, int32_t outWidth, int32_t outHeight,
                       const float* uniforms, int32_t uniformCount,
                       const float* lutTable, int32_t lutCount) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+
     size_t pixelCount = static_cast<size_t>(outWidth * outHeight);
-    std::vector<uint32_t> stage8In(pixelCount);
-    std::vector<uint32_t> stage8Out(pixelCount);
 
-    #pragma omp parallel for
-    for (size_t p = 0; p < pixelCount; p++) {
-        uint8_t r = static_cast<uint8_t>(inputBytes[p * 4 + 0] >> 8);
-        uint8_t g = static_cast<uint8_t>(inputBytes[p * 4 + 1] >> 8);
-        uint8_t b = static_cast<uint8_t>(inputBytes[p * 4 + 2] >> 8);
-        uint8_t a = static_cast<uint8_t>(inputBytes[p * 4 + 3] >> 8);
-        stage8In[p] = (a << 24) | (b << 16) | (g << 8) | r;
+    if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount)) {
+        // Safe 16-bit passthrough fallback
+        std::memcpy(outputBytes, inputBytes, pixelCount * 8);
+        return;
     }
 
-    process_image(reinterpret_cast<const uint8_t*>(stage8In.data()), inWidth, inHeight,
-                  reinterpret_cast<uint8_t*>(stage8Out.data()), outWidth, outHeight,
-                  uniforms, uniformCount, lutTable, lutCount);
+    size_t total16BitByteSize = pixelCount * 8; // 4 channels * 2 bytes = 8 bytes per pixel
 
-    #pragma omp parallel for
-    for (size_t p = 0; p < pixelCount; p++) {
-        uint32_t pix = stage8Out[p];
-        uint16_t r8 = (pix & 0xFF);
-        uint16_t g8 = ((pix >> 8) & 0xFF);
-        uint16_t b8 = ((pix >> 16) & 0xFF);
-        uint16_t a8 = ((pix >> 24) & 0xFF);
+    // 1. Direct Upload of Pure 16-bit Input
+    void* mappedInput = nullptr;
+    vkMapMemory(gVk.device, gVk.inMemory, 0, total16BitByteSize, 0, &mappedInput);
+    std::memcpy(mappedInput, inputBytes, total16BitByteSize);
+    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, total16BitByteSize};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
+    vkUnmapMemory(gVk.device, gVk.inMemory);
 
-        outputBytes[p * 4 + 0] = (r8 << 8) | r8;
-        outputBytes[p * 4 + 1] = (g8 << 8) | g8;
-        outputBytes[p * 4 + 2] = (b8 << 8) | b8;
-        outputBytes[p * 4 + 3] = (a8 << 8) | a8;
+    // 2. Upload Uniforms
+    void* mappedUbo = nullptr;
+    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float)));
+    vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
+    std::memcpy(mappedUbo, uniforms, uboCopyBytes);
+    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, uboCopyBytes};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
+    vkUnmapMemory(gVk.device, gVk.uboMemory);
+
+    // 3. Upload 3D LUT
+    if (lutTable != nullptr && lutCount > 0) {
+        void* mappedLut = nullptr;
+        size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
+        vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
+        std::memcpy(mappedLut, lutTable, lutCopyBytes);
+        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, lutCopyBytes};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
+        vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
+
+    // 4. Record Multi-Pass Compute Commands
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo);
+    vkCmdBindPipeline(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gVk.computePipeline);
+    vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
+
+    auto insertBarrier = []() {
+        VkMemoryBarrier memoryBarrier{};
+        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(gVk.commandBuffer,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
+    };
+
+    int32_t wL0 = std::max(1, outWidth / 2);
+    int32_t hL0 = std::max(1, outHeight / 2);
+    int32_t wL1 = std::max(1, outWidth / 4);
+    int32_t hL1 = std::max(1, outHeight / 4);
+    int32_t wL2 = std::max(1, outWidth / 8);
+    int32_t hL2 = std::max(1, outHeight / 8);
+
+    ComputePushConstants pc{};
+
+    // Pass 0: 16-Bit Primary Color Grade + FXAA
+    pc = {0, outWidth, outHeight, 1.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 1: Prefilter
+    pc = {1, wL0, hL0, 1.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 2: Downsample L0 -> L1
+    pc = {2, wL1, hL1, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 3: Downsample L1 -> L2
+    pc = {3, wL2, hL2, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 4: Upsample L2 -> L1
+    pc = {4, wL1, hL1, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 5: Upsample L1 -> L0
+    pc = {5, wL0, hL0, 1.5f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 6: Master Composite & 16-Bit Tonemapped Pack
+    pc = {6, outWidth, outHeight, 1.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
+
+    vkEndCommandBuffer(gVk.commandBuffer);
+
+    // 5. Submit with Fence Synchronization
+    vkResetFences(gVk.device, 1, &gVk.computeFence);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &gVk.commandBuffer;
+
+    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
+    vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
+
+    // 6. Direct Read Back of Full 16-Bit Words (Zero Truncation)
+    void* mappedOutput = nullptr;
+    vkMapMemory(gVk.device, gVk.outMemory, 0, total16BitByteSize, 0, &mappedOutput);
+    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, total16BitByteSize};
+    vkInvalidateMappedMemoryRanges(gVk.device, 1, &outRange);
+    std::memcpy(outputBytes, mappedOutput, total16BitByteSize);
+    vkUnmapMemory(gVk.device, gVk.outMemory);
 }
 
 void cleanup_processor() {
@@ -824,7 +816,7 @@ void cleanup_processor() {
     }
 
     gVk.isInitialized = false;
-    LOGI("Shaderly Vulkan Processor Destroyed Cleanly.");
+    LOGI("AEReality Vulkan Processor Destroyed Cleanly.");
 }
 
 // JNI Bridge Exports
