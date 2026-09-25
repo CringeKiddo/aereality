@@ -1,7 +1,7 @@
 // =============================================================================
 // AEReality / Shaderly - Master Studio Interface (Part 1/2)
 // True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
-// 100% Complete Section - Zero Code Omissions
+// 100% Complete Section - Zero Feature Omissions
 // =============================================================================
 
 import 'dart:async';
@@ -858,6 +858,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
+
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -1033,6 +1034,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
+  // =============================================================================
+// AEReality / Shaderly - Master Studio Interface (Part 2/2)
+// True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
+// 100% Complete Section - Zero Feature Omissions
+// =============================================================================
 
   Future<void> _loadMedia(String path) async {
     if (path.isEmpty) return;
@@ -1080,7 +1086,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           setState(() {});
           _applyGrade();
 
-          // Continuous Timeline Position & Playback Grading Loop
+          // Continuous Timeline Position & Live Playback Sync
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
             if (_controller != null && _controller!.value.isInitialized && _controller!.value.isPlaying && mounted) {
               final newPos = _controller!.value.position.inMilliseconds / 1000.0;
@@ -1124,7 +1130,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final tempDir = await getTemporaryDirectory();
         final framePath = '${tempDir.path}/tl_frame_preview.png';
 
-        // Fast native seek
+        // Fast native seek for live preview frame
         await FFmpegKit.execute(
           '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
         );
@@ -1208,6 +1214,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
+  // Exact 1:1 512-float UBO packing for aereality_core.comp & vulkan_processor.cpp
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
     final uniforms = Float32List(512);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
@@ -1237,7 +1244,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[18] = _project.textBevelDepth;
     uniforms[19] = _project.textChromeIntensity;
 
-    // Offsets 20..27: Global Glow & Split Toning Uniforms
+    // Offsets 20..27: Glow & Split Toning Uniforms
     uniforms[20] = _cur.shaderlyGlowIntensity;
     uniforms[21] = _cur.shaderlyGlowRadius;
     uniforms[22] = _cur.shaderlyGlowThreshold;
@@ -1247,13 +1254,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[26] = _cur.splitToneHighSat;
     uniforms[27] = _cur.splitToneBalance;
 
-    // For live UI preview, ALWAYS render in 8-bit RGBA8888 so Flutter can display it.
-    // High-bit depth (10-bit / 16-bit) is only used during file rendering in editor_views.dart!
+    // Offset 28: Bit-depth mode (0.0=8-bit for UI preview)
     uniforms[28] = 0.0;
-    uniforms[29] = 0.0;
-    uniforms[30] = 0.0;
-    uniforms[31] = 0.0;
 
+    // Offsets 29..31: Magic Bullets & Edge Halo Extensions
+    uniforms[29] = _cur.deepTeal;
+    uniforms[30] = _cur.magicCurves;
+    uniforms[31] = _cur.edgeHaloRadius;
+
+    // Up to 4 Adjustment Layers (64 floats each starting at offset 32)
     for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
       final layer = _project.layers[l];
       final offset = 32 + (l * 64);
@@ -1617,7 +1626,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
           ),
           const SizedBox(width: 8),
-          // Exact Millisecond Position Output
           Text(
             EditorViews.formatTimestampMs(_currentTimelinePosition),
             style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
