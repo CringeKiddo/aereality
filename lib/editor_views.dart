@@ -2864,16 +2864,11 @@ class EditorViews {
 
       final finalOutputFile = File(finalOutputPath);
 
-      // Force Android MediaScanner to index the file in MediaStore so it appears immediately
+      // Force Android MediaStore to index the file via MainActivity.kt
       try {
         if (Platform.isAndroid) {
-          await Process.run('am', [
-            'broadcast',
-            '-a',
-            'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
-            '-d',
-            'file://${finalOutputFile.path}',
-          ]);
+          const channel = MethodChannel('com.example.aereality/media_scanner');
+          await channel.invokeMethod('scanFile', {'path': finalOutputFile.path});
         }
       } catch (_) {}
 
