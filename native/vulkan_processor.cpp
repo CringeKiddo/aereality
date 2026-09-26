@@ -16,7 +16,7 @@ namespace {
 
 // Push constants matching aereality_core.comp layout
 struct ComputePushConstants {
-    int32_t passIndex;   // 0: Grade & FXAA, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite
+    int32_t passIndex;   // 0: Grade, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite & FXAA
     int32_t passWidth;
     int32_t passHeight;
     float passRadius;
@@ -48,6 +48,7 @@ struct VulkanContext {
     // Binding 4: Bloom L0 (1/2 Resolution)
     // Binding 5: Bloom L1 (1/4 Resolution)
     // Binding 6: Bloom L2 (1/8 Resolution)
+    // Binding 7: Intermediate Composite Buffer (Permanently eliminates the brick-wall race condition)
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
@@ -63,6 +64,9 @@ struct VulkanContext {
     VkDeviceMemory bloomL1Memory = VK_NULL_HANDLE;
     VkBuffer bloomL2Buffer = VK_NULL_HANDLE;
     VkDeviceMemory bloomL2Memory = VK_NULL_HANDLE;
+
+    VkBuffer tempCompositeBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory tempCompositeMemory = VK_NULL_HANDLE;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
@@ -80,7 +84,13 @@ uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, Vk
             return i;
         }
     }
-    LOGE("Failed to find suitable memory type!");
+
+    // Fallback if exact device-local is not available
+    if (properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+        return findMemoryType(physicalDevice, typeFilter, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    }
+
+    LOGE("Failed to find suitable Vulkan memory type!");
     return 0;
 }
 
@@ -135,6 +145,7 @@ void cleanupBuffers() {
     safeDestroy(gVk.bloomL0Buffer, gVk.bloomL0Memory);
     safeDestroy(gVk.bloomL1Buffer, gVk.bloomL1Memory);
     safeDestroy(gVk.bloomL2Buffer, gVk.bloomL2Memory);
+    safeDestroy(gVk.tempCompositeBuffer, gVk.tempCompositeMemory);
 
     gVk.allocatedPixelCapacity = 0;
 }
@@ -146,8 +157,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
 
     cleanupBuffers();
 
-    // 8 bytes per pixel allocates enough space for true 16-bit RGBA (R16G16B16A16 = 2 uint32 words per pixel).
-    // This completely eliminates the VRAM out-of-bounds metallic paste artifact.
+    // 8 bytes per pixel allocates enough space for true 16-bit RGBA (R16G16B16A16 = 64 bits per pixel).
     VkDeviceSize pixelBufferSize = requiredPixels * 8; 
     VkDeviceSize uboBufferSize = 512 * sizeof(float); // 2048 bytes
     VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 393,216 bytes
@@ -192,7 +202,13 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
-    // Set up descriptor bindings for all 7 storage buffers
+    // Fast Device-Local Memory for Intermediate Composite (Kills Brick-Wall Artifacts)
+    createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.tempCompositeBuffer, gVk.tempCompositeMemory);
+
+    // Set up descriptor bindings for all 8 storage buffers
     VkDescriptorBufferInfo inBufferInfo{gVk.inBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo outBufferInfo{gVk.outBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo uboBufferInfo{gVk.uboBuffer, 0, uboBufferSize};
@@ -200,8 +216,9 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     VkDescriptorBufferInfo l0BufferInfo{gVk.bloomL0Buffer, 0, l0Size};
     VkDescriptorBufferInfo l1BufferInfo{gVk.bloomL1Buffer, 0, l1Size};
     VkDescriptorBufferInfo l2BufferInfo{gVk.bloomL2Buffer, 0, l2Size};
+    VkDescriptorBufferInfo tempCompInfo{gVk.tempCompositeBuffer, 0, pixelBufferSize};
 
-    VkWriteDescriptorSet descriptorWrites[7]{};
+    VkWriteDescriptorSet descriptorWrites[8]{};
 
     descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[0].dstSet = gVk.descriptorSet;
@@ -252,10 +269,17 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     descriptorWrites[6].descriptorCount = 1;
     descriptorWrites[6].pBufferInfo = &l2BufferInfo;
 
-    vkUpdateDescriptorSets(gVk.device, 7, descriptorWrites, 0, nullptr);
+    descriptorWrites[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[7].dstSet = gVk.descriptorSet;
+    descriptorWrites[7].dstBinding = 7;
+    descriptorWrites[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[7].descriptorCount = 1;
+    descriptorWrites[7].pBufferInfo = &tempCompInfo;
+
+    vkUpdateDescriptorSets(gVk.device, 8, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Safe 64bpp Vulkan Buffers for %zu pixels.", requiredPixels);
+    LOGI("Allocated Safe 64bpp Vulkan Buffers with Ping-Pong Buffer for %zu pixels.", requiredPixels);
     return true;
 }
 
@@ -413,9 +437,9 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
 
-    // 5. Descriptor Set Layout (7 Storage Buffers)
-    VkDescriptorSetLayoutBinding bindings[7]{};
-    for (int b = 0; b < 7; b++) {
+    // 5. Descriptor Set Layout (8 Storage Buffers)
+    VkDescriptorSetLayoutBinding bindings[8]{};
+    for (int b = 0; b < 8; b++) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
@@ -424,7 +448,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 7;
+    layoutInfo.bindingCount = 8;
     layoutInfo.pBindings = bindings;
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
@@ -455,7 +479,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     // 8. Descriptor Pool & Set
     VkDescriptorPoolSize poolSizes[1]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 7;
+    poolSizes[0].descriptorCount = 8;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -491,11 +515,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
 
     gVk.isInitialized = true;
-    LOGI("AEReality 32-bit Vulkan Compute Pipeline Initialized Successfully.");
+    LOGI("AEReality 32-bit Vulkan Compute Pipeline with Ping-Pong Buffer Initialized Successfully.");
     return 1;
 }
 
-// 8-BIT & 10-BIT PROCESSING ENTRY POINT
+// 8-BIT PROCESSING ENTRY POINT
 void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
                    uint8_t* outputBytes, int32_t outWidth, int32_t outHeight,
                    const float* uniforms, int32_t uniformCount,
@@ -511,13 +535,13 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
         return;
     }
 
-    size_t inputByteSize = pixelCount * sizeof(uint32_t); // 8-bit / 10-bit RGBA = 4 bytes per pixel
+    size_t inputByteSize = pixelCount * sizeof(uint32_t); // 8-bit RGBA = 4 bytes per pixel
 
     // 1. Upload Input Pixels
     void* mappedInput = nullptr;
     vkMapMemory(gVk.device, gVk.inMemory, 0, inputByteSize, 0, &mappedInput);
     std::memcpy(mappedInput, inputBytes, inputByteSize);
-    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, inputByteSize};
+    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, VK_WHOLE_SIZE};
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
@@ -526,7 +550,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
     std::memcpy(mappedUbo, uniforms, uboCopyBytes);
-    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, uboCopyBytes};
+    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
     vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
@@ -536,7 +560,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
         size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
         vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
         std::memcpy(mappedLut, lutTable, lutCopyBytes);
-        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, lutCopyBytes};
+        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
         vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
@@ -571,13 +595,13 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
 
     ComputePushConstants pc{};
 
-    // Pass 0: Main Color Grade + FXAA -> writes OutputBuffer
+    // Pass 0: Main Color Grade -> writes clean Linear composite to TempCompositeBuffer (Binding 7)
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
     insertBarrier();
 
-    // Pass 1: Prefilter Highlights -> Bloom L0
+    // Pass 1: Prefilter Highlights from TempCompositeBuffer -> Bloom L0
     pc = {1, wL0, hL0, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
@@ -607,7 +631,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // Pass 6: Master Composite & Tonemapping
+    // Pass 6: Master Composite, FXAA & Tonemapping -> reads TempCompositeBuffer, writes outBuffer (Binding 1)
     pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -628,7 +652,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     // 6. Read Back
     void* mappedOutput = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, inputByteSize, 0, &mappedOutput);
-    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, inputByteSize};
+    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
     vkInvalidateMappedMemoryRanges(gVk.device, 1, &outRange);
     std::memcpy(outputBytes, mappedOutput, inputByteSize);
     vkUnmapMemory(gVk.device, gVk.outMemory);
@@ -655,7 +679,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     void* mappedInput = nullptr;
     vkMapMemory(gVk.device, gVk.inMemory, 0, total16BitByteSize, 0, &mappedInput);
     std::memcpy(mappedInput, inputBytes, total16BitByteSize);
-    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, total16BitByteSize};
+    VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, VK_WHOLE_SIZE};
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
@@ -664,7 +688,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(512 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
     std::memcpy(mappedUbo, uniforms, uboCopyBytes);
-    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, uboCopyBytes};
+    VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
     vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
@@ -674,7 +698,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
         size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
         vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
         std::memcpy(mappedLut, lutTable, lutCopyBytes);
-        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, lutCopyBytes};
+        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, VK_WHOLE_SIZE};
         vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
         vkUnmapMemory(gVk.device, gVk.lutMemory);
     }
@@ -709,7 +733,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
 
     ComputePushConstants pc{};
 
-    // Pass 0: 16-Bit Primary Color Grade + FXAA
+    // Pass 0: 16-Bit Primary Color Grade -> TempCompositeBuffer (Binding 7)
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -745,7 +769,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // Pass 6: Master Composite & 16-Bit Tonemapped Pack
+    // Pass 6: Master Composite & 16-Bit Tonemapped Pack -> outBuffer (Binding 1)
     pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -766,7 +790,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     // 6. Direct Read Back of Full 16-Bit Words (Zero Truncation)
     void* mappedOutput = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, total16BitByteSize, 0, &mappedOutput);
-    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, total16BitByteSize};
+    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
     vkInvalidateMappedMemoryRanges(gVk.device, 1, &outRange);
     std::memcpy(outputBytes, mappedOutput, total16BitByteSize);
     vkUnmapMemory(gVk.device, gVk.outMemory);
