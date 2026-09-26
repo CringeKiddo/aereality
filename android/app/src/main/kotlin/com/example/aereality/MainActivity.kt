@@ -1,4 +1,4 @@
-package com.example.aereality
+package com.aereality
 
 import android.content.ContentValues
 import android.media.MediaScannerConnection
