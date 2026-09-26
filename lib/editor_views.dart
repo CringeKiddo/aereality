@@ -21,7 +21,7 @@ import 'package:image/image.dart' as img;
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
-import 'spline_curve_editor.dart';
+import 'curve_editor.dart';
 import 'vulkan_bridge.dart';
 
 class EditorViews {
