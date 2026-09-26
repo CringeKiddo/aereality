@@ -21,7 +21,7 @@ import 'package:image/image.dart' as img;
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
-import 'components/curve_editor.dart';
+import 'spline_curve_editor.dart';
 import 'vulkan_bridge.dart';
 
 class EditorViews {
@@ -423,7 +423,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. BASIC TAB (Smooth Hue Slider, Oklab Contrast & Black Crush)
+  // 4. BASIC TAB (Smooth Oklab Hue, Contrast & Black Crush)
   // ---------------------------------------------------------------------------
   static Widget buildBasicGradingTab({
     required BuildContext context,
@@ -744,14 +744,14 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // FULL PRESET ENGINE (WIS & YOUTUBE SHORTS GRADE REVAMPS - ZERO FLARES/RAYS)
-  // Preserving Okkotsu, Home-Made Sauce, and Malenia 100% Intact
+  // FULL PRESET ENGINE (WIS & YOUTUBE SHORTS GRADE REVAMPS)
+  // Okkotsu, Home-Made Sauce, and Malenia are preserved 100% UNTOUCHED
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
     project.layers.clear();
 
     switch (name.toLowerCase()) {
-      // 1. YAMATO (Soft Creamy Ice / Cold Oceanic Contrast)
+      // 1. YAMATO (Sule-Style Soft Creamy Ice / Cold Oceanic Contrast)
       case 'yamato':
         project.tonemapMode = 1.0; // AgX Anime Punch
         project.deepTeal = 0.35;
@@ -857,7 +857,7 @@ class EditorViews {
         ));
         break;
 
-      // 4. ARKNIGHTS (Crisp Gold / Deep Film Noir Ambience)
+      // 4. ARKNIGHTS (Conquestor Gold & Film Noir Ambient Shadow)
       case 'arknights':
         project.tonemapMode = 2.0; // Khronos PBR Neutral
         project.deepTeal = 0.22;
@@ -897,7 +897,7 @@ class EditorViews {
         ));
         break;
 
-      // 5. ADEVOB SLOP (YouTube Adevob Steel & Crisp Monochromatic Inks)
+      // 5. ADEVOB SLOP (Adevob Cranberry Steel Inks & Crisp Lines)
       case 'adevob slop':
         project.tonemapMode = 1.0; // AgX Punch
         project.deepTeal = 0.45;
@@ -933,7 +933,7 @@ class EditorViews {
         ));
         break;
 
-      // 6. YUTA (Desaturated Silver & Cursed Specular Core)
+      // 6. YUTA (Desaturated Silver Blade & Cursed Specular Core)
       case 'yuta':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.25;
@@ -1003,7 +1003,7 @@ class EditorViews {
         ));
         break;
 
-      // 8. DEKU (Vibrant Emerald Glow / Hero Contrast)
+      // 8. DEKU (Vibrant Emerald Glow & Hero Line Pop)
       case 'deku':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.20;
@@ -1078,7 +1078,7 @@ class EditorViews {
         ));
         break;
 
-      // 10. MAHITO (Soft Desaturated Cold Cream)
+      // 10. MAHITO (Soft Desaturated Cold Cream & Film Haze)
       case 'mahito':
         project.tonemapMode = 2.0; // Khronos Neutral
         project.deepTeal = 0.38;
@@ -1114,7 +1114,7 @@ class EditorViews {
         ));
         break;
 
-      // 11. GOJO (Infinity Blue / Punchy Cinema Magic Bullet)
+      // 11. GOJO (Sule Six Eyes Radiance / Punchy Magic Bullet Cyan Bloom)
       case 'gojo':
         project.tonemapMode = 1.0; // AgX Anime Punch
         project.deepTeal = 0.50;
@@ -1149,7 +1149,7 @@ class EditorViews {
         ));
         break;
 
-      // 12. TOJI (Heavy Steel Inks / High Acutance Manga Silhouette)
+      // 12. TOJI (Heavy Steel Inks & High Acutance Manga Silhouette)
       case 'toji':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.18;
@@ -1219,7 +1219,7 @@ class EditorViews {
         ));
         break;
 
-      // 14. GIORNO (Rich Gold Experience / Golden Hour Luster)
+      // 14. GIORNO (Rich Gold Experience & Golden Hour Luster)
       case 'giorno':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.15;
@@ -1326,7 +1326,7 @@ class EditorViews {
         ));
         break;
 
-      // 17. DENJI (Blood Chainsaw / High Saturated Crimson Grime)
+      // 17. DENJI (Sule Giyu Style Chainsaw Blood / Saturated Crimson Energy)
       case 'denji':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.20;
@@ -1978,16 +1978,28 @@ class EditorViews {
       xmlBuffer.writeln('  </Layers>');
       xmlBuffer.writeln('</AERealityColorCorrection>');
 
-      Directory targetDir = Directory('/storage/emulated/0/Download');
-      if (!targetDir.existsSync()) {
-        targetDir = await getApplicationDocumentsDirectory();
-      }
-
-      final jsonFile = File('${targetDir.path}/AEReality_${safeName}_CC.json');
+      final docs = await getApplicationDocumentsDirectory();
+      final jsonFile = File('${docs.path}/AEReality_${safeName}_CC.json');
       await jsonFile.writeAsString(const JsonEncoder.withIndent('  ').convert(ccData));
 
-      final xmlFile = File('${targetDir.path}/AEReality_${safeName}_CC.xml');
+      final xmlFile = File('${docs.path}/AEReality_${safeName}_CC.xml');
       await xmlFile.writeAsString(xmlBuffer.toString());
+
+      try {
+        if (Platform.isAndroid) {
+          const channel = MethodChannel('com.example.aereality/media_scanner');
+          await channel.invokeMethod('saveToDownloads', {
+            'sourcePath': jsonFile.path,
+            'fileName': 'AEReality_${safeName}_CC.json',
+            'mimeType': 'application/json',
+          });
+          await channel.invokeMethod('saveToDownloads', {
+            'sourcePath': xmlFile.path,
+            'fileName': 'AEReality_${safeName}_CC.xml',
+            'mimeType': 'application/xml',
+          });
+        }
+      } catch (_) {}
 
       scaffold.showSnackBar(SnackBar(
         backgroundColor: const Color(0xFF101016),
@@ -2385,37 +2397,44 @@ class EditorViews {
 
       Uint8List encodedFile;
       String ext = format.toLowerCase();
+      String mimeType = 'image/png';
+
       if (format == 'PNG') {
         encodedFile = Uint8List.fromList(img.encodePng(outputImg));
+        mimeType = 'image/png';
       } else if (format == 'JPG') {
         encodedFile = Uint8List.fromList(img.encodeJpg(outputImg, quality: quality));
         ext = 'jpg';
+        mimeType = 'image/jpeg';
       } else {
         encodedFile = Uint8List.fromList(img.encodePng(outputImg));
         ext = 'webp';
+        mimeType = 'image/webp';
       }
 
-      Directory destDir = Directory('/storage/emulated/0/Download');
-      if (!await destDir.exists()) {
-        final docs = await getApplicationDocumentsDirectory();
-        destDir = docs;
-      }
+      final docs = await getApplicationDocumentsDirectory();
+      final fileName = 'Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final localTempPath = '${docs.path}/$fileName';
+      final tempFile = File(localTempPath);
+      await tempFile.writeAsBytes(encodedFile);
 
-      final outPath = '${destDir.path}/Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
-      final outFile = File(outPath);
-      await outFile.writeAsBytes(encodedFile);
-
+      String publicResultPath = localTempPath;
       try {
         if (Platform.isAndroid) {
           const channel = MethodChannel('com.example.aereality/media_scanner');
-          await channel.invokeMethod('scanFile', {'path': outFile.path});
+          final res = await channel.invokeMethod<String>('saveToDownloads', {
+            'sourcePath': tempFile.path,
+            'fileName': fileName,
+            'mimeType': mimeType,
+          });
+          if (res != null) publicResultPath = res;
         }
       } catch (_) {}
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Image Saved to Downloads:\n$outPath'),
+            content: Text('Image Saved to Downloads:\n$publicResultPath'),
             backgroundColor: Colors.teal,
             duration: const Duration(seconds: 4),
           ),
@@ -2667,7 +2686,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 15. NATIVE HIGH-BIT DEPTH CLEAN EXPORT ENGINE
+  // 15. NATIVE HIGH-BIT DEPTH CLEAN EXPORT ENGINE (LIGHTNING-FAST RAW PIPE)
   // ---------------------------------------------------------------------------
   static Future<void> executeVideoExport({
     required BuildContext context,
@@ -2800,8 +2819,9 @@ class EditorViews {
 
       statusNotifier.value = 'Extracting $outW x $outH frames fast...';
       
+      // Fast rawvideo frame extraction bypassing CPU image encoding
       activeSession = await FFmpegKit.execute(
-        '-hide_banner -i "${project.mediaPath}" -r $targetFps -s ${outW}x${outH} -pix_fmt rgba -compression_level 1 -y "${framesDir.path}/frame_%05d.png"',
+        '-hide_banner -i "${project.mediaPath}" -r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${framesDir.path}/frame_%05d.raw"',
       );
 
       final extractReturnCode = await activeSession.getReturnCode();
@@ -2819,19 +2839,23 @@ class EditorViews {
         throw Exception('Frame extraction failed: 0 frames produced.');
       }
 
+      final int frameByteLength8 = outW * outH * 4;
+
       for (int i = 0; i < totalFrames; i++) {
         if (isCancelled) return;
 
         final file = frameFiles[i];
         if (file is! File) continue;
-        final bytes = await file.readAsBytes();
-        final decoded = img.decodePng(bytes);
-        if (decoded == null) continue;
+        final rawInput8 = await file.readAsBytes();
+        if (rawInput8.length < frameByteLength8) continue;
 
         final currentTime = i / targetFps.toDouble();
 
         // Multi-Layer Timeline Segment Evaluation
         bool applyCurrentCc = true;
+        Float32List activeUniforms = uniforms;
+        Float32List? activeLut = lutTable;
+
         if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
           final matchingSegments = project.timelineSegments.where((seg) =>
               seg.isEnabled && currentTime >= seg.startTime && currentTime <= seg.endTime);
@@ -2842,7 +2866,6 @@ class EditorViews {
 
         if (is16Bit) {
           // True 16-Bit Processing Stride
-          final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
           final rawInput16 = Uint16List(outW * outH * 4);
           for (int px = 0; px < rawInput8.length; px++) {
             rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
@@ -2850,7 +2873,7 @@ class EditorViews {
 
           Uint16List outputRaw16;
           if (applyCurrentCc) {
-            outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, uniforms, lutTable: lutTable);
+            outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, activeUniforms, lutTable: activeLut);
           } else {
             outputRaw16 = rawInput16;
           }
@@ -2858,29 +2881,20 @@ class EditorViews {
           final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
           await outputFile.writeAsBytes(outputRaw16.buffer.asUint8List());
         } else {
-          // 8-Bit & 10-Bit Processing Stride
-          img.Image gradedImg;
+          // 8-Bit & 10-Bit Fast Raw Stream
+          Uint8List outputRaw8;
           if (applyCurrentCc) {
-            final rawInput8 = decoded.getBytes(order: img.ChannelOrder.rgba);
-            final outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, uniforms, lutTable: lutTable);
-            gradedImg = img.Image.fromBytes(
-              width: outW,
-              height: outH,
-              bytes: outputRaw8.buffer,
-              numChannels: 4,
-              order: img.ChannelOrder.rgba,
-            );
+            outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, activeUniforms, lutTable: activeLut);
           } else {
-            gradedImg = decoded;
+            outputRaw8 = rawInput8;
           }
 
-          final pngBytes = img.encodePng(gradedImg);
-          final outputFile = File('${processedDir.path}/frame_$paddedIndex.png');
-          await outputFile.writeAsBytes(pngBytes);
+          final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
+          await outputFile.writeAsBytes(outputRaw8);
         }
 
         progressNotifier.value = (i + 1) / totalFrames;
-        statusNotifier.value = 'Grading frames: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
+        statusNotifier.value = 'Grading frames on GPU: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
         
         await Future.delayed(Duration.zero);
       }
@@ -2892,10 +2906,9 @@ class EditorViews {
       final silentFile = File(silentOutputPath);
       if (await silentFile.exists()) await silentFile.delete();
 
-      final String frameExt = is16Bit ? 'raw' : 'png';
       final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
         fps: targetFps,
-        framePattern: '${processedDir.path}/frame_%05d.$frameExt',
+        framePattern: '${processedDir.path}/frame_%05d.raw',
         container: container,
         codec: codec,
         bitDepth: bitDepth,
@@ -2916,38 +2929,33 @@ class EditorViews {
 
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
       
-      // Direct root Downloads path
-      Directory destDir = Directory('/storage/emulated/0/Download');
-      if (!destDir.existsSync()) {
-        try {
-          destDir.createSync(recursive: true);
-        } catch (_) {
-          destDir = await getApplicationDocumentsDirectory();
-        }
-      }
-
       final cleanCodec = codec.split(' ').first;
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final finalOutputPath = '${destDir.path}/$fileName';
+      final tempMuxedPath = '${dir.path}/$fileName';
 
       if (hasAudio) {
         final aCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$finalOutputPath"');
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$tempMuxedPath"');
       } else {
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -c:v copy "$finalOutputPath"');
+        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -c:v copy "$tempMuxedPath"');
       }
 
-      final finalOutputFile = File(finalOutputPath);
+      final tempMuxedFile = File(tempMuxedPath);
 
-      // Force Android MediaStore to index the file via MainActivity.kt
+      // Save via Android MediaStore ContentResolver platform channel for full Android 15 compatibility
+      String publicDestPath = tempMuxedPath;
       try {
         if (Platform.isAndroid) {
           const channel = MethodChannel('com.example.aereality/media_scanner');
-          await channel.invokeMethod('scanFile', {'path': finalOutputFile.path});
+          final res = await channel.invokeMethod<String>('saveToDownloads', {
+            'sourcePath': tempMuxedFile.path,
+            'fileName': fileName,
+            'mimeType': 'video/$containerExt',
+          });
+          if (res != null) publicDestPath = res;
         }
       } catch (_) {}
 
-      // Keep dialog open until disk write verification completes
       if (!isCancelled && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
       }
@@ -2955,7 +2963,7 @@ class EditorViews {
       if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Master Saved to Downloads:\n${finalOutputFile.path}'),
+            content: Text('Master Video Saved to Downloads:\n$publicDestPath'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 4),
           ),
@@ -3159,8 +3167,8 @@ class SplineCurvePainter extends CustomPainter {
       ..strokeWidth = 1.0;
 
     for (int i = 1; i < 4; i++) {
-      double x = size.width * (i / 4.0);
-      double y = size.height * (i / 4.0);
+      final x = size.width * (i / 4.0);
+      final y = size.height * (i / 4.0);
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
@@ -3196,7 +3204,7 @@ class SplineCurvePainter extends CustomPainter {
   double _evalCatmullRom(double x, List<double> p) {
     x = x.clamp(0.0, 1.0);
     double seg = x * 4.0;
-    int idx = seg.floor();
+    int idx = int(floor(seg));
     if (idx >= 4) return p[4].clamp(0.0, 1.0);
     double t = seg - idx;
 
