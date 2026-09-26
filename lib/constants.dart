@@ -82,6 +82,7 @@ class PresetStyle {
   });
 }
 
+// Comprehensive Anime Presets Definition Map (Clean Title Only)
 const List<PresetStyle> kAnimePresetStyles = [
   PresetStyle(name: 'Yamato', accent: AnimePalette.yamatoIce),
   PresetStyle(name: 'Okkotsu', accent: AnimePalette.silverWhite),
@@ -106,6 +107,7 @@ const List<PresetStyle> kAnimePresetStyles = [
 
 // -----------------------------------------------------------------------------
 // Master Clean Export Matrix Engine (AV1, VP9, ProRes, FFV1)
+// Zero MediaCodec / Zero H.264/H.265 / Complete 16-Bit & 10-Bit Matrix
 // -----------------------------------------------------------------------------
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
@@ -133,18 +135,21 @@ class ExportMatrix {
   /// Validates whether a specific bit-depth is supported by the chosen codec & container
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
+      // True 16-bit master formats
       if (codec.contains('FFV1') && container == 'MKV') return true;
       if (codec.contains('4444') && (container == 'MOV' || container == 'MKV')) return true;
       return false; // 16-bit is disabled for AV1, VP9, and ProRes 422
     }
     if (bitDepth == '10-bit') {
+      // 10-bit master profile formats
       if (codec.contains('AV1')) return true;
       if (codec.contains('VP9')) return true;
       if (codec.contains('ProRes')) return true;
       if (codec.contains('FFV1')) return true;
       return false;
     }
-    return true; // 8-bit is universally supported
+    // 8-bit is universally supported
+    return true;
   }
 
   /// Validates bitrate compatibility (Lossless FFV1 / ProRes don't use fixed lossy bitrates)
@@ -195,7 +200,7 @@ class ExportMatrix {
       vcodec = 'libvpx-vp9';
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
       final profile = is10 ? '-profile:v 2' : '-profile:v 0';
-      // Automatically injects +0.3 unsharp snap for anime line-art pop
+      // Automatically injects +0.3 unsharp acutance snap for VP9 anime lines
       filterChain = 'unsharp=5:5:0.3:5:5:0.0,';
       codecFlags = '-c:v $vcodec -deadline good -cpu-used 2 -crf 20 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
     } else if (codec.contains('ProRes')) {
@@ -215,10 +220,9 @@ class ExportMatrix {
       codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt yuv420p -b:v ${bitrateKbps}k';
     }
 
-    // Precise rawvideo input format flags preventing stride and psychedelic pixel corruption
-    final String inputFormat = is16
-        ? '-f rawvideo -pix_fmt rgba64le -s ${width}x${height}'
-        : '-f rawvideo -pix_fmt rgba -s ${width}x${height}';
+    // Precise image2 + rawvideo demuxer: FFmpeg accurately reads sequentially indexed .raw files
+    final String pixFmtIn = is16 ? 'rgba64le' : 'rgba';
+    final String inputFormat = '-f image2 -c:v rawvideo -pix_fmt $pixFmtIn -s ${width}x${height}';
 
     final String filterArg = filterChain.isNotEmpty
         ? '-vf "${filterChain.substring(0, filterChain.length - 1)}"'
