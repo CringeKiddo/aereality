@@ -5,7 +5,6 @@
 
 import 'dart:ffi' as ffi;
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
@@ -84,7 +83,6 @@ class VulkanBridge {
   static ffi.DynamicLibrary? _lib;
   static bool _libLoaded = false;
 
-  // Vulkan Grading function pointers
   static _InitVulkanDart? _initVulkanFn;
   static _ProcessImage8Dart? _processImage8Fn;
   static _ProcessImage16Dart? _processImage16Fn;
@@ -104,12 +102,9 @@ class VulkanBridge {
 
       if (_lib != null) {
         try {
-          _initVulkanFn = _lib!
-              .lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
-          _processImage8Fn = _lib!
-              .lookupFunction<_ProcessImage8C, _ProcessImage8Dart>('process_image');
-          _processImage16Fn = _lib!
-              .lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_16');
+          _initVulkanFn = _lib!.lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
+          _processImage8Fn = _lib!.lookupFunction<_ProcessImage8C, _ProcessImage8Dart>('process_image');
+          _processImage16Fn = _lib!.lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_16');
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
         }
@@ -119,10 +114,6 @@ class VulkanBridge {
     }
     _libLoaded = true;
   }
-
-  // -------------------------------------------------------------
-  // CPU FALLBACK GRADING HELPER (True 32-Bit Float Color Processing)
-  // -------------------------------------------------------------
 
   static Uint8List gradeFrameCpuFallback(
     Uint8List rgba,
@@ -141,13 +132,9 @@ class VulkanBridge {
     }
 
     for (int i = 0; i < result.length; i += 4) {
-      double r = result[i].toDouble();
-      double g = result[i + 1].toDouble();
-      double bCol = result[i + 2].toDouble();
-
-      r += b;
-      g += b;
-      bCol += b;
+      double r = result[i].toDouble() + b;
+      double g = result[i + 1].toDouble() + b;
+      double bCol = result[i + 2].toDouble() + b;
 
       r = (r - 128.0) * c + 128.0;
       g = (g - 128.0) * c + 128.0;
@@ -308,11 +295,11 @@ Uint16List processImage16(
 
 Uint8List _cpuFallbackGrade(Uint8List inBytes, int w, int h, Float32List uniforms) {
   final out = Uint8List.fromList(inBytes);
-  if (uniforms.length < 35) return out;
+  if (uniforms.length < 38) return out;
 
-  final double b = uniforms[31] * 255.0; // Offset based on layer packing
-  final double s = uniforms[32];
-  final double c = uniforms[33];
+  final double b = uniforms[35] * 255.0;
+  final double s = uniforms[36];
+  final double c = uniforms[37];
 
   for (int i = 0; i < out.length; i += 4) {
     double r = out[i].toDouble() + b;
