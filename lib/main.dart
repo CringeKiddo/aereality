@@ -23,9 +23,9 @@ import 'package:image/image.dart' as img;
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
-import 'components/curve_editor.dart';
+import 'spline_curve_editor.dart';
 import 'vulkan_bridge.dart';
-import 'touch_particles.dart';
+import 'touch_particles_wrapper.dart';
 import 'editor_views.dart';
 
 Future<void> main() async {
@@ -40,13 +40,6 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('FFmpeg initialization error: $e');
   }
-
-  try {
-    final downloadDir = Directory('/storage/emulated/0/Download');
-    if (!await downloadDir.exists()) {
-      await downloadDir.create(recursive: true);
-    }
-  } catch (_) {}
 
   runApp(const ShaderlyApp());
 }
@@ -858,6 +851,11 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     );
   }
 }
+// =============================================================================
+// AEReality / Shaderly - Master Studio Interface (Part 2/2)
+// True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
+// 100% Complete Section - Zero Feature Omissions
+// =============================================================================
 
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -1034,11 +1032,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     }
   }
-  // =============================================================================
-// AEReality / Shaderly - Master Studio Interface (Part 2/2)
-// True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
-// 100% Complete Section - Zero Feature Omissions
-// =============================================================================
 
   Future<void> _loadMedia(String path) async {
     if (path.isEmpty) return;
@@ -1084,9 +1077,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _isPlaying = false;
 
           setState(() {});
-          _applyGrade();
+          _applyGrade(forceExtract: true);
 
-          // Continuous Timeline Position & Live Playback Sync
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
             if (_controller != null && _controller!.value.isInitialized && _controller!.value.isPlaying && mounted) {
               final newPos = _controller!.value.position.inMilliseconds / 1000.0;
@@ -1098,9 +1090,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 _currentTimelinePosition = newPos;
               });
 
-              // Active shader grading while playing if switch is disabled
               if (!gGradeActiveFrameOnly) {
-                _applyGrade();
+                _applyGrade(forceExtract: true);
               }
             }
           });
@@ -1110,7 +1101,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  Future<void> _applyGrade() async {
+  // Fast GPU live grading with in-memory caching
+  Future<void> _applyGrade({bool forceExtract = false}) async {
     if (_isVulkanProcessing) {
       _needsReprocess = true;
       return;
@@ -1127,22 +1119,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
         rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
       } else if (!_project.isImage && _project.mediaPath.isNotEmpty) {
-        final tempDir = await getTemporaryDirectory();
-        final framePath = '${tempDir.path}/tl_frame_preview.png';
+        if (forceExtract || _cachedRawImage == null) {
+          final tempDir = await getTemporaryDirectory();
+          final framePath = '${tempDir.path}/tl_frame_preview.png';
 
-        // Fast native seek for live preview frame
-        await FFmpegKit.execute(
-          '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
-        );
+          await FFmpegKit.execute(
+            '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
+          );
 
-        final frameFile = File(framePath);
-        if (await frameFile.exists()) {
-          final fBytes = await frameFile.readAsBytes();
-          final decoded = img.decodePng(fBytes);
-          if (decoded != null) {
-            rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
+          final frameFile = File(framePath);
+          if (await frameFile.exists()) {
+            final fBytes = await frameFile.readAsBytes();
+            final decoded = img.decodePng(fBytes);
+            if (decoded != null) {
+              _cachedRawImage = decoded;
+              rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
+            }
+            try { await frameFile.delete(); } catch (_) {}
           }
-          try { await frameFile.delete(); } catch (_) {}
+        } else if (_cachedRawImage != null) {
+          rawBytes = _cachedRawImage!.getBytes(order: img.ChannelOrder.rgba);
         }
       }
 
@@ -1214,7 +1210,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
-  // Exact 1:1 512-float UBO packing for aereality_core.comp & vulkan_processor.cpp
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
     final uniforms = Float32List(512);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
@@ -1595,9 +1590,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // TIMELINE SCRUBBER (EXACT MILLISECONDS + LIVE MOVING PREVIEW)
-  // ---------------------------------------------------------------------------
   Widget _buildTimelineScrubber() {
     if (_project.isImage || _controller == null || !_controller!.value.isInitialized) {
       return const SizedBox.shrink();
@@ -1616,7 +1608,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 if (_controller!.value.isPlaying) {
                   _controller!.pause();
                   _isPlaying = false;
-                  _applyGrade();
+                  _applyGrade(forceExtract: true);
                 } else {
                   _controller!.play();
                   _isPlaying = true;
@@ -1649,12 +1641,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   });
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
                   if (!gGradeActiveFrameOnly) {
-                    _applyGrade();
+                    _applyGrade(forceExtract: true);
                   }
                 },
                 onChangeEnd: (val) {
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
-                    _applyGrade();
+                    _applyGrade(forceExtract: true);
                   });
                 },
               ),
@@ -1669,9 +1661,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // TEXT SUITE OVERLAY
-  // ---------------------------------------------------------------------------
   Widget _buildTextSuiteBoundingBoxOverlay(BoxConstraints constraints) {
     if (!_project.textSuiteEnabled) return const SizedBox.shrink();
 
@@ -1744,14 +1733,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     setState(() => _project.textSuiteEnabled = !_project.textSuiteEnabled);
                     _applyGrade();
                     _autoSaveProject();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(_project.textSuiteEnabled
-                            ? 'Text Suite Enabled: Drag the bounding box over your text'
-                            : 'Text Suite Disabled'),
-                        duration: const Duration(milliseconds: 900),
-                      ),
-                    );
                   },
                 ),
                 IconButton(
@@ -1804,7 +1785,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  // 1. Live Native Video Playing Surface
                                   if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
                                     FittedBox(
                                       fit: BoxFit.cover,
@@ -1815,7 +1795,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       ),
                                     ),
 
-                                  // 2. Graded Vulkan Static Composite
                                   if (hasMedia && (gGradeActiveFrameOnly ? !_isPlaying : true))
                                     FittedBox(
                                       fit: BoxFit.cover,
@@ -1830,7 +1809,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       child: CircularProgressIndicator(color: Colors.white38),
                                     ),
 
-                                  // 3. Isolated Text Suite Overlay
                                   _buildTextSuiteBoundingBoxOverlay(constraints),
                                 ],
                               ),
