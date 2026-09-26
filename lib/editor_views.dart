@@ -21,7 +21,7 @@ import 'package:image/image.dart' as img;
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
-import 'components/curve_editor.dart';
+import 'spline_curve_editor.dart';
 import 'vulkan_bridge.dart';
 
 class EditorViews {
@@ -2942,7 +2942,12 @@ class EditorViews {
 
       final tempMuxedFile = File(tempMuxedPath);
 
-      // Save via Android MediaStore ContentResolver platform channel for full Android 15 compatibility
+      // Correct Android 15 MIME types
+      String mimeType = 'video/mp4';
+      if (containerExt == 'mkv') mimeType = 'video/x-matroska';
+      else if (containerExt == 'webm') mimeType = 'video/webm';
+      else if (containerExt == 'mov') mimeType = 'video/quicktime';
+
       String publicDestPath = tempMuxedPath;
       try {
         if (Platform.isAndroid) {
@@ -2950,9 +2955,18 @@ class EditorViews {
           final res = await channel.invokeMethod<String>('saveToDownloads', {
             'sourcePath': tempMuxedFile.path,
             'fileName': fileName,
-            'mimeType': 'video/$containerExt',
+            'mimeType': mimeType,
           });
           if (res != null) publicDestPath = res;
+        }
+      } catch (_) {}
+
+      // Dual-path fallback: also attempt direct copy if allowed
+      try {
+        final directDownload = File('/storage/emulated/0/Download/$fileName');
+        if (!await directDownload.exists()) {
+          await tempMuxedFile.copy(directDownload.path);
+          publicDestPath = directDownload.path;
         }
       } catch (_) {}
 
