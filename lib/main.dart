@@ -23,9 +23,9 @@ import 'package:image/image.dart' as img;
 import 'constants.dart';
 import 'models.dart';
 import 'lut_processor.dart';
-import 'spline_curve_editor.dart';
+import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
-import 'touch_particles_wrapper.dart';
+import 'touch_particles.dart';
 import 'editor_views.dart';
 
 Future<void> main() async {
@@ -74,8 +74,8 @@ class ShaderlyApp extends StatelessWidget {
               iconTheme: IconThemeData(color: Colors.white),
             ),
           ),
-          home: const TouchParticlesWrapper(
-            child: HomeScreen(),
+          home: TouchParticlesWrapper(
+            child: const HomeScreen(),
           ),
           debugShowCheckedModeBanner: false,
         );
