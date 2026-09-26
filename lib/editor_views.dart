@@ -3204,7 +3204,7 @@ class SplineCurvePainter extends CustomPainter {
   double _evalCatmullRom(double x, List<double> p) {
     x = x.clamp(0.0, 1.0);
     double seg = x * 4.0;
-    int idx = int(floor(seg));
+    int idx = seg.floor();
     if (idx >= 4) return p[4].clamp(0.0, 1.0);
     double t = seg - idx;
 
