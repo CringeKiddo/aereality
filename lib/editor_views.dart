@@ -2740,6 +2740,7 @@ class EditorViews {
 
     int targetFps = int.parse(fps.replaceAll('fps', ''));
     String containerExt = container.toLowerCase();
+    if (container.toUpperCase() == 'WEBM') containerExt = 'webm';
     final bool is16Bit = (bitDepth == '16-bit');
 
     final progressNotifier = ValueNotifier<double>(0.0);
@@ -2799,9 +2800,14 @@ class EditorViews {
       sessionTempDir = Directory('${baseCacheDir.path}/aereality_export_${DateTime.now().millisecondsSinceEpoch}');
       await sessionTempDir.create(recursive: true);
 
-      // Extract Audio track first
-      final audioPath = '${sessionTempDir.path}/extracted_audio.aac';
-      await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a aac -b:a 256k "$audioPath"');
+      // Extract Audio track first with container-appropriate format
+      final String audioExt = (container.toUpperCase() == 'WEBM') ? 'opus' : 'aac';
+      final audioPath = '${sessionTempDir.path}/extracted_audio.$audioExt';
+      if (audioExt == 'opus') {
+        await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a libopus -b:a 128k "$audioPath"');
+      } else {
+        await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a aac -b:a 256k "$audioPath"');
+      }
 
       if (isCancelled) return;
 
@@ -2830,7 +2836,6 @@ class EditorViews {
         final int chunkStartFrame = c * chunkSize;
         final int framesInThisChunk = math.min(chunkSize, totalFrames - chunkStartFrame);
         final double chunkStartSec = chunkStartFrame / targetFps.toDouble();
-        final double chunkDurSec = framesInThisChunk / targetFps.toDouble();
 
         final chunkRawDir = Directory('${sessionTempDir.path}/raw_c$c');
         final chunkProcDir = Directory('${sessionTempDir.path}/proc_c$c');
@@ -2841,8 +2846,8 @@ class EditorViews {
         statusNotifier.value = 'GPU Processing: ${((c / totalChunks) * 100).toInt()}% (Batch ${c + 1}/$totalChunks)';
         progressNotifier.value = c / totalChunks;
 
-        final extractCmd = '-hide_banner -ss $chunkStartSec -t $chunkDurSec -i "${project.mediaPath}" '
-            '-r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
+        final extractCmd = '-hide_banner -ss $chunkStartSec -i "${project.mediaPath}" '
+            '-frames:v $framesInThisChunk -r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
         await FFmpegKit.execute(extractCmd);
 
         final rawFiles = await chunkRawDir.list().toList();
@@ -2891,12 +2896,12 @@ class EditorViews {
           }
         }
 
-        // Encode this tiny chunk to an intermediate part file
-        final chunkPartPath = '${sessionTempDir.path}/part_$c.$containerExt';
+        // Encode this chunk into a temporary MKV segment (ensures lossless concat across all containers)
+        final chunkPartPath = '${sessionTempDir.path}/part_$c.mkv';
         final encodeChunkCmd = ExportMatrix.buildFFmpegEncodeCommand(
           fps: targetFps,
           framePattern: '${chunkProcDir.path}/f_%05d.raw',
-          container: container,
+          container: 'MKV',
           codec: codec,
           bitDepth: bitDepth,
           bitrateKbps: bitrateKbps,
@@ -2908,7 +2913,7 @@ class EditorViews {
 
         chunkVideoParts.add(chunkPartPath);
 
-        // INSTANT MEMORY & DISK PURGE: Wipe the raw frames immediately from disk!
+        // INSTANT MEMORY & DISK PURGE: Wipe raw frames immediately from disk
         if (await chunkRawDir.exists()) await chunkRawDir.delete(recursive: true);
         if (await chunkProcDir.exists()) await chunkProcDir.delete(recursive: true);
       }
@@ -2932,7 +2937,7 @@ class EditorViews {
         await FFmpegKit.execute('-hide_banner -y -f concat -safe 0 -i "${concatListFile.path}" -c copy "$silentVideoPath"');
       }
 
-      // Final Mux with Audio
+      // Final Mux with Audio into the requested container format
       final tempFinalPath = '${sessionTempDir.path}/$fileName';
       final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 500;
 
@@ -2985,7 +2990,7 @@ class EditorViews {
         );
       }
     } finally {
-      // ALWAYS purge all scratch buffers, whether export succeeded, failed, or was cancelled
+      // Purge all scratch buffers whether export succeeded, failed, or was cancelled
       try {
         if (sessionTempDir != null && await sessionTempDir.exists()) {
           await sessionTempDir.delete(recursive: true);
@@ -3169,6 +3174,9 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// CATMULL-ROM SPLINE CURVE PAINTER
+// -----------------------------------------------------------------------------
 class SplineCurvePainter extends CustomPainter {
   final List<double> points;
   final Color curveColor;
