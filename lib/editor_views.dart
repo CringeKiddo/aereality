@@ -1114,7 +1114,7 @@ class EditorViews {
         ));
         break;
 
-      // 11. GOJO (Sule Six Eyes Radiance / Punchy Magic Bullet Cyan Bloom)
+      // 11. GOJO (Six Eyes Radiance / Punchy Magic Bullet Cyan Bloom)
       case 'gojo':
         project.tonemapMode = 1.0; // AgX Anime Punch
         project.deepTeal = 0.50;
@@ -1326,7 +1326,7 @@ class EditorViews {
         ));
         break;
 
-      // 17. DENJI (Sule Giyu Style Chainsaw Blood / Saturated Crimson Energy)
+      // 17. DENJI (Chainsaw Blood / Saturated Crimson Energy)
       case 'denji':
         project.tonemapMode = 1.0;
         project.deepTeal = 0.20;
@@ -2394,19 +2394,15 @@ class EditorViews {
 
       Uint8List encodedFile;
       String ext = format.toLowerCase();
-      String mimeType = 'image/png';
 
       if (format == 'PNG') {
         encodedFile = Uint8List.fromList(img.encodePng(outputImg));
-        mimeType = 'image/png';
       } else if (format == 'JPG') {
         encodedFile = Uint8List.fromList(img.encodeJpg(outputImg, quality: quality));
         ext = 'jpg';
-        mimeType = 'image/jpeg';
       } else {
         encodedFile = Uint8List.fromList(img.encodePng(outputImg));
         ext = 'webp';
-        mimeType = 'image/webp';
       }
 
       final fileName = 'Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
@@ -2741,7 +2737,9 @@ class EditorViews {
     int targetFps = int.parse(fps.replaceAll('fps', ''));
     String containerExt = container.toLowerCase();
     if (container.toUpperCase() == 'WEBM') containerExt = 'webm';
-    final bool is16Bit = (bitDepth == '16-bit');
+    
+    // Both 10-bit and 16-bit use 16-bit linear integer pipelines (rgba64le) to prevent color truncation and mush
+    final bool use16BitRaw = (bitDepth == '10-bit' || bitDepth == '16-bit');
 
     final progressNotifier = ValueNotifier<double>(0.0);
     final accent = gCustomAccentColor.value;
@@ -2800,13 +2798,13 @@ class EditorViews {
       sessionTempDir = Directory('${baseCacheDir.path}/aereality_export_${DateTime.now().millisecondsSinceEpoch}');
       await sessionTempDir.create(recursive: true);
 
-      // Extract Audio track first with container-appropriate format
-      final String audioExt = (container.toUpperCase() == 'WEBM') ? 'opus' : 'aac';
+      // Extract Audio track first with matching codec
+      final String audioExt = (container.toUpperCase() == 'WEBM' || container.toUpperCase() == 'MKV') ? 'opus' : 'aac';
       final audioPath = '${sessionTempDir.path}/extracted_audio.$audioExt';
       if (audioExt == 'opus') {
         await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a libopus -b:a 128k "$audioPath"');
       } else {
-        await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a aac -b:a 256k "$audioPath"');
+        await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a aac -b:a 192k "$audioPath"');
       }
 
       if (isCancelled) return;
@@ -2823,8 +2821,7 @@ class EditorViews {
       final silentVideoPath = '${sessionTempDir.path}/silent_out.$containerExt';
 
       // -----------------------------------------------------------------------
-      // STREAMING PIPELINE: Small rolling chunk batches to guarantee 0 GB disk waste
-      // Process 30-frame rolling batches on Mali-G57 GPU, encode, and delete immediately.
+      // STREAMING PIPELINE: Rolling 30-frame GPU batches to eliminate storage bloat
       // -----------------------------------------------------------------------
       final int chunkSize = 30;
       final int totalChunks = (totalFrames / chunkSize).ceil();
@@ -2842,15 +2839,16 @@ class EditorViews {
         await chunkRawDir.create(recursive: true);
         await chunkProcDir.create(recursive: true);
 
-        // Extract raw frames for ONLY this small 0.5s - 1.0s window
         statusNotifier.value = 'GPU Processing: ${((c / totalChunks) * 100).toInt()}% (Batch ${c + 1}/$totalChunks)';
         progressNotifier.value = c / totalChunks;
 
-        final extractCmd = '-hide_banner -ss $chunkStartSec -i "${project.mediaPath}" '
-            '-frames:v $framesInThisChunk -r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
+        // CRITICAL FIX: Use -f image2 -c:v rawvideo so all 30 frames are saved as separate files
+        final extractCmd = '-hide_banner -accurate_seek -ss $chunkStartSec -i "${project.mediaPath}" '
+            '-frames:v $framesInThisChunk -r $targetFps -s ${outW}x${outH} -f image2 -c:v rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
         await FFmpegKit.execute(extractCmd);
 
-        final rawFiles = await chunkRawDir.list().toList();
+        final rawEntities = await chunkRawDir.list().toList();
+        final rawFiles = rawEntities.whereType<File>().toList();
         rawFiles.sort((a, b) => a.path.compareTo(b.path));
 
         final int frameByteLength8 = outW * outH * 4;
@@ -2858,7 +2856,6 @@ class EditorViews {
         for (int fi = 0; fi < rawFiles.length; fi++) {
           if (isCancelled) return;
           final f = rawFiles[fi];
-          if (f is! File) continue;
 
           final rawInput8 = await f.readAsBytes();
           if (rawInput8.length < frameByteLength8) continue;
@@ -2879,9 +2876,10 @@ class EditorViews {
           final paddedIndex = (fi + 1).toString().padLeft(5, '0');
           final outFile = File('${chunkProcDir.path}/f_$paddedIndex.raw');
 
-          if (is16Bit) {
+          if (use16BitRaw) {
+            // Expand 8-bit to 16-bit integer linear space (0-65535)
             final rawInput16 = Uint16List(outW * outH * 4);
-            for (int px = 0; px < rawInput8.length; px++) {
+            for (int px = 0; px < frameByteLength8; px++) {
               rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
             }
             Uint16List outputRaw16 = applyCurrentCc
@@ -2896,12 +2894,12 @@ class EditorViews {
           }
         }
 
-        // Encode this chunk into a temporary MKV segment (ensures lossless concat across all containers)
-        final chunkPartPath = '${sessionTempDir.path}/part_$c.mkv';
+        // Encode this chunk into a temporary segment matching the target container
+        final chunkPartPath = '${sessionTempDir.path}/part_$c.$containerExt';
         final encodeChunkCmd = ExportMatrix.buildFFmpegEncodeCommand(
           fps: targetFps,
           framePattern: '${chunkProcDir.path}/f_%05d.raw',
-          container: 'MKV',
+          container: container,
           codec: codec,
           bitDepth: bitDepth,
           bitrateKbps: bitrateKbps,
@@ -2913,7 +2911,7 @@ class EditorViews {
 
         chunkVideoParts.add(chunkPartPath);
 
-        // INSTANT MEMORY & DISK PURGE: Wipe raw frames immediately from disk
+        // INSTANT MEMORY & DISK PURGE: Delete uncompressed frame files immediately
         if (await chunkRawDir.exists()) await chunkRawDir.delete(recursive: true);
         if (await chunkProcDir.exists()) await chunkProcDir.delete(recursive: true);
       }
@@ -2931,10 +2929,12 @@ class EditorViews {
       }
       await concatListFile.writeAsString(concatBuffer.toString());
 
+      final fastStart = (container.toUpperCase() == 'MP4' || container.toUpperCase() == 'MOV') ? '-movflags +faststart' : '';
+
       if (chunkVideoParts.length == 1) {
         await File(chunkVideoParts.first).copy(silentVideoPath);
       } else {
-        await FFmpegKit.execute('-hide_banner -y -f concat -safe 0 -i "${concatListFile.path}" -c copy "$silentVideoPath"');
+        await FFmpegKit.execute('-hide_banner -y -f concat -safe 0 -i "${concatListFile.path}" -c copy -fflags +genpts -avoid_negative_ts make_zero $fastStart "$silentVideoPath"');
       }
 
       // Final Mux with Audio into the requested container format
@@ -2943,14 +2943,14 @@ class EditorViews {
 
       if (hasAudio) {
         final aCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-hide_banner -y -i "$silentVideoPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$tempFinalPath"');
+        await FFmpegKit.execute('-hide_banner -y -i "$silentVideoPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest $fastStart "$tempFinalPath"');
       } else {
         await File(silentVideoPath).copy(tempFinalPath);
       }
 
       final tempFinalFile = File(tempFinalPath);
 
-      // Transfer directly to Root Downloads using exact same logic as images
+      // Save directly to Downloads folder
       final downloadsDir = Directory('/storage/emulated/0/Download');
       if (!downloadsDir.existsSync()) {
         downloadsDir.createSync(recursive: true);
@@ -2958,10 +2958,12 @@ class EditorViews {
       final publicFile = File('${downloadsDir.path}/$fileName');
       await tempFinalFile.copy(publicFile.path);
 
-      // Trigger Android Media Scanner so it displays instantly in Files & Gallery
+      // Trigger Android Media Scanner so it appears instantly in Files and Gallery
       try {
-        const channel = MethodChannel('com.aereality/media');
-        await channel.invokeMethod('scanFile', {'path': publicFile.path});
+        if (Platform.isAndroid) {
+          const channel = MethodChannel('com.aereality/media');
+          await channel.invokeMethod('scanFile', {'path': publicFile.path});
+        }
       } catch (_) {}
 
       progressNotifier.value = 1.0;
@@ -2990,7 +2992,7 @@ class EditorViews {
         );
       }
     } finally {
-      // Purge all scratch buffers whether export succeeded, failed, or was cancelled
+      // Purge scratch cache directory
       try {
         if (sessionTempDir != null && await sessionTempDir.exists()) {
           await sessionTempDir.delete(recursive: true);
@@ -3172,84 +3174,4 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
       ),
     );
   }
-}
-
-// -----------------------------------------------------------------------------
-// CATMULL-ROM SPLINE CURVE PAINTER
-// -----------------------------------------------------------------------------
-class SplineCurvePainter extends CustomPainter {
-  final List<double> points;
-  final Color curveColor;
-
-  SplineCurvePainter({required this.points, required this.curveColor});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.06)
-      ..strokeWidth = 1.0;
-
-    for (int i = 1; i < 4; i++) {
-      final x = size.width * (i / 4.0);
-      final y = size.height * (i / 4.0);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final linePaint = Paint()
-      ..color = curveColor
-      ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    for (int px = 0; px <= size.width.toInt(); px++) {
-      double normX = px / size.width;
-      double normY = _evalCatmullRom(normX, points);
-      double py = size.height - (normY * size.height);
-
-      if (px == 0) {
-        path.moveTo(px.toDouble(), py.clamp(0.0, size.height));
-      } else {
-        path.lineTo(px.toDouble(), py.clamp(0.0, size.height));
-      }
-    }
-    canvas.drawPath(path, linePaint);
-
-    final knotPaint = Paint()..color = curveColor;
-    for (int i = 0; i < 5; i++) {
-      double kx = size.width * (i / 4.0);
-      double ky = size.height - (points[i] * size.height);
-      canvas.drawCircle(Offset(kx, ky.clamp(0.0, size.height)), 5.0, knotPaint);
-      canvas.drawCircle(Offset(kx, ky.clamp(0.0, size.height)), 2.5, Paint()..color = Colors.black);
-    }
-  }
-
-  double _evalCatmullRom(double x, List<double> p) {
-    x = x.clamp(0.0, 1.0);
-    double seg = x * 4.0;
-    int idx = seg.floor();
-    if (idx >= 4) return p[4].clamp(0.0, 1.0);
-    double t = seg - idx;
-
-    double p0 = (idx == 0) ? p[0] : (idx == 1) ? p[0] : (idx == 2) ? p[1] : p[2];
-    double p1 = (idx == 0) ? p[0] : (idx == 1) ? p[1] : (idx == 2) ? p[2] : p[3];
-    double p2 = (idx == 0) ? p[1] : (idx == 1) ? p[2] : (idx == 2) ? p[3] : p[4];
-    double p3 = (idx == 0) ? p[2] : (idx == 1) ? p[3] : (idx == 2) ? p[4] : p[4];
-
-    double m1 = (0.5 * (p2 - p0)).clamp(-1.2, 1.2);
-    double m2 = (0.5 * (p3 - p1)).clamp(-1.2, 1.2);
-
-    double t2 = t * t;
-    double t3 = t2 * t;
-
-    double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    double h10 = t3 - 2.0 * t2 + t;
-    double h01 = -2.0 * t3 + 3.0 * t2;
-    double h11 = t3 - t2;
-
-    return (h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2).clamp(0.0, 1.0);
-  }
-
-  @override
-  bool shouldRepaint(covariant SplineCurvePainter oldDelegate) => true;
 }
