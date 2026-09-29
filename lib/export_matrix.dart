@@ -6,17 +6,29 @@
 
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
-    'MP4': ['AV1', 'ProRes 422 HQ'],
-    'MKV': ['AV1', 'VP9', 'FFV1 (Lossless 16-bit)', 'ProRes 4444'],
-    'WebM': ['AV1', 'VP9'],
-    'MOV': ['ProRes 422 HQ', 'ProRes 4444', 'AV1'],
+    'MP4': ['AV1 (libsvtav1 Master)'],
+    'MKV': [
+      'AV1 (libsvtav1 Master)',
+      'VP9 (Google Master Profile)',
+      'FFV1 (Lossless 10/16-bit)',
+      'ProRes 4444 (Lossless Master)',
+    ],
+    'WebM': [
+      'AV1 (libsvtav1 Master)',
+      'VP9 (Google Master Profile)',
+    ],
+    'MOV': [
+      'ProRes 422 HQ (Cinema Master)',
+      'ProRes 4444 (Lossless Master)',
+      'AV1 (libsvtav1 Master)',
+    ],
   };
 
   /// Validates whether a specific bit-depth is supported by the chosen codec & container
   static bool isBitDepthValid(String container, String codec, String bitDepth) {
     if (bitDepth == '16-bit') {
       // True 16-bit master formats
-      if (codec.startsWith('FFV1') && container == 'MKV') return true;
+      if (codec.contains('FFV1') && container == 'MKV') return true;
       if (codec.contains('4444') && (container == 'MOV' || container == 'MKV')) return true;
       return false;
     }
@@ -25,7 +37,7 @@ class ExportMatrix {
       if (codec.contains('AV1')) return true;
       if (codec.contains('VP9')) return true;
       if (codec.contains('ProRes')) return true;
-      if (codec.startsWith('FFV1')) return true;
+      if (codec.contains('FFV1')) return true;
       return false;
     }
     // 8-bit fallback
@@ -34,7 +46,7 @@ class ExportMatrix {
 
   /// Validates bitrate compatibility (Lossless FFV1 / ProRes don't use fixed lossy bitrates)
   static bool isBitrateValid(String codec, String bitrate) {
-    if (codec.startsWith('FFV1') || codec.contains('ProRes')) {
+    if (codec.contains('FFV1') || codec.contains('ProRes')) {
       return bitrate == 'Lossless Variable';
     }
     return true;
@@ -44,16 +56,19 @@ class ExportMatrix {
   static String getAudioCodec(String container) {
     switch (container) {
       case 'WebM':
+        return 'libopus -b:a 128k';
       case 'MKV':
-        return 'libopus';
-      case 'MP4':
+        return 'libopus -b:a 192k';
       case 'MOV':
+        return 'aac -b:a 256k';
+      case 'MP4':
       default:
-        return 'aac';
+        return 'aac -b:a 192k';
     }
   }
 
   /// Builds clean, high-performance FFmpeg encoding command string
+  /// Correctly declares rawvideo, dimensions, framerate, and pixel format on the input pipe
   static String buildFFmpegEncodeCommand({
     required int fps,
     required String framePattern,
@@ -62,20 +77,23 @@ class ExportMatrix {
     required String bitDepth,
     required int bitrateKbps,
     required String outputPath,
+    required int width,
+    required int height,
   }) {
-    final bool is10 = bitDepth == '10-bit';
-    final bool is16 = bitDepth == '16-bit';
+    final bool is10 = (bitDepth == '10-bit');
+    final bool is16 = (bitDepth == '16-bit');
     String codecFlags;
 
     if (codec.contains('AV1')) {
       // SVT-AV1 / AOM-AV1 high performance master
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
-      codecFlags = '-c:v libsvtav1 -preset 6 -crf 20 -pix_fmt $pixFmt -b:v ${bitrateKbps}k';
+      final fastStart = (container == 'MP4' || container == 'MOV') ? '-movflags +faststart' : '';
+      codecFlags = '-c:v libsvtav1 -preset 6 -crf 20 -b:v ${bitrateKbps}k -pix_fmt $pixFmt $fastStart';
     } else if (codec.contains('VP9')) {
-      // Google VP9 Profile 0 (8-bit) / Profile 2 (10-bit)
+      // Google VP9 Profile 0 (8-bit) / Profile 2 (10-bit) with acutance sharpness
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
       final profile = is10 ? '-profile:v 2' : '-profile:v 0';
-      codecFlags = '-c:v libvpx-vp9 -crf 20 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
+      codecFlags = '-c:v libvpx-vp9 $profile -crf 18 -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
     } else if (codec.contains('ProRes')) {
       // Apple ProRes Master Ks
       if (codec.contains('4444')) {
@@ -84,7 +102,7 @@ class ExportMatrix {
       } else {
         codecFlags = '-c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le';
       }
-    } else if (codec.startsWith('FFV1')) {
+    } else if (codec.contains('FFV1')) {
       // Pure mathematical intra-frame lossless master
       if (is16) {
         codecFlags = '-c:v ffv1 -level 3 -coder 1 -context 1 -pix_fmt yuv422p16le';
@@ -94,10 +112,12 @@ class ExportMatrix {
         codecFlags = '-c:v ffv1 -level 3 -coder 1 -context 1 -pix_fmt yuv420p';
       }
     } else {
-      // Default clean fallback
-      codecFlags = '-c:v libsvtav1 -preset 6 -crf 20 -pix_fmt yuv420p -b:v ${bitrateKbps}k';
+      // Safe high-efficiency fallback
+      codecFlags = '-c:v libsvtav1 -preset 6 -crf 20 -b:v ${bitrateKbps}k -pix_fmt yuv420p';
     }
 
-    return '-hide_banner -y -framerate $fps -i "$framePattern" $codecFlags "$outputPath"';
+    // CRITICAL: Must specify -f rawvideo, -pix_fmt rgba, and -s ${width}x${height}
+    // so FFmpeg interprets the raw byte files accurately
+    return '-hide_banner -y -f rawvideo -framerate $fps -video_size ${width}x${height} -pix_fmt rgba -i "$framePattern" $codecFlags "$outputPath"';
   }
 }
