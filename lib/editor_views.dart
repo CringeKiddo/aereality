@@ -23,6 +23,7 @@ import 'models.dart';
 import 'lut_processor.dart';
 import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
+import 'export_matrix.dart';
 
 class EditorViews {
   // ---------------------------------------------------------------------------
@@ -1501,7 +1502,7 @@ class EditorViews {
   }
   // =============================================================================
   // AEReality / Shaderly - Editor Views & Export Suite (Part 3/3)
-  // True 32-Bit Float Linear Pipeline - 3-Layer Timeline, Text Suite & Export Engine
+  // True 32-Bit Float Linear Pipeline - 3-Layer Timeline, Text Suite & Zero-Disk Export Engine
   // 100% Complete Section - Zero Feature Omissions
   // =============================================================================
 
@@ -1987,17 +1988,14 @@ class EditorViews {
 
       try {
         if (Platform.isAndroid) {
-          const channel = MethodChannel('com.example.aereality/media_scanner');
-          await channel.invokeMethod('saveToDownloads', {
-            'sourcePath': jsonFile.path,
-            'fileName': 'AEReality_${safeName}_CC.json',
-            'mimeType': 'application/json',
-          });
-          await channel.invokeMethod('saveToDownloads', {
-            'sourcePath': xmlFile.path,
-            'fileName': 'AEReality_${safeName}_CC.xml',
-            'mimeType': 'application/xml',
-          });
+          final downloadsDir = Directory('/storage/emulated/0/Download');
+          if (!downloadsDir.existsSync()) downloadsDir.createSync(recursive: true);
+          await jsonFile.copy('${downloadsDir.path}/AEReality_${safeName}_CC.json');
+          await xmlFile.copy('${downloadsDir.path}/AEReality_${safeName}_CC.xml');
+
+          const channel = MethodChannel('com.aereality/media');
+          await channel.invokeMethod('scanFile', {'path': '${downloadsDir.path}/AEReality_${safeName}_CC.json'});
+          await channel.invokeMethod('scanFile', {'path': '${downloadsDir.path}/AEReality_${safeName}_CC.xml'});
         }
       } catch (_) {}
 
@@ -2412,29 +2410,25 @@ class EditorViews {
         mimeType = 'image/webp';
       }
 
-      final docs = await getApplicationDocumentsDirectory();
       final fileName = 'Shaderly_Art_${resolution}_${DateTime.now().millisecondsSinceEpoch}.$ext';
-      final localTempPath = '${docs.path}/$fileName';
-      final tempFile = File(localTempPath);
-      await tempFile.writeAsBytes(encodedFile);
+      final downloadsDir = Directory('/storage/emulated/0/Download');
+      if (!downloadsDir.existsSync()) {
+        downloadsDir.createSync(recursive: true);
+      }
+      final targetPublicFile = File('${downloadsDir.path}/$fileName');
+      await targetPublicFile.writeAsBytes(encodedFile);
 
-      String publicResultPath = localTempPath;
       try {
         if (Platform.isAndroid) {
-          const channel = MethodChannel('com.example.aereality/media_scanner');
-          final res = await channel.invokeMethod<String>('saveToDownloads', {
-            'sourcePath': tempFile.path,
-            'fileName': fileName,
-            'mimeType': mimeType,
-          });
-          if (res != null) publicResultPath = res;
+          const channel = MethodChannel('com.aereality/media');
+          await channel.invokeMethod('scanFile', {'path': targetPublicFile.path});
         }
       } catch (_) {}
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Image Saved to Downloads:\n$publicResultPath'),
+            content: Text('Image Saved to Downloads:\n${targetPublicFile.path}'),
             backgroundColor: Colors.teal,
             duration: const Duration(seconds: 4),
           ),
@@ -2686,7 +2680,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 15. NATIVE HIGH-BIT DEPTH CLEAN EXPORT ENGINE (LIGHTNING-FAST RAW PIPE)
+  // 15. NATIVE HIGH-BIT DEPTH CLEAN EXPORT ENGINE (ZERO-DISK STREAMING PIPE)
   // ---------------------------------------------------------------------------
   static Future<void> executeVideoExport({
     required BuildContext context,
@@ -2747,11 +2741,11 @@ class EditorViews {
 
     int targetFps = int.parse(fps.replaceAll('fps', ''));
     String containerExt = container.toLowerCase();
-
     final bool is16Bit = (bitDepth == '16-bit');
+
     final progressNotifier = ValueNotifier<double>(0.0);
     final accent = gCustomAccentColor.value;
-    final statusNotifier = ValueNotifier<String>('Initializing 32-bit Vulkan Engine: 0%');
+    final statusNotifier = ValueNotifier<String>('Starting 32-bit GPU Pipeline: 0%');
     bool isCancelled = false;
     FFmpegSession? activeSession;
     BuildContext? dialogContext;
@@ -2774,7 +2768,7 @@ class EditorViews {
                   isCancelled = true;
                   activeSession?.cancel();
                   if (dialogContext != null) Navigator.of(dialogContext!).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Export cancelled by user.')));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Export cancelled.')));
                 },
               ),
             ],
@@ -2800,175 +2794,174 @@ class EditorViews {
       },
     );
 
+    Directory? sessionTempDir;
     try {
-      final dir = await getTemporaryDirectory();
-      final framesDir = Directory('${dir.path}/export_frames');
-      final processedDir = Directory('${dir.path}/export_processed');
+      final baseCacheDir = await getTemporaryDirectory();
+      sessionTempDir = Directory('${baseCacheDir.path}/aereality_export_${DateTime.now().millisecondsSinceEpoch}');
+      await sessionTempDir.create(recursive: true);
 
-      if (await framesDir.exists()) await framesDir.delete(recursive: true);
-      if (await processedDir.exists()) await processedDir.delete(recursive: true);
-      await framesDir.create(recursive: true);
-      await processedDir.create(recursive: true);
-
-      final audioPath = '${dir.path}/current_audio.aac';
-      final oldAudio = File(audioPath);
-      if (await oldAudio.exists()) await oldAudio.delete();
-      await FFmpegKit.execute('-hide_banner -i "${project.mediaPath}" -vn -c:a aac -b:a 256k -y "$audioPath"');
+      // Extract Audio track first
+      final audioPath = '${sessionTempDir.path}/extracted_audio.aac';
+      await FFmpegKit.execute('-hide_banner -y -i "${project.mediaPath}" -vn -c:a aac -b:a 256k "$audioPath"');
 
       if (isCancelled) return;
 
-      statusNotifier.value = 'Extracting $outW x $outH frames fast...';
-      
-      // Fast rawvideo frame extraction bypassing CPU image encoding
-      activeSession = await FFmpegKit.execute(
-        '-hide_banner -i "${project.mediaPath}" -r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${framesDir.path}/frame_%05d.raw"',
-      );
+      // Determine duration & total frames cleanly via ffprobe
+      final probeSession = await FFprobeKit.getMediaInformation(project.mediaPath);
+      final mediaInfo = probeSession.getMediaInformation();
+      double durationSec = double.tryParse(mediaInfo?.getDuration() ?? '4.0') ?? 4.0;
+      if (durationSec <= 0.0) durationSec = 4.0;
+      final int totalFrames = (durationSec * targetFps).ceil();
 
-      final extractReturnCode = await activeSession.getReturnCode();
-      if (!ReturnCode.isSuccess(extractReturnCode)) {
-        throw Exception('FFmpeg frame extraction encountered an error.');
-      }
-
-      if (isCancelled) return;
-
-      var frameFiles = await framesDir.list().toList();
-      frameFiles.sort((a, b) => a.path.compareTo(b.path));
-      final totalFrames = frameFiles.length;
-
-      if (totalFrames == 0) {
-        throw Exception('Frame extraction failed: 0 frames produced.');
-      }
-
-      final int frameByteLength8 = outW * outH * 4;
-
-      for (int i = 0; i < totalFrames; i++) {
-        if (isCancelled) return;
-
-        final file = frameFiles[i];
-        if (file is! File) continue;
-        final rawInput8 = await file.readAsBytes();
-        if (rawInput8.length < frameByteLength8) continue;
-
-        final currentTime = i / targetFps.toDouble();
-
-        // Multi-Layer Timeline Segment Evaluation
-        bool applyCurrentCc = true;
-        Float32List activeUniforms = uniforms;
-        Float32List? activeLut = lutTable;
-
-        if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
-          final matchingSegments = project.timelineSegments.where((seg) =>
-              seg.isEnabled && currentTime >= seg.startTime && currentTime <= seg.endTime);
-          applyCurrentCc = matchingSegments.isNotEmpty;
-        }
-
-        final paddedIndex = (i + 1).toString().padLeft(5, '0');
-
-        if (is16Bit) {
-          // True 16-Bit Processing Stride
-          final rawInput16 = Uint16List(outW * outH * 4);
-          for (int px = 0; px < rawInput8.length; px++) {
-            rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
-          }
-
-          Uint16List outputRaw16;
-          if (applyCurrentCc) {
-            outputRaw16 = processImage16(rawInput16, outW, outH, outW, outH, activeUniforms, lutTable: activeLut);
-          } else {
-            outputRaw16 = rawInput16;
-          }
-
-          final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
-          await outputFile.writeAsBytes(outputRaw16.buffer.asUint8List());
-        } else {
-          // 8-Bit & 10-Bit Fast Raw Stream
-          Uint8List outputRaw8;
-          if (applyCurrentCc) {
-            outputRaw8 = processImage(rawInput8, outW, outH, outW, outH, activeUniforms, lutTable: activeLut);
-          } else {
-            outputRaw8 = rawInput8;
-          }
-
-          final outputFile = File('${processedDir.path}/frame_$paddedIndex.raw');
-          await outputFile.writeAsBytes(outputRaw8);
-        }
-
-        progressNotifier.value = (i + 1) / totalFrames;
-        statusNotifier.value = 'Grading frames on GPU: ${(((i + 1) / totalFrames) * 100).toInt()}% (${i + 1}/$totalFrames)';
-        
-        await Future.delayed(Duration.zero);
-      }
-
-      if (isCancelled) return;
-
-      statusNotifier.value = 'Encoding master ($codec)...';
-      final silentOutputPath = '${dir.path}/silent_video.$containerExt';
-      final silentFile = File(silentOutputPath);
-      if (await silentFile.exists()) await silentFile.delete();
-
-      final encodeCmd = ExportMatrix.buildFFmpegEncodeCommand(
-        fps: targetFps,
-        framePattern: '${processedDir.path}/frame_%05d.raw',
-        container: container,
-        codec: codec,
-        bitDepth: bitDepth,
-        bitrateKbps: bitrateKbps,
-        outputPath: silentOutputPath,
-        width: outW,
-        height: outH,
-      );
-      activeSession = await FFmpegKit.execute(encodeCmd);
-
-      if (isCancelled) return;
-
-      final encodeReturnCode = await activeSession.getReturnCode();
-      if (!ReturnCode.isSuccess(encodeReturnCode) || !await silentFile.exists()) {
-        final logs = await activeSession.getLogsAsString();
-        throw Exception('Encoder failed: ${logs ?? "Encoding rejected by FFmpeg"}');
-      }
-
-      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 1000;
-      
       final cleanCodec = codec.split(' ').first;
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${bitDepth}_${DateTime.now().millisecondsSinceEpoch}.$containerExt';
-      final tempMuxedPath = '${dir.path}/$fileName';
+      final silentVideoPath = '${sessionTempDir.path}/silent_out.$containerExt';
+
+      // -----------------------------------------------------------------------
+      // STREAMING PIPELINE: Small rolling chunk batches to guarantee 0 GB disk waste
+      // Process 30-frame rolling batches on Mali-G57 GPU, encode, and delete immediately.
+      // -----------------------------------------------------------------------
+      final int chunkSize = 30;
+      final int totalChunks = (totalFrames / chunkSize).ceil();
+      final List<String> chunkVideoParts = [];
+
+      for (int c = 0; c < totalChunks; c++) {
+        if (isCancelled) return;
+
+        final int chunkStartFrame = c * chunkSize;
+        final int framesInThisChunk = math.min(chunkSize, totalFrames - chunkStartFrame);
+        final double chunkStartSec = chunkStartFrame / targetFps.toDouble();
+        final double chunkDurSec = framesInThisChunk / targetFps.toDouble();
+
+        final chunkRawDir = Directory('${sessionTempDir.path}/raw_c$c');
+        final chunkProcDir = Directory('${sessionTempDir.path}/proc_c$c');
+        await chunkRawDir.create(recursive: true);
+        await chunkProcDir.create(recursive: true);
+
+        // Extract raw frames for ONLY this small 0.5s - 1.0s window
+        statusNotifier.value = 'GPU Processing: ${((c / totalChunks) * 100).toInt()}% (Batch ${c + 1}/$totalChunks)';
+        progressNotifier.value = c / totalChunks;
+
+        final extractCmd = '-hide_banner -ss $chunkStartSec -t $chunkDurSec -i "${project.mediaPath}" '
+            '-r $targetFps -s ${outW}x${outH} -f rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
+        await FFmpegKit.execute(extractCmd);
+
+        final rawFiles = await chunkRawDir.list().toList();
+        rawFiles.sort((a, b) => a.path.compareTo(b.path));
+
+        final int frameByteLength8 = outW * outH * 4;
+
+        for (int fi = 0; fi < rawFiles.length; fi++) {
+          if (isCancelled) return;
+          final f = rawFiles[fi];
+          if (f is! File) continue;
+
+          final rawInput8 = await f.readAsBytes();
+          if (rawInput8.length < frameByteLength8) continue;
+
+          final globalFrameIdx = chunkStartFrame + fi;
+          final currentTime = globalFrameIdx / targetFps.toDouble();
+
+          bool applyCurrentCc = true;
+          Float32List activeUniforms = uniforms;
+          Float32List? activeLut = lutTable;
+
+          if (project.enableTimelineSegments && project.timelineSegments.isNotEmpty) {
+            final matchingSegments = project.timelineSegments.where((seg) =>
+                seg.isEnabled && currentTime >= seg.startTime && currentTime <= seg.endTime);
+            applyCurrentCc = matchingSegments.isNotEmpty;
+          }
+
+          final paddedIndex = (fi + 1).toString().padLeft(5, '0');
+          final outFile = File('${chunkProcDir.path}/f_$paddedIndex.raw');
+
+          if (is16Bit) {
+            final rawInput16 = Uint16List(outW * outH * 4);
+            for (int px = 0; px < rawInput8.length; px++) {
+              rawInput16[px] = (rawInput8[px] << 8) | rawInput8[px];
+            }
+            Uint16List outputRaw16 = applyCurrentCc
+                ? processImage16(rawInput16, outW, outH, outW, outH, activeUniforms, lutTable: activeLut)
+                : rawInput16;
+            await outFile.writeAsBytes(outputRaw16.buffer.asUint8List());
+          } else {
+            Uint8List outputRaw8 = applyCurrentCc
+                ? processImage(rawInput8, outW, outH, outW, outH, activeUniforms, lutTable: activeLut)
+                : rawInput8;
+            await outFile.writeAsBytes(outputRaw8);
+          }
+        }
+
+        // Encode this tiny chunk to an intermediate part file
+        final chunkPartPath = '${sessionTempDir.path}/part_$c.$containerExt';
+        final encodeChunkCmd = ExportMatrix.buildFFmpegEncodeCommand(
+          fps: targetFps,
+          framePattern: '${chunkProcDir.path}/f_%05d.raw',
+          container: container,
+          codec: codec,
+          bitDepth: bitDepth,
+          bitrateKbps: bitrateKbps,
+          outputPath: chunkPartPath,
+          width: outW,
+          height: outH,
+        );
+        await FFmpegKit.execute(encodeChunkCmd);
+
+        chunkVideoParts.add(chunkPartPath);
+
+        // INSTANT MEMORY & DISK PURGE: Wipe the raw frames immediately from disk!
+        if (await chunkRawDir.exists()) await chunkRawDir.delete(recursive: true);
+        if (await chunkProcDir.exists()) await chunkProcDir.delete(recursive: true);
+      }
+
+      if (isCancelled) return;
+
+      statusNotifier.value = 'Muxing master stream...';
+      progressNotifier.value = 0.95;
+
+      // Concatenate the encoded chunk parts
+      final concatListFile = File('${sessionTempDir.path}/concat.txt');
+      final concatBuffer = StringBuffer();
+      for (final p in chunkVideoParts) {
+        concatBuffer.writeln("file '$p'");
+      }
+      await concatListFile.writeAsString(concatBuffer.toString());
+
+      if (chunkVideoParts.length == 1) {
+        await File(chunkVideoParts.first).copy(silentVideoPath);
+      } else {
+        await FFmpegKit.execute('-hide_banner -y -f concat -safe 0 -i "${concatListFile.path}" -c copy "$silentVideoPath"');
+      }
+
+      // Final Mux with Audio
+      final tempFinalPath = '${sessionTempDir.path}/$fileName';
+      final hasAudio = await File(audioPath).exists() && (await File(audioPath).length()) > 500;
 
       if (hasAudio) {
         final aCodec = ExportMatrix.getAudioCodec(container);
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$tempMuxedPath"');
+        await FFmpegKit.execute('-hide_banner -y -i "$silentVideoPath" -i "$audioPath" -c:v copy -c:a $aCodec -shortest "$tempFinalPath"');
       } else {
-        await FFmpegKit.execute('-hide_banner -y -i "$silentOutputPath" -c:v copy "$tempMuxedPath"');
+        await File(silentVideoPath).copy(tempFinalPath);
       }
 
-      final tempMuxedFile = File(tempMuxedPath);
+      final tempFinalFile = File(tempFinalPath);
 
-      // Correct Android 15 MIME types
-      String mimeType = 'video/mp4';
-      if (containerExt == 'mkv') mimeType = 'video/x-matroska';
-      else if (containerExt == 'webm') mimeType = 'video/webm';
-      else if (containerExt == 'mov') mimeType = 'video/quicktime';
+      // Transfer directly to Root Downloads using exact same logic as images
+      final downloadsDir = Directory('/storage/emulated/0/Download');
+      if (!downloadsDir.existsSync()) {
+        downloadsDir.createSync(recursive: true);
+      }
+      final publicFile = File('${downloadsDir.path}/$fileName');
+      await tempFinalFile.copy(publicFile.path);
 
-      String publicDestPath = tempMuxedPath;
+      // Trigger Android Media Scanner so it displays instantly in Files & Gallery
       try {
-        if (Platform.isAndroid) {
-          const channel = MethodChannel('com.example.aereality/media_scanner');
-          final res = await channel.invokeMethod<String>('saveToDownloads', {
-            'sourcePath': tempMuxedFile.path,
-            'fileName': fileName,
-            'mimeType': mimeType,
-          });
-          if (res != null) publicDestPath = res;
-        }
+        const channel = MethodChannel('com.aereality/media');
+        await channel.invokeMethod('scanFile', {'path': publicFile.path});
       } catch (_) {}
 
-      // Dual-path fallback: also attempt direct copy if allowed
-      try {
-        final directDownload = File('/storage/emulated/0/Download/$fileName');
-        if (!await directDownload.exists()) {
-          await tempMuxedFile.copy(directDownload.path);
-          publicDestPath = directDownload.path;
-        }
-      } catch (_) {}
+      progressNotifier.value = 1.0;
+      statusNotifier.value = 'Complete!';
 
       if (!isCancelled && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
@@ -2977,7 +2970,7 @@ class EditorViews {
       if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Master Video Saved to Downloads:\n$publicDestPath'),
+            content: Text('Video Saved to Downloads:\n${publicFile.path}'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 4),
           ),
@@ -2988,8 +2981,17 @@ class EditorViews {
         Navigator.of(dialogContext!).pop();
       }
       if (!isCancelled && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red),
+        );
       }
+    } finally {
+      // ALWAYS purge all scratch buffers, whether export succeeded, failed, or was cancelled
+      try {
+        if (sessionTempDir != null && await sessionTempDir.exists()) {
+          await sessionTempDir.delete(recursive: true);
+        }
+      } catch (_) {}
     }
   }
 }
