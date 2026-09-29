@@ -2808,7 +2808,7 @@ class EditorViews {
       // Determine duration & total frames cleanly via ffprobe
       final probeSession = await FFprobeKit.getMediaInformation(project.mediaPath);
       final mediaInfo = probeSession.getMediaInformation();
-      double durationSec = double.tryParse(mediaInfo?.getDuration() ?? '4.0') ?? 4.0;
+      double durationSec = double.tryParse(mediaInfo?.duration ?? '4.0') ?? 4.0;
       if (durationSec <= 0.0) durationSec = 4.0;
       final int totalFrames = (durationSec * targetFps).ceil();
 
