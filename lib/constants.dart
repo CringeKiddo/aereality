@@ -1,6 +1,6 @@
 // =============================================================================
 // AEReality / Shaderly - Constants, Globals, Palettes & Master Export Matrix
-// True 32-Bit Linear Pipeline • Zero H.264/H.265/MediaCodec dependencies
+// True 32-Bit Linear Pipeline • High-Bit Depth GPU Sync & Acutance Filter
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -107,19 +107,18 @@ const List<PresetStyle> kAnimePresetStyles = [
 
 // -----------------------------------------------------------------------------
 // Master Clean Export Matrix Engine (AV1, VP9, ProRes, FFV1)
-// Zero MediaCodec / Zero H.264/H.265 / Complete 16-Bit & 10-Bit Matrix
+// Complete 16-Bit & 10-Bit Matrix • Zero Stride Mismatches • Faststart Support
 // -----------------------------------------------------------------------------
 class ExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
-    'MP4': [
-      'AV1 (libsvtav1 Master)',
-      'ProRes 422 HQ (10-bit)',
-    ],
     'MKV': [
-      'FFV1 (16-bit Lossless)',
       'AV1 (libsvtav1 Master)',
       'VP9 (libvpx-vp9 Sharp)',
+      'FFV1 (16-bit Lossless)',
       'ProRes 4444 (16-bit)',
+    ],
+    'MP4': [
+      'AV1 (libsvtav1 Master)',
     ],
     'MOV': [
       'ProRes 422 HQ (10-bit)',
@@ -127,8 +126,8 @@ class ExportMatrix {
       'AV1 (libsvtav1 Master)',
     ],
     'WebM': [
-      'AV1 (libsvtav1 Master)',
       'VP9 (libvpx-vp9 Sharp)',
+      'AV1 (libsvtav1 Master)',
     ],
   };
 
@@ -164,17 +163,19 @@ class ExportMatrix {
   static String getAudioCodec(String container) {
     switch (container.toUpperCase()) {
       case 'WEBM':
+        return 'libopus -b:a 128k';
       case 'MKV':
         return 'libopus -b:a 192k';
       case 'MOV':
-        return 'pcm_s16le';
+        return 'aac -b:a 256k';
       case 'MP4':
       default:
-        return 'aac -b:a 256k';
+        return 'aac -b:a 192k';
     }
   }
 
-  /// Builds clean, high-performance FFmpeg encoding command string
+  /// Builds a clean, fully synchronized FFmpeg encoding command string
+  /// Fixes pixel format matching and enables acutance sharpening on VP9
   static String buildFFmpegEncodeCommand({
     required int fps,
     required String framePattern,
@@ -183,11 +184,17 @@ class ExportMatrix {
     required String bitDepth,
     required int bitrateKbps,
     required String outputPath,
-    int width = 1920,
-    int height = 1080,
+    required int width,
+    required int height,
   }) {
-    final bool is10 = bitDepth == '10-bit';
-    final bool is16 = bitDepth == '16-bit';
+    final bool is10 = (bitDepth == '10-bit');
+    final bool is16 = (bitDepth == '16-bit');
+    final bool inputIs16BitRaw = is10 || is16; // 10-bit and 16-bit feed rgba64le for true linear precision
+
+    // Strict alignment with Dart: rgba64le (8 bytes/px) for 10/16-bit, rgba (4 bytes/px) for 8-bit
+    final String pixFmtIn = inputIs16BitRaw ? 'rgba64le' : 'rgba';
+    final String inputFormat = '-f image2 -c:v rawvideo -pix_fmt $pixFmtIn -s ${width}x${height}';
+
     String vcodec;
     String codecFlags;
     String filterChain = '';
@@ -195,14 +202,15 @@ class ExportMatrix {
     if (codec.contains('AV1')) {
       vcodec = 'libsvtav1';
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
-      codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt $pixFmt -b:v ${bitrateKbps}k';
+      final fastStart = (container.toUpperCase() == 'MP4' || container.toUpperCase() == 'MOV') ? '-movflags +faststart' : '';
+      codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt $pixFmt -b:v ${bitrateKbps}k $fastStart';
     } else if (codec.contains('VP9')) {
       vcodec = 'libvpx-vp9';
       final pixFmt = is10 ? 'yuv420p10le' : 'yuv420p';
       final profile = is10 ? '-profile:v 2' : '-profile:v 0';
-      // Automatically injects +0.3 unsharp acutance snap for VP9 anime lines
-      filterChain = 'unsharp=5:5:0.3:5:5:0.0,';
-      codecFlags = '-c:v $vcodec -deadline good -cpu-used 2 -crf 20 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
+      // Automatically injects +0.3 unsharp acutance snap for clean anime lines
+      filterChain = 'unsharp=5:5:0.3:5:5:0.0';
+      codecFlags = '-c:v $vcodec -deadline good -cpu-used 2 -crf 18 $profile -b:v ${bitrateKbps}k -pix_fmt $pixFmt';
     } else if (codec.contains('ProRes')) {
       vcodec = 'prores_ks';
       if (codec.contains('4444')) {
@@ -220,13 +228,7 @@ class ExportMatrix {
       codecFlags = '-c:v $vcodec -preset 6 -crf 20 -pix_fmt yuv420p -b:v ${bitrateKbps}k';
     }
 
-    // Precise image2 + rawvideo demuxer: FFmpeg accurately reads sequentially indexed .raw files
-    final String pixFmtIn = is16 ? 'rgba64le' : 'rgba';
-    final String inputFormat = '-f image2 -c:v rawvideo -pix_fmt $pixFmtIn -s ${width}x${height}';
-
-    final String filterArg = filterChain.isNotEmpty
-        ? '-vf "${filterChain.substring(0, filterChain.length - 1)}"'
-        : '';
+    final String filterArg = filterChain.isNotEmpty ? '-vf "$filterChain"' : '';
 
     return '-hide_banner -loglevel error -y $inputFormat -framerate $fps -i "$framePattern" $filterArg $codecFlags "$outputPath"';
   }
