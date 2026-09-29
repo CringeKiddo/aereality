@@ -23,7 +23,6 @@ import 'models.dart';
 import 'lut_processor.dart';
 import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
-import 'export_matrix.dart';
 
 class EditorViews {
   // ---------------------------------------------------------------------------
