@@ -707,20 +707,17 @@ class EditorViews {
           }).toList(),
         ),
         const SizedBox(height: 16),
-        Container(
-          height: 220,
-          decoration: BoxDecoration(
-            color: const Color(0xFF0C0C12),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: CustomPaint(
-              painter: SplineCurvePainter(points: activeCurve, curveColor: curveColor),
-            ),
-          ),
-        ),
+        // NEW CLEAN CODE:
+SplineCurveEditor(
+  points: activeCurve,
+  curveColor: curveColor,
+  onChanged: (newPts) {
+    for (int i = 0; i < 5; i++) {
+      activeCurve[i] = newPts[i];
+    }
+    onChanged();
+  },
+),
         const SizedBox(height: 16),
         buildSliderRow(context: context, title: 'Black Point (0.00)', val: activeCurve[0], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[0] = v.clamp(0.0, 1.0); onChanged(); }),
         buildSliderRow(context: context, title: 'Shadow Lift (0.25)', val: activeCurve[1], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[1] = v.clamp(0.0, 1.0); onChanged(); }),
