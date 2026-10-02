@@ -1,6 +1,6 @@
 // =============================================================================
 // AEReality / Shaderly - Master Data Models & Layer State
-// True 32-Bit Linear RGB + Oklab Pipeline • 3-Segment Timeline Architecture
+// True 32-Bit Linear RGB + Oklab Pipeline • 10-Layer Stack • Light Wrap & Bilateral
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -17,15 +17,16 @@ enum LayerBlendMode {
   overlay,
   softLight,
   multiply,
+  add,
+  linearDodge,
 }
 
-/// Represents an isolated timeline clip region (up to 3 sequential layers)
-/// where a custom CC/Preset is applied exclusively to that time range.
+/// Represents an isolated timeline clip region (up to 10 sequential layers)
 class TimelineClipSegment {
   String id;
   String name;
-  double startTime; // Seconds
-  double endTime;   // Seconds
+  double startTime;
+  double endTime;
   List<AdjustmentLayer> layers;
   double tonemapMode;
   bool isEnabled;
@@ -109,17 +110,28 @@ class AdjustmentLayer {
   double blackCrush;
 
   // Split Toning Engine
-  double splitToneShadowHue;  // 0.0 to 1.0 (Color wheel hue)
-  double splitToneShadowSat;  // 0.0 to 1.0
-  double splitToneHighHue;    // 0.0 to 1.0
-  double splitToneHighSat;    // 0.0 to 1.0
-  double splitToneBalance;    // -1.0 to 1.0 (Pivot)
+  double splitToneShadowHue;
+  double splitToneShadowSat;
+  double splitToneHighHue;
+  double splitToneHighSat;
+  double splitToneBalance;
 
-  // Stylistic Cel & Edges
+  // Stylistic Cel, Edges & Line Thinning
   double darkOutlines;
   double edgeDarken;
+  double lineThinning;
+  double lineThinningThreshold;
   double vignette;
   double vignetteBoxed;
+
+  // Bilateral Filter (Anime Skin / Clothes Smoothing)
+  double bilateralIntensity;
+  double bilateralRadius;
+  double bilateralRange;
+
+  // Debanding Filter (Fix Source 8-bit Gradient Discs)
+  double debandRadius;
+  double debandThreshold;
 
   // Dynamics & Texture
   double flickerIntensity;
@@ -129,19 +141,30 @@ class AdjustmentLayer {
   double filmGrain;
   double denoise;
 
-  // Deep Glow & Flares
+  // Deep Glow, Sapphire Glow & New Glow Engines
   double deepGlowIntensity;
   double deepGlowRadius;
   double deepGlowThreshold;
   double edgeGlowTint;
   double sapphireGlowWidth;
   double sapphireGlowThreshold;
+  double kawaseGlowIntensity;
+  double kawaseGlowRadius;
+  double diffuseSpGlowIntensity;
+  double diffuseSpGlowRadius;
+  double diffuseSpGlowThreshold;
 
   // Soft Gaussian Saturated Bloom ("Shaderly Glow")
   double shaderlyGlowIntensity;
   double shaderlyGlowRadius;
   double shaderlyGlowThreshold;
   double shaderlyGlowTint;
+
+  // S_LightWrap (Foreground Character Edge Bleed)
+  double lightWrapWidth;
+  double lightWrapIntensity;
+  double lightWrapThreshold;
+  int lightWrapBlendMode; // 0 = Screen, 1 = Add / Linear Dodge
 
   // Video Flares
   int videoFlareType;
@@ -188,10 +211,10 @@ class AdjustmentLayer {
   double mblColoristaLift;
   double mblColoristaGamma;
   double mblColoristaGain;
-  double deepTeal;             // Magic Bullets Deep Teal
-  double magicCurves;          // Magic Bullets S-Curve
+  double deepTeal;
+  double magicCurves;
 
-  // Copied Stuff Category (After Effects Style FX)
+  // Copied Stuff Category
   double copiedChromaShift;
   double copiedEdgeRays;
   double copiedProMist;
@@ -223,8 +246,15 @@ class AdjustmentLayer {
     this.splitToneBalance = 0.0,
     this.darkOutlines = 0.0,
     this.edgeDarken = 0.0,
+    this.lineThinning = 0.0,
+    this.lineThinningThreshold = 0.05,
     this.vignette = 0.0,
     this.vignetteBoxed = 0.0,
+    this.bilateralIntensity = 0.0,
+    this.bilateralRadius = 2.0,
+    this.bilateralRange = 0.15,
+    this.debandRadius = 0.0,
+    this.debandThreshold = 0.02,
     this.flickerIntensity = 0.0,
     this.flickerSpeed = 10.0,
     this.halationRadius = 0.0,
@@ -237,10 +267,19 @@ class AdjustmentLayer {
     this.edgeGlowTint = 0.0,
     this.sapphireGlowWidth = 0.0,
     this.sapphireGlowThreshold = 0.70,
+    this.kawaseGlowIntensity = 0.0,
+    this.kawaseGlowRadius = 0.45,
+    this.diffuseSpGlowIntensity = 0.0,
+    this.diffuseSpGlowRadius = 0.50,
+    this.diffuseSpGlowThreshold = 0.65,
     this.shaderlyGlowIntensity = 0.0,
     this.shaderlyGlowRadius = 0.45,
     this.shaderlyGlowThreshold = 0.50,
     this.shaderlyGlowTint = 0.0,
+    this.lightWrapWidth = 0.0,
+    this.lightWrapIntensity = 0.0,
+    this.lightWrapThreshold = 0.60,
+    this.lightWrapBlendMode = 0,
     this.videoFlareType = 0,
     this.thinStreakIntensity = 0.0,
     this.thinStreakWidth = 0.50,
@@ -309,8 +348,15 @@ class AdjustmentLayer {
       splitToneBalance: splitToneBalance,
       darkOutlines: darkOutlines,
       edgeDarken: edgeDarken,
+      lineThinning: lineThinning,
+      lineThinningThreshold: lineThinningThreshold,
       vignette: vignette,
       vignetteBoxed: vignetteBoxed,
+      bilateralIntensity: bilateralIntensity,
+      bilateralRadius: bilateralRadius,
+      bilateralRange: bilateralRange,
+      debandRadius: debandRadius,
+      debandThreshold: debandThreshold,
       flickerIntensity: flickerIntensity,
       flickerSpeed: flickerSpeed,
       halationRadius: halationRadius,
@@ -323,10 +369,19 @@ class AdjustmentLayer {
       edgeGlowTint: edgeGlowTint,
       sapphireGlowWidth: sapphireGlowWidth,
       sapphireGlowThreshold: sapphireGlowThreshold,
+      kawaseGlowIntensity: kawaseGlowIntensity,
+      kawaseGlowRadius: kawaseGlowRadius,
+      diffuseSpGlowIntensity: diffuseSpGlowIntensity,
+      diffuseSpGlowRadius: diffuseSpGlowRadius,
+      diffuseSpGlowThreshold: diffuseSpGlowThreshold,
       shaderlyGlowIntensity: shaderlyGlowIntensity,
       shaderlyGlowRadius: shaderlyGlowRadius,
       shaderlyGlowThreshold: shaderlyGlowThreshold,
       shaderlyGlowTint: shaderlyGlowTint,
+      lightWrapWidth: lightWrapWidth,
+      lightWrapIntensity: lightWrapIntensity,
+      lightWrapThreshold: lightWrapThreshold,
+      lightWrapBlendMode: lightWrapBlendMode,
       videoFlareType: videoFlareType,
       thinStreakIntensity: thinStreakIntensity,
       thinStreakWidth: thinStreakWidth,
@@ -393,8 +448,15 @@ class AdjustmentLayer {
       'splitToneBalance': splitToneBalance,
       'darkOutlines': darkOutlines,
       'edgeDarken': edgeDarken,
+      'lineThinning': lineThinning,
+      'lineThinningThreshold': lineThinningThreshold,
       'vignette': vignette,
       'vignetteBoxed': vignetteBoxed,
+      'bilateralIntensity': bilateralIntensity,
+      'bilateralRadius': bilateralRadius,
+      'bilateralRange': bilateralRange,
+      'debandRadius': debandRadius,
+      'debandThreshold': debandThreshold,
       'flickerIntensity': flickerIntensity,
       'flickerSpeed': flickerSpeed,
       'halationRadius': halationRadius,
@@ -407,10 +469,19 @@ class AdjustmentLayer {
       'edgeGlowTint': edgeGlowTint,
       'sapphireGlowWidth': sapphireGlowWidth,
       'sapphireGlowThreshold': sapphireGlowThreshold,
+      'kawaseGlowIntensity': kawaseGlowIntensity,
+      'kawaseGlowRadius': kawaseGlowRadius,
+      'diffuseSpGlowIntensity': diffuseSpGlowIntensity,
+      'diffuseSpGlowRadius': diffuseSpGlowRadius,
+      'diffuseSpGlowThreshold': diffuseSpGlowThreshold,
       'shaderlyGlowIntensity': shaderlyGlowIntensity,
       'shaderlyGlowRadius': shaderlyGlowRadius,
       'shaderlyGlowThreshold': shaderlyGlowThreshold,
       'shaderlyGlowTint': shaderlyGlowTint,
+      'lightWrapWidth': lightWrapWidth,
+      'lightWrapIntensity': lightWrapIntensity,
+      'lightWrapThreshold': lightWrapThreshold,
+      'lightWrapBlendMode': lightWrapBlendMode,
       'videoFlareType': videoFlareType,
       'thinStreakIntensity': thinStreakIntensity,
       'thinStreakWidth': thinStreakWidth,
@@ -454,12 +525,17 @@ class AdjustmentLayer {
   }
 
   factory AdjustmentLayer.fromJson(Map<String, dynamic> json) {
+    final bModeIdx = (json['blendMode'] as int?) ?? 0;
+    final safeBlendMode = (bModeIdx >= 0 && bModeIdx < LayerBlendMode.values.length)
+        ? LayerBlendMode.values[bModeIdx]
+        : LayerBlendMode.normal;
+
     return AdjustmentLayer(
       id: json['id'] ?? 'layer_${DateTime.now().millisecondsSinceEpoch}',
       name: json['name'] ?? 'Layer',
       isEnabled: json['isEnabled'] ?? true,
       opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
-      blendMode: LayerBlendMode.values[(json['blendMode'] as int?) ?? 0],
+      blendMode: safeBlendMode,
       brightness: (json['brightness'] as num?)?.toDouble() ?? 0.0,
       contrast: (json['contrast'] as num?)?.toDouble() ?? 1.0,
       saturation: (json['saturation'] as num?)?.toDouble() ?? 1.0,
@@ -477,8 +553,15 @@ class AdjustmentLayer {
       splitToneBalance: (json['splitToneBalance'] as num?)?.toDouble() ?? 0.0,
       darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
       edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
+      lineThinning: (json['lineThinning'] as num?)?.toDouble() ?? 0.0,
+      lineThinningThreshold: (json['lineThinningThreshold'] as num?)?.toDouble() ?? 0.05,
       vignette: (json['vignette'] as num?)?.toDouble() ?? 0.0,
       vignetteBoxed: (json['vignetteBoxed'] as num?)?.toDouble() ?? 0.0,
+      bilateralIntensity: (json['bilateralIntensity'] as num?)?.toDouble() ?? 0.0,
+      bilateralRadius: (json['bilateralRadius'] as num?)?.toDouble() ?? 2.0,
+      bilateralRange: (json['bilateralRange'] as num?)?.toDouble() ?? 0.15,
+      debandRadius: (json['debandRadius'] as num?)?.toDouble() ?? 0.0,
+      debandThreshold: (json['debandThreshold'] as num?)?.toDouble() ?? 0.02,
       flickerIntensity: (json['flickerIntensity'] as num?)?.toDouble() ?? 0.0,
       flickerSpeed: (json['flickerSpeed'] as num?)?.toDouble() ?? 10.0,
       halationRadius: (json['halationRadius'] as num?)?.toDouble() ?? 0.0,
@@ -491,10 +574,19 @@ class AdjustmentLayer {
       edgeGlowTint: (json['edgeGlowTint'] as num?)?.toDouble() ?? 0.0,
       sapphireGlowWidth: (json['sapphireGlowWidth'] as num?)?.toDouble() ?? 0.0,
       sapphireGlowThreshold: (json['sapphireGlowThreshold'] as num?)?.toDouble() ?? 0.70,
+      kawaseGlowIntensity: (json['kawaseGlowIntensity'] as num?)?.toDouble() ?? 0.0,
+      kawaseGlowRadius: (json['kawaseGlowRadius'] as num?)?.toDouble() ?? 0.45,
+      diffuseSpGlowIntensity: (json['diffuseSpGlowIntensity'] as num?)?.toDouble() ?? 0.0,
+      diffuseSpGlowRadius: (json['diffuseSpGlowRadius'] as num?)?.toDouble() ?? 0.50,
+      diffuseSpGlowThreshold: (json['diffuseSpGlowThreshold'] as num?)?.toDouble() ?? 0.65,
       shaderlyGlowIntensity: (json['shaderlyGlowIntensity'] as num?)?.toDouble() ?? 0.0,
       shaderlyGlowRadius: (json['shaderlyGlowRadius'] as num?)?.toDouble() ?? 0.45,
       shaderlyGlowThreshold: (json['shaderlyGlowThreshold'] as num?)?.toDouble() ?? 0.50,
       shaderlyGlowTint: (json['shaderlyGlowTint'] as num?)?.toDouble() ?? 0.0,
+      lightWrapWidth: (json['lightWrapWidth'] as num?)?.toDouble() ?? 0.0,
+      lightWrapIntensity: (json['lightWrapIntensity'] as num?)?.toDouble() ?? 0.0,
+      lightWrapThreshold: (json['lightWrapThreshold'] as num?)?.toDouble() ?? 0.60,
+      lightWrapBlendMode: (json['lightWrapBlendMode'] as int?) ?? 0,
       videoFlareType: json['videoFlareType'] ?? 0,
       thinStreakIntensity: (json['thinStreakIntensity'] as num?)?.toDouble() ?? 0.0,
       thinStreakWidth: (json['thinStreakWidth'] as num?)?.toDouble() ?? 0.50,
@@ -544,9 +636,8 @@ class ProjectData {
   String aspectRatio;
   List<AdjustmentLayer> layers;
   int activeLayerIndex;
-  double tonemapMode; // 0=Linear, 1=Shaderly AgX Anime, 2=Khronos Neutral
+  double tonemapMode;
 
-  // Isolated Text Suite
   bool textSuiteEnabled;
   double textBoxX;
   double textBoxY;
@@ -559,15 +650,11 @@ class ProjectData {
   double textLumaThreshold;
   double textMetallicTint;
 
-  // Timeline Optimizer / Up to 3 Layer Clip Regions
   bool enableTimelineSegments;
   List<TimelineClipSegment> timelineSegments;
   int activeTimelineSegmentIndex;
 
-  // Master Dither Strength
   double ditherStrength;
-
-  // Global Project Magic Bullets
   double deepTeal;
   double magicCurves;
 
