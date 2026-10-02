@@ -27,6 +27,7 @@ import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
 import 'touch_particles.dart';
 import 'editor_views.dart';
+import 'export_suite.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1101,7 +1102,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
-  // Fast GPU live grading with in-memory caching
   Future<void> _applyGrade({bool forceExtract = false}) async {
     if (_isVulkanProcessing) {
       _needsReprocess = true;
@@ -1210,8 +1210,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     await ProjectManager.saveProject(proj);
   }
 
+  // ===========================================================================
+  // 10-LAYER UNIFORM BUFFER ENGINE (1024 Floats • 96-Float Stride per Layer)
+  // Fixes the opacity jump bug by writing each layer's independent properties
+  // ===========================================================================
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
-    final uniforms = Float32List(512);
+    final uniforms = Float32List(1024);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
@@ -1257,10 +1261,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[30] = _cur.magicCurves;
     uniforms[31] = _cur.edgeHaloRadius;
 
-    // Up to 4 Adjustment Layers (64 floats each starting at offset 32)
-    for (int l = 0; l < math.min(_project.layers.length, 4); l++) {
+    // Up to 10 Adjustment Layers (96 floats each starting at offset 32)
+    for (int l = 0; l < math.min(_project.layers.length, 10); l++) {
       final layer = _project.layers[l];
-      final offset = 32 + (l * 64);
+      final offset = 32 + (l * 96);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1341,6 +1345,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 61] = layer.mblColoristaGamma;
       uniforms[offset + 62] = layer.mblColoristaGain;
       uniforms[offset + 63] = layer.centerAura;
+
+      // Offsets 64..79: New Effects Packed from Each Layer's Own Properties
+      uniforms[offset + 64] = layer.bilateralIntensity;
+      uniforms[offset + 65] = layer.bilateralRadius;
+      uniforms[offset + 66] = layer.bilateralRange;
+      uniforms[offset + 67] = layer.debandRadius;
+
+      uniforms[offset + 68] = layer.debandThreshold;
+      uniforms[offset + 69] = layer.lineThinning;
+      uniforms[offset + 70] = layer.lineThinningThreshold;
+      uniforms[offset + 71] = layer.kawaseGlowIntensity;
+
+      uniforms[offset + 72] = layer.kawaseGlowRadius;
+      uniforms[offset + 73] = layer.diffuseSpGlowIntensity;
+      uniforms[offset + 74] = layer.diffuseSpGlowRadius;
+      uniforms[offset + 75] = layer.diffuseSpGlowThreshold;
+
+      uniforms[offset + 76] = layer.lightWrapWidth;
+      uniforms[offset + 77] = layer.lightWrapIntensity;
+      uniforms[offset + 78] = layer.lightWrapThreshold;
+      uniforms[offset + 79] = layer.lightWrapBlendMode.toDouble();
     }
 
     return uniforms;
@@ -1359,8 +1384,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   void _addNewAdjustmentLayer() {
-    if (_project.layers.length >= 4) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 4 Adjustment Layers allowed.')));
+    if (_project.layers.length >= 10) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 10 Adjustment Layers allowed.')));
       return;
     }
     _pushUndoSnapshot();
@@ -1422,7 +1447,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         children: [
           IconButton(
             icon: Icon(Icons.add_box_rounded, color: accent, size: 22),
-            tooltip: 'Add Adjustment Layer (Max 4)',
+            tooltip: 'Add Adjustment Layer (Max 10)',
             onPressed: _addNewAdjustmentLayer,
           ),
           Expanded(
@@ -1552,6 +1577,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               DropdownMenuItem(value: LayerBlendMode.overlay, child: Text('Overlay')),
               DropdownMenuItem(value: LayerBlendMode.softLight, child: Text('Soft Light')),
               DropdownMenuItem(value: LayerBlendMode.multiply, child: Text('Multiply')),
+              DropdownMenuItem(value: LayerBlendMode.add, child: Text('Add')),
+              DropdownMenuItem(value: LayerBlendMode.linearDodge, child: Text('Linear Dodge')),
             ],
             onChanged: (mode) {
               if (mode != null) {
@@ -1756,7 +1783,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 IconButton(
                   icon: const Icon(Icons.file_upload_outlined, color: Colors.white),
                   tooltip: 'Render Master Video / Art',
-                  onPressed: () => EditorViews.showExportSheet(
+                  onPressed: () => ExportSuite.showExportSheet(
                     context: context,
                     project: _project,
                     curLayer: _cur,
