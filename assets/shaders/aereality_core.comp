@@ -3,8 +3,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // =============================================================================
 // AEReality / Shaderly - Master Vulkan Compute Shader (Full Suite)
-// True 32-Bit Linear RGB + Oklab Color Engine • AgX Anime & Khronos PBR Neutral
-// Smooth Gaussian Bloom • Real Optical Flares • Line-Art Safe Edge Glow
+// True 32-Bit Linear RGB + Oklab Color Engine • Up to 10 Layers • IGN Dither
+// 13-Tap Anti-Grid Pyramid • Karis Average • Deband • Line Thinning • Light Wrap
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -35,7 +35,7 @@ layout(std430, binding = 6) buffer BloomL2 {
     uint bloom_l2[]; // 1/8 resolution
 };
 
-// Intermediate Linear Composite (Binding 7: Permanently Eliminates Tile Grid/Brick-Wall Artifacts)
+// Intermediate Linear Composite (Binding 7: Permanently Eliminates Race Conditions)
 layout(std430, binding = 7) buffer TempCompositeBuffer {
     uint temp_composite[];
 };
@@ -49,12 +49,12 @@ layout(push_constant) uniform PushConsts {
 };
 
 // =============================================================================
-// UNIFORM STRUCTURES (Exact 1:1 match with Dart and C++ FFI)
+// UNIFORM STRUCTURES (96 floats per layer, supporting 10 stacked layers)
 // =============================================================================
 struct LayerData {
     float isEnabled;              // Offset 0
     float opacity;                // Offset 1
-    float blendMode;              // Offset 2
+    float blendMode;              // Offset 2: 0=Norm, 1=Screen, 2=LinearAdd, 3=Overlay, 4=SoftLight, 5=Multiply, 6=Add, 7=LinearDodge
     float brightness;             // Offset 3
 
     float saturation;             // Offset 4
@@ -131,11 +131,49 @@ struct LayerData {
     float mblColoristaGamma;      // Offset 61
     float mblColoristaGain;       // Offset 62
     float centerAura;             // Offset 63
+
+    // NEW EXTENDED PARAMETERS (Offsets 64..95)
+    float bilateralIntensity;     // Offset 64
+    float bilateralRadius;        // Offset 65
+    float bilateralRange;         // Offset 66
+    float debandRadius;           // Offset 67
+
+    float debandThreshold;        // Offset 68
+    float lineThinning;           // Offset 69
+    float lineThinningThreshold;  // Offset 70
+    float kawaseGlowIntensity;    // Offset 71
+
+    float kawaseGlowRadius;       // Offset 72
+    float diffuseSpGlowIntensity; // Offset 73
+    float diffuseSpGlowRadius;    // Offset 74
+    float diffuseSpGlowThreshold; // Offset 75
+
+    float lightWrapWidth;         // Offset 76
+    float lightWrapIntensity;     // Offset 77
+    float lightWrapThreshold;     // Offset 78
+    float lightWrapBlendMode;     // Offset 79 (0=Screen, 1=Add)
+
+    float pad0;                   // Offset 80
+    float pad1;                   // Offset 81
+    float pad2;                   // Offset 82
+    float pad3;                   // Offset 83
+    float pad4;                   // Offset 84
+    float pad5;                   // Offset 85
+    float pad6;                   // Offset 86
+    float pad7;                   // Offset 87
+    float pad8;                   // Offset 88
+    float pad9;                   // Offset 89
+    float pad10;                  // Offset 90
+    float pad11;                  // Offset 91
+    float pad12;                  // Offset 92
+    float pad13;                  // Offset 93
+    float pad14;                  // Offset 94
+    float pad15;                  // Offset 95
 };
 
 layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_time;                 // 0
-    float u_layerCount;            // 1
+    float u_layerCount;            // 1 (Up to 10)
     float u_tonemapMode;           // 2: 0=Linear, 1=AgX Anime Punch, 2=Khronos Neutral
     float u_imgWidth;              // 3
     float u_imgHeight;             // 4
@@ -166,11 +204,11 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_splitToneBalance;      // 27
 
     float u_bitDepthMode;          // 28: 0.0 = 8-bit, 1.0 = 10-bit, 2.0 = 16-bit
-    float u_deepTeal;              // 29: Magic Bullets Deep Teal strength
-    float u_magicCurves;           // 30: Magic Bullets Lightness S-Curve
-    float u_edgeHaloRadius;        // 31: Edge Glow Soft Halo spread
+    float u_deepTeal;              // 29
+    float u_magicCurves;           // 30
+    float u_edgeHaloRadius;        // 31
 
-    LayerData layers[4];           // 32 + (l * 64)
+    LayerData layers[10];          // 32 + (l * 96) -> supports up to 10 active layers
 };
 
 // =============================================================================
@@ -194,8 +232,24 @@ vec3 linearToSrgb(vec3 c) {
 }
 
 // =============================================================================
+// INTERLEAVED GRADIENT NOISE (IGN) DITHERING (Jorge Jimenez / Next-Gen Tech)
+// Screen-Space Dithering at Final Output Presentation
+// =============================================================================
+float interleavedGradientNoise(vec2 fragCoord) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(fragCoord.xy, magic.xy)));
+}
+
+// =============================================================================
+// KARIS AVERAGE WEIGHTING (Suppresses bright specular glints blowing into blocks)
+// =============================================================================
+float karisWeight(vec3 color) {
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    return 1.0 / (1.0 + luma);
+}
+
+// =============================================================================
 // PERCEPTUAL COLOR SPACE: OKLAB (<-> LINEAR RGB)
-// Mathematically Clamped Against Cusp Inversions (Zero Inverted Yellow/Black Faces)
 // =============================================================================
 vec3 linearRgbToOklab(vec3 c) {
     c = max(vec3(0.0), c);
@@ -215,7 +269,6 @@ vec3 linearRgbToOklab(vec3 c) {
 }
 
 vec3 oklabToLinearRgb(vec3 lab) {
-    // Prevent Oklab gamut cusp negative values that cause cubed signs to invert into yellow/black masks
     float l_ = max(0.0, lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z);
     float m_ = max(0.0, lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z);
     float s_ = max(0.0, lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
@@ -240,7 +293,7 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
 }
 
 // =============================================================================
-// CATMULL-ROM SPLINE EVALUATOR (MONOTONIC SLOPE LIMITING - ZERO INVERSIONS)
+// CATMULL-ROM SPLINE EVALUATOR (MONOTONIC SLOPE LIMITING)
 // =============================================================================
 float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) {
     x = clamp(x, 0.0, 1.0);
@@ -254,7 +307,6 @@ float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) 
     float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
     float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
 
-    // Strict monotonic tangent limiting prevents cubic spline undershoots / inversions
     float d1 = cp2 - cp1;
     float m1 = clamp(0.5 * (cp2 - cp0), min(0.0, d1 * 3.0), max(0.0, d1 * 3.0));
     float m2 = clamp(0.5 * (cp3 - cp1), min(0.0, d1 * 3.0), max(0.0, d1 * 3.0));
@@ -300,7 +352,6 @@ vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
     }
 }
 
-// Read from Intermediate Linear Composite Buffer (Binding 7)
 vec4 unpackComposite_Dynamic(int pixelIndex, float bitMode) {
     if (bitMode > 1.5) {
         uint word0 = temp_composite[pixelIndex * 2];
@@ -320,7 +371,6 @@ vec4 unpackComposite_Dynamic(int pixelIndex, float bitMode) {
     }
 }
 
-// Write into Intermediate Linear Composite Buffer (Binding 7)
 void packComposite_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     if (bitMode > 1.5) {
         uint r = uint(clamp(col.r * 65535.0 + 0.5, 0.0, 65535.0));
@@ -338,7 +388,6 @@ void packComposite_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     }
 }
 
-// Write into Final Display Output Buffer (Binding 1)
 void packFinalDisplay_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     if (bitMode > 1.5) {
         uint r = uint(clamp(col.r * 65535.0 + 0.5, 0.0, 65535.0));
@@ -360,7 +409,7 @@ vec3 unpackBloomHalf(uint val) {
     float r = float(val & 0xFFu) / 255.0;
     float g = float((val >> 8u) & 0xFFu) / 255.0;
     float b = float((val >> 16u) & 0xFFu) / 255.0;
-    return vec3(r * r, g * g, b * b); // Linearize
+    return vec3(r * r, g * g, b * b);
 }
 
 uint packBloomHalf(vec3 col) {
@@ -426,10 +475,8 @@ vec3 colorTempToRGB(float kelvin) {
 }
 
 // =============================================================================
-// OFFICIAL KHRONOS PBR NEUTRAL & AgX ANIME PUNCH TONEMAPPERS
+// TONEMAPPERS
 // =============================================================================
-
-// Official Khronos PBR Neutral Specification (Zero Black Crushing)
 vec3 tonemapKhronosPbrNeutral(vec3 color) {
     color = max(color, vec3(0.0));
     const float startCompression = 0.8 - 0.04;
@@ -446,11 +493,9 @@ vec3 tonemapKhronosPbrNeutral(vec3 color) {
     return mix(color, newPeak * vec3(1.0), g);
 }
 
-// AgX Anime Punch: Filmic S-curve in normalized log space, returning Linear RGB for consistent pipeline transfer
 vec3 tonemapAgxAnime(vec3 color) {
     color = max(vec3(0.0), color);
 
-    // 1. AgX Inset Matrix (preserves saturated neon highlights from clipping)
     const mat3 agxMat = mat3(
         0.842479062253094, 0.0423282422610123, 0.0423756549057051,
         0.0784335999999992, 0.878468636494572, 0.0784336,
@@ -458,20 +503,15 @@ vec3 tonemapAgxAnime(vec3 color) {
     );
     vec3 val = agxMat * color;
 
-    // 2. Log2 encoding [-10.0 to +6.5 EV]
     const float minEV = -10.0;
     const float maxEV = 6.5;
     val = clamp(log2(val + 1e-5), minEV, maxEV);
     val = (val - minEV) / (maxEV - minEV);
 
-    // 3. ASC CDL Anime S-Curve: Deepens dark midtones without blowing skin highlights
     vec3 sCurve = val * val * (3.0 - 2.0 * val);
     val = mix(val, sCurve, 0.55);
-
-    // Rational Sigmoid Roll-Off
     val = val * (2.0 * val + 0.05) / (val * (1.8 * val + 0.50) + 0.14);
 
-    // 4. AgX Outset Matrix
     const mat3 agxMatInv = mat3(
         1.19687900512017, -0.0528968517594969, -0.0529716355844491,
         -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
@@ -479,19 +519,15 @@ vec3 tonemapAgxAnime(vec3 color) {
     );
     val = max(vec3(0.0), agxMatInv * val);
 
-    // 5. Anime Vibrance Restorer in Linear Space
     float luma = dot(val, vec3(0.2126, 0.7152, 0.0722));
     val = mix(vec3(luma), val, 1.18);
     return clamp(val, 0.0, 1.0);
 }
 
 vec3 applyToneMapping(vec3 linearCol, float mode) {
-    if (mode == 1.0) {
-        return tonemapAgxAnime(linearCol);
-    } else if (mode == 2.0) {
-        return tonemapKhronosPbrNeutral(linearCol);
-    }
-    return linearCol; // Mode 0 = Linear Passthrough
+    if (mode == 1.0) return tonemapAgxAnime(linearCol);
+    if (mode == 2.0) return tonemapKhronosPbrNeutral(linearCol);
+    return linearCol;
 }
 
 // 3D LUT TRILINEAR SAMPLER
@@ -521,7 +557,7 @@ vec3 sample3DLut(vec3 color, float opacity) {
     return mix(color, mix(s0, s1, f.z), opacity);
 }
 
-// LINEAR RGB LAYER BLENDING
+// EXTENDED LINEAR RGB BLEND MODES (Including Add & Linear Dodge)
 vec3 applyBlendModeLinear(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
     vec3 result = blendCol;
     if (mode == 1) { // Screen
@@ -534,11 +570,15 @@ vec3 applyBlendModeLinear(vec3 baseCol, vec3 blendCol, int mode, float opacity) 
         result = (1.0 - 2.0 * blendCol) * baseCol * baseCol + 2.0 * blendCol * baseCol;
     } else if (mode == 5) { // Multiply
         result = baseCol * blendCol;
+    } else if (mode == 6) { // Add
+        result = min(vec3(1.0), baseCol + blendCol);
+    } else if (mode == 7) { // Linear Dodge
+        result = baseCol + blendCol;
     }
     return mix(baseCol, result, clamp(opacity, 0.0, 1.0));
 }
 
-// FXAA SPATIAL ANTI-ALIASING PASS (Reads Clean Linear Composite from Binding 7)
+// FXAA SPATIAL ANTI-ALIASING PASS
 vec3 applyFxaa(ivec2 coord, int width, int height, float bitMode) {
     vec3 rgbM = unpackComposite_Dynamic(coord.y * width + coord.x, bitMode).rgb;
     float lumaM = dot(rgbM, vec3(0.2126, 0.7152, 0.0722));
@@ -557,9 +597,7 @@ vec3 applyFxaa(ivec2 coord, int width, int height, float bitMode) {
     float lumaMax = max(lumaM, max(max(lumaU, lumaD), max(lumaL, lumaR)));
     float range = lumaMax - lumaMin;
 
-    if (range < max(0.04, lumaMax * 0.12)) {
-        return rgbM;
-    }
+    if (range < max(0.04, lumaMax * 0.12)) return rgbM;
 
     vec3 rgbFour = (unpackComposite_Dynamic(up.y * width + up.x, bitMode).rgb +
                     unpackComposite_Dynamic(down.y * width + down.x, bitMode).rgb +
@@ -597,14 +635,13 @@ vec3 sampleBloomBuffer(int passLevel, vec2 uv, int w, int h) {
 }
 
 // =============================================================================
-// PASS 1: LINEAR HIGHLIGHT ISOLATION
+// PASS 1: HIGHLIGHT EXTRACTION WITH KARIS AVERAGE
 // =============================================================================
 void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
     vec2 centerUV = (vec2(coord) + 0.5) / vec2(l0W, l0H);
     ivec2 srcC = ivec2(centerUV * vec2(srcW, srcH));
     float bitMode = u_bitDepthMode;
 
-    // Read from clean intermediate composite buffer (Binding 7)
     vec3 col = unpackComposite_Dynamic(srcC.y * srcW + srcC.x, bitMode).rgb;
 
     float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
@@ -612,29 +649,50 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
     float threshold = clamp(L.deepGlowThreshold, 0.10, 0.95);
     float knee = smoothstep(threshold, threshold + 0.20, luma);
 
-    bloom_l0[coord.y * l0W + coord.x] = packBloomHalf(col * knee);
+    // Apply Karis Average to prevent bright specular dots from blowing into blocks
+    vec3 isolated = col * knee;
+    isolated *= karisWeight(isolated);
+
+    bloom_l0[coord.y * l0W + coord.x] = packBloomHalf(isolated);
 }
 
-// PASS 2 & 3: CONTINUOUS DOWNSAMPLE
+// =============================================================================
+// PASS 2 & 3: ANTI-GRID 13-TAP BOX DOWNSAMPLE
+// =============================================================================
 void executeBloomDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
     int srcLevel = (passIdx == 2) ? 0 : 1;
     int srcW = w * 2;
     int srcH = h * 2;
     vec2 uv = (vec2(coord) + 0.5) / vec2(w, h);
     vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.6);
+    float x = texel.x;
+    float y = texel.y;
 
-    vec3 sum = sampleBloomBuffer(srcLevel, uv, srcW, srcH) * 4.0;
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(-texel.x, -texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2( texel.x, -texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(-texel.x,  texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2( texel.x,  texel.y), srcW, srcH);
-    sum /= 8.0;
+    // 13 Strategic Overlapping Taps cancel out structural grid lines
+    vec3 a = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x,  2.0 * y), srcW, srcH);
+    vec3 b = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,      2.0 * y), srcW, srcH);
+    vec3 c = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x,  2.0 * y), srcW, srcH);
+
+    vec3 d = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x,  0.0), srcW, srcH);
+    vec3 e = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,      0.0), srcW, srcH);
+    vec3 f = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x,  0.0), srcW, srcH);
+
+    vec3 g = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x, -2.0 * y), srcW, srcH);
+    vec3 h = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,     -2.0 * y), srcW, srcH);
+    vec3 i = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x, -2.0 * y), srcW, srcH);
+
+    vec3 j = sampleBloomBuffer(srcLevel, uv + vec2(-x,  y), srcW, srcH);
+    vec3 k = sampleBloomBuffer(srcLevel, uv + vec2( x,  y), srcW, srcH);
+    vec3 l = sampleBloomBuffer(srcLevel, uv + vec2(-x, -y), srcW, srcH);
+    vec3 m = sampleBloomBuffer(srcLevel, uv + vec2( x, -y), srcW, srcH);
+
+    vec3 downsample = (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (e + j + k + l + m) * 0.125;
 
     int dstIdx = coord.y * w + coord.x;
     if (passIdx == 2) {
-        bloom_l1[dstIdx] = packBloomHalf(sum);
+        bloom_l1[dstIdx] = packBloomHalf(downsample);
     } else {
-        bloom_l2[dstIdx] = packBloomHalf(sum);
+        bloom_l2[dstIdx] = packBloomHalf(downsample);
     }
 }
 
@@ -668,22 +726,19 @@ void executeBloomUpsample(int passIdx, ivec2 coord, int w, int h, float radius) 
 }
 
 // =============================================================================
-// PASS 6: COMPOSITING & DISPLAY TRANSFER (Reads Binding 7 -> Writes Binding 1)
+// PASS 6: COMPOSITING & IGN DITHER (Reads Binding 7 -> Writes Binding 1)
 // =============================================================================
 void executeFinalComposite(ivec2 coord, int width, int height) {
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
 
-    // 1. Anti-Aliased Linear Base (Sampled from clean TempCompositeBuffer, zero race condition)
     vec3 linearBase = applyFxaa(coord, width, height, bitMode);
-
     vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
-    LayerData L = layers[0];
 
     vec3 tightGlow = sampleBloomBuffer(0, uv, width / 2, height / 2);
     vec3 wideGlow  = sampleBloomBuffer(2, uv, width / 8, height / 8);
 
-    // Calculate line-art edge gradient to protect ink outlines
+    // Calculate line-art edge gradient
     float resScale = float(max(width, height)) / 720.0;
     int edgeStep = max(1, int(round(resScale)));
     float gx = 0.0, gy = 0.0;
@@ -698,83 +753,105 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
 
     // Dynamic Glow Tint Profiles
+    LayerData L0 = layers[0];
     vec3 glowTint = vec3(1.0);
-    if (L.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
-    else if (L.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
-    else if (L.edgeGlowTint == 3.0) glowTint = vec3(1.25, 0.85, 0.40);
-    else if (L.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30);
-    else if (L.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
-    else if (L.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
+    if (L0.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
+    else if (L0.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
+    else if (L0.edgeGlowTint == 3.0) glowTint = vec3(1.25, 0.85, 0.40);
+    else if (L0.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30);
+    else if (L0.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
+    else if (L0.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
 
-    // 1. DEEP GLOW: High-threshold atmospheric light falloff
-    if (L.deepGlowIntensity > 0.01) {
-        float falloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.2);
-        vec3 deepBloom = wideGlow * glowTint * (L.deepGlowIntensity * 1.35 * falloff);
-        deepBloom *= (1.0 - lineEdge * 0.85); // Protect black ink outlines
-        linearBase += deepBloom;
+    // Multi-Layer Glow Accumulation across all 10 active layers (smooth layer stacking)
+    int totalLayers = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int i = 0; i < totalLayers; i++) {
+        LayerData L = layers[i];
+        if (L.isEnabled < 0.5) continue;
+
+        // 1. Deep Glow: High-threshold atmospheric light falloff
+        if (L.deepGlowIntensity > 0.01) {
+            float falloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.2);
+            vec3 deepBloom = wideGlow * glowTint * (L.deepGlowIntensity * 1.35 * falloff);
+            deepBloom *= (1.0 - lineEdge * 0.85);
+            linearBase += deepBloom * L.opacity;
+        }
+
+        // 2. Kawase Glow
+        if (L.kawaseGlowIntensity > 0.01) {
+            vec3 kGlow = mix(tightGlow, wideGlow, clamp(L.kawaseGlowRadius, 0.0, 1.0));
+            linearBase += kGlow * glowTint * (L.kawaseGlowIntensity * 1.25) * L.opacity;
+        }
+
+        // 3. Diffuse SP (Screen-Space) Glow
+        if (L.diffuseSpGlowIntensity > 0.01) {
+            float spKnee = smoothstep(L.diffuseSpGlowThreshold, L.diffuseSpGlowThreshold + 0.15, dot(tightGlow, vec3(0.333)));
+            vec3 diffuseBloom = tightGlow * spKnee * (L.diffuseSpGlowIntensity * 1.40);
+            linearBase += diffuseBloom * L.opacity;
+        }
+
+        // 4. CapCut/WIS Soft Edge Glow Halo: Diffuses outwards while keeping black line-art intact
+        if (L.sapphireGlowWidth > 0.01 || u_edgeHaloRadius > 0.01) {
+            float edgeStrength = max(L.sapphireGlowWidth, u_edgeHaloRadius);
+            float baseLuma = dot(linearBase, vec3(0.2126, 0.7152, 0.0722));
+            float inkMask = smoothstep(0.02, 0.16, baseLuma);
+            float outerHalo = smoothstep(0.08, 0.45, lineEdge) * (1.0 - smoothstep(0.70, 0.98, lineEdge));
+            vec3 haloTint = (L.edgeGlowTint == 2.0) ? vec3(0.45, 1.15, 1.50) : glowTint;
+            vec3 edgeHalo = mix(linearBase, tightGlow * 1.5, 0.5) * outerHalo * haloTint * (edgeStrength * 1.6);
+            linearBase += edgeHalo * inkMask * L.opacity;
+        }
+
+        // 5. True Optical Anamorphic Flares (Horizontal Streaks across entire frame)
+        if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
+            float flareWidth = clamp(L.thinStreakWidth * 0.45, 0.05, 1.0);
+            vec3 cyanCore = vec3(0.60, 1.00, 1.45);
+            vec3 amberEdge = vec3(1.25, 0.75, 0.35);
+
+            vec3 streakSum = vec3(0.0);
+            float totalW = 0.0;
+            int streakSteps = 16;
+            float stepSize = flareWidth / float(streakSteps);
+
+            for (int s = -streakSteps; s <= streakSteps; s++) {
+                float off = float(s) * stepSize;
+                float w = exp(-3.2 * (float(s) / float(streakSteps)) * (float(s) / float(streakSteps)));
+                vec2 sampleUV = clamp(uv + vec2(off, 0.0), vec2(0.0), vec2(1.0));
+                vec3 highSample = sampleBloomBuffer(0, sampleUV, width / 2, height / 2);
+                vec3 spectral = mix(cyanCore, amberEdge, abs(float(s)) / float(streakSteps));
+                streakSum += highSample * w * spectral;
+                totalW += w;
+            }
+
+            if (totalW > 0.0) {
+                vec3 anamorphicBeam = (streakSum / totalW) * (L.thinStreakIntensity * 2.2) * L.thinStreakOpacity;
+                linearBase += anamorphicBeam * L.opacity;
+            }
+        }
     }
 
-    // 2. SHADERLY GLOW: Soft creamy bloom modulated by underlying footage color
+    // 6. Shaderly Glow: Soft creamy bloom modulated by footage color
     if (u_shaderlyGlowIntensity > 0.01) {
         vec3 creamyColor = mix(linearBase, tightGlow, 0.40);
         float radiusMod = clamp(u_shaderlyGlowRadius * 1.5, 0.2, 2.0);
         vec3 softBloom = creamyColor * (u_shaderlyGlowIntensity * 1.10 * radiusMod);
-        softBloom *= (1.0 - lineEdge * 0.50);
-        linearBase += softBloom;
+        linearBase += softBloom * (1.0 - lineEdge * 0.50);
     }
 
-    // 3. CAPCUT/WIS SOFT EDGE GLOW: Diffuses outwards while keeping black line-art intact
-    if (L.sapphireGlowWidth > 0.01 || u_edgeHaloRadius > 0.01) {
-        float edgeStrength = max(L.sapphireGlowWidth, u_edgeHaloRadius);
-        // Protect inner black line-art: if luminance is low (black ink line), mask it out
-        float baseLuma = dot(linearBase, vec3(0.2126, 0.7152, 0.0722));
-        float inkMask = smoothstep(0.02, 0.16, baseLuma); // 0.0 on pure black line-art
-
-        float outerHalo = smoothstep(0.08, 0.45, lineEdge) * (1.0 - smoothstep(0.70, 0.98, lineEdge));
-        vec3 haloTint = (L.edgeGlowTint == 2.0) ? vec3(0.45, 1.15, 1.50) : glowTint;
-        vec3 edgeHalo = mix(linearBase, tightGlow * 1.5, 0.5) * outerHalo * haloTint * (edgeStrength * 1.6);
-        edgeHalo *= inkMask; // Black lines stay dense and sharp
-        linearBase += edgeHalo;
-    }
-
-    // 4. TRUE OPTICAL ANAMORPHIC FLARES (Horizontal Streaks across entire frame)
-    if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-        float flareWidth = clamp(L.thinStreakWidth * 0.45, 0.05, 1.0);
-        vec3 cyanCore = vec3(0.60, 1.00, 1.45);
-        vec3 amberEdge = vec3(1.25, 0.75, 0.35);
-
-        vec3 streakSum = vec3(0.0);
-        float totalW = 0.0;
-        int streakSteps = 16;
-        float stepSize = flareWidth / float(streakSteps);
-
-        for (int s = -streakSteps; s <= streakSteps; s++) {
-            float off = float(s) * stepSize;
-            float w = exp(-3.2 * (float(s) / float(streakSteps)) * (float(s) / float(streakSteps)));
-            vec2 sampleUV = clamp(uv + vec2(off, 0.0), vec2(0.0), vec2(1.0));
-            vec3 highSample = sampleBloomBuffer(0, sampleUV, width / 2, height / 2);
-            vec3 spectral = mix(cyanCore, amberEdge, abs(float(s)) / float(streakSteps));
-            streakSum += highSample * w * spectral;
-            totalW += w;
-        }
-
-        if (totalW > 0.0) {
-            vec3 anamorphicBeam = (streakSum / totalW) * (L.thinStreakIntensity * 2.2) * L.thinStreakOpacity;
-            linearBase += anamorphicBeam;
-        }
-    }
-
-    // 5. Master Tonemapping (Linear -> Display Dynamic Compression)
+    // 7. Master Tonemapping
     vec3 finalLinear = applyToneMapping(linearBase, u_tonemapMode);
 
-    // 6. Convert to sRGB for display output
+    // 8. Convert to sRGB
     vec3 finalDisplay = linearToSrgb(finalLinear);
 
-    // 7. Smooth Sub-Pixel Dithering (Clean triangular distribution - Zero Brick-Wall Lines)
+    // 9. SCREEN-SPACE INTERLEAVED GRADIENT NOISE (IGN) DITHER
+    float ignNoise = interleavedGradientNoise(vec2(coord));
+    float ditherStep = (bitMode > 1.5) ? (1.0 / 65535.0) : (1.0 / 255.0);
+    vec3 ditherOffset = vec3(ignNoise - 0.5) * ditherStep * max(u_ditherStrength, 0.85);
+    finalDisplay = clamp(finalDisplay + ditherOffset, 0.0, 1.0);
+
+    // Smooth Triangular Sub-Pixel Dither
     if (u_ditherStrength > 0.01) {
         float dither = smoothTriangularDither(coord);
-        float quantStep = (bitMode > 1.5) ? (1.0 / 65535.0) : (1.0 / 255.0);
-        finalDisplay = clamp(finalDisplay + vec3(dither * quantStep * (u_ditherStrength * 1.5)), 0.0, 1.0);
+        finalDisplay = clamp(finalDisplay + vec3(dither * ditherStep * (u_ditherStrength * 0.5)), 0.0, 1.0);
     }
 
     packFinalDisplay_Dynamic(pixelIndex, vec4(finalDisplay, 1.0), bitMode);
@@ -805,18 +882,73 @@ void main() {
     }
 
     // =========================================================================
-    // PASS 0: FULL PRIMARY GRADE PIPELINE
-    // Reads input from in_pixels -> Writes clean Linear composite to temp_composite
+    // PASS 0: FULL PRIMARY GRADE & INPUT RESTORATION PIPELINE
+    // Reads in_pixels -> Writes clean composite to temp_composite (Binding 7)
     // =========================================================================
     int pixelIndex = coord.y * width + coord.x;
     float bitMode = u_bitDepthMode;
     vec4 rawPixel = unpackRGBA_Dynamic(pixelIndex, bitMode);
 
-    // Linearize base footage
     vec3 currentComposite = srgbToLinear(rawPixel.rgb);
-
     float resScale = float(max(width, height)) / 720.0;
     int edgeStep = max(1, int(round(resScale)));
+
+    // -------------------------------------------------------------------------
+    // STAGE 1: INPUT DEBANDING (Restores compressed 8-bit source gradients)
+    // -------------------------------------------------------------------------
+    LayerData L0 = layers[0];
+    if (L0.debandRadius > 0.01) {
+        float dRad = L0.debandRadius * 4.0 * resScale;
+        float dThresh = max(L0.debandThreshold, 0.005);
+        vec3 centerCol = currentComposite;
+        vec3 sumDeband = centerCol;
+        float totalW = 1.0;
+
+        for (int a = 0; a < 4; a++) {
+            float angle = float(a) * 1.5707963;
+            ivec2 off = ivec2(cos(angle) * dRad, sin(angle) * dRad);
+            ivec2 sc = clamp(coord + off, ivec2(0), ivec2(width - 1, height - 1));
+            vec3 sCol = srgbToLinear(unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb);
+            if (distance(centerCol, sCol) < dThresh) {
+                sumDeband += sCol;
+                totalW += 1.0;
+            }
+        }
+        currentComposite = sumDeband / totalW;
+    }
+
+    // -------------------------------------------------------------------------
+    // STAGE 2: EDGE-DIRECTED LINE THINNING & DARKENING (Crisp anime line art)
+    // -------------------------------------------------------------------------
+    if (L0.lineThinning > 0.01) {
+        ivec2 cT = clamp(coord + ivec2(0,  edgeStep), ivec2(0), ivec2(width - 1, height - 1));
+        ivec2 cB = clamp(coord + ivec2(0, -edgeStep), ivec2(0), ivec2(width - 1, height - 1));
+        ivec2 cL = clamp(coord + ivec2(-edgeStep, 0), ivec2(0), ivec2(width - 1, height - 1));
+        ivec2 cR = clamp(coord + ivec2( edgeStep, 0), ivec2(0), ivec2(width - 1, height - 1));
+
+        vec3 colT = srgbToLinear(unpackRGBA_Dynamic(cT.y * width + cT.x, bitMode).rgb);
+        vec3 colB = srgbToLinear(unpackRGBA_Dynamic(cB.y * width + cB.x, bitMode).rgb);
+        vec3 colL = srgbToLinear(unpackRGBA_Dynamic(cL.y * width + cL.x, bitMode).rgb);
+        vec3 colR = srgbToLinear(unpackRGBA_Dynamic(cR.y * width + cR.x, bitMode).rgb);
+
+        float lumaC = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
+        float lumaT = dot(colT, vec3(0.2126, 0.7152, 0.0722));
+        float lumaB = dot(colB, vec3(0.2126, 0.7152, 0.0722));
+        float lumaL = dot(colL, vec3(0.2126, 0.7152, 0.0722));
+        float lumaR = dot(colR, vec3(0.2126, 0.7152, 0.0722));
+
+        float edgeGrad = sqrt(pow(lumaR - lumaL, 2.0) + pow(lumaT - lumaB, 2.0));
+        if (edgeGrad > L0.lineThinningThreshold) {
+            float minLuma = min(min(lumaT, lumaB), min(lumaL, lumaR));
+            if (minLuma < lumaC) {
+                vec3 darkestNeighbor = colT;
+                if (lumaB == minLuma) darkestNeighbor = colB;
+                if (lumaL == minLuma) darkestNeighbor = colL;
+                if (lumaR == minLuma) darkestNeighbor = colR;
+                currentComposite = mix(currentComposite, darkestNeighbor, clamp(L0.lineThinning * 0.65, 0.0, 1.0));
+            }
+        }
+    }
 
     // Sobel gradient for line detection and edge normal
     float gx = 0.0, gy = 0.0;
@@ -834,7 +966,10 @@ void main() {
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
     vec2 edgeNormal = (lineEdge > 0.05) ? normalize(vec2(gx, gy)) : vec2(0.0);
 
-    int totalLayers = int(clamp(u_layerCount, 0.0, 4.0));
+    // -------------------------------------------------------------------------
+    // STAGE 3: MULTI-LAYER GRADING STACK (Iterate across up to 10 layers cleanly)
+    // -------------------------------------------------------------------------
+    int totalLayers = int(clamp(u_layerCount, 1.0, 10.0));
 
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
@@ -907,7 +1042,30 @@ void main() {
             layerColor = mix(layerColor, denoiseSum / max(denoiseWeight, 0.001), clamp(L.denoise * 0.90, 0.0, 1.0));
         }
 
-        // 5. Frequency Unsharp Mask
+        // 5. Anime Bilateral Skin/Cloth Smoothing
+        if (L.bilateralIntensity > 0.01) {
+            vec3 bCenter = layerColor;
+            vec3 bSum = bCenter;
+            float bWeight = 1.0;
+            int bRad = clamp(int(round(L.bilateralRadius * resScale)), 1, 4);
+            float bRange = max(L.bilateralRange, 0.02);
+
+            for (int dy = -bRad; dy <= bRad; dy++) {
+                for (int dx = -bRad; dx <= bRad; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 bc = clamp(coord + ivec2(dx, dy), ivec2(0), ivec2(width - 1, height - 1));
+                    vec3 scCol = srgbToLinear(unpackRGBA_Dynamic(bc.y * width + bc.x, bitMode).rgb);
+                    float spat = float(dx * dx + dy * dy);
+                    float colDiff = distance(bCenter, scCol);
+                    float w = exp(-spat / 8.0) * exp(-(colDiff * colDiff) / (2.0 * bRange * bRange));
+                    bSum += scCol * w;
+                    bWeight += w;
+                }
+            }
+            layerColor = mix(layerColor, bSum / bWeight, clamp(L.bilateralIntensity, 0.0, 1.0));
+        }
+
+        // 6. Frequency Unsharp Mask
         if (L.unsharpAmount > 0.01) {
             int uRad = int(clamp(L.unsharpRadius * resScale, 1.0, 6.0));
             vec3 lowPass = vec3(0.0);
@@ -928,7 +1086,7 @@ void main() {
             }
         }
 
-        // 6. High-Pass Anime Line Acutance Sharpness
+        // 7. High-Pass Anime Line Acutance Sharpness
         if (L.sharpness > 0.01) {
             vec3 blur = vec3(0.0);
             blur += srgbToLinear(unpackRGBA_Dynamic(clamp(coord.y - edgeStep, 0, height - 1) * width + coord.x, bitMode).rgb);
@@ -940,7 +1098,7 @@ void main() {
             layerColor += detail * (L.sharpness * 1.5);
         }
 
-        // 7. Cel Line Darkeners
+        // 8. Cel Line Darkeners
         if (L.darkOutlines > 0.01) {
             float outlineFactor = smoothstep(0.12, 0.40, lineEdge);
             layerColor = mix(layerColor, vec3(0.0), outlineFactor * L.darkOutlines * 0.75);
@@ -950,7 +1108,7 @@ void main() {
             layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.40);
         }
 
-        // 8. Color Temperature
+        // 9. Color Temperature
         if (L.temperature > 1000.0 && abs(L.temperature - 6500.0) > 30.0) {
             vec3 tempColor = colorTempToRGB(L.temperature);
             layerColor *= tempColor / colorTempToRGB(6500.0);
@@ -959,7 +1117,7 @@ void main() {
         // --- CONVERT TO OKLAB FOR PERCEPTUAL TONAL & COLOR GRADING ---
         vec3 lab = linearRgbToOklab(layerColor);
 
-        // 9. Exposure, Contrast & Shadows (Oklab Lightness - zero hue drift)
+        // 10. Exposure, Contrast & Shadows (Oklab Lightness - zero hue drift)
         if (abs(L.brightness) > 0.001) lab.x += L.brightness * 0.35;
         if (abs(L.contrast - 1.0) > 0.001) lab.x = (lab.x - 0.50) * L.contrast + 0.50;
 
@@ -971,7 +1129,7 @@ void main() {
         lab.x += lab.x * (L.highlights * smoothstep(0.55, 1.0, lab.x) * 0.30);
         lab.x = pow(max(lab.x, 0.0), 1.0 / max(L.gamma, 0.001));
 
-        // 10. Magic Mojo II (Oklab Teal & Orange)
+        // 11. Magic Mojo II (Oklab Teal & Orange)
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
             float warmMask = clamp((lab.x - 0.35) * 1.5, 0.0, 1.0);
@@ -981,7 +1139,7 @@ void main() {
             lab.z += warmMask * L.mblMojoTealOrange * 0.035;
         }
 
-        // 11. Deep Teal with Adaptive Skin Tone Shielding
+        // 12. Deep Teal with Adaptive Skin Tone Shielding
         if (u_deepTeal > 0.01) {
             float deepShadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
             bool isSkinTone = (lab.y > 0.015 && lab.z > 0.015);
@@ -990,20 +1148,20 @@ void main() {
             lab.y -= deepShadowMask * u_deepTeal * 0.025 * skinShield;
         }
 
-        // 12. Colorista 3-Way
+        // 13. Colorista 3-Way
         if (abs(L.mblColoristaLift) > 0.001 || abs(L.mblColoristaGamma) > 0.001 || abs(L.mblColoristaGain) > 0.001) {
             lab.x += L.mblColoristaLift * (1.0 - lab.x) * 0.35;
             lab.x = pow(max(0.0, lab.x), 1.0 / max(1.0 + L.mblColoristaGamma * 0.40, 0.01));
             lab.x += L.mblColoristaGain * lab.x * 0.35;
         }
 
-        // 13. Cosmo Skin Protection
+        // 14. Cosmo Skin Protection
         if (L.cosmoCleanHighlight > 0.01) {
             float faceMask = smoothstep(0.50, 0.85, lab.x) * (1.0 - lineEdge);
             lab.yz = mix(lab.yz, lab.yz * 0.85, faceMask * L.cosmoCleanHighlight * 0.40);
         }
 
-        // 14. Monotonic Spline Curves on Lightness (Zero Inversion Risk)
+        // 15. Monotonic Spline Curves on Lightness (Zero Inversion Risk)
         lab.x = evalCatmullRom(float(lab.x), float(L.curveM0), float(L.curveM1), float(L.curveM2), float(L.curveM3), float(L.curveM4));
 
         // Magic Curves (Secondary S-Curve on L)
@@ -1012,7 +1170,7 @@ void main() {
             lab.x = mix(lab.x, s, u_magicCurves * 0.50);
         }
 
-        // 15. Saturation & Hue Rotation (Oklab Chroma Plane)
+        // 16. Saturation & Hue Rotation (Oklab Chroma Plane)
         lab.yz *= L.saturation;
         if (abs(L.hue) > 0.001) {
             lab.yz = oklabRotateHue(lab.yz, L.hue * 3.14159265);
@@ -1021,14 +1179,14 @@ void main() {
         // Convert back to Linear RGB
         layerColor = oklabToLinearRgb(lab);
 
-        // Optional RGB curve offsets in Linear RGB with strict clamping
+        // 17. Optional RGB curve offsets in Linear RGB with strict clamping
         if (abs(L.curveR2 - 0.5) > 0.01 || abs(L.curveG2 - 0.5) > 0.01 || abs(L.curveB2 - 0.5) > 0.01) {
             layerColor.r = evalCatmullRom(layerColor.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
             layerColor.g = clamp(layerColor.g + (L.curveG2 - 0.5) * 0.3, 0.0, 1.0);
             layerColor.b = clamp(layerColor.b + (L.curveB2 - 0.5) * 0.3, 0.0, 1.0);
         }
 
-        // 16. Split Toning
+        // 18. Split Toning
         if (u_splitToneShadowSat > 0.01 || u_splitToneHighSat > 0.01) {
             vec3 sTint = srgbToLinear(hueToRGB(u_splitToneShadowHue));
             vec3 hTint = srgbToLinear(hueToRGB(u_splitToneHighHue));
@@ -1038,7 +1196,7 @@ void main() {
             layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), smoothstep(pivot, 1.0, curLuma) * u_splitToneHighSat * 0.65);
         }
 
-        // 17. 4-Point Star Sparkle Glint
+        // 19. 4-Point Star Sparkle Glint
         float curLuma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
         if (u_copiedStarGlint > 0.01 && curLuma > 0.72) {
             float glint = 0.0;
@@ -1054,7 +1212,7 @@ void main() {
             layerColor += vec3(glint);
         }
 
-        // 18. Volumetric God Rays
+        // 20. Volumetric God Rays
         if (L.bslaGodRays > 0.01) {
             vec2 sunPos = vec2(float(width) * 0.50, float(height) * 0.06);
             vec2 rayDir = normalize(vec2(coord) - sunPos + vec2(0.0001));
@@ -1081,7 +1239,7 @@ void main() {
             }
         }
 
-        // 19. Volumetric Fog
+        // 21. Volumetric Fog
         if (L.bslaFogDensity > 0.01) {
             vec2 fuv = vec2(coord) / vec2(width, height);
             float fogAlt = smoothstep(1.0 - L.bslaFogDepth, 0.0, fuv.y);
@@ -1090,7 +1248,7 @@ void main() {
             layerColor = mix(layerColor, mistColor, clamp(fogAmount, 0.0, 0.65));
         }
 
-        // 20. Pro-Mist & Halation
+        // 22. Pro-Mist & Halation
         if (L.halationRadius > 0.01 || u_copiedProMist > 0.01) {
             float mistStrength = max(L.halationRadius, u_copiedProMist);
             float redBleed = smoothstep(0.55, 0.95, curLuma) * mistStrength * 0.25;
@@ -1098,20 +1256,20 @@ void main() {
             layerColor.g += redBleed * (0.20 + L.halationWarmth * 0.10);
         }
 
-        // 21. Film Grain
+        // 23. Film Grain
         if (L.filmGrain > 0.001) {
             float noise = (hash12(vec2(coord) + vec2(u_time * 17.13, u_time * 31.37)) - 0.5);
             layerColor += vec3(noise * L.filmGrain * 0.06);
         }
 
-        // 22. Micro-Pulse / Flicker
+        // 24. Micro-Pulse / Flicker
         if (L.flickerIntensity > 0.005) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.30);
         }
 
-        // 23. Radial & Boxed Vignettes
+        // 25. Radial & Boxed Vignettes
         if (L.vignette > 0.01) {
             vec2 vuv = (vec2(coord) / vec2(width, height)) - 0.5;
             layerColor *= clamp(smoothstep(0.75, 0.15, length(vuv) * (0.7 + L.vignette * 0.8)), 0.0, 1.0);
@@ -1121,7 +1279,7 @@ void main() {
             layerColor *= clamp(smoothstep(0.95, 0.20, max(buv.x, buv.y) * (0.7 + L.vignetteBoxed * 0.8)), 0.0, 1.0);
         }
 
-        // 24. Centre Aura & Horizontal Ramp
+        // 26. Centre Aura & Horizontal Ramp
         vec2 auv = vec2(coord) / vec2(width, height);
         if (L.centerAura > 0.01) {
             layerColor += vec3(smoothstep(0.60, 0.0, length(auv - 0.5)) * L.centerAura * 0.30);
@@ -1130,11 +1288,37 @@ void main() {
             layerColor *= (1.0 + smoothstep(0.35, 0.65, auv.y) * u_horizontalRamp * 0.30);
         }
 
-        // Physical Layer Composite in Linear Space
+        // 27. S_LightWrap Algorithm: Edge contour + blurred background highlight bleed
+        if (L.lightWrapIntensity > 0.01) {
+            float lwRad = L.lightWrapWidth * 8.0 * resScale;
+            vec3 bgLightSum = vec3(0.0);
+            float bgW = 0.0;
+            for (int sy = -2; sy <= 2; sy++) {
+                for (int sx = -2; sx <= 2; sx++) {
+                    ivec2 lwc = clamp(coord + ivec2(float(sx) * lwRad * 0.5, float(sy) * lwRad * 0.5), ivec2(0), ivec2(width - 1, height - 1));
+                    vec3 scSample = srgbToLinear(unpackRGBA_Dynamic(lwc.y * width + lwc.x, bitMode).rgb);
+                    float scLuma = dot(scSample, vec3(0.2126, 0.7152, 0.0722));
+                    if (scLuma > L.lightWrapThreshold) {
+                        bgLightSum += scSample;
+                        bgW += 1.0;
+                    }
+                }
+            }
+            if (bgW > 0.0) {
+                vec3 wrapBleed = (bgLightSum / bgW) * L.lightWrapIntensity;
+                if (L.lightWrapBlendMode > 0.5) {
+                    layerColor += wrapBleed; // Add / Linear Dodge
+                } else {
+                    layerColor = layerColor + wrapBleed - (layerColor * wrapBleed); // Screen
+                }
+            }
+        }
+
+        // Physical Layer Composite in Linear Space (Normal, Screen, Linear Add, Overlay, Soft Light, Multiply, Add, Linear Dodge)
         currentComposite = applyBlendModeLinear(currentComposite, layerColor, int(L.blendMode), L.opacity);
     }
 
-    // 25. ISOLATED TEXT SUITE METALLIC BEVEL
+    // 28. ISOLATED TEXT SUITE METALLIC BEVEL
     if (u_textSuiteEnabled > 0.5) {
         vec2 normCoord = vec2(coord) / vec2(width, height);
         bool inBox = (normCoord.x >= u_textBoxX && normCoord.x <= (u_textBoxX + u_textBoxW) &&
@@ -1160,7 +1344,7 @@ void main() {
         }
     }
 
-    // 26. 3D LUT APPLICATION
+    // 29. 3D LUT APPLICATION
     if (u_hasLut > 0.5) {
         currentComposite = sample3DLut(currentComposite, u_lutOpacity);
     }
