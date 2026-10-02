@@ -14,9 +14,8 @@
 
 namespace {
 
-// Push constants matching aereality_core.comp layout
 struct ComputePushConstants {
-    int32_t passIndex;   // 0: Grade, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite & FXAA
+    int32_t passIndex;
     int32_t passWidth;
     int32_t passHeight;
     float passRadius;
@@ -40,24 +39,26 @@ struct VulkanContext {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence computeFence = VK_NULL_HANDLE;
 
-    // Storage Buffers:
-    // Binding 0: Input Image (Up to 16-bit 64bpp)
-    // Binding 1: Output Image (Up to 16-bit 64bpp)
-    // Binding 2: Uniform Buffer (UBO expanded to 1024 floats for 10 layers)
-    // Binding 3: 3D LUT Table
-    // Binding 4: Bloom L0 (1/2 Resolution)
-    // Binding 5: Bloom L1 (1/4 Resolution)
-    // Binding 6: Bloom L2 (1/8 Resolution)
-    // Binding 7: Intermediate Composite Buffer (Eliminates brick-wall race conditions)
+    // Hardware Samplers
+    VkSampler linearSampler = VK_NULL_HANDLE;
+    VkSampler lutSampler = VK_NULL_HANDLE;
+
+    // True 3D Volumetric LUT Texture
+    VkImage lutImage = VK_NULL_HANDLE;
+    VkDeviceMemory lutMemory = VK_NULL_HANDLE;
+    VkImageView lutImageView = VK_NULL_HANDLE;
+
+    // Storage Buffers for Image Data, UBO & Composite
     VkBuffer inBuffer = VK_NULL_HANDLE;
     VkDeviceMemory inMemory = VK_NULL_HANDLE;
     VkBuffer outBuffer = VK_NULL_HANDLE;
     VkDeviceMemory outMemory = VK_NULL_HANDLE;
     VkBuffer uboBuffer = VK_NULL_HANDLE;
     VkDeviceMemory uboMemory = VK_NULL_HANDLE;
-    VkBuffer lutBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory lutMemory = VK_NULL_HANDLE;
+    VkBuffer lutStagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory lutStagingMemory = VK_NULL_HANDLE;
 
+    // Bloom Pyramid Buffers
     VkBuffer bloomL0Buffer = VK_NULL_HANDLE;
     VkDeviceMemory bloomL0Memory = VK_NULL_HANDLE;
     VkBuffer bloomL1Buffer = VK_NULL_HANDLE;
@@ -65,11 +66,13 @@ struct VulkanContext {
     VkBuffer bloomL2Buffer = VK_NULL_HANDLE;
     VkDeviceMemory bloomL2Memory = VK_NULL_HANDLE;
 
+    // Intermediate Linear Composite
     VkBuffer tempCompositeBuffer = VK_NULL_HANDLE;
     VkDeviceMemory tempCompositeMemory = VK_NULL_HANDLE;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
+    bool lutUploaded = false;
     std::mutex pipelineMutex;
 };
 
@@ -103,7 +106,7 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan buffer of size: %llu", (unsigned long long)size);
+        LOGE("Failed to create buffer size: %llu", (unsigned long long)size);
         return;
     }
 
@@ -116,11 +119,105 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
     allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
 
     if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        LOGE("Failed to allocate Vulkan memory of size: %llu", (unsigned long long)memRequirements.size);
+        LOGE("Failed to allocate memory size: %llu", (unsigned long long)memRequirements.size);
         return;
     }
 
     vkBindBufferMemory(device, buffer, bufferMemory, 0);
+}
+
+void createHardwareSamplers() {
+    // 1. Linear Clamp-To-Edge Sampler (Standard for 2D Blurs, Downsampling & Edge Glows)
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(gVk.device, &samplerInfo, nullptr, &gVk.linearSampler) != VK_SUCCESS) {
+        LOGE("Failed to create Vulkan Linear Sampler.");
+    }
+
+    // 2. Hardware 3D LUT Trilinear Sampler
+    VkSamplerCreateInfo lutSamplerInfo{};
+    lutSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    lutSamplerInfo.magFilter = VK_FILTER_LINEAR;
+    lutSamplerInfo.minFilter = VK_FILTER_LINEAR;
+    lutSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    lutSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lutSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lutSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lutSamplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(gVk.device, &lutSamplerInfo, nullptr, &gVk.lutSampler) != VK_SUCCESS) {
+        LOGE("Failed to create Vulkan 3D LUT Sampler.");
+    }
+}
+
+void create3DLutImage() {
+    if (gVk.lutImage != VK_NULL_HANDLE) return;
+
+    // 32 x 32 x 32 3D Texture Image
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_3D;
+    imageInfo.extent.width = 32;
+    imageInfo.extent.height = 32;
+    imageInfo.extent.depth = 32;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (vkCreateImage(gVk.device, &imageInfo, nullptr, &gVk.lutImage) != VK_SUCCESS) {
+        LOGE("Failed to create 3D LUT Image.");
+        return;
+    }
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(gVk.device, gVk.lutImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(gVk.physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(gVk.device, &allocInfo, nullptr, &gVk.lutMemory) != VK_SUCCESS) {
+        LOGE("Failed to allocate 3D LUT Image Memory.");
+        return;
+    }
+
+    vkBindImageMemory(gVk.device, gVk.lutImage, gVk.lutMemory, 0);
+
+    // Create 3D View
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = gVk.lutImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(gVk.device, &viewInfo, nullptr, &gVk.lutImageView) != VK_SUCCESS) {
+        LOGE("Failed to create 3D LUT Image View.");
+    }
 }
 
 void cleanupBuffers() {
@@ -140,7 +237,7 @@ void cleanupBuffers() {
     safeDestroy(gVk.inBuffer, gVk.inMemory);
     safeDestroy(gVk.outBuffer, gVk.outMemory);
     safeDestroy(gVk.uboBuffer, gVk.uboMemory);
-    safeDestroy(gVk.lutBuffer, gVk.lutMemory);
+    safeDestroy(gVk.lutStagingBuffer, gVk.lutStagingMemory);
     safeDestroy(gVk.bloomL0Buffer, gVk.bloomL0Memory);
     safeDestroy(gVk.bloomL1Buffer, gVk.bloomL1Memory);
     safeDestroy(gVk.bloomL2Buffer, gVk.bloomL2Memory);
@@ -156,10 +253,9 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
 
     cleanupBuffers();
 
-    // 8 bytes per pixel for true 16-bit RGBA (R16G16B16A16 = 64 bpp)
-    VkDeviceSize pixelBufferSize = requiredPixels * 8; 
-    VkDeviceSize uboBufferSize = 1024 * sizeof(float); // 4096 bytes for up to 10 layers
-    VkDeviceSize lutBufferSize = 32 * 32 * 32 * 3 * sizeof(float); // 393,216 bytes
+    VkDeviceSize pixelBufferSize = requiredPixels * 8; // 64bpp for up to 16-bit float/int
+    VkDeviceSize uboBufferSize = 1024 * sizeof(float); // Expanded for 10 layers
+    VkDeviceSize lutStagingSize = 32 * 32 * 32 * 4 * sizeof(float); // RGBA32F 3D table
 
     VkDeviceSize l0Size = ((requiredPixels / 4) + 64) * sizeof(uint32_t);
     VkDeviceSize l1Size = ((requiredPixels / 16) + 64) * sizeof(uint32_t);
@@ -180,12 +276,11 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.uboBuffer, gVk.uboMemory);
 
-    createBuffer(gVk.device, gVk.physicalDevice, lutBufferSize,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    createBuffer(gVk.device, gVk.physicalDevice, lutStagingSize,
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                 gVk.lutBuffer, gVk.lutMemory);
+                 gVk.lutStagingBuffer, gVk.lutStagingMemory);
 
-    // Device-Local Fast Memory for Bloom Pyramid Passes
     createBuffer(gVk.device, gVk.physicalDevice, l0Size,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -201,17 +296,18 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
-    // Device-Local Intermediate Composite (Eliminates Race Conditions)
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.tempCompositeBuffer, gVk.tempCompositeMemory);
 
-    // Set up descriptor bindings for all 8 storage buffers
+    create3DLutImage();
+
+    // Descriptor Writes for all bindings
     VkDescriptorBufferInfo inBufferInfo{gVk.inBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo outBufferInfo{gVk.outBuffer, 0, pixelBufferSize};
     VkDescriptorBufferInfo uboBufferInfo{gVk.uboBuffer, 0, uboBufferSize};
-    VkDescriptorBufferInfo lutBufferInfo{gVk.lutBuffer, 0, lutBufferSize};
+    VkDescriptorImageInfo lutImageInfo{gVk.lutSampler, gVk.lutImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo l0BufferInfo{gVk.bloomL0Buffer, 0, l0Size};
     VkDescriptorBufferInfo l1BufferInfo{gVk.bloomL1Buffer, 0, l1Size};
     VkDescriptorBufferInfo l2BufferInfo{gVk.bloomL2Buffer, 0, l2Size};
@@ -240,12 +336,13 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &uboBufferInfo;
 
+    // Binding 3: True Hardware 3D LUT Combined Image Sampler
     descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[3].dstSet = gVk.descriptorSet;
     descriptorWrites[3].dstBinding = 3;
-    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     descriptorWrites[3].descriptorCount = 1;
-    descriptorWrites[3].pBufferInfo = &lutBufferInfo;
+    descriptorWrites[3].pImageInfo = &lutImageInfo;
 
     descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[4].dstSet = gVk.descriptorSet;
@@ -278,7 +375,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     vkUpdateDescriptorSets(gVk.device, 8, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Allocated Safe 64bpp Vulkan Buffers with 1024-float UBO for %zu pixels.", requiredPixels);
+    LOGI("Configured Vulkan Samplers, 3D LUT Image, and Buffers for %zu pixels.", requiredPixels);
     return true;
 }
 
@@ -309,7 +406,6 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             float b = cpuSrgbToLinear(((pixel >> 16) & 0xFF) / 255.0f);
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
-            // Updated stride: 96 floats per layer for up to 10 layers
             for (int l = 0; l < std::min(layerCount, 10); l++) {
                 int off = 32 + (l * 96);
                 if (ubo[off + 0] < 0.5f) continue;
@@ -343,6 +439,91 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
     }
 }
 
+void uploadLutTo3DTexture(const float* lutTable, int32_t lutCount) {
+    if (lutTable == nullptr || lutCount <= 0 || gVk.lutImage == VK_NULL_HANDLE) return;
+
+    size_t totalPoints = 32 * 32 * 32;
+    std::vector<float> rgbaLut(totalPoints * 4);
+
+    // Expand RGB triplets to RGBA32F for optimal 3D GPU alignment
+    for (size_t i = 0; i < totalPoints; i++) {
+        if ((i * 3 + 2) < (size_t)lutCount) {
+            rgbaLut[i * 4 + 0] = lutTable[i * 3 + 0];
+            rgbaLut[i * 4 + 1] = lutTable[i * 3 + 1];
+            rgbaLut[i * 4 + 2] = lutTable[i * 3 + 2];
+            rgbaLut[i * 4 + 3] = 1.0f;
+        }
+    }
+
+    size_t copyBytes = rgbaLut.size() * sizeof(float);
+    void* mappedStaging = nullptr;
+    vkMapMemory(gVk.device, gVk.lutStagingMemory, 0, copyBytes, 0, &mappedStaging);
+    std::memcpy(mappedStaging, rgbaLut.data(), copyBytes);
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutStagingMemory, 0, VK_WHOLE_SIZE};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &range);
+    vkUnmapMemory(gVk.device, gVk.lutStagingMemory);
+
+    // Transition 3D Image & Copy from Staging
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo);
+
+    VkImageMemoryBarrier barrierToDst{};
+    barrierToDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrierToDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrierToDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrierToDst.image = gVk.lutImage;
+    barrierToDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrierToDst.subresourceRange.levelCount = 1;
+    barrierToDst.subresourceRange.layerCount = 1;
+    barrierToDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(gVk.commandBuffer,
+                         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrierToDst);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageExtent = {32, 32, 32};
+
+    vkCmdCopyBufferToImage(gVk.commandBuffer, gVk.lutStagingBuffer, gVk.lutImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    VkImageMemoryBarrier barrierToRead{};
+    barrierToRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrierToRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrierToRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrierToRead.image = gVk.lutImage;
+    barrierToRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrierToRead.subresourceRange.levelCount = 1;
+    barrierToRead.subresourceRange.layerCount = 1;
+    barrierToRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrierToRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(gVk.commandBuffer,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrierToRead);
+
+    vkEndCommandBuffer(gVk.commandBuffer);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &gVk.commandBuffer;
+
+    vkResetFences(gVk.device, 1, &gVk.computeFence);
+    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
+    vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
+
+    gVk.lutUploaded = true;
+    LOGI("Uploaded 3D Volumetric LUT directly to hardware sampler.");
+}
+
 } // namespace
 
 extern "C" {
@@ -350,9 +531,7 @@ extern "C" {
 int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
-    if (gVk.isInitialized) {
-        return 1;
-    }
+    if (gVk.isInitialized) return 1;
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -373,10 +552,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
-    if (deviceCount == 0) {
-        LOGE("No Vulkan physical devices found.");
-        return 0;
-    }
+    if (deviceCount == 0) return 0;
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, devices.data());
@@ -387,18 +563,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(gVk.physicalDevice, &queueFamilyCount, queueFamilies.data());
 
-    bool foundQueue = false;
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
         if (queueFamilies[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
             gVk.computeQueueFamilyIndex = i;
-            foundQueue = true;
             break;
         }
-    }
-
-    if (!foundQueue) {
-        LOGE("No compute queue family found on GPU.");
-        return 0;
     }
 
     float queuePriority = 1.0f;
@@ -416,11 +585,13 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
     if (vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan logical device.");
+        LOGE("Failed to create logical device.");
         return 0;
     }
 
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
+
+    createHardwareSamplers();
 
     VkShaderModuleCreateInfo shaderModuleInfo{};
     shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -428,14 +599,15 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(shaderBytes);
 
     if (vkCreateShaderModule(gVk.device, &shaderModuleInfo, nullptr, &gVk.shaderModule) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan shader module.");
+        LOGE("Failed to create shader module.");
         return 0;
     }
 
+    // 8 Bindings with hardware sampler at Binding 3
     VkDescriptorSetLayoutBinding bindings[8]{};
     for (int b = 0; b < 8; b++) {
         bindings[b].binding = b;
-        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[b].descriptorType = (b == 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
@@ -468,13 +640,15 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineInfo.stage.pName = "main";
     vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
 
-    VkDescriptorPoolSize poolSizes[1]{};
+    VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 8;
+    poolSizes[0].descriptorCount = 7;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = 1;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
+    poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
     vkCreateDescriptorPool(gVk.device, &poolInfo, nullptr, &gVk.descriptorPool);
@@ -505,7 +679,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
 
     gVk.isInitialized = true;
-    LOGI("AEReality 32-bit Vulkan Compute Pipeline with 1024-float UBO Initialized.");
+    LOGI("Vulkan Pipeline with Hardware Samplers & 3D LUT Texture Initialized.");
     return 1;
 }
 
@@ -534,7 +708,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // 2. Upload Uniforms (1024 floats capacity)
+    // 2. Upload Uniforms (1024 floats capacity for 10 layers)
     void* mappedUbo = nullptr;
     size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(1024 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
@@ -543,18 +717,12 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
-    // 3. Upload 3D LUT
+    // 3. Upload 3D Volumetric LUT directly into 3D Texture
     if (lutTable != nullptr && lutCount > 0) {
-        void* mappedLut = nullptr;
-        size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
-        vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
-        std::memcpy(mappedLut, lutTable, lutCopyBytes);
-        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, VK_WHOLE_SIZE};
-        vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
-        vkUnmapMemory(gVk.device, gVk.lutMemory);
+        uploadLutTo3DTexture(lutTable, lutCount);
     }
 
-    // 4. Record Multi-Pass Compute Commands with Explicit Integer Bit-Shift Dimensions (>> 1)
+    // 4. Record Multi-Pass Compute Commands with integer bit-shifts (>> 1)
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -575,7 +743,6 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
                              0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
     };
 
-    // Strict integer bit-shift dimensions prevent grid lines & seam artifacts
     int32_t wL0 = std::max(1, outWidth >> 1);
     int32_t hL0 = std::max(1, outHeight >> 1);
     int32_t wL1 = std::max(1, outWidth >> 2);
@@ -585,7 +752,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
 
     ComputePushConstants pc{};
 
-    // Pass 0: Primary Grade & Input Restoration -> TempCompositeBuffer (Binding 7)
+    // Pass 0: Primary Grade & Input Restoration -> TempCompositeBuffer
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -621,7 +788,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // Pass 6: Master Composite, FXAA, Tonemap & IGN Dither -> outBuffer (Binding 1)
+    // Pass 6: Master Composite, FXAA, Tonemap & IGN Dither -> outBuffer
     pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -639,7 +806,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
     vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
 
-    // 6. Read Back
+    // 6. Read Back Output
     void* mappedOutput = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, inputByteSize, 0, &mappedOutput);
     VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
@@ -661,7 +828,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
         return;
     }
 
-    size_t total16BitByteSize = pixelCount * 8; // 4 channels * 2 bytes = 8 bytes per pixel
+    size_t total16BitByteSize = pixelCount * 8; // 64 bpp
 
     // 1. Direct Upload of Pure 16-bit Input
     void* mappedInput = nullptr;
@@ -680,18 +847,12 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
-    // 3. Upload 3D LUT
+    // 3. Upload 3D Volumetric LUT directly into 3D Texture
     if (lutTable != nullptr && lutCount > 0) {
-        void* mappedLut = nullptr;
-        size_t lutCopyBytes = std::min(size_t(lutCount * sizeof(float)), size_t(32 * 32 * 32 * 3 * sizeof(float)));
-        vkMapMemory(gVk.device, gVk.lutMemory, 0, lutCopyBytes, 0, &mappedLut);
-        std::memcpy(mappedLut, lutTable, lutCopyBytes);
-        VkMappedMemoryRange lutRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.lutMemory, 0, VK_WHOLE_SIZE};
-        vkFlushMappedMemoryRanges(gVk.device, 1, &lutRange);
-        vkUnmapMemory(gVk.device, gVk.lutMemory);
+        uploadLutTo3DTexture(lutTable, lutCount);
     }
 
-    // 4. Record Multi-Pass Compute Commands with Explicit Integer Bit-Shift Dimensions (>> 1)
+    // 4. Record Multi-Pass Compute Commands with integer bit-shifts (>> 1)
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -721,7 +882,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
 
     ComputePushConstants pc{};
 
-    // Pass 0: 16-Bit Primary Color Grade & Input Restoration -> TempCompositeBuffer (Binding 7)
+    // Pass 0: 16-Bit Primary Color Grade & Input Restoration -> TempCompositeBuffer
     pc = {0, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -757,7 +918,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
     insertBarrier();
 
-    // Pass 6: Master Composite & 16-Bit Tonemapped Pack with IGN Dither -> outBuffer (Binding 1)
+    // Pass 6: Master Composite & 16-Bit Tonemapped Pack with IGN Dither -> outBuffer
     pc = {6, outWidth, outHeight, 1.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
@@ -789,6 +950,27 @@ void cleanup_processor() {
     if (!gVk.isInitialized) return;
 
     cleanupBuffers();
+
+    if (gVk.lutImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(gVk.device, gVk.lutImageView, nullptr);
+        gVk.lutImageView = VK_NULL_HANDLE;
+    }
+    if (gVk.lutImage != VK_NULL_HANDLE) {
+        vkDestroyImage(gVk.device, gVk.lutImage, nullptr);
+        gVk.lutImage = VK_NULL_HANDLE;
+    }
+    if (gVk.lutMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(gVk.device, gVk.lutMemory, nullptr);
+        gVk.lutMemory = VK_NULL_HANDLE;
+    }
+    if (gVk.linearSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(gVk.device, gVk.linearSampler, nullptr);
+        gVk.linearSampler = VK_NULL_HANDLE;
+    }
+    if (gVk.lutSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(gVk.device, gVk.lutSampler, nullptr);
+        gVk.lutSampler = VK_NULL_HANDLE;
+    }
 
     if (gVk.computeFence != VK_NULL_HANDLE) {
         vkDestroyFence(gVk.device, gVk.computeFence, nullptr);
