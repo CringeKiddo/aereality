@@ -15,7 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:image/image.dart' as img;
 
-import 'constants.dart';
+import 'constants.dart' hide ExportMatrix;
 import 'models.dart';
 import 'vulkan_bridge.dart';
 import 'export_matrix.dart';
