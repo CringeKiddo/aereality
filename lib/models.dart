@@ -166,6 +166,22 @@ class AdjustmentLayer {
   double lightWrapThreshold;
   int lightWrapBlendMode; // 0 = Screen, 1 = Add / Linear Dodge
 
+  // Aliases for editor views compatibility
+  double get diffuseGlow => diffuseSpGlowIntensity;
+  set diffuseGlow(double v) => diffuseSpGlowIntensity = v;
+
+  double get sLightWrapWidth => lightWrapWidth;
+  set sLightWrapWidth(double v) => lightWrapWidth = v;
+
+  double get sLightWrapIntensity => lightWrapIntensity;
+  set sLightWrapIntensity(double v) => lightWrapIntensity = v;
+
+  double get sLightWrapThreshold => lightWrapThreshold;
+  set sLightWrapThreshold(double v) => lightWrapThreshold = v;
+
+  double get sLightWrapBlendMode => lightWrapBlendMode.toDouble();
+  set sLightWrapBlendMode(double v) => lightWrapBlendMode = v.toInt();
+
   // Video Flares
   int videoFlareType;
   double thinStreakIntensity;
