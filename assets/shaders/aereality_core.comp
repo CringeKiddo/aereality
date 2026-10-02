@@ -640,11 +640,11 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
 // =============================================================================
 // PASS 2 & 3: ANTI-GRID 13-TAP BOX DOWNSAMPLE
 // =============================================================================
-void executeBloomDownsample(int passIdx, ivec2 coord, int w, int h, float radius) {
+void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, float radius) {
     int srcLevel = (passIdx == 2) ? 0 : 1;
-    int srcW = w * 2;
-    int srcH = h * 2;
-    vec2 uv = (vec2(coord) + 0.5) / vec2(w, h);
+    int srcW = width * 2;
+    int srcH = height * 2;
+    vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
     vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.6);
     float x = texel.x;
     float y = texel.y;
@@ -669,7 +669,7 @@ void executeBloomDownsample(int passIdx, ivec2 coord, int w, int h, float radius
 
     vec3 downsample = (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (e + j + k + l + m) * 0.125;
 
-    int dstIdx = coord.y * w + coord.x;
+    int dstIdx = coord.y * width + coord.x;
     if (passIdx == 2) {
         bloom_l1[dstIdx] = packBloomHalf(downsample);
     } else {
