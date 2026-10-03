@@ -11,10 +11,9 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.example.aereality/media_scanner"
+    private val CHANNEL = "com.aereality/media"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -38,7 +37,7 @@ class MainActivity: FlutterActivity() {
                 "saveToDownloads" -> {
                     val sourcePath = call.argument<String>("sourcePath")
                     val fileName = call.argument<String>("fileName")
-                    val mimeType = call.argument<String>("mimeType") ?: "video/mp4"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
 
                     if (sourcePath == null || fileName == null) {
                         result.error("INVALID_ARGS", "sourcePath and fileName cannot be null", null)
@@ -86,11 +85,14 @@ class MainActivity: FlutterActivity() {
                             resolver.update(itemUri, contentValues, null, null)
                         }
 
-                        // Also trigger media scanner on the public URI
                         val publicPath = "/storage/emulated/0/Download/$fileName"
-                        MediaScannerConnection.scanFile(context, arrayOf(publicPath), arrayOf(mimeType), null)
-
-                        result.success(publicPath)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            result.success(publicPath)
+                        } else {
+                            MediaScannerConnection.scanFile(context, arrayOf(publicPath), arrayOf(mimeType)) { _, _ ->
+                                result.success(publicPath)
+                            }
+                        }
                     } catch (e: Exception) {
                         result.error("COPY_FAILED", "Exception saving file to MediaStore: ${e.message}", null)
                     }
