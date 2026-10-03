@@ -166,7 +166,9 @@ class AdjustmentLayer {
   double lightWrapThreshold;
   int lightWrapBlendMode; // 0 = Screen, 1 = Add / Linear Dodge
 
-  // Aliases for editor views compatibility
+  // ===========================================================================
+  // Compatibility Aliases for EditorViews & UI Sliders
+  // ===========================================================================
   double get diffuseGlow => diffuseSpGlowIntensity;
   set diffuseGlow(double v) => diffuseSpGlowIntensity = v;
 
