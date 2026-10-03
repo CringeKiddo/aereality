@@ -1,6 +1,6 @@
 // =============================================================================
 // AEReality / Shaderly - Master Data Models & Layer State
-// True 32-Bit Linear RGB + Oklab Pipeline • 10-Layer Stack • Light Wrap & Bilateral
+// True 32-Bit Linear RGB + Oklab Pipeline • 10-Layer Stack • 128-Stride Support
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -21,7 +21,7 @@ enum LayerBlendMode {
   linearDodge,
 }
 
-/// Represents an isolated timeline clip region (up to 10 sequential layers)
+/// Represents an isolated timeline clip region (up to 3 sequential layers)
 class TimelineClipSegment {
   String id;
   String name;
@@ -94,6 +94,7 @@ class AdjustmentLayer {
   bool isEnabled;
   double opacity;
   LayerBlendMode blendMode;
+  bool blendLinear; // false = AE Gamma space, true = Physical Linear
 
   // Basic Grading
   double brightness;
@@ -116,8 +117,9 @@ class AdjustmentLayer {
   double splitToneHighSat;
   double splitToneBalance;
 
-  // Stylistic Cel, Edges & Line Thinning
-  double darkOutlines;
+  // S_lining (Inner Grey Blur) & Line Thinning
+  double darkOutlines;    // S_lining Slider 1: Intensity / Radius
+  double sLiningOpacity;  // S_lining Slider 2: Opacity
   double edgeDarken;
   double lineThinning;
   double lineThinningThreshold;
@@ -166,9 +168,7 @@ class AdjustmentLayer {
   double lightWrapThreshold;
   int lightWrapBlendMode; // 0 = Screen, 1 = Add / Linear Dodge
 
-  // ===========================================================================
-  // Compatibility Aliases for EditorViews & UI Sliders
-  // ===========================================================================
+  // Aliases for compatibility
   double get diffuseGlow => diffuseSpGlowIntensity;
   set diffuseGlow(double v) => diffuseSpGlowIntensity = v;
 
@@ -207,6 +207,10 @@ class AdjustmentLayer {
   double depthOfField;
   double dofFocus;
   double dofAngle;
+  double dofRange;
+  double dofFalloff;
+  double dofBokeh;
+  double dofMode; // 0.0 = Tilt-shift, 1.0 = Radial
 
   // Unsharp Mask
   double unsharpRadius;
@@ -247,6 +251,7 @@ class AdjustmentLayer {
     this.isEnabled = true,
     this.opacity = 1.0,
     this.blendMode = LayerBlendMode.normal,
+    this.blendLinear = false, // Default to AE Gamma space
     this.brightness = 0.0,
     this.contrast = 1.0,
     this.saturation = 1.0,
@@ -263,6 +268,7 @@ class AdjustmentLayer {
     this.splitToneHighSat = 0.0,
     this.splitToneBalance = 0.0,
     this.darkOutlines = 0.0,
+    this.sLiningOpacity = 0.0,
     this.edgeDarken = 0.0,
     this.lineThinning = 0.0,
     this.lineThinningThreshold = 0.05,
@@ -316,6 +322,10 @@ class AdjustmentLayer {
     this.depthOfField = 0.0,
     this.dofFocus = 0.50,
     this.dofAngle = 0.0,
+    this.dofRange = 0.20,
+    this.dofFalloff = 0.25,
+    this.dofBokeh = 0.50,
+    this.dofMode = 0.0,
     this.unsharpRadius = 1.5,
     this.unsharpAmount = 0.0,
     this.unsharpThreshold = 0.02,
@@ -336,7 +346,7 @@ class AdjustmentLayer {
     this.copiedEdgeRays = 0.0,
     this.copiedProMist = 0.0,
     this.copiedStarGlint = 0.0,
-    this.edgeHaloRadius = 0.50,
+    this.edgeHaloRadius = 0.0, // Clean 0.0 default
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveRed = curveRed ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveGreen = curveGreen ?? [0.0, 0.25, 0.50, 0.75, 1.0],
@@ -349,6 +359,7 @@ class AdjustmentLayer {
       isEnabled: isEnabled,
       opacity: opacity,
       blendMode: blendMode,
+      blendLinear: blendLinear,
       brightness: brightness,
       contrast: contrast,
       saturation: saturation,
@@ -365,6 +376,7 @@ class AdjustmentLayer {
       splitToneHighSat: splitToneHighSat,
       splitToneBalance: splitToneBalance,
       darkOutlines: darkOutlines,
+      sLiningOpacity: sLiningOpacity,
       edgeDarken: edgeDarken,
       lineThinning: lineThinning,
       lineThinningThreshold: lineThinningThreshold,
@@ -418,6 +430,10 @@ class AdjustmentLayer {
       depthOfField: depthOfField,
       dofFocus: dofFocus,
       dofAngle: dofAngle,
+      dofRange: dofRange,
+      dofFalloff: dofFalloff,
+      dofBokeh: dofBokeh,
+      dofMode: dofMode,
       unsharpRadius: unsharpRadius,
       unsharpAmount: unsharpAmount,
       unsharpThreshold: unsharpThreshold,
@@ -449,6 +465,7 @@ class AdjustmentLayer {
       'isEnabled': isEnabled,
       'opacity': opacity,
       'blendMode': blendMode.index,
+      'blendLinear': blendLinear,
       'brightness': brightness,
       'contrast': contrast,
       'saturation': saturation,
@@ -465,6 +482,7 @@ class AdjustmentLayer {
       'splitToneHighSat': splitToneHighSat,
       'splitToneBalance': splitToneBalance,
       'darkOutlines': darkOutlines,
+      'sLiningOpacity': sLiningOpacity,
       'edgeDarken': edgeDarken,
       'lineThinning': lineThinning,
       'lineThinningThreshold': lineThinningThreshold,
@@ -518,6 +536,10 @@ class AdjustmentLayer {
       'depthOfField': depthOfField,
       'dofFocus': dofFocus,
       'dofAngle': dofAngle,
+      'dofRange': dofRange,
+      'dofFalloff': dofFalloff,
+      'dofBokeh': dofBokeh,
+      'dofMode': dofMode,
       'unsharpRadius': unsharpRadius,
       'unsharpAmount': unsharpAmount,
       'unsharpThreshold': unsharpThreshold,
@@ -554,6 +576,7 @@ class AdjustmentLayer {
       isEnabled: json['isEnabled'] ?? true,
       opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
       blendMode: safeBlendMode,
+      blendLinear: json['blendLinear'] ?? false,
       brightness: (json['brightness'] as num?)?.toDouble() ?? 0.0,
       contrast: (json['contrast'] as num?)?.toDouble() ?? 1.0,
       saturation: (json['saturation'] as num?)?.toDouble() ?? 1.0,
@@ -570,6 +593,7 @@ class AdjustmentLayer {
       splitToneHighSat: (json['splitToneHighSat'] as num?)?.toDouble() ?? 0.0,
       splitToneBalance: (json['splitToneBalance'] as num?)?.toDouble() ?? 0.0,
       darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
+      sLiningOpacity: (json['sLiningOpacity'] as num?)?.toDouble() ?? 0.0,
       edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
       lineThinning: (json['lineThinning'] as num?)?.toDouble() ?? 0.0,
       lineThinningThreshold: (json['lineThinningThreshold'] as num?)?.toDouble() ?? 0.05,
@@ -623,6 +647,10 @@ class AdjustmentLayer {
       depthOfField: (json['depthOfField'] as num?)?.toDouble() ?? 0.0,
       dofFocus: (json['dofFocus'] as num?)?.toDouble() ?? 0.50,
       dofAngle: (json['dofAngle'] as num?)?.toDouble() ?? 0.0,
+      dofRange: (json['dofRange'] as num?)?.toDouble() ?? 0.20,
+      dofFalloff: (json['dofFalloff'] as num?)?.toDouble() ?? 0.25,
+      dofBokeh: (json['dofBokeh'] as num?)?.toDouble() ?? 0.50,
+      dofMode: (json['dofMode'] as num?)?.toDouble() ?? 0.0,
       unsharpRadius: (json['unsharpRadius'] as num?)?.toDouble() ?? 1.5,
       unsharpAmount: (json['unsharpAmount'] as num?)?.toDouble() ?? 0.0,
       unsharpThreshold: (json['unsharpThreshold'] as num?)?.toDouble() ?? 0.02,
@@ -643,7 +671,7 @@ class AdjustmentLayer {
       copiedEdgeRays: (json['copiedEdgeRays'] as num?)?.toDouble() ?? 0.0,
       copiedProMist: (json['copiedProMist'] as num?)?.toDouble() ?? 0.0,
       copiedStarGlint: (json['copiedStarGlint'] as num?)?.toDouble() ?? 0.0,
-      edgeHaloRadius: (json['edgeHaloRadius'] as num?)?.toDouble() ?? 0.50,
+      edgeHaloRadius: (json['edgeHaloRadius'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
