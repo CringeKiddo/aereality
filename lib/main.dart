@@ -1168,6 +1168,98 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ===========================================================================
+  // EXPORT BRIDGE: gives ExportSuite the real video info + a full-res frame renderer
+  // ===========================================================================
+  Uint8List? _lastExportSource; // reused if ffmpeg can't decode the very last frame
+
+  /// Native export size. Video: real size rounded down to even. Image: decoded size.
+  List<int> _exportSize() {
+    if (_project.isImage && _cachedRawImage != null) {
+      return [_cachedRawImage!.width, _cachedRawImage!.height];
+    }
+    final s = _controller!.value.size;
+    int w = s.width.toInt();
+    int h = s.height.toInt();
+    if (w.isOdd) w -= 1;
+    if (h.isOdd) h -= 1;
+    return [w, h];
+  }
+
+  void _openExportSheet() {
+    final bool isImage = _project.isImage;
+    final bool ready = isImage
+        ? _cachedRawImage != null
+        : (_controller != null && _controller!.value.isInitialized);
+    if (!ready) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Load a video or image first.')),
+      );
+      return;
+    }
+
+    // Stop playback so the preview timer doesn't compete with the export.
+    _controller?.pause();
+    _isPlaying = false;
+
+    final size = _exportSize();
+    ExportSuite.showExportSheet(
+      context: context,
+      project: _project,
+      curLayer: _cur,
+      packUniforms: _packMultiLayerUniforms,
+      getActiveLut: _getActiveLutTable,
+      renderFrameToRgba: _renderFrameForExport,
+      videoDurationMs: _videoDurationSeconds * 1000.0, // seconds -> milliseconds
+      videoFps: 30.0, // video_player can't report fps; see note
+      videoWidth: size[0],
+      videoHeight: size[1],
+      audioSourcePath: isImage ? null : _project.mediaPath,
+    );
+  }
+
+  /// Returns ONE graded RGBA8 frame at native resolution (width*height*4 bytes).
+  Future<Uint8List> _renderFrameForExport(double timestampMs) async {
+    final size = _exportSize();
+    final w = size[0];
+    final h = size[1];
+    Uint8List? raw;
+
+    if (_project.isImage) {
+      raw = _cachedRawImage!.getBytes(order: img.ChannelOrder.rgba);
+    } else {
+      final tempDir = await getTemporaryDirectory();
+      final rawFile = File('${tempDir.path}/export_src_frame.rgba');
+      if (rawFile.existsSync()) rawFile.deleteSync();
+
+      final t = (timestampMs / 1000.0).toStringAsFixed(3);
+      await FFmpegKit.execute(
+        '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
+        '-vf scale=$w:$h -f rawvideo -pix_fmt rgba "${rawFile.path}"',
+      );
+
+      if (rawFile.existsSync() && rawFile.lengthSync() == w * h * 4) {
+        raw = await rawFile.readAsBytes();
+        _lastExportSource = raw;
+      } else {
+        raw = _lastExportSource; // end-of-stream: repeat previous frame
+      }
+      try { if (rawFile.existsSync()) rawFile.deleteSync(); } catch (_) {}
+    }
+
+    if (raw == null || raw.length != w * h * 4) {
+      throw Exception('Could not decode source frame at ${timestampMs.toStringAsFixed(0)} ms');
+    }
+
+    final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+    uniforms[0] = timestampMs / 1000.0; // time uniform = export time, not preview position
+    final out = processImage(raw, w, h, w, h, uniforms, lutTable: _getActiveLutTable());
+
+    // Let the UI breathe between frames so the progress bar can repaint.
+    await Future<void>.delayed(Duration.zero);
+    return out;
+  }
+
   Float32List? _getActiveLutTable() {
     if (_cur.activeLutId == null) return null;
     final match = _activeLuts.where((l) => l.id == _cur.activeLutId);
@@ -1783,13 +1875,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 IconButton(
                   icon: const Icon(Icons.file_upload_outlined, color: Colors.white),
                   tooltip: 'Render Master Video / Art',
-                  onPressed: () => ExportSuite.showExportSheet(
-                    context: context,
-                    project: _project,
-                    curLayer: _cur,
-                    packUniforms: _packMultiLayerUniforms,
-                    getActiveLut: _getActiveLutTable,
-                  ),
+                  onPressed: _openExportSheet,
                 ),
               ],
             ),
