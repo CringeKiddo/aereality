@@ -27,6 +27,7 @@ class ExportSuite {
     required String fileName,
     required String mimeType,
   }) async {
+    Object? nativeError;
     try {
       final uri = await _mediaChannel.invokeMethod<String>('saveToDownloads', {
         'sourcePath': sourcePath,
@@ -38,11 +39,13 @@ class ExportSuite {
         debugPrint('Successfully saved via MediaStore: $uri');
         return uri;
       }
+      nativeError = 'native save returned no URI';
     } catch (e) {
-      debugPrint('Native MediaStore save failed, falling back to public disk: $e');
+      nativeError = e;
+      debugPrint('Native MediaStore save failed: $e');
     }
 
-    // Direct filesystem fallback for older devices or non-Android hosts
+    // Direct filesystem fallback (only works if "All files access" was granted)
     try {
       final downloadsDir = Directory('/storage/emulated/0/Download');
       if (!downloadsDir.existsSync()) {
@@ -57,8 +60,9 @@ class ExportSuite {
 
       return targetFile.path;
     } catch (e) {
-      debugPrint('Fallback copy also failed: $e');
-      return sourcePath;
+      // IMPORTANT: do NOT return sourcePath here. The temp file is deleted in the
+      // caller's finally block, so pretending it was saved loses the export silently.
+      throw Exception('Could not save to Downloads.\nMediaStore: $nativeError\nDirect copy: $e');
     }
   }
 
@@ -93,8 +97,26 @@ class ExportSuite {
         lutTextureId: lutTextureId,
         lutSize: lutSize,
         renderFrameToRgba: renderFrameToRgba,
+        srcWidth: videoWidth,
+        srcHeight: videoHeight,
       );
     } else {
+      // No silent defaults: a missing duration/size used to fall back to 5000 ms @ 1080p
+      // (= 150 frames) and a missing renderer produced all-black frames.
+      if (renderFrameToRgba == null ||
+          videoDurationMs == null ||
+          videoWidth == null ||
+          videoHeight == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Export is not connected: renderFrameToRgba, videoDurationMs, videoWidth and videoHeight must be passed to showExportSheet.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
       showVideoExportSheet(
         context: context,
         project: project,
@@ -104,10 +126,10 @@ class ExportSuite {
         lutTextureId: lutTextureId,
         lutSize: lutSize,
         renderFrameToRgba: renderFrameToRgba,
-        videoDurationMs: videoDurationMs ?? 5000.0,
+        videoDurationMs: videoDurationMs,
         videoFps: videoFps ?? 30.0,
-        videoWidth: videoWidth ?? 1920,
-        videoHeight: videoHeight ?? 1080,
+        videoWidth: videoWidth,
+        videoHeight: videoHeight,
         audioSourcePath: audioSourcePath,
       );
     }
@@ -125,6 +147,8 @@ class ExportSuite {
     dynamic lutTextureId,
     dynamic lutSize,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
+    int? srcWidth,
+    int? srcHeight,
   }) {
     String selectedFormat = 'PNG';
     String selectedRes = '1080p';
@@ -239,6 +263,12 @@ class ExportSuite {
                     style: const TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                   const SizedBox(height: 16),
+                ] else if (statusText.startsWith('Failed')) ...[
+                  SelectableText(
+                    statusText,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  ),
+                  const SizedBox(height: 16),
                 ],
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
@@ -263,6 +293,8 @@ class ExportSuite {
                               format: selectedFormat,
                               resolution: selectedRes,
                               renderFrameToRgba: renderFrameToRgba,
+                              srcW: srcWidth,
+                              srcH: srcHeight,
                               onProgress: (p, msg) {
                                 setSheetState(() {
                                   exportProgress = p;
@@ -402,15 +434,15 @@ class ExportSuite {
                         onSelected: isExporting ? null : (s) {
                           if (s) {
                             setSheetState(() {
-                              selectedCodec = cdc;
-                              if (cdc == 'Apple ProRes') {
-                                selectedContainer = 'MOV';
-                                selectedBitDepth = '10-bit';
-                              } else if (cdc == 'VP9') {
-                                selectedContainer = 'WEBM';
-                              } else if (cdc == 'AV1' && selectedBitDepth != '8-bit') {
-                                selectedContainer = 'MKV';
-                              }
+                              final r = _reconcile(
+                                container: selectedContainer,
+                                codec: cdc,
+                                depth: selectedBitDepth,
+                                changed: 'codec',
+                              );
+                              selectedContainer = r[0];
+                              selectedCodec = r[1];
+                              selectedBitDepth = r[2];
                             });
                           }
                         },
@@ -427,7 +459,19 @@ class ExportSuite {
                       final selected = selectedContainer == ctn;
                       return Expanded(
                         child: GestureDetector(
-                          onTap: isExporting ? null : () => setSheetState(() => selectedContainer = ctn),
+                          onTap: isExporting
+                              ? null
+                              : () => setSheetState(() {
+                                    final r = _reconcile(
+                                      container: ctn,
+                                      codec: selectedCodec,
+                                      depth: selectedBitDepth,
+                                      changed: 'container',
+                                    );
+                                    selectedContainer = r[0];
+                                    selectedCodec = r[1];
+                                    selectedBitDepth = r[2];
+                                  }),
                           child: Container(
                             margin: const EdgeInsets.symmetric(horizontal: 4),
                             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -460,22 +504,42 @@ class ExportSuite {
                   Row(
                     children: [
                       _buildDepthOption('8-bit', 'SDR (Rec.709)', selectedBitDepth, isExporting, (d) {
-                        setSheetState(() => selectedBitDepth = d);
+                        setSheetState(() {
+                          final r = _reconcile(
+                            container: selectedContainer,
+                            codec: selectedCodec,
+                            depth: d,
+                            changed: 'depth',
+                          );
+                          selectedContainer = r[0];
+                          selectedCodec = r[1];
+                          selectedBitDepth = r[2];
+                        });
                       }),
                       _buildDepthOption('10-bit', 'HDR (BT.2020)', selectedBitDepth, isExporting, (d) {
                         setSheetState(() {
-                          selectedBitDepth = d;
-                          if (selectedContainer == 'MP4' && selectedCodec == 'AV1') {
-                            selectedContainer = 'MKV';
-                          }
+                          final r = _reconcile(
+                            container: selectedContainer,
+                            codec: selectedCodec,
+                            depth: d,
+                            changed: 'depth',
+                          );
+                          selectedContainer = r[0];
+                          selectedCodec = r[1];
+                          selectedBitDepth = r[2];
                         });
                       }),
                       _buildDepthOption('16-bit', 'Master (4:4:4)', selectedBitDepth, isExporting, (d) {
                         setSheetState(() {
-                          selectedBitDepth = d;
-                          if (selectedCodec != 'Apple ProRes') {
-                            selectedContainer = 'MKV';
-                          }
+                          final r = _reconcile(
+                            container: selectedContainer,
+                            codec: selectedCodec,
+                            depth: d,
+                            changed: 'depth',
+                          );
+                          selectedContainer = r[0];
+                          selectedCodec = r[1];
+                          selectedBitDepth = r[2];
                         });
                       }),
                     ],
@@ -529,6 +593,12 @@ class ExportSuite {
                       statusText,
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                  ] else if (statusText.startsWith('Export error')) ...[
+                    SelectableText(
+                      statusText,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
                     ),
                     const SizedBox(height: 16),
                   ],
@@ -641,6 +711,104 @@ class ExportSuite {
   }
 
   // ===========================================================================
+  // EXPORT MATRIX BRIDGE (UI chip names -> ExportMatrix rules)
+  // ===========================================================================
+  static String _matrixKey(String container) =>
+      container.toUpperCase() == 'WEBM' ? 'WebM' : container.toUpperCase();
+
+  static String _codecToken(String codec) {
+    if (codec.contains('ProRes')) return 'ProRes';
+    if (codec.contains('HEVC') || codec.contains('H.265')) return 'HEVC';
+    if (codec.contains('AV1')) return 'AV1';
+    if (codec.contains('VP9')) return 'VP9';
+    return 'H.264';
+  }
+
+  /// True if ExportMatrix.containerCodecs allows this codec in this container.
+  static bool _comboValid(String container, String codec) {
+    final list = ExportMatrix.containerCodecs[_matrixKey(container)] ?? const <String>[];
+    final token = _codecToken(codec);
+    return list.any((e) => e.contains(token));
+  }
+
+  static String _defaultCodecFor(String container) {
+    for (final c in const ['H.264', 'HEVC / H.265', 'VP9', 'AV1', 'Apple ProRes']) {
+      if (_comboValid(container, c)) return c;
+    }
+    return 'H.264';
+  }
+
+  static String _bestContainer(String codec, String depth) {
+    final order = _codecToken(codec) == 'VP9'
+        ? const ['WEBM', 'MKV', 'MP4', 'MOV']
+        : const ['MP4', 'MOV', 'MKV', 'WEBM'];
+    for (final c in order) {
+      if (_comboValid(c, codec) && ExportMatrix.isBitDepthValid(_matrixKey(c), codec, depth)) {
+        return c;
+      }
+    }
+    for (final c in order) {
+      if (_comboValid(c, codec)) return c;
+    }
+    return 'MKV';
+  }
+
+  /// Keeps container / codec / bit depth legal after the user changes one of them.
+  /// The thing the user just changed wins; the others adapt.
+  static List<String> _reconcile({
+    required String container,
+    required String codec,
+    required String depth,
+    required String changed, // 'codec' | 'container' | 'depth'
+  }) {
+    String c = container, k = codec, d = depth;
+    bool depthOk() => ExportMatrix.isBitDepthValid(_matrixKey(c), k, d);
+
+    if (changed == 'depth') {
+      if (!depthOk()) {
+        if (d == '16-bit') {
+          c = 'MKV';
+        } else if (d == '10-bit' && k.contains('H.264')) {
+          k = 'HEVC / H.265'; // Hi10P H.264 breaks mobile hardware decoders
+        } else if (d == '8-bit' && k.contains('ProRes')) {
+          k = 'H.264'; // ProRes is 10-bit minimum
+        }
+      }
+    } else if (changed == 'codec') {
+      if (!_comboValid(c, k)) c = _bestContainer(k, d);
+    } else {
+      if (!_comboValid(c, k)) k = _defaultCodecFor(c);
+    }
+
+    if (!_comboValid(c, k)) {
+      if (changed == 'container') {
+        k = _defaultCodecFor(c);
+      } else {
+        c = _bestContainer(k, d);
+      }
+    }
+    if (!depthOk()) {
+      for (final cand in const ['10-bit', '8-bit', '16-bit']) {
+        if (ExportMatrix.isBitDepthValid(_matrixKey(c), k, cand)) {
+          d = cand;
+          break;
+        }
+      }
+    }
+    return [c, k, d];
+  }
+
+  static Future<String> _sessionLogTail(dynamic session) async {
+    try {
+      final out = await session.getOutput();
+      final s = (out ?? '').toString();
+      return s.length > 500 ? s.substring(s.length - 500) : s;
+    } catch (_) {
+      return '(FFmpeg log unavailable)';
+    }
+  }
+
+  // ===========================================================================
   // IMAGE ENCODING EXECUTION
   // ===========================================================================
   static Future<void> _executeImageExport({
@@ -649,8 +817,13 @@ class ExportSuite {
     required String format,
     required String resolution,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
+    int? srcW,
+    int? srcH,
     required Function(double, String) onProgress,
   }) async {
+    if (renderFrameToRgba == null || srcW == null || srcH == null) {
+      throw Exception('Image export is not connected (renderer or source size missing).');
+    }
     final tempDir = await getTemporaryDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final ext = format.toLowerCase();
@@ -659,18 +832,22 @@ class ExportSuite {
 
     try {
       onProgress(0.3, 'Rasterizing 32-bit linear texture...');
-      final rgbaBytes = renderFrameToRgba != null
-          ? await renderFrameToRgba(0.0)
-          : Uint8List(1920 * 1080 * 4);
+      if (renderFrameToRgba == null) {
+        throw Exception('No frame renderer connected (renderFrameToRgba is null).');
+      }
+      final rgbaBytes = await renderFrameToRgba(0.0);
+      if (rgbaBytes.length != srcW * srcH * 4) {
+        throw Exception('Rendered image is ${rgbaBytes.length} bytes, expected ${srcW * srcH * 4}.');
+      }
 
       await tempRawFile.writeAsBytes(rgbaBytes, flush: true);
 
       onProgress(0.6, 'Encoding $format surface...');
-      final targetDims = _calculateDimensions(resolution, 1920, 1080);
+      final targetDims = _calculateDimensions(resolution, srcW, srcH);
       final w = targetDims['w']!;
       final h = targetDims['h']!;
 
-      final ffmpegCmd = '-y -f rawvideo -pix_fmt rgba -s 1920x1080 -i "${tempRawFile.path}" '
+      final ffmpegCmd = '-y -f rawvideo -pix_fmt rgba -s ${srcW}x$srcH -i "${tempRawFile.path}" '
           '-vf "scale=$w:$h:flags=lanczos" "${tempEncodedFile.path}"';
 
       final session = await FFmpegKit.execute(ffmpegCmd);
@@ -734,6 +911,18 @@ class ExportSuite {
         sessionTempDir.createSync(recursive: true);
       }
 
+      final render = renderFrameToRgba;
+      if (render == null) {
+        throw Exception('No frame renderer connected (renderFrameToRgba is null).');
+      }
+      if (!_comboValid(container, codec)) {
+        throw Exception('$codec cannot be stored in $container.');
+      }
+      if (!ExportMatrix.isBitDepthValid(_matrixKey(container), codec, bitDepth)) {
+        throw Exception('$bitDepth is not valid for $codec in $container.');
+      }
+      final expectedBytes = videoWidth * videoHeight * 4;
+
       final targetDims = _calculateDimensions(resolution, videoWidth, videoHeight);
       final outW = targetDims['w']!;
       final outH = targetDims['h']!;
@@ -745,28 +934,37 @@ class ExportSuite {
       final totalBatches = (totalFrames / batchSize).ceil();
       final List<String> partVideoPaths = [];
 
-      // Pass 1: Rolling 30-frame GPU scratch rendering
+      // Pass 1: Rolling 30-frame GPU scratch rendering.
+      // Each batch is written to ONE raw file. The rawvideo demuxer does not expand
+      // "frame_%04d.rgba" patterns (that is image2's job), so the old command opened a
+      // literal file named "frame_%04d.rgba", which does not exist.
       for (int b = 0; b < totalBatches; b++) {
         final startFrame = b * batchSize;
         final endFrame = (startFrame + batchSize).clamp(0, totalFrames);
         final currentBatchCount = endFrame - startFrame;
 
-        final batchRgbaDir = Directory('${sessionTempDir.path}/batch_$b');
-        batchRgbaDir.createSync();
+        final rawFile = File('${sessionTempDir.path}/batch_$b.rgba');
+        final raf = await rawFile.open(mode: FileMode.write);
+        try {
+          for (int f = 0; f < currentBatchCount; f++) {
+            final globalFrameIdx = startFrame + f;
+            final timeMs = globalFrameIdx * frameIntervalMs;
 
-        for (int f = 0; f < currentBatchCount; f++) {
-          final globalFrameIdx = startFrame + f;
-          final timeMs = globalFrameIdx * frameIntervalMs;
+            final bytes = await render(timeMs);
+            if (bytes.length != expectedBytes) {
+              throw Exception(
+                'Frame $globalFrameIdx returned ${bytes.length} bytes, expected $expectedBytes '
+                '(${videoWidth}x$videoHeight RGBA8).',
+              );
+            }
+            await raf.writeFrom(bytes);
 
-          final bytes = renderFrameToRgba != null
-              ? await renderFrameToRgba(timeMs)
-              : Uint8List(videoWidth * videoHeight * 4);
-
-          final frameFile = File('${batchRgbaDir.path}/frame_${f.toString().padLeft(4, '0')}.rgba');
-          await frameFile.writeAsBytes(bytes, flush: true);
-
-          final progressRatio = (globalFrameIdx / totalFrames) * 0.70;
-          onProgress(progressRatio, 'Rendering frames (${globalFrameIdx + 1}/$totalFrames)...');
+            final progressRatio = (globalFrameIdx / totalFrames) * 0.70;
+            onProgress(progressRatio, 'Rendering frames (${globalFrameIdx + 1}/$totalFrames)...');
+          }
+          await raf.flush();
+        } finally {
+          await raf.close();
         }
 
         // Encode batch part
@@ -774,7 +972,7 @@ class ExportSuite {
         final partFile = File('${sessionTempDir.path}/part_${b.toString().padLeft(4, '0')}.$partExt');
 
         final ffmpegBatchCmd = _buildBatchEncodeCmd(
-          inputPattern: '${batchRgbaDir.path}/frame_%04d.rgba',
+          inputFile: rawFile.path,
           outputFile: partFile.path,
           fps: videoFps,
           inW: videoWidth,
@@ -790,15 +988,17 @@ class ExportSuite {
         final session = await FFmpegKit.execute(ffmpegBatchCmd);
         final rc = await session.getReturnCode();
 
-        if (!ReturnCode.isSuccess(rc)) {
-          throw Exception('FFmpeg batch $b encode failed: $rc');
+        if (!ReturnCode.isSuccess(rc) || !partFile.existsSync() || partFile.lengthSync() == 0) {
+          final logTail = await _sessionLogTail(session);
+          debugPrint('FFmpeg cmd: $ffmpegBatchCmd\n$logTail');
+          throw Exception('FFmpeg batch $b failed (rc: $rc)\n$logTail');
         }
 
         partVideoPaths.add(partFile.path);
 
-        // Immediate disk cleanup: purge raw 30 RGBA disk frames
+        // Immediate disk cleanup: purge the raw RGBA batch
         try {
-          batchRgbaDir.deleteSync(recursive: true);
+          rawFile.deleteSync();
         } catch (_) {}
       }
 
@@ -811,28 +1011,42 @@ class ExportSuite {
       final ext = container.toLowerCase();
       final tempFinalFile = File('${sessionTempDir.path}/temp_master_$timestamp.$ext');
 
+      // -map is required: without it ffmpeg may pick the ORIGINAL video's picture stream
+      // from the audio source instead of the graded concat output.
+      // Audio codec must match the container (WebM/MKV -> opus, MP4/MOV -> aac).
+      final fastStart = (container == 'MP4' || container == 'MOV') ? '-movflags +faststart' : '';
       String concatCmd;
       if (audioSourcePath != null && File(audioSourcePath).existsSync()) {
+        final audioCodec = ExportMatrix.getAudioCodec(container);
         concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -i "$audioSourcePath" '
-            '-c:v copy -c:a aac -b:a 320k -shortest "${tempFinalFile.path}"';
+            '-map 0:v:0 -map 1:a:0? -c:v copy -c:a $audioCodec -b:a 320k -shortest $fastStart "${tempFinalFile.path}"';
       } else {
-        concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -c copy "${tempFinalFile.path}"';
+        concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -c copy $fastStart "${tempFinalFile.path}"';
       }
 
       final concatSession = await FFmpegKit.execute(concatCmd);
       final concatRc = await concatSession.getReturnCode();
 
-      if (!ReturnCode.isSuccess(concatRc)) {
-        throw Exception('Stream concatenation failed with code: $concatRc');
+      if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
+        final logTail = await _sessionLogTail(concatSession);
+        debugPrint('FFmpeg concat cmd: $concatCmd\n$logTail');
+        throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
       }
 
       // Pass 3: MediaStore save to Downloads
       onProgress(0.92, 'Registering video with Android MediaStore...');
-      final cleanCodec = codec.replaceAll(' ', '_').replaceAll('/', '_');
-      final cleanBitDepth = bitDepth.replaceAll(' ', '_');
+      final cleanCodec = codec.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
+      final cleanBitDepth = bitDepth.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${cleanBitDepth}_$timestamp.$ext';
 
-      final mimeType = (container == 'WEBM') ? 'video/webm' : ((container == 'MOV') ? 'video/quicktime' : 'video/mp4');
+      // MIME must match the extension or MediaStore may rename/reject the file.
+      final mimeType = container == 'WEBM'
+          ? 'video/webm'
+          : container == 'MOV'
+              ? 'video/quicktime'
+              : container == 'MKV'
+                  ? 'video/x-matroska'
+                  : 'video/mp4';
 
       final finalUri = await saveToDownloads(
         sourcePath: tempFinalFile.path,
@@ -865,7 +1079,7 @@ class ExportSuite {
   // Supports: H.264, HEVC, AV1, VP9, ProRes HQ/4444 + 8-bit, 10-bit HDR, 16-bit
   // ===========================================================================
   static String _buildBatchEncodeCmd({
-    required String inputPattern,
+    required String inputFile,
     required String outputFile,
     required double fps,
     required int inW,
@@ -877,70 +1091,89 @@ class ExportSuite {
     required String bitrateProfile,
     required String container,
   }) {
-    String cOption = '-c:v libx264';
-    String pixFmt = '-pix_fmt yuv420p';
-    String colorMetadata = '-colorspace bt709 -color_primaries bt709 -color_trc bt709';
-    String rateControl = '-crf 18 -preset fast';
-    String extraFilters = '';
-
     final is10Bit = bitDepth.startsWith('10');
     final is16Bit = bitDepth.startsWith('16');
+    final isProRes = codec.contains('ProRes');
+    final isHevc = codec.contains('HEVC') || codec.contains('H.265');
+    final isAv1 = codec.contains('AV1');
+    final isVp9 = codec.contains('VP9');
 
-    // 1. Bit Depth & Color Metadata Mapping
+    // 1. Bit depth & colour metadata
+    String pixFmt;
+    String colorMetadata;
     if (is10Bit) {
       pixFmt = '-pix_fmt yuv420p10le';
-      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67'; // True HLG/HDR10
+      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
     } else if (is16Bit) {
       pixFmt = '-pix_fmt yuv444p10le';
-      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084'; // PQ HDR Master
+      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
     } else {
       pixFmt = '-pix_fmt yuv420p';
       colorMetadata = '-colorspace bt709 -color_primaries bt709 -color_trc bt709';
     }
 
-    // 2. Codec-Specific Command Generation
-    if (codec.contains('HEVC') || codec.contains('H.265')) {
-      cOption = '-c:v libx265 -tag:v hvc1';
-      rateControl = '-crf 20 -preset fast';
-    } else if (codec.contains('AV1')) {
-      cOption = '-c:v libsvtav1';
-      rateControl = '-crf 24 -preset 6';
-    } else if (codec.contains('VP9')) {
-      cOption = '-c:v libvpx-vp9';
-      rateControl = '-crf 22 -b:v 0';
-      extraFilters = ',unsharp=5:5:0.3:5:5:0.0'; // Contrast compensation for VP9
-    } else if (codec.contains('ProRes')) {
+    // 2. Codec, speed preset and default quality
+    String cOption;
+    String speed = '';
+    String rate = '';
+    String extraFilters = '';
+    if (isProRes) {
       if (is16Bit) {
-        cOption = '-c:v prores_ks -profile:v 4'; // ProRes 4444
+        cOption = '-c:v prores_ks -profile:v 4';
         pixFmt = '-pix_fmt yuv444p10le';
       } else {
-        cOption = '-c:v prores_ks -profile:v 3'; // ProRes 422 HQ
+        cOption = '-c:v prores_ks -profile:v 3';
         pixFmt = '-pix_fmt yuv422p10le';
       }
-      rateControl = '';
+    } else if (isHevc) {
+      cOption = '-c:v libx265 -tag:v hvc1';
+      speed = '-preset fast';
+      rate = '-crf 20';
+    } else if (isAv1) {
+      cOption = '-c:v libsvtav1';
+      speed = '-preset 6';
+      rate = '-crf 24';
+    } else if (isVp9) {
+      cOption = '-c:v libvpx-vp9';
+      speed = '-deadline good -cpu-used 4 -row-mt 1';
+      rate = '-crf 22 -b:v 0';
+      extraFilters = ',unsharp=5:5:0.3:5:5:0.0';
     } else {
-      // H.264
       cOption = '-c:v libx264';
-      rateControl = '-crf 18 -preset fast';
+      speed = '-preset fast';
+      rate = '-crf 18';
     }
 
-    // 3. Bitrate Profile Adjustments
-    if (codec != 'Apple ProRes') {
+    // 3. Bitrate / quality profile (ProRes ignores it).
+    // Note: -preset medium is only valid for x264/x265. The old code passed it to
+    // SVT-AV1 and VP9 for the Lossless profile, which makes ffmpeg abort.
+    if (!isProRes) {
       if (bitrateProfile.contains('Lossless')) {
-        rateControl = codec.contains('HEVC') ? '-crf 12 -preset medium' : '-crf 14 -preset medium';
-      } else if (bitrateProfile.contains('Ultra')) {
-        rateControl = '-b:v 50M -maxrate 60M -bufsize 100M';
-      } else if (bitrateProfile.contains('High')) {
-        rateControl = '-b:v 25M -maxrate 30M -bufsize 50M';
-      } else if (bitrateProfile.contains('Master')) {
-        rateControl = '-b:v 80M -maxrate 95M -bufsize 160M';
+        rate = isHevc ? '-crf 12' : (isVp9 ? '-crf 14 -b:v 0' : '-crf 14');
+        if (!isAv1 && !isVp9) speed = '-preset medium';
+      } else {
+        int mbps = 0;
+        if (bitrateProfile.contains('Master')) {
+          mbps = 80;
+        } else if (bitrateProfile.contains('Ultra')) {
+          mbps = 50;
+        } else if (bitrateProfile.contains('High')) {
+          mbps = 25;
+        } else if (bitrateProfile.contains('Standard')) {
+          mbps = 12;
+        }
+        if (mbps > 0) {
+          rate = isAv1
+              ? '-b:v ${mbps}M'
+              : '-b:v ${mbps}M -maxrate ${(mbps * 1.2).round()}M -bufsize ${mbps * 2}M';
+        }
       }
     }
 
     final scaleFilter = 'scale=$outW:$outH:flags=lanczos$extraFilters';
 
-    return '-y -r $fps -f rawvideo -pix_fmt rgba -s ${inW}x$inH -i "$inputPattern" '
-        '-vf "$scaleFilter" $cOption $pixFmt $colorMetadata $rateControl "$outputFile"';
+    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
+        '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $pixFmt $colorMetadata $rate "$outputFile"';
   }
 
   // ===========================================================================
