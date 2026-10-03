@@ -343,6 +343,7 @@ class ExportSuite {
     String selectedBitDepth = '8-bit';
     String selectedBitrate = 'High (25 Mbps)';
     String selectedContainer = 'MP4';
+    double selectedFps = const [24.0, 25.0, 30.0, 48.0, 50.0, 60.0].contains(videoFps) ? videoFps : 30.0;
 
     bool isExporting = false;
     double exportProgress = 0.0;
@@ -408,6 +409,31 @@ class ExportSuite {
                         ),
                         onSelected: isExporting ? null : (s) {
                           if (s) setSheetState(() => selectedRes = res);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 1b. Frame rate
+                  const Text('Frame Rate', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [24.0, 25.0, 30.0, 48.0, 50.0, 60.0].map((f) {
+                      final selected = selectedFps == f;
+                      return ChoiceChip(
+                        label: Text('${f.toInt()} fps'),
+                        selected: selected,
+                        selectedColor: const Color(0xFF00E5FF),
+                        backgroundColor: const Color(0xFF1E1E2C),
+                        labelStyle: TextStyle(
+                          color: selected ? Colors.black : Colors.white70,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        onSelected: isExporting ? null : (s) {
+                          if (s) setSheetState(() => selectedFps = f);
                         },
                       );
                     }).toList(),
@@ -628,7 +654,7 @@ class ExportSuite {
                                 getActiveLut: getActiveLut,
                                 renderFrameToRgba: renderFrameToRgba,
                                 videoDurationMs: videoDurationMs,
-                                videoFps: videoFps,
+                                videoFps: selectedFps,
                                 videoWidth: videoWidth,
                                 videoHeight: videoHeight,
                                 audioSourcePath: audioSourcePath,
