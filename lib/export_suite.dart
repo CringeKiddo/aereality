@@ -69,6 +69,7 @@ class ExportSuite {
     required BuildContext context,
     required ProjectData project,
     AdjustmentLayer? curLayer,
+    dynamic packUniforms,
     dynamic lutTextureId,
     dynamic lutSize,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
@@ -83,6 +84,7 @@ class ExportSuite {
         context: context,
         project: project,
         curLayer: curLayer,
+        packUniforms: packUniforms,
         renderFrameToRgba: renderFrameToRgba,
       );
     } else {
@@ -90,6 +92,7 @@ class ExportSuite {
         context: context,
         project: project,
         curLayer: curLayer,
+        packUniforms: packUniforms,
         renderFrameToRgba: renderFrameToRgba,
         videoDurationMs: videoDurationMs ?? 5000.0,
         videoFps: videoFps ?? 30.0,
@@ -107,6 +110,7 @@ class ExportSuite {
     required BuildContext context,
     required ProjectData project,
     AdjustmentLayer? curLayer,
+    dynamic packUniforms,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
   }) {
     String selectedFormat = 'PNG';
@@ -278,6 +282,7 @@ class ExportSuite {
     required BuildContext context,
     required ProjectData project,
     AdjustmentLayer? curLayer,
+    dynamic packUniforms,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     required double videoDurationMs,
     required double videoFps,
@@ -533,6 +538,7 @@ class ExportSuite {
                                 context: context,
                                 project: project,
                                 curLayer: curLayer,
+                                packUniforms: packUniforms,
                                 renderFrameToRgba: renderFrameToRgba,
                                 videoDurationMs: videoDurationMs,
                                 videoFps: videoFps,
@@ -686,6 +692,7 @@ class ExportSuite {
     required BuildContext context,
     required ProjectData project,
     AdjustmentLayer? curLayer,
+    dynamic packUniforms,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     required double videoDurationMs,
     required double videoFps,
