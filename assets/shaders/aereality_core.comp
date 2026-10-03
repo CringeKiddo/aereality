@@ -2,19 +2,46 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // =============================================================================
-// AEReality / Shaderly - Master Vulkan Compute Shader (v2 - Final Complete)
+// AEReality / Shaderly - Master Vulkan Compute Shader (v2 - AE-matched pipeline)
 // -----------------------------------------------------------------------------
-//  * HDR half-float (fp16) intermediate composite + bloom pyramid
-//  * Per-layer parameters for EVERY effect (128-float stride, 10 active layers)
+//  * HDR half-float (fp16) intermediate composite + bloom pyramid (no 8-bit
+//    linear storage anywhere between input decode and final quantise)
+//  * Per-layer parameters for EVERY effect (switching layers can't change CC)
 //  * Neighbourhood filters apply a DELTA so earlier layers' grades survive
 //  * Oklab grading with chroma-reduction gamut mapping (no random green/purple)
 //  * C1-continuous monotone cubic curves (no ridges / banding)
 //  * Gamma-space (AE style) or linear-space blending, selectable per layer
 //  * Proper AgX + enhanced Khronos Neutral, LUT applied display-referred
 //  * Continuous anamorphic streak, true edge glow, prismatic diffuse glow
-//  * Location-adaptive metallic text bevel + text edge glow + contact shadow
 //  * TPDF dither right before the final quantise
 // Layer stride = 128 floats, 10 layers -> UBO of 2048 floats.
+// -----------------------------------------------------------------------------
+// v2.1 changes
+//  * AgX: inset matrix was transposed (pink/dark cast) -> fixed, SDR white restored, mids kept
+//  * Khronos Neutral: black-level subtraction removed (was the brightness drop), real shoulder
+//  * Glows (Deep / Kawase / Diffuse SP / Shaderly / Sapphire edge / halo) take scene colour
+//  * Anamorphic streak: jittered continuous kernel, scene-tinted, soft shoulder
+//  * S_lining: stronger, soft dark falloff outside the line art
+//  * Anime skin smoothing: Oklab skin mask + ink shielding (skin only, lines untouched)
+//  * Text bevel: scene-aware chrome, contact shadow, horizon bands, glints, contour glow
+// -----------------------------------------------------------------------------
+// v2.2 changes
+//  * FIX: packComposite() was called with 3 args but declared with 2 (shader would not compile)
+//  * Every glow is now a DIFFERENT effect (see the per-glow notes in pass 6):
+//      Deep Glow     = HDR multi-radius glow with a hot, whitened core
+//      Kawase        = soft blur glow
+//      Shaderly Glow = overall AE-"Glow" style screen-blended glow over the whole frame
+//      Diffuse SP    = light-source simulation: finds the dominant light, scatters it onto the
+//                      subject along the light direction, prismatic radial dispersion (R>G>B)
+//      Sapphire Edge = crisp contour glow hugging edges (coloured by the bright side of the edge)
+//      Edge Halo     = wide soft aura that spills OUTWARD from silhouettes, never touches the line
+//  * S_LightWrap rebuilt: wraps the blurred bright background into the foreground edge (no tap
+//    ring, so the clip is never duplicated)
+//  * Volumetric fog rebuilt (BSL-style): pseudo-depth + ground fog, domain-warped drifting noise,
+//    per-channel Beer-Lambert extinction, forward-scatter sun glow, sky/ground in-scatter colour
+//  * TPDF dither: exact +-1 LSB triangular at default strength
+//  * Linear tonemap mode now has a hue-preserving soft shoulder (identity below 0.92) instead of hard clipping
+// -----------------------------------------------------------------------------
 // =============================================================================
 
 // STORAGE BUFFERS
@@ -167,11 +194,11 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_imgHeight;             // 4
     float u_hasLut;                // 5
     float u_lutOpacity;            // 6
-    float u_pad7;                  // 7
-    float u_pad8;                  // 8
-    float u_pad9;                  // 9
-    float u_pad10;                 // 10
-    float u_pad11;                 // 11
+    float u_copiedChromaShift_unused; // 7
+    float u_copiedEdgeRays_unused; // 8
+    float u_copiedProMist_unused;  // 9
+    float u_copiedStarGlint_unused;// 10
+    float u_horizontalRamp_unused; // 11
     float u_ditherStrength;        // 12
     float u_textSuiteEnabled;      // 13
     float u_textBoxX;              // 14
@@ -180,18 +207,10 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_textBoxH;              // 17
     float u_textBevelDepth;        // 18
     float u_textChromeIntensity;   // 19
-    float u_textSpecularGlint;     // 20
-    float u_textContactShadow;     // 21
-    float u_textLumaThreshold;     // 22
-    float u_textMetallicTint;      // 23 (0 Platinum, 1 Gold, 2 Cyan, 3 Crimson, 4 Violet)
-    float u_textGlowIntensity;     // 24
-    float u_textGlowRadius;        // 25
-    float u_pad26;                 // 26
-    float u_pad27;                 // 27
+    float u_g20; float u_g21; float u_g22; float u_g23;
+    float u_g24; float u_g25; float u_g26; float u_g27;   // 20..27 (legacy, now per-layer)
     float u_bitDepthMode;          // 28: 0 = 8-bit, 1 = 10-bit, 2 = 16-bit
-    float u_pad29;                 // 29
-    float u_pad30;                 // 30
-    float u_pad31;                 // 31
+    float u_g29; float u_g30; float u_g31;                // 29..31 (legacy, now per-layer)
     LayerData layers[10];          // 32 + l * 128
 };
 
@@ -322,6 +341,7 @@ vec3 oklabToLinearRgbRaw(vec3 lab) {
 }
 
 // Keeps lightness + hue, pulls chroma in until no channel is negative.
+// This is what stops grades turning into random green / purple / cyan.
 vec3 oklabToLinearRgb(vec3 lab) {
     lab.x = max(lab.x, 0.0);
     vec3 rgb = oklabToLinearRgbRaw(lab);
@@ -343,7 +363,7 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
 }
 
 // =============================================================================
-// C1-CONTINUOUS MONOTONE CUBIC (PCHIP) 5-POINT CURVE
+// C1-CONTINUOUS MONOTONE CUBIC (PCHIP) 5-POINT CURVE - no slope breaks, no ridges
 // =============================================================================
 float evalCurve5(float x, float p0, float p1, float p2, float p3, float p4) {
     x = clamp(x, 0.0, 1.0);
@@ -395,6 +415,13 @@ vec3 srcSrgb(ivec2 c) {
     return unpackRGBA_Dynamic(c.y * gW + c.x, gBit).rgb;
 }
 vec3 srcLin(ivec2 c) { return srgbToLinear(srcSrgb(c)); }
+
+// "Is this pixel part of the (bright) text?" - used by the text suite only
+float textFillAt(ivec2 p) {
+    vec3 c = srcLin(p);
+    float v = 0.5 * luma(c) + 0.5 * max(c.r, max(c.g, c.b));
+    return smoothstep(0.45, 0.75, v);
+}
 
 vec4 unpackComposite(int idx) {
     return vec4(unpackHalf2x16(temp_composite[idx * 2]), unpackHalf2x16(temp_composite[idx * 2 + 1]));
@@ -459,12 +486,15 @@ vec4 sampleBloom(int level, vec2 uv, int w, int h) {
 // =============================================================================
 // TONEMAPPERS
 // =============================================================================
-vec3 tonemapAgx(vec3 c) {
+vec3 agxCore(vec3 c, float sat) {
+    // GLSL mat3(vec3, vec3, vec3) is COLUMN-major. toRec2020 / outset / toSrgb below were already
+    // listed as columns. The AgX *inset* was listed row-by-row (transposed), so neutral greys were
+    // pushed off-axis - that was the pink, dark cast. It is now written as columns too.
     const mat3 toRec2020 = mat3(vec3(0.6274, 0.0691, 0.0164), vec3(0.3293, 0.9195, 0.0880), vec3(0.0433, 0.0113, 0.8956));
     const mat3 inset = mat3(
-        vec3(0.856627153315983, 0.0951212405381588, 0.0482516061458583),
-        vec3(0.137318972929847, 0.761241990602591, 0.101439036467562),
-        vec3(0.11189821299995, 0.0767994186031903, 0.811302368396859));
+        vec3(0.856627153315983, 0.137318972929847, 0.11189821299995),
+        vec3(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+        vec3(0.0482516061458583, 0.101439036467562, 0.811302368396859));
     const mat3 outset = mat3(
         vec3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
         vec3(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
@@ -476,51 +506,91 @@ vec3 tonemapAgx(vec3 c) {
     c = log2(max(c, vec3(1e-10)));
     c = clamp((c - (-12.47393)) / (4.026069 + 12.47393), 0.0, 1.0);
 
+    // Troy Sobotka's 6th-order contrast approximation (AgX base look)
     vec3 x2 = c * c;
     vec3 x4 = x2 * x2;
     c = 15.5 * x4 * x2 - 40.14 * x4 * c + 31.96 * x4 - 6.868 * x2 * c + 0.4298 * x2 + 0.1191 * c - 0.00232;
     c = clamp(c, 0.0, 1.0);
 
-    c = pow(c, vec3(1.12));
+    // gentle chroma restore (AgX desaturates highlights by design)
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    c = mix(vec3(l), c, 1.32);
+    c = mix(vec3(l), c, sat);
 
     c = outset * c;
     c = pow(max(c, vec3(0.0)), vec3(2.2));
     c = toSrgb * c;
-    return clamp(c, 0.0, 1.0);
+    return max(c, vec3(0.0));
 }
 
+// AgX for display-referred video: neutral stays neutral, mids stay close to the source,
+// and SDR white is lifted back to 1.0 (raw AgX tops out at ~0.79 = the muddy grey look).
+vec3 tonemapAgx(vec3 c) {
+    const float AGX_SAT = 1.20;
+    vec3 raw = agxCore(c, AGX_SAT);
+    float whiteEnc = linearToSrgb(luma(agxCore(vec3(1.0), AGX_SAT)));
+    vec3 e = linearToSrgb(raw);
+    float ye = luma(e);
+    float lift = 1.0 + (1.0 / whiteEnc - 1.0) * smoothstep(0.42, whiteEnc, ye);
+    if (ye >= whiteEnc) lift = 1.0 / whiteEnc;
+    e = min(e * lift, vec3(1.0));
+    return srgbToLinear(e);
+}
+
+// Khronos PBR Neutral, retuned for video: no black-level subtraction (that was the "brightness
+// drop"), a real shoulder that maps SDR white back to ~white, hue-preserving peak compression,
+// highlight desaturation, and a very light display-space contrast curve.
 vec3 tonemapNeutralPlus(vec3 color) {
     color = max(color, vec3(0.0));
     const float startCompression = 0.55;
-    const float desaturation = 0.30;
-
-    float x = min(color.r, min(color.g, color.b));
-    float offset = (x < 0.08) ? (x - 6.25 * x * x) : 0.04;
-    color -= offset;
+    const float desaturation = 0.25;
+    const float whitePoint = 1.35;
+    const float kShoulder = 1.6;
 
     float peak = max(color.r, max(color.g, color.b));
-    if (peak >= startCompression) {
+    if (peak > startCompression) {
         float d = 1.0 - startCompression;
-        float newPeak = 1.0 - d * d / (peak + d - startCompression);
+        float t = (peak - startCompression) / (whitePoint - startCompression);
+        float newPeak = startCompression + d * (1.0 - exp(-kShoulder * t)) / (1.0 - exp(-kShoulder));
+        newPeak = min(newPeak, 1.0);
         color *= newPeak / peak;
-        float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+        float g = max(1.0 - 1.0 / (desaturation * max(peak - newPeak, 0.0) + 1.0), 0.0);
         color = mix(color, vec3(newPeak), g);
     }
     color = clamp(color, 0.0, 1.0);
 
     vec3 e = linearToSrgb(color);
-    e = mix(e, e * e * (3.0 - 2.0 * e), 0.20);
+    e = e + 0.12 * (e * e * (3.0 - 2.0 * e) - e);
     return srgbToLinear(e);
+}
+
+// "Linear" mode, de-slopped: values up to the knee pass through UNCHANGED (so the grade looks exactly
+// like plain linear), then the PEAK channel is rolled off smoothly towards 1.0 and the other channels
+// are scaled with it. Hue is preserved instead of every channel hard-clipping to flat white, and a
+// touch of highlight desaturation stops over-driven colours going neon.
+vec3 tonemapLinearSoft(vec3 c) {
+    c = max(c, vec3(0.0));
+    const float knee = 0.92;      // linear light (~sRGB 0.96): nothing below this is touched
+    const float whiteIn = 1.60;   // input peak that reaches 1.0
+    const float kS = 8.5;         // gives slope 1.0 at the knee (C1-continuous, no visible kink)
+    float peak = max(c.r, max(c.g, c.b));
+    if (peak <= knee) return c;
+    float d = 1.0 - knee;
+    float t = clamp((peak - knee) / (whiteIn - knee), 0.0, 1.0);
+    float newPeak = knee + d * (1.0 - exp(-kS * t)) / (1.0 - exp(-kS));
+    c *= newPeak / peak;
+    float g = 1.0 - 1.0 / (0.20 * max(peak - newPeak, 0.0) + 1.0);
+    return clamp(mix(c, vec3(newPeak), g), 0.0, 1.0);
 }
 
 vec3 applyToneMapping(vec3 linearCol, float mode) {
     if (mode > 1.5) return tonemapNeutralPlus(linearCol);
     if (mode > 0.5) return tonemapAgx(linearCol);
-    return linearCol;
+    return tonemapLinearSoft(linearCol);
 }
 
+// =============================================================================
+// LUT (display-referred: input/outputs are sRGB-encoded 0..1)
+// =============================================================================
 vec3 sample3DLutDisplay(vec3 srgb, float opacity) {
     if (opacity <= 0.001) return srgb;
     vec3 c = clamp(srgb, 0.0, 1.0);
@@ -530,7 +600,7 @@ vec3 sample3DLutDisplay(vec3 srgb, float opacity) {
 }
 
 // =============================================================================
-// BLEND MODES (After Effects Gamma Space Default)
+// BLEND MODES (gamma space by default = After Effects behaviour)
 // =============================================================================
 vec3 softLightW3C(vec3 a, vec3 b) {
     vec3 dA = mix(sqrt(a), ((16.0 * a - 12.0) * a + 4.0) * a, step(a, vec3(0.25)));
@@ -540,27 +610,27 @@ vec3 softLightW3C(vec3 a, vec3 b) {
 }
 
 vec3 blendCore(vec3 a, vec3 b, int mode) {
-    if (mode == 1) { // Screen
+    if (mode == 1) {                       // Screen
         vec3 ca = clamp(a, 0.0, 1.0);
         vec3 cb = clamp(b, 0.0, 1.0);
         return (ca + cb - ca * cb) + max(a - 1.0, 0.0) + max(b - 1.0, 0.0);
-    } else if (mode == 3) { // Overlay
+    } else if (mode == 3) {                // Overlay
         vec3 ca = clamp(a, 0.0, 1.0);
         vec3 cb = clamp(b, 0.0, 1.0);
         return mix(2.0 * ca * cb, 1.0 - 2.0 * (1.0 - ca) * (1.0 - cb), step(vec3(0.5), ca));
-    } else if (mode == 4) { // Soft Light
+    } else if (mode == 4) {                // Soft Light
         return softLightW3C(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0));
-    } else if (mode == 5) { // Multiply
+    } else if (mode == 5) {                // Multiply
         return a * b;
-    } else if (mode == 6) { // Add
+    } else if (mode == 6) {                // Add
         return a + b;
     }
-    return b; // Normal
+    return b;                              // Normal
 }
 
 vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity, bool linearSpace) {
     opacity = clamp(opacity, 0.0, 1.0);
-    if (mode == 2 || mode == 7) { // Linear Add / Linear Dodge
+    if (mode == 2 || mode == 7) {          // Linear Add / Linear Dodge: always linear light
         return mix(baseCol, baseCol + blendCol, opacity);
     }
     if (mode == 0 && opacity >= 0.9999) return blendCol;
@@ -588,6 +658,7 @@ vec3 saturateColor(vec3 c, float s) {
     return max(mix(vec3(l), c, s), vec3(0.0));
 }
 
+// Lowest highlight threshold any enabled glow needs (shared bloom extraction)
 float glowExtractThreshold() {
     float t = 1.0;
     bool any_ = false;
@@ -598,6 +669,7 @@ float glowExtractThreshold() {
         if (L.deepGlowIntensity > 0.01 || L.kawaseGlowIntensity > 0.01) { t = min(t, L.deepGlowThreshold); any_ = true; }
         if (L.diffuseSpGlowIntensity > 0.01) { t = min(t, L.diffuseSpGlowThreshold); any_ = true; }
         if (L.shaderlyGlowIntensity > 0.01)  { t = min(t, L.shaderlyGlowThreshold);  any_ = true; }
+        if (L.lightWrapIntensity > 0.01 && L.lightWrapWidth > 0.01) { t = min(t, L.lightWrapThreshold); any_ = true; }
         if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.45); any_ = true; }
         if (L.halationRadius > 0.01 || L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
     }
@@ -623,7 +695,7 @@ vec3 gateGlow(vec3 g, float th, float exMin) {
 }
 
 // =============================================================================
-// PASS 1: HIGHLIGHT & EDGE EXTRACTION -> Bloom L0
+// PASS 1: HIGHLIGHT + EDGE EXTRACTION -> Bloom L0
 // =============================================================================
 void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
     vec2 centerUV = (vec2(coord) + 0.5) / vec2(l0W, l0H);
@@ -637,6 +709,7 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
     vec3 isolated = col * knee;
     isolated *= karisWeight(isolated);
 
+    // Edge mask (perceptual-luma Sobel, 2px step because L0 is half-res)
     float gx = 0.0;
     float gy = 0.0;
     for (int y = -1; y <= 1; y++) {
@@ -654,7 +727,7 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
     bloomStore(0, coord.y * l0W + coord.x, vec4(isolated, edge));
 }
 
-// PASS 2 & 3: 13-Tap Anti-Grid Downsample
+// PASS 2 & 3: 13-tap anti-grid downsample
 void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, float radius) {
     int srcLevel = (passIdx == 2) ? 0 : 1;
     int srcW = width * 2;
@@ -682,7 +755,7 @@ void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, flo
     bloomStore((passIdx == 2) ? 1 : 2, coord.y * width + coord.x, downsample);
 }
 
-// PASS 4 & 5: Continuous Upsample
+// PASS 4 & 5: tent upsample
 void executeBloomUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
     int srcLevel = (passIdx == 4) ? 2 : 1;
     int srcW = w / 2;
@@ -708,6 +781,61 @@ void executeBloomUpsample(int passIdx, ivec2 coord, int w, int h, float radius) 
 }
 
 // =============================================================================
+// SCENE-COLOUR HELPERS (glows / flares inherit the background instead of going white)
+// =============================================================================
+vec3 sampleAmbientColor(ivec2 coord, int width, int height, float radiusPx) {
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    const int AMB_TAPS = 16;
+    float rot = hash12(vec2(coord) * 0.61 + 3.3) * 6.2831853;
+    for (int k = 0; k < AMB_TAPS; k++) {
+        float fr = (float(k) + 0.5) / float(AMB_TAPS);
+        float rr = sqrt(fr) * radiusPx;
+        float ang = rot + float(k) * 2.39996323;
+        vec3 s = compAt(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)), width, height);
+        float w = smoothstep(0.015, 0.12, luma(s)) + 0.03;   // ignore ink / near-black
+        acc += s * w;
+        wsum += w;
+    }
+    return acc / max(wsum, 1e-4);
+}
+
+// Glows built from highlight extraction tend to be near-white. Where a glow has little chroma,
+// re-tint it with the surrounding scene colour (luminance of the glow is preserved).
+vec3 colorizeGlow(vec3 g, vec3 ambient, float amount) {
+    float lg = luma(g);
+    if (lg < 1e-5) return g;
+    float mx = max(g.r, max(g.g, g.b));
+    float mn = min(g.r, min(g.g, g.b));
+    float chroma = (mx - mn) / max(mx, 1e-5);
+    float whiteness = 1.0 - clamp(chroma * 2.5, 0.0, 1.0);
+    float la = luma(ambient);
+    vec3 hue = (la > 1e-4) ? clamp(ambient / la, vec3(0.05), vec3(4.0)) : vec3(1.0);
+    hue = saturateColor(hue, 1.5);
+    hue /= max(luma(hue), 1e-4);
+    return mix(g, hue * lg, clamp(whiteness * amount, 0.0, 1.0));
+}
+
+float gaussBand(float x, float w) {
+    float t = x / w;
+    return exp(-t * t);
+}
+
+// Multi-band chrome reflection. v: 0 = top of the text, 1 = bottom. Horizon sits just under the
+// middle: bright sky -> dark band -> thin bright horizon line -> dark ground -> lit lower band.
+vec3 chromeBands(float v, vec3 skyRef, vec3 gndRef) {
+    const float HZ = 0.52;
+    vec3 top = mix(skyRef * 1.25, skyRef * 0.28, smoothstep(0.0, HZ - 0.04, v));
+    top *= 1.0 - 0.60 * gaussBand(v - (HZ - 0.07), 0.05);
+    vec3 warm = vec3(1.0, 0.72, 0.45);
+    vec3 bot = mix(gndRef * 0.22, gndRef * 1.15 + warm * 0.10, smoothstep(HZ, 0.92, v));
+    bot += (gndRef * 0.6 + warm * 0.08) * gaussBand(v - 0.83, 0.06);
+    vec3 col = mix(top, bot, smoothstep(HZ - 0.012, HZ + 0.012, v));
+    col += mix(vec3(1.0), skyRef, 0.35) * gaussBand(v - HZ, 0.012) * 1.4;
+    return col;
+}
+
+// =============================================================================
 // FINAL COMPOSITE HELPERS
 // =============================================================================
 vec3 applyFxaa(ivec2 coord, int width, int height) {
@@ -722,6 +850,63 @@ vec3 applyFxaa(ivec2 coord, int width, int height) {
     float lumaMax = max(lumaM, max(max(lU, lD), max(lL, lR)));
     if ((lumaMax - lumaMin) < max(0.04, lumaMax * 0.12)) return rgbM;
     return mix(rgbM, (cU + cD + cL + cR) * 0.25, 0.30);
+}
+
+// =============================================================================
+// DOMINANT LIGHT SOURCE (used by Diffuse SP)
+// One 16x16 workgroup scans the 1/8-res highlight pyramid level on a 16x16 lattice (4 sub-taps per
+// cell so small suns are not missed) and reduces it in shared memory to a luminance^3-weighted
+// centroid. That is the "where would the sun / brightest source be" point. Cost: ~1 load/pixel.
+// =============================================================================
+shared vec4 s_lightA[256];   // rgb * w, w
+shared vec2 s_lightB[256];   // uv  * w
+vec2  gLightUV = vec2(0.5, 0.10);
+vec3  gLightCol = vec3(1.0);
+float gLightStrength = 0.0;
+
+bool diffuseLayerActive() {
+    int total = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int i = 0; i < total; i++) {
+        if (layers[i].isEnabled > 0.5 && layers[i].diffuseSpGlowIntensity > 0.01) return true;
+    }
+    return false;
+}
+
+// MUST be called from uniform control flow (before any early return) because it uses barrier().
+void detectDominantLight(int width, int height) {
+    uint lid = gl_LocalInvocationIndex;
+    ivec2 cell = ivec2(int(lid & 15u), int(lid >> 4u));
+    int w8 = max(width / 8, 1);
+    int h8 = max(height / 8, 1);
+    vec4 acc = vec4(0.0);
+    vec2 accUV = vec2(0.0);
+    for (int k = 0; k < 4; k++) {
+        vec2 sub = vec2(float(k & 1), float(k >> 1)) * 0.5 + 0.25;
+        vec2 cuv = (vec2(cell) + sub) / 16.0;
+        vec3 c = sampleBloom(2, cuv, w8, h8).rgb;
+        float l = luma(c);
+        float w = l * l * l;
+        acc += vec4(c * w, w);
+        accUV += cuv * w;
+    }
+    s_lightA[lid] = acc;
+    s_lightB[lid] = accUV;
+    barrier();
+    for (uint st = 128u; st > 0u; st >>= 1u) {
+        if (lid < st) {
+            s_lightA[lid] += s_lightA[lid + st];
+            s_lightB[lid] += s_lightB[lid + st];
+        }
+        barrier();
+    }
+    float wt = s_lightA[0].w;
+    if (wt > 1e-7) {
+        gLightUV = s_lightB[0] / wt;
+        vec3 lc = s_lightA[0].rgb / wt;
+        float ll = max(luma(lc), 1e-4);
+        gLightCol = clamp(lc / ll, vec3(0.3), vec3(3.0));          // hue only (luma = 1)
+        gLightStrength = smoothstep(0.02, 0.35, ll);
+    }
 }
 
 // =============================================================================
@@ -743,6 +928,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     vec3 midGlow   = midS.rgb;
     vec3 wideGlow  = wideS.rgb;
 
+    // line-art edge gradient (used to protect ink lines)
     float resScale = gRes;
     int edgeStep = gEdgeStep;
     float gx = 0.0;
@@ -759,145 +945,226 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     float exMin = glowExtractThreshold();
     int totalLayers = int(clamp(u_layerCount, 1.0, 10.0));
 
+    // Scene colour context shared by every glow / flare (only paid for when one is active)
+    bool anyGlow = false;
+    for (int i = 0; i < totalLayers; i++) {
+        LayerData Lg = layers[i];
+        if (Lg.isEnabled < 0.5) continue;
+        if (Lg.deepGlowIntensity > 0.01 || Lg.kawaseGlowIntensity > 0.01 || Lg.diffuseSpGlowIntensity > 0.01 ||
+            Lg.shaderlyGlowIntensity > 0.01 || Lg.copiedEdgeRays > 0.01 || Lg.sapphireGlowWidth > 0.01 ||
+            Lg.edgeHaloRadius > 0.01 || Lg.thinStreakIntensity > 0.01) { anyGlow = true; }
+    }
+    float maxDim = float(max(width, height));
+    vec3 ambientCol = vec3(0.5);
+    vec3 ambientNear = vec3(0.5);
+    if (anyGlow) {
+        ambientCol  = sampleAmbientColor(coord, width, height, 0.045 * maxDim);
+        ambientNear = sampleAmbientColor(coord, width, height, 0.012 * maxDim);
+    }
+
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
         if (L.isEnabled < 0.5) continue;
         float op = clamp(L.opacity, 0.0, 1.0);
         vec3 glowTint = tintFor(L.edgeGlowTint);
 
-        // ---- S_LightWrap: background light spilling onto the darker foreground edge ----
+        // ---- S_LightWrap: blurred BACKGROUND light wrapping into the darker foreground edge ----
+        // v2.2: no more tap ring. The old version gathered a fixed ring of raw taps (a literal copy of
+        // the clip at a fixed offset = the "duplicated ring"). Now the wrap source is the already
+        // blurred highlight pyramid, so it is a smooth gradient that is strong at the silhouette and
+        // dies off inward, exactly like a real light wrap.
         if (L.lightWrapIntensity > 0.01 && L.lightWrapWidth > 0.01) {
-            float lwRad = max(2.0, L.lightWrapWidth * 46.0 * resScale);
+            float wv = clamp(L.lightWrapWidth, 0.0, 1.0);
+            vec3 field = (wv < 0.5) ? mix(tightGlow, midGlow, wv * 2.0) : mix(midGlow, wideGlow, (wv - 0.5) * 2.0);
+            field = gateGlow(field, L.lightWrapThreshold, exMin);
             float lumaP = luma(linearBase);
-            vec3 bgSum = vec3(0.0);
-            float wSum = 0.0;
-            const int LW_TAPS = 28;
-            for (int k = 0; k < LW_TAPS; k++) {
-                float fr = (float(k) + 0.5) / float(LW_TAPS);
-                float rr = sqrt(fr) * lwRad;
-                float ang = float(k) * 2.39996323;
-                ivec2 sc = coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr));
-                vec3 s = compAt(sc, width, height);
-                float ls = luma(s);
-                float bright = smoothstep(L.lightWrapThreshold, L.lightWrapThreshold + 0.25, ls);
-                float brighter = smoothstep(0.02, 0.35, ls - lumaP);
-                float gw = exp(-fr * 1.6);
-                float w = bright * brighter * gw;
-                bgSum += s * w;
-                wSum += w;
-            }
-            if (wSum > 0.0001) {
-                vec3 bgAvg = bgSum / wSum;
-                float cover = clamp(wSum / (float(LW_TAPS) * 0.30), 0.0, 1.0);
-                float receive = 1.0 - smoothstep(0.45, 0.95, lumaP);
-                vec3 wrap = saturateColor(bgAvg, 1.10) * cover * receive * L.lightWrapIntensity * 0.85;
-                float lw = luma(wrap);
-                if (lw > 1e-5) wrap *= (1.0 - exp(-lw * 1.3)) / lw;
-                if (L.lightWrapBlendMode > 0.5) linearBase += wrap * op;
-                else {
-                    vec3 cb = clamp(linearBase, 0.0, 1.0);
-                    linearBase = mix(linearBase, cb + wrap - cb * wrap + max(linearBase - 1.0, 0.0), op);
-                }
+            float lf = luma(field);
+            // the pixel only receives light if it is darker than the light spilling onto it
+            float receive = clamp((lf - lumaP * 0.85) / max(lf, 1e-4), 0.0, 1.0);
+            receive = receive * receive * (3.0 - 2.0 * receive);
+            // hug the silhouette: strongest where the blurred edge mask is high
+            float nearEdge = clamp(max(tightS.a, midS.a * 0.8) * 1.6, 0.0, 1.0);
+            float edgeGate = mix(0.30, 1.0, nearEdge);
+            vec3 wrap = saturateColor(field, 1.10) * receive * edgeGate * L.lightWrapIntensity * 1.35;
+            float lw = luma(wrap);
+            if (lw > 1e-5) wrap *= (1.0 - exp(-lw * 1.3)) / lw;   // soft-limit: never slams to pure white
+            if (L.lightWrapBlendMode > 0.5) linearBase += wrap * op;
+            else {
+                vec3 cb = clamp(linearBase, 0.0, 1.0);
+                linearBase = mix(linearBase, cb + wrap - cb * wrap + max(linearBase - 1.0, 0.0), op);
             }
         }
 
-        // ---- 1. Deep Glow: Continuous falloff ----
+        // ---- 1. Deep Glow: multi-radius, colour-faithful, energy-aware ----
         if (L.deepGlowIntensity > 0.01) {
             float r = clamp(L.deepGlowRadius, 0.0, 1.0);
-            float wT = max(0.0, 1.0 - r * 1.7);
-            float wM = max(0.0, 1.0 - abs(r - 0.5) * 2.2);
-            float wW = max(0.0, r * 1.7 - 0.7) + 0.12;
+            // Inverse-square style decay: each pyramid level (relative blur size sT/sM/sW) is weighted by
+            // 1/(1+(s/R)^2). Small R = bright tight core with a short tail; large R pulls energy into the
+            // wide levels = long, slowly fading tail. The tight core is always present.
+            float Rg = mix(0.8, 7.0, r);
+            float wT = 1.0 / (1.0 + (1.0 / Rg) * (1.0 / Rg));
+            float wM = 1.0 / (1.0 + (2.5 / Rg) * (2.5 / Rg));
+            float wW = 1.0 / (1.0 + (6.0 / Rg) * (6.0 / Rg));
             float wn = wT + wM + wW;
             vec3 g = (tightGlow * wT + midGlow * wM + wideGlow * wW) / wn;
             g = gateGlow(g, L.deepGlowThreshold, exMin);
+            g = colorizeGlow(g, ambientCol, 0.85);
             g = saturateColor(g, 1.15) * mix(vec3(1.0), glowTint, 0.80);
+            // Deep Glow signature: a hot core. Where the tight glow is strong the light burns towards
+            // white (energy-aware), while the outer falloff keeps the scene colour.
+            float hotAmt = smoothstep(0.30, 1.10, luma(tightGlow) * (1.25 - 0.6 * r));
+            g = mix(g, vec3(luma(g)) * vec3(1.00, 0.96, 0.90) * 1.20, hotAmt * 0.35);
             g *= (1.0 - lineEdge * 0.15);
             linearBase += g * (L.deepGlowIntensity * 1.9) * op;
         }
 
-        // ---- 2. Kawase Glow ----
+        // ---- 2. Kawase glow ----
         if (L.kawaseGlowIntensity > 0.01) {
             float r = clamp(L.kawaseGlowRadius, 0.0, 1.0);
             vec3 g = (r < 0.5) ? mix(tightGlow, midGlow, r * 2.0) : mix(midGlow, wideGlow, (r - 0.5) * 2.0);
             g = gateGlow(g, L.deepGlowThreshold, exMin);
+            g = colorizeGlow(g, ambientCol, 0.80);
             linearBase += g * glowTint * (L.kawaseGlowIntensity * 1.6) * op;
         }
 
-        // ---- 3. Diffuse SP Glow: Prismatic Screen-Space Diffusion ----
+        // ---- 3. Diffuse SP: light-source simulation + prismatic dispersion bloom ----
+        // Finds the dominant light (sun / brightest source), then every pixel gathers the highlight
+        // field ALONG THE RAY towards that light, so the light visibly travels onto the subject
+        // instead of just blooming in place. The R/G/B gathers use radially scaled offsets about the
+        // light (R furthest, B least) = prismatic screen-space dispersion with radial chromatic
+        // aberration that grows with distance from the source. Strength falls off with distance to
+        // the light, and pixels that are already bright receive less.
         if (L.diffuseSpGlowIntensity > 0.01) {
             float r = clamp(L.diffuseSpGlowRadius, 0.0, 1.0);
-            vec2 dir = (uv - vec2(0.5)) * vec2(float(width) / float(height), 1.0);
-            float disp = (0.004 + r * 0.030);
-            vec2 uvR = uv + dir * disp * 1.00 * vec2(float(height) / float(width), 1.0);
-            vec2 uvB = uv - dir * disp * 0.65 * vec2(float(height) / float(width), 1.0);
-            float lvlMix = clamp(r * 1.2, 0.0, 1.0);
+            float aspect = float(width) / float(height);
+            vec2 toL = (gLightUV - uv) * vec2(aspect, 1.0);
+            float dL = length(toL);
+            vec2 dirUv = (toL / max(dL, 1e-4)) * vec2(1.0 / aspect, 1.0);   // unit direction, in uv space
+            float dispAmt = (0.006 + r * 0.040) * (0.35 + dL);               // dispersion grows with distance
+            float reachLen = dL * (0.45 + 0.55 * r);                          // how far along the ray we gather
             int mw = max(width / 4, 1); int mh = max(height / 4, 1);
             int ww = max(width / 8, 1); int wh = max(height / 8, 1);
-            vec3 cr = mix(sampleBloom(1, uvR, mw, mh).rgb, sampleBloom(2, uvR, ww, wh).rgb, lvlMix);
-            vec3 cg = mix(midGlow, wideGlow, lvlMix);
-            vec3 cb = mix(sampleBloom(1, uvB, mw, mh).rgb, sampleBloom(2, uvB, ww, wh).rgb, lvlMix);
-            vec3 prism = vec3(cr.r, cg.g, cb.b);
-            vec3 core = mix(tightGlow, midGlow, 0.5) * vec3(1.10, 1.00, 0.88);
-            vec3 g = prism * 0.75 + core * 0.55;
+            float jit = hashInt12(coord * 7 + ivec2(3, 29));
+            const int DN = 6;
+            vec3 prism = vec3(0.0);
+            float wsum = 0.0;
+            for (int k = 0; k < DN; k++) {
+                float t = (float(k) + jit) / float(DN);                       // 0..1 along the ray
+                float wk = exp(-t * 1.8);
+                vec2 base = uv + dirUv * reachLen * t;
+                int lv = (t < 0.5) ? 1 : 2;
+                int lw_ = (lv == 1) ? mw : ww;
+                int lh_ = (lv == 1) ? mh : wh;
+                float sR = sampleBloom(lv, base + dirUv * dispAmt * 1.00, lw_, lh_).r;
+                float sG = sampleBloom(lv, base + dirUv * dispAmt * 0.60, lw_, lh_).g;
+                float sB = sampleBloom(lv, base + dirUv * dispAmt * 0.22, lw_, lh_).b;
+                prism += vec3(sR, sG, sB) * wk;
+                wsum += wk;
+            }
+            prism /= max(wsum, 1e-3);
+            vec3 core = mix(tightGlow, midGlow, 0.5) * vec3(1.06, 1.00, 0.92);
+            vec3 g = prism * 1.15 + core * 0.30;
             g = gateGlow(g, L.diffuseSpGlowThreshold, exMin);
-            float veil = clamp(L.diffuseSpGlowIntensity * 0.12, 0.0, 0.25);
-            linearBase += g * (L.diffuseSpGlowIntensity * 1.5) * op;
-            linearBase += wideGlow * veil * op * vec3(0.95, 0.98, 1.05);
+            g = colorizeGlow(g, ambientCol, 0.55);
+            g *= mix(vec3(1.0), gLightCol, 0.35);                              // inherit the light's own colour
+            float prox = 1.0 / (1.0 + dL * dL * mix(14.0, 3.0, r));            // closer to the light = stronger
+            float receiveD = 1.0 - smoothstep(0.55, 1.15, luma(linearBase));    // already-bright pixels receive less
+            float gain = mix(0.30, 1.0, prox) * mix(0.55, 1.0, gLightStrength);
+            linearBase += g * (L.diffuseSpGlowIntensity * 1.5) * gain * receiveD * (1.0 - lineEdge * 0.25) * op;
         }
 
-        // ---- 4. Sapphire Edge Glow & Soft Edge Halo (True Edge Glow) ----
+        // ---- 4a. Sapphire edge glow: a crisp, bright CONTOUR that hugs the edges ----
+        // Full-res Sobel gives the contour itself; a tight blurred copy of the edge mask gives the short
+        // falloff next to it. Colour comes from the BRIGHT side of the edge, so it reads as the edge
+        // lighting up (Sapphire-style), not as a flat white line.
         {
             float sapInt = 0.0;
-            float sapSpread = 0.35;
             if (L.copiedEdgeRays > 0.01) sapInt = L.copiedEdgeRays;
             else if (L.sapphireGlowWidth > 0.01) sapInt = 0.8;
-            if (L.sapphireGlowWidth > 0.01) sapSpread = clamp(L.sapphireGlowWidth * 0.5, 0.0, 1.0);
-
             if (sapInt > 0.01) {
-                float eT = tightS.a;
-                float eM = midS.a;
-                float eW = wideS.a;
-                float spread = sapSpread;
-                float e = (spread < 0.5) ? mix(eT, eM, spread * 2.0) : mix(eM, eW, (spread - 0.5) * 2.0);
-                e = clamp(e * (1.4 + spread * 1.6), 0.0, 1.5);
-                vec3 edgeCol = saturateColor(linearBase, 1.45) * 1.15 + midGlow * 0.5;
-                vec3 tinted = mix(edgeCol, edgeCol * glowTint + glowTint * 0.12 * luma(edgeCol), step(0.5, L.edgeGlowTint) * 0.65);
-                linearBase += tinted * e * sapInt * 0.9 * op;
-            }
-            if (L.edgeHaloRadius > 0.01) {
-                float e = clamp(mix(midS.a, wideS.a, 0.6) * 2.2, 0.0, 1.5);
-                vec3 haloCol = saturateColor(mix(linearBase, wideGlow * 2.0 + linearBase * 0.5, 0.45), 1.25);
-                vec3 tinted = haloCol * mix(vec3(1.0), glowTint, 0.7);
-                linearBase += tinted * e * L.edgeHaloRadius * 0.55 * op;
+                float widthN = clamp(L.sapphireGlowWidth * 0.5, 0.0, 1.0);          // 0..1 (slider is 0..2)
+                float sens = clamp(L.sapphireGlowThreshold, 0.1, 0.99);
+                float lo = sens * 0.30;
+                float crisp = smoothstep(lo, lo + 0.18, lineEdge);
+                // brightest neighbour across the edge = the lit side
+                int ss = max(2, edgeStep * 2);
+                vec3 n0 = compAt(coord + ivec2( ss, 0), width, height);
+                vec3 n1 = compAt(coord + ivec2(-ss, 0), width, height);
+                vec3 n2 = compAt(coord + ivec2(0,  ss), width, height);
+                vec3 n3 = compAt(coord + ivec2(0, -ss), width, height);
+                vec3 lit = n0;
+                if (luma(n1) > luma(lit)) lit = n1;
+                if (luma(n2) > luma(lit)) lit = n2;
+                if (luma(n3) > luma(lit)) lit = n3;
+                float ll = max(luma(lit), 1e-4);
+                vec3 hueL = saturateColor(clamp(lit / ll, vec3(0.05), vec3(4.0)), 1.45);
+                hueL /= max(luma(hueL), 1e-4);
+                float lvl = clamp(ll * 1.5 + 0.25, 0.30, 1.60);
+                vec3 edgeCol = hueL * lvl + ambientNear * 0.15;
+                edgeCol = mix(edgeCol, edgeCol * glowTint + glowTint * 0.10 * luma(edgeCol), step(0.5, L.edgeGlowTint) * 0.65);
+                // short falloff just outside the contour (tight -> mid with the width slider)
+                float eBlur = mix(tightS.a, midS.a, widthN) * (1.2 + widthN * 1.2);
+                float field = clamp(crisp * 1.00 + eBlur * (1.0 - crisp * 0.5) * 0.85, 0.0, 1.6);
+                linearBase += edgeCol * field * sapInt * 0.85 * op;
             }
         }
 
-        // ---- 5. Anamorphic Flare Streak (Continuous Exponential Falloff) ----
+        // ---- 4b. Edge Halo: a wide, soft AURA that spills OUTWARD from silhouettes ----
+        // Opposite of Sapphire: no contour at all (it is masked off the line itself), very wide, built
+        // from the coarse edge mask, tinted by the surrounding ambient light, and it prefers the darker
+        // side of an edge so it reads as light bleeding out into the background.
+        if (L.edgeHaloRadius > 0.01) {
+            float hs = clamp(L.edgeHaloRadius / 1.5, 0.0, 1.0);
+            float eWide = mix(midS.a, wideS.a, 0.35 + 0.65 * hs);
+            float eH = 1.0 - exp(-eWide * (2.4 + 2.0 * hs));
+            float la = luma(ambientCol);
+            float lp = luma(linearBase);
+            float outward = smoothstep(0.0, 0.50, (la - lp) / (la + 0.05));
+            float sideGate = mix(0.35, 1.0, outward);
+            vec3 haloCol = saturateColor(ambientCol * 1.15 + wideGlow * 1.4 + midGlow * 0.4, 1.25);
+            haloCol *= mix(vec3(1.0), glowTint, 0.70);
+            linearBase += haloCol * eH * sideGate * L.edgeHaloRadius * 0.60 * (1.0 - lineEdge * 0.65) * op;
+        }
+
+        // ---- 5. Anamorphic streak: continuous, jittered, scene-coloured (no stepped copies) ----
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
             float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.30;
-            const int SN = 48;
+            const int SN = 40;
             int w8 = max(width / 8, 1);
             int h8 = max(height / 8, 1);
+            int w4 = max(width / 4, 1);
+            int h4 = max(height / 4, 1);
+            // per-pixel jitter: taps never land on the same lattice twice, so no ghosted repeats
+            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;
             vec3 sSum = vec3(0.0);
+            float wSumS = 0.0;
             for (int s = -SN; s <= SN; s++) {
-                float t = float(s) / float(SN);
-                float wgt = exp(-abs(t) * 3.2) * (1.0 - smoothstep(0.80, 1.0, abs(t)));
+                float t = (float(s) + jit) / float(SN);
+                float at = abs(t);
+                float wgt = exp(-at * 3.0) * (1.0 - smoothstep(0.70, 1.0, at));
                 vec2 suv = vec2(clamp(uv.x + t * halfLen, 0.0, 1.0), uv.y);
-                vec3 sm = sampleBloom(2, suv, w8, h8).rgb;
-                float gate = smoothstep(0.22, 0.75, luma(sm));
-                vec3 spectral = mix(vec3(0.75, 1.00, 1.35), vec3(1.25, 0.80, 0.45), abs(t));
-                sSum += sm * gate * wgt * mix(vec3(1.0), spectral, 0.65);
+                vec3 sm = mix(sampleBloom(1, suv, w4, h4).rgb, sampleBloom(2, suv, w8, h8).rgb, 0.55);
+                float gate = smoothstep(0.18, 0.70, luma(sm));
+                vec3 spectral = mix(vec3(0.80, 1.00, 1.30), vec3(1.25, 0.85, 0.55), at);
+                sSum += sm * gate * wgt * mix(vec3(1.0), spectral, 0.22);
+                wSumS += wgt;
             }
-            vec3 streak = sSum / float(SN) * 3.4;
+            vec3 streak = sSum / max(wSumS, 1e-3) * 1.6;
+            streak = colorizeGlow(streak, ambientCol, 0.70);
+            streak = saturateColor(streak, 1.25) * mix(vec3(1.0), glowTint, 0.60);
+            // soft shoulder (never hard-clips), and it reads less on already-bright backgrounds
+            streak = vec3(1.0) - exp(-streak);
+            streak *= 1.0 - 0.45 * clamp(luma(linearBase), 0.0, 1.0);
             linearBase += streak * L.thinStreakIntensity * L.thinStreakOpacity * op;
         }
 
-        // ---- 6. Pro-Mist Halation Diffusion ----
+        // ---- 6. Pro-Mist diffusion + red/orange halation ----
         if (L.copiedProMist > 0.01) {
             vec3 mist = mix(midGlow, wideGlow, 0.55);
             mist = gateGlow(mist, 0.40, exMin);
             vec3 m2 = mist * (L.copiedProMist * 1.25) * (1.0 - lineEdge * 0.65);
             linearBase += m2 * op;
+            // diffusion also gently flattens contrast
             float l0 = luma(linearBase);
             linearBase = mix(linearBase, vec3(l0) + (linearBase - vec3(l0)) * 0.97, clamp(L.copiedProMist * 0.5, 0.0, 0.5));
         }
@@ -907,10 +1174,11 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             float warm = clamp(L.halationWarmth / 1.5, 0.0, 1.0);
             vec3 halTint = mix(vec3(1.00, 0.30, 0.12), vec3(1.00, 0.52, 0.20), warm);
             float hl = luma(hal);
-            linearBase += halTint * hl * 1.35 * (1.0 - lineEdge * 0.6) * L.halationRadius * 1.1 * op;
+            vec3 halCol = halTint * hl * 1.35;
+            linearBase += halCol * (1.0 - lineEdge * 0.6) * L.halationRadius * 1.1 * op;
         }
 
-        // ---- 7. Atmosphere Haze & Scatter ----
+        // ---- 7. Atmosphere haze / scatter (glow-driven) ----
         if (L.bslaBloomHaze > 0.01) {
             vec3 hz = mix(wideGlow, vec3(luma(wideGlow)) * vec3(0.78, 0.90, 1.10), 0.35);
             linearBase += hz * L.bslaBloomHaze * 1.2 * op;
@@ -921,42 +1189,48 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
         }
     }
 
-    // ---- Shaderly Glow: Soft Saturated Bloom ----
+    // ---- Shaderly Glow: OVERALL glow (AE "Glow" effect) ----
+    // Whole-frame, threshold-driven, always has a strong wide component and is SCREEN-blended (like AE's
+    // Glow), so it lifts and softens the entire image rather than adding hot spots like Deep Glow.
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
         if (L.isEnabled < 0.5 || L.shaderlyGlowIntensity <= 0.01) continue;
         float r = clamp(L.shaderlyGlowRadius, 0.0, 1.0);
-        vec3 g = (r < 0.5) ? mix(tightGlow, midGlow, r * 2.0) : mix(midGlow, wideGlow, (r - 0.5) * 2.0);
-        g = mix(g, g + wideGlow * 0.5, 0.35);
+        float wT2 = 0.35 * (1.0 - r);
+        float wM2 = 0.50;
+        float wW2 = 0.40 + 0.60 * r;
+        vec3 g = (tightGlow * wT2 + midGlow * wM2 + wideGlow * wW2) / (wT2 + wM2 + wW2);
         g = gateGlow(g, L.shaderlyGlowThreshold, exMin);
+        g = colorizeGlow(g, ambientCol, 0.90);
         g = saturateColor(g, 1.30);
         if (L.shaderlyGlowTint > 0.01) {
             vec3 tint = srgbToLinear(hueToRGB(fract(L.shaderlyGlowTint)));
             g = mix(g, tint * luma(g) * 2.2, 0.55);
         }
-        vec3 add = g * (L.shaderlyGlowIntensity * 1.6);
-        add *= (1.0 - clamp(luma(linearBase), 0.0, 1.0) * 0.40);
-        linearBase += add * (1.0 - lineEdge * 0.30) * clamp(L.opacity, 0.0, 1.0);
+        // exposure-style shoulder, then Screen against the image (never clips highlights)
+        vec3 gl = vec3(1.0) - exp(-g * (L.shaderlyGlowIntensity * 2.4));
+        vec3 cb = clamp(linearBase, 0.0, 1.0);
+        vec3 screened = cb + gl - cb * gl + max(linearBase - 1.0, vec3(0.0));
+        linearBase = mix(linearBase, screened, clamp(L.opacity, 0.0, 1.0) * (1.0 - lineEdge * 0.30));
     }
 
-    // ---- Master Tonemap & Convert to Display sRGB ----
+    // ---- Master tonemap -> sRGB ----
     vec3 finalLinear = applyToneMapping(linearBase, u_tonemapMode);
     vec3 finalDisplay = linearToSrgb(finalLinear);
 
-    // ---- Display-Referred 3D LUT Application ----
+    // ---- LUT: display-referred, after tonemap ----
     if (u_hasLut > 0.5) {
         finalDisplay = sample3DLutDisplay(finalDisplay, u_lutOpacity);
     }
 
-    // ---- TPDF Triangular Dither Before Final Quantization ----
+    // ---- TPDF dither right before the quantise (+-1 LSB triangular, scaled) ----
     float lsb = (bitMode > 1.5) ? (1.0 / 65535.0) : (1.0 / 255.0);
-    float amt = mix(0.55, 1.35, clamp(u_ditherStrength, 0.0, 1.0));
+    float amt = mix(0.50, 1.00, clamp(u_ditherStrength, 0.0, 1.0));   // 1.0 = exact +-1 LSB triangular
     ivec2 shift = ivec2(int(fract(u_time * 0.1371) * 997.0), int(fract(u_time * 0.0713) * 991.0));
     float n1 = hashInt12(coord + shift);
     float n2 = hashInt12(coord + shift + ivec2(41, 17));
     float tpdf = (n1 + n2) - 1.0;
-    vec3 chroma = vec3(tpdf,
-                       (hashInt12(coord + shift + ivec2(7, 91)) + hashInt12(coord + shift + ivec2(113, 3)) - 1.0),
+    vec3 chroma = vec3(tpdf, (hashInt12(coord + shift + ivec2(7, 91)) + hashInt12(coord + shift + ivec2(113, 3)) - 1.0),
                        (hashInt12(coord + shift + ivec2(59, 29)) + hashInt12(coord + shift + ivec2(5, 211)) - 1.0));
     finalDisplay = clamp(finalDisplay + mix(vec3(tpdf), chroma, 0.35) * lsb * amt, 0.0, 1.0);
 
@@ -970,6 +1244,13 @@ void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
     int width = u_passWidth;
     int height = u_passHeight;
+
+    // Dominant-light scan uses shared memory + barrier(), so it must run before the bounds return.
+    // Both conditions are dispatch-uniform, so every invocation in the group takes the same path.
+    if (u_passIndex == 6 && diffuseLayerActive()) {
+        detectDominantLight(width, height);
+    }
+
     if (coord.x >= width || coord.y >= height) return;
 
     gW = int(round(u_imgWidth)) > 0 ? width : width;
@@ -1036,7 +1317,7 @@ void main() {
     vec3 src0 = srgbToLinear(srcS);
     vec3 currentComposite = src0;
 
-    // ---- STAGE 2: LINE THINNING ----
+    // ---- STAGE 2: LINE THINNING (layer 0 slot, kept as-is) ----
     LayerData L0 = layers[0];
     if (L0.lineThinning > 0.01) {
         vec3 colT = srcLin(coord + ivec2(0,  edgeStep));
@@ -1059,7 +1340,7 @@ void main() {
         }
     }
 
-    // Sobel gradient (source) for edge normal / line masks
+    // ---- Sobel gradient (source) for edge normal / line masks ----
     float gx = 0.0;
     float gy = 0.0;
     for (int y = -1; y <= 1; y++) {
@@ -1160,33 +1441,47 @@ void main() {
             layerColor += (max(target, vec3(0.0)) - src0) * (1.0 - lineEdge * 0.25);
         }
 
-        // 5. Anime skin / cloth smoothing (edge + line preserving, skin weighted)
+        // 5. Anime skin smoothing: Oklab skin-tone mask + ink-line shielding.
+        //    Only skin-toned areas are smoothed; ink lines never bleed into the skin.
         if (L.bilateralIntensity > 0.01) {
-            float rad = clamp(L.bilateralRadius * resScale * 0.7, 1.0, 6.0);
-            int bRad = int(ceil(rad));
-            int stp = (bRad > 3) ? 2 : 1;
-            float sigS = max(1.0, rad * 0.65);
-            float sigR = max(L.bilateralRange, 0.03) * 0.6;
-            vec3 pc = sqrt(src0);
-            vec3 acc = src0;
-            float wsum = 1.0;
-            for (int dy = -bRad; dy <= bRad; dy += stp) {
-                for (int dx = -bRad; dx <= bRad; dx += stp) {
-                    if (dx == 0 && dy == 0) continue;
-                    vec3 s = srcLin(coord + ivec2(dx, dy));
-                    vec3 dc = pc - sqrt(s);
-                    float w = exp(-float(dx * dx + dy * dy) / (2.0 * sigS * sigS)) * exp(-dot(dc, dc) / (2.0 * sigR * sigR));
-                    acc += s * w;
-                    wsum += w;
-                }
-            }
-            vec3 smoothC = acc / wsum;
             vec3 lab0 = linearRgbToOklab(src0);
-            float skin = smoothstep(0.02, 0.10, lab0.y) * smoothstep(0.01, 0.07, lab0.z) * smoothstep(0.50, 0.72, lab0.x);
-            float prot = 1.0 - smoothstep(0.10, 0.35, lineEdge);
-            float amount = clamp(L.bilateralIntensity, 0.0, 1.0) * mix(0.55, 1.0, skin) * prot;
-            layerColor += (smoothC - src0) * amount;
-            layerColor *= 1.0 + skin * L.bilateralIntensity * 0.035;
+            float chroma0 = length(lab0.yz);
+            float hue0 = atan(lab0.z, lab0.y);
+            float skin = smoothstep(0.30, 0.55, hue0) * (1.0 - smoothstep(1.20, 1.50, hue0))
+                       * smoothstep(0.015, 0.040, chroma0) * (1.0 - smoothstep(0.13, 0.19, chroma0))
+                       * smoothstep(0.42, 0.62, lab0.x);
+            // ink shielding: own gradient + dark-line proximity (centre and 4 neighbours)
+            float inkMax = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
+            int inkR = max(2, edgeStep * 2);
+            inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord + ivec2(inkR, 0)))));
+            inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord - ivec2(inkR, 0)))));
+            inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord + ivec2(0, inkR)))));
+            inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord - ivec2(0, inkR)))));
+            float prot = (1.0 - smoothstep(0.08, 0.30, lineEdge)) * (1.0 - inkMax);
+            if (skin > 0.01 && prot > 0.01) {
+                float rad = clamp(L.bilateralRadius * resScale * 0.7, 1.0, 6.0);
+                int bRad = int(ceil(rad));
+                int stp = (bRad > 3) ? 2 : 1;
+                float sigS = max(1.0, rad * 0.65);
+                float sigR = max(L.bilateralRange, 0.03) * 0.6;
+                vec3 pc = sqrt(src0);
+                vec3 acc = src0;
+                float wsum = 1.0;
+                for (int dy = -bRad; dy <= bRad; dy += stp) {
+                    for (int dx = -bRad; dx <= bRad; dx += stp) {
+                        if (dx == 0 && dy == 0) continue;
+                        vec3 s = srcLin(coord + ivec2(dx, dy));
+                        vec3 dc = pc - sqrt(s);
+                        float inkTap = smoothstep(0.012, 0.060, luma(s));   // near-black ink never contributes
+                        float w = exp(-float(dx * dx + dy * dy) / (2.0 * sigS * sigS)) * exp(-dot(dc, dc) / (2.0 * sigR * sigR)) * inkTap;
+                        acc += s * w;
+                        wsum += w;
+                    }
+                }
+                vec3 smoothC = acc / wsum;
+                layerColor += (smoothC - src0) * clamp(L.bilateralIntensity, 0.0, 1.0) * skin * prot;
+                layerColor *= 1.0 + skin * prot * L.bilateralIntensity * 0.035;
+            }
         }
 
         // 6. Frequency unsharp mask (delta on source detail)
@@ -1218,8 +1513,9 @@ void main() {
         }
 
         // 8. S_lining: line-art detection -> tiny inner grey-black blur on the edges
+        //    slider 1 (darkOutlines) = intensity + radius, slider 2 (sLiningOpacity) = opacity
         if (L.darkOutlines > 0.01 && L.sLiningOpacity > 0.01) {
-            float radius = (1.2 + L.darkOutlines * 4.0) * resScale;
+            float radius = (1.6 + L.darkOutlines * 5.0) * resScale;
             float sigma = radius * 0.55;
             float cLuma = dot(srcSrgb(coord), vec3(0.2126, 0.7152, 0.0722));
             float centerLine = 1.0 - smoothstep(0.06, 0.30, cLuma);
@@ -1237,10 +1533,10 @@ void main() {
                 wacc += w;
             }
             float halo = acc / max(wacc, 1e-4);
-            float mask = pow(clamp(halo * 1.5, 0.0, 1.0), 0.85) * (1.0 - centerLine);
-            vec3 greyTarget = vec3(0.045);
-            vec3 inner = mix(layerColor * 0.30, greyTarget, 0.35);
-            layerColor = mix(layerColor, inner, clamp(mask * (0.55 + 0.45 * L.darkOutlines) * L.sLiningOpacity, 0.0, 1.0));
+            float mask = (1.0 - exp(-halo * 4.2)) * (1.0 - centerLine);   // soft, saturating falloff
+            vec3 inner = mix(layerColor * 0.12, vec3(0.020), 0.45);        // soft dark, not on the line itself
+            float amt = mask * (0.85 + 0.65 * L.darkOutlines) * L.sLiningOpacity * 1.25;
+            layerColor = mix(layerColor, inner, clamp(amt, 0.0, 1.0));
         }
         if (L.edgeDarken > 0.01) {
             float innerEdge = smoothstep(0.10, 0.45, lineEdge);
@@ -1380,27 +1676,69 @@ void main() {
             }
         }
 
-        // 21. Volumetric fog
+        // 21. Volumetric fog (BSL-shader style)
+        //     * pseudo view distance: higher in frame = further away, plus a separate ground-fog layer
+        //     * domain-warped, drifting fbm gives cloud banks + wisps (not a flat overlay)
+        //     * per-channel Beer-Lambert extinction: blue scatters/extinguishes a bit more, so distance
+        //       goes cool and desaturated the way real fog does
+        //     * in-scatter colour comes from the scene's own sky/ground, plus a forward-scatter (Mie)
+        //       sun glow around the same sun position the god rays use
+        //     sliders: Fog Density = optical thickness, Fog Depth = how far the fog reaches / how high
+        //     the ground fog climbs
         if (L.bslaFogDensity > 0.01) {
-            float t = u_time * 0.035;
-            float n1 = fbm(uvN * vec2(2.6, 1.9) + vec2(t, -t * 0.55));
-            float n2 = fbm(uvN * vec2(6.5, 4.8) + vec2(-t * 1.6, t * 0.9) + 31.7);
-            float depth = clamp(L.bslaFogDepth, 0.0, 1.0);
-            float heightMask = mix(0.20, 1.0, smoothstep(1.0 - (0.25 + depth * 0.75), 1.0, uvN.y));
-            float dens = L.bslaFogDensity * heightMask * (0.50 + 0.95 * (n1 - 0.5) + 0.40 * (n2 - 0.5) + 0.35);
-            dens = max(dens, 0.0);
-            float trans = exp(-dens * 2.4);
+            float sigma = clamp(L.bslaFogDensity, 0.0, 1.0);
+            float reach = clamp(L.bslaFogDepth, 0.0, 1.0);
+            float aspectF = float(width) / float(height);
+            float tf = u_time * 0.030;
+            float yy = clamp(uvN.y, 0.0, 1.0);                       // 0 = top of frame, 1 = bottom
 
-            vec3 amb = (srcLin(ivec2(width / 4, height / 4)) + srcLin(ivec2(3 * width / 4, height / 4))
-                      + srcLin(ivec2(width / 4, 3 * height / 4)) + srcLin(ivec2(3 * width / 4, 3 * height / 4))) * 0.25;
-            vec3 cool = srgbToLinear(vec3(0.64, 0.72, 0.82));
-            float sceneL = clamp(luma(layerColor), 0.0, 1.0);
-            vec3 fogCol = mix(cool, amb * 1.45 + cool * 0.25, 0.45) * (0.30 + 0.70 * clamp(luma(amb) * 2.4 + sceneL * 0.5, 0.0, 1.2));
-            fogCol *= 1.0 + (n1 - 0.5) * 0.35;
-            layerColor = layerColor * trans + fogCol * (1.0 - trans);
+            // --- noise: domain warp -> banks (low freq) + wisps (high freq) + sun-aligned shafts ---
+            vec2 wp = uvN * vec2(2.2 * aspectF, 2.2);
+            vec2 warp = vec2(fbm(wp + vec2(tf, 3.1)), fbm(wp + vec2(7.7, -tf * 0.8))) - 0.5;
+            vec2 npos = wp + warp * 1.6;
+            float bank = fbm(npos * 1.0 + vec2(tf * 1.0, -tf * 0.45));
+            float wisp = fbm(npos * 3.4 + vec2(-tf * 1.7, tf * 0.9) + 31.7);
+            float vol = smoothstep(0.22, 0.82, mix(bank, wisp, 0.35));
+
+            // --- pseudo depth + height fog ---
+            float distFar = 1.0 - yy * 0.62;                                        // 0.38 (near) .. 1.0 (far)
+            float groundFog = smoothstep(1.0 - (0.28 + reach * 0.62), 1.0, yy);   // thicker towards the bottom
+            float column = (0.40 + 0.75 * reach) * distFar + 0.85 * groundFog;
+            float dens = sigma * column * mix(0.40, 1.65, vol);
+
+            // --- sun: same position as the god rays, forward-scatter lobe + soft shafts through the fog ---
+            vec2 sunUV = vec2(0.50, 0.06);
+            float sd = length((uvN - sunUV) * vec2(aspectF, 1.0));
+            float mieTight = exp(-sd * 7.0);
+            float mieWide = exp(-sd * 2.2);
+            float shafts = fbm(vec2(uvN.x * 15.0 * aspectF, uvN.y * 1.4 - tf * 0.6) + 5.3);
+            dens *= 1.0 + 0.30 * (shafts - 0.5) * mieWide;
+
+            // keep ink / fine character detail readable: fog is thinner where detail is dense (= nearer)
+            dens *= 1.0 - 0.30 * smoothstep(0.10, 0.50, lineEdge);
+            dens = max(dens, 0.0);
+
+            // --- Beer-Lambert, slightly stronger extinction in blue ---
+            vec3 trans = exp(-dens * 3.2 * vec3(0.92, 1.00, 1.12));
+
+            // --- in-scatter colour: sky above, ground below, both from the actual scene ---
+            vec3 skyC = (srcLin(ivec2(width / 4, height / 8)) + srcLin(ivec2(3 * width / 4, height / 8))) * 0.5;
+            vec3 gndC = (srcLin(ivec2(width / 4, 7 * height / 8)) + srcLin(ivec2(3 * width / 4, 7 * height / 8))) * 0.5;
+            vec3 amb = (skyC + gndC) * 0.5;
+            vec3 cool = srgbToLinear(vec3(0.62, 0.72, 0.84));
+            vec3 hazeBase = mix(skyC, gndC, smoothstep(0.30, 0.95, yy));
+            vec3 fogCol = mix(cool, hazeBase * 1.40 + cool * 0.20, 0.45);
+            float ambL = clamp(luma(amb) * 2.4 + clamp(luma(layerColor), 0.0, 1.0) * 0.5, 0.0, 1.2);
+            fogCol *= (0.30 + 0.70 * ambL);
+            fogCol *= 1.0 + (bank - 0.5) * 0.40;                                  // lit banks vs shadowed banks
+            vec3 sunTint = vec3(1.00, 0.80, 0.55);
+            fogCol += sunTint * (mieWide * 0.16 + mieTight * 0.34) * (0.35 + 0.65 * vol) * (0.30 + 0.70 * ambL);
+            fogCol = max(fogCol, vec3(0.0));
+
+            layerColor = layerColor * trans + fogCol * (vec3(1.0) - trans);
         }
 
-        // 23. Film grain
+        // 23. Film grain (luma-weighted, grows in mids like real stock)
         if (L.filmGrain > 0.001) {
             float noise = (hash12(vec2(coord) + vec2(u_time * 17.13, u_time * 31.37)) - 0.5);
             float lw = 0.35 + 0.65 * (1.0 - abs(clamp(luma(layerColor), 0.0, 1.0) - 0.45) * 1.4);
@@ -1414,7 +1752,7 @@ void main() {
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.30);
         }
 
-        // 25. Vignettes
+        // 25. Vignettes (slightly gentler than v1)
         if (L.vignette > 0.01) {
             vec2 vuv = uvN - 0.5;
             layerColor *= clamp(smoothstep(0.78, 0.18, length(vuv) * (0.62 + L.vignette * 0.58)), 0.0, 1.0);
@@ -1432,71 +1770,113 @@ void main() {
             layerColor *= (1.0 + smoothstep(0.35, 0.65, uvN.y) * L.horizontalRamp * 0.30);
         }
 
-        // Composite this layer
+        // Composite this layer (gamma-space blending by default = AE)
         currentComposite = applyBlendMode(currentComposite, max(layerColor, vec3(0.0)), int(L.blendMode + 0.5), L.opacity, L.blendLinear > 0.5);
     }
 
-    // =========================================================================
-    // 28. STYLIZED METALLIC CHISEL BEVEL & TEXT SUITE (Position-Adaptive)
-    // =========================================================================
+    // 28. Stylized metallic text bevel: reads the scene colour around the draggable box, grounds the
+    //     text with a contact drop shadow, reflects a multi-band chrome horizon, adds specular glints
+    //     and a reflective contour glow.
     if (u_textSuiteEnabled > 0.5) {
-        bool inBox = (uvN.x >= u_textBoxX && uvN.x <= (u_textBoxX + u_textBoxW) &&
-                      uvN.y >= u_textBoxY && uvN.y <= (u_textBoxY + u_textBoxH));
-        if (inBox) {
-            float textLuma = luma(currentComposite);
-            float thresh = clamp(u_textLumaThreshold, 0.15, 0.95);
-            float textFill = smoothstep(thresh, thresh + 0.15, textLuma);
-            float textEdge = smoothstep(0.06, 0.35, lineEdge) * smoothstep(thresh - 0.20, thresh + 0.30, textLuma);
+        vec2 boxMin = vec2(u_textBoxX, u_textBoxY);
+        vec2 boxSize = max(vec2(u_textBoxW, u_textBoxH), vec2(1e-3));
+        float tMargin = max(0.06, 0.45 * boxSize.y);        // room for shadow + glow outside the box
+        bool inExt = (uvN.x >= boxMin.x - tMargin && uvN.x <= boxMin.x + boxSize.x + tMargin &&
+                      uvN.y >= boxMin.y - tMargin && uvN.y <= boxMin.y + boxSize.y + tMargin);
+        if (inExt) {
+            float tDepth = clamp(u_textBevelDepth, 0.0, 4.0);
+            float tChrome = clamp(u_textChromeIntensity, 0.0, 4.0) / 1.2;   // 1.2 = default look
+            float tpx = max(resScale, 0.5);
+            vec2 whPx = vec2(float(width), float(height));
+            vec2 relBox = (uvN - boxMin) / boxSize;                           // 0..1 inside the box
 
-            // 1. Adaptive Ambient: Sample scene colour around the text box
-            vec2 boxCenter = vec2(u_textBoxX + u_textBoxW * 0.5, u_textBoxY + u_textBoxH * 0.5);
-            vec3 sceneAmb = (srcLin(ivec2(int(boxCenter.x * float(width)), int(boxCenter.y * float(height)))) +
-                             srcLin(ivec2(int(u_textBoxX * float(width)), int(u_textBoxY * float(height)))) +
-                             srcLin(ivec2(int((u_textBoxX + u_textBoxW) * float(width)), int((u_textBoxY + u_textBoxH) * float(height))))) * 0.3333;
-            sceneAmb = mix(vec3(0.5), sceneAmb, 0.65);
-
-            // 2. Grounding Contact Drop Shadow behind text
-            if (u_textContactShadow > 0.01) {
-                ivec2 shOff = ivec2(int(2.0 * resScale), int(3.0 * resScale));
-                float aboveLuma = luma(srcLin(coord - shOff));
-                float shadowMask = smoothstep(thresh, thresh + 0.15, aboveLuma) * (1.0 - textFill);
-                currentComposite *= mix(vec3(1.0), vec3(0.15), shadowMask * u_textContactShadow * 0.75);
+            // ---- ambient scene colour: above / inside / below the box (text pixels excluded) ----
+            vec3 skyAcc = vec3(0.0); vec3 midAcc = vec3(0.0); vec3 gndAcc = vec3(0.0);
+            float skyWt = 0.0; float midWt = 0.0; float gndWt = 0.0;
+            for (int ix = 0; ix < 4; ix++) {
+                float bx = boxMin.x + ((float(ix) + 0.5) / 4.0) * boxSize.x;
+                ivec2 pS = ivec2(vec2(bx, boxMin.y - 0.10 * boxSize.y - 0.02) * whPx);
+                ivec2 pM = ivec2(vec2(bx, boxMin.y + 0.50 * boxSize.y) * whPx);
+                ivec2 pG = ivec2(vec2(bx, boxMin.y + 1.10 * boxSize.y + 0.02) * whPx);
+                float wS = 1.02 - textFillAt(pS);
+                float wM = 1.02 - textFillAt(pM);
+                float wG = 1.02 - textFillAt(pG);
+                skyAcc += srcLin(pS) * wS; skyWt += wS;
+                midAcc += srcLin(pM) * wM; midWt += wM;
+                gndAcc += srcLin(pG) * wG; gndWt += wG;
             }
+            vec3 skyAmb = skyAcc / max(skyWt, 1e-3);
+            vec3 midAmb = midAcc / max(midWt, 1e-3);
+            vec3 gndAmb = gndAcc / max(gndWt, 1e-3);
+            vec3 skyRef = saturateColor(skyAmb * 0.7 + midAmb * 0.3, 1.35) * 1.5 + vec3(0.06);
+            vec3 gndRef = saturateColor(gndAmb * 0.7 + midAmb * 0.3, 1.30) * 1.2 + vec3(0.03);
 
-            // 3. Stylized Metallic Chisel Surface & Reflection
-            if (textEdge > 0.01 || textFill > 0.01) {
-                vec3 N = normalize(vec3(edgeNormal.x * (u_textBevelDepth * resScale),
-                                        edgeNormal.y * (u_textBevelDepth * resScale), 1.0));
-                vec3 L_dir = normalize(vec3(0.35 + (boxCenter.x - 0.5) * 0.3,
-                                            -0.65 + (boxCenter.y - 0.5) * 0.2, 0.75));
-                vec3 H = normalize(L_dir + vec3(0.0, 0.0, 1.0));
-
-                // Chrome Horizon Reflection Line (adapted to vertical screen position)
-                float reflY = clamp(dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5 + (uvN.y - boxCenter.y) * 0.5, 0.0, 1.0);
-                float chromeBands = pow(sin(reflY * 6.2831853) * 0.5 + 0.5, 2.5) * u_textChromeIntensity;
-                float horizonLine = smoothstep(0.46, 0.50, reflY) * (1.0 - smoothstep(0.50, 0.54, reflY));
-
-                // Specular Glint Core
-                float spec = pow(max(0.0, dot(N, H)), 28.0) * (2.2 * u_textSpecularGlint);
-
-                // Palette Tints: 0=Platinum Steel, 1=Gold, 2=Cyan Steel, 3=Crimson, 4=Violet
-                vec3 metalBase = vec3(0.85, 0.90, 0.95);
-                if (u_textMetallicTint == 1.0) metalBase = vec3(1.15, 0.95, 0.55);
-                else if (u_textMetallicTint == 2.0) metalBase = vec3(0.60, 1.05, 1.35);
-                else if (u_textMetallicTint == 3.0) metalBase = vec3(1.20, 0.45, 0.55);
-                else if (u_textMetallicTint == 4.0) metalBase = vec3(0.95, 0.65, 1.25);
-
-                vec3 metalColor = mix(vec3(0.08, 0.10, 0.14) * sceneAmb, metalBase * (1.0 + chromeBands * 0.6), reflY);
-                metalColor += vec3(horizonLine * 0.45) * metalBase;
-                metalColor += vec3(spec);
-
-                // Integrated Text Contour Glow
-                float textGlow = textEdge * u_textGlowIntensity * 1.8;
-                vec3 stylizedText = metalColor + metalBase * textGlow;
-
-                float blendFactor = max(textFill * 0.85, textEdge * 0.95);
-                currentComposite = mix(currentComposite, stylizedText, blendFactor);
+            // ---- bevel normal from a 3-scale height gradient of the text mask ----
+            float fillC = textFillAt(coord);
+            vec2 grad = vec2(0.0);
+            for (int bi = 0; bi < 3; bi++) {
+                float br = (bi == 0) ? 1.2 : ((bi == 1) ? 2.6 : 4.5);
+                float bw = (bi == 0) ? 0.5 : ((bi == 1) ? 0.3 : 0.2);
+                int bo = int(max(round(br * tpx), 1.0));
+                grad.x += (textFillAt(coord + ivec2(bo, 0)) - textFillAt(coord - ivec2(bo, 0))) * bw;
+                grad.y += (textFillAt(coord + ivec2(0, bo)) - textFillAt(coord - ivec2(0, bo))) * bw;
             }
+            vec3 tN = normalize(vec3(-grad * (tDepth * 1.6), 1.0));
+            vec3 tLight = normalize(vec3(-0.45, -0.60, 0.65));     // from the top-left
+            float rimAmt = clamp(length(grad) * 3.0, 0.0, 1.0);    // 0 on flat faces, 1 on bevel slopes
+
+            // ---- chrome: horizon bands shift with the bevel so the surface reacts to its shape ----
+            float vText = clamp(relBox.y + tN.y * 0.10 * tDepth + tN.x * 0.02 * tDepth, 0.0, 1.0);
+            vec3 chromeCol = chromeBands(vText, skyRef, gndRef) * tChrome;
+            float lambert = clamp(dot(tN, tLight), 0.0, 1.0);
+            chromeCol *= mix(0.65, 1.25, lambert);
+
+            // ---- specular + sparkle glints (tinted by the scene) ----
+            vec3 tH = normalize(tLight + vec3(0.0, 0.0, 1.0));
+            float ndh = max(dot(tN, tH), 0.0);
+            vec3 specTint = mix(vec3(1.0), skyRef / max(luma(skyRef), 1e-3), 0.30);
+            float spec = pow(ndh, 36.0) * (0.35 + rimAmt) * 2.2;
+            float cellSz = float(max(int(round(5.0 * tpx)), 2));
+            float cellRnd = hashInt12(coord / ivec2(int(cellSz)));
+            float sparkle = step(0.965, cellRnd) * smoothstep(0.45, 0.90, ndh) * rimAmt;
+            chromeCol += specTint * (spec + sparkle * 2.4) * max(tChrome, 0.25);
+
+            // ---- contact drop shadow + contour glow from blurred copies of the text mask ----
+            float rotT = hash12(vec2(coord) * 0.73 + 5.1) * 6.2831853;
+            vec2 shOff = vec2(2.5, 4.5) * tpx * (0.6 + 0.4 * tDepth);
+            float blurNear = 0.0;
+            float blurFar = 0.0;
+            float shadowAcc = 0.0;
+            const int TX_TAPS = 16;
+            for (int tk = 0; tk < TX_TAPS; tk++) {
+                float tfr = (float(tk) + 0.5) / float(TX_TAPS);
+                float tang = rotT + float(tk) * 2.39996323;
+                vec2 tdir = vec2(cos(tang), sin(tang));
+                blurNear += textFillAt(coord + ivec2(round(tdir * (3.0 + 5.0 * tfr) * tpx)));
+                blurFar  += textFillAt(coord + ivec2(round(tdir * (9.0 + 16.0 * tfr) * tpx)));
+                shadowAcc += textFillAt(coord - ivec2(round(shOff)) + ivec2(round(tdir * (1.0 + 5.0 * tfr) * tpx)));
+            }
+            blurNear /= float(TX_TAPS);
+            blurFar /= float(TX_TAPS);
+            shadowAcc /= float(TX_TAPS);
+            float outside = 1.0 - fillC;
+
+            // grounded shadow (tight contact + wide soft), tinted by the scene instead of pure black
+            float contact = shadowAcc * outside;
+            float soft = blurFar * outside * 0.35;
+            vec3 shadowTint = mix(vec3(0.02), midAmb * 0.12, 0.5);
+            currentComposite = mix(currentComposite, shadowTint, clamp(contact * 0.78 + soft * 0.45, 0.0, 0.85));
+
+            // reflective contour glow: takes the chrome band colour of its own height, so it reads as light
+            // bouncing off the metal rather than a flat halo
+            vec3 glowBand = saturateColor(chromeBands(clamp(relBox.y, 0.0, 1.0), skyRef, gndRef), 1.4);
+            float glowAmt = (blurNear * 0.9 + blurFar * 1.1) * outside;
+            vec3 contourGlow = glowBand * glowAmt * 0.55 * max(tChrome, 0.2);
+            contourGlow *= 1.0 - 0.50 * clamp(luma(currentComposite), 0.0, 1.0);
+            currentComposite += contourGlow;
+
+            // finally the metal itself
+            currentComposite = mix(currentComposite, max(chromeCol, vec3(0.0)), smoothstep(0.0, 1.0, fillC) * 0.96);
         }
     }
 
