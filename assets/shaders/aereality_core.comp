@@ -2,10 +2,19 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // =============================================================================
-// AEReality / Shaderly - Master Vulkan Compute Shader (Full Suite)
-// True 32-Bit Linear RGB + Oklab Color Engine • Hardware 3D LUT VkSampler
-// 10 Layers • IGN Dither • 13-Tap Anti-Grid • Deband • Line Thinning • Light Wrap
-// 100% Complete File - Zero Feature Omissions
+// AEReality / Shaderly - Master Vulkan Compute Shader (v2 - Final Complete)
+// -----------------------------------------------------------------------------
+//  * HDR half-float (fp16) intermediate composite + bloom pyramid
+//  * Per-layer parameters for EVERY effect (128-float stride, 10 active layers)
+//  * Neighbourhood filters apply a DELTA so earlier layers' grades survive
+//  * Oklab grading with chroma-reduction gamut mapping (no random green/purple)
+//  * C1-continuous monotone cubic curves (no ridges / banding)
+//  * Gamma-space (AE style) or linear-space blending, selectable per layer
+//  * Proper AgX + enhanced Khronos Neutral, LUT applied display-referred
+//  * Continuous anamorphic streak, true edge glow, prismatic diffuse glow
+//  * Location-adaptive metallic text bevel + text edge glow + contact shadow
+//  * TPDF dither right before the final quantise
+// Layer stride = 128 floats, 10 layers -> UBO of 2048 floats.
 // =============================================================================
 
 // STORAGE BUFFERS
@@ -17,173 +26,153 @@ layout(std430, binding = 1) buffer OutputBuffer {
     uint out_pixels[];
 };
 
-// BINDING 3: True Hardware 3D Volumetric LUT Sampler (VkSampler Trilinear)
+// BINDING 3: Hardware 3D LUT sampler
 layout(binding = 3) uniform sampler3D u_lutTexture;
 
-// Bloom Pyramid Storage Buffers
-layout(std430, binding = 4) buffer BloomL0 {
-    uint bloom_l0[]; // 1/2 resolution
-};
+// Bloom pyramid (fp16 RGBA = 2 uints / texel). RGB = highlights, A = edge mask.
+layout(std430, binding = 4) buffer BloomL0 { uint bloom_l0[]; }; // 1/2 res
+layout(std430, binding = 5) buffer BloomL1 { uint bloom_l1[]; }; // 1/4 res
+layout(std430, binding = 6) buffer BloomL2 { uint bloom_l2[]; }; // 1/8 res
 
-layout(std430, binding = 5) buffer BloomL1 {
-    uint bloom_l1[]; // 1/4 resolution
-};
+// HDR composite (fp16 RGBA = 2 uints / pixel)
+layout(std430, binding = 7) buffer TempCompositeBuffer { uint temp_composite[]; };
 
-layout(std430, binding = 6) buffer BloomL2 {
-    uint bloom_l2[]; // 1/8 resolution
-};
-
-// Intermediate Linear Composite (Binding 7: Permanently Eliminates Race Conditions)
-layout(std430, binding = 7) buffer TempCompositeBuffer {
-    uint temp_composite[];
-};
-
-// Push Constants for Multi-Pass Routing
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0: Grade, 1: Prefilter->L0, 2: Down1, 3: Down2, 4: Up1, 5: Up0, 6: Composite & FXAA
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
 };
 
 // =============================================================================
-// UNIFORM STRUCTURES (96 floats per layer, supporting 10 stacked layers)
+// UNIFORMS (128 floats per layer)
 // =============================================================================
 struct LayerData {
-    float isEnabled;              // Offset 0
-    float opacity;                // Offset 1
-    float blendMode;              // Offset 2: 0=Norm, 1=Screen, 2=LinearAdd, 3=Overlay, 4=SoftLight, 5=Multiply, 6=Add, 7=LinearDodge
-    float brightness;             // Offset 3
-
-    float saturation;             // Offset 4
-    float contrast;               // Offset 5
-    float sharpness;              // Offset 6
-    float gamma;                  // Offset 7
-
-    float hue;                    // Offset 8
-    float temperature;            // Offset 9
-    float deepGlowIntensity;      // Offset 10
-    float deepGlowRadius;         // Offset 11
-
-    float deepGlowThreshold;      // Offset 12
-    float edgeGlowTint;           // Offset 13
-    float thinStreakIntensity;    // Offset 14
-    float thinStreakWidth;        // Offset 15
-
-    float lineChromaStrength;     // Offset 16
-    float volRaysLength;          // Offset 17
-    float volRaysDecay;           // Offset 18
-    float shadows;                // Offset 19
-
-    float highlights;             // Offset 20
-    float blackCrush;             // Offset 21
-    float vignette;               // Offset 22
-    float vignetteBoxed;          // Offset 23
-
-    float edgeDarken;             // Offset 24
-    float darkOutlines;           // Offset 25
-    float denoise;                // Offset 26
-    float filmGrain;              // Offset 27
-
-    float flickerIntensity;       // Offset 28
-    float flickerSpeed;           // Offset 29
-    float halationRadius;         // Offset 30
-    float halationWarmth;         // Offset 31
-
-    float depthOfField;           // Offset 32
-    float dofFocus;               // Offset 33
-    float dofAngle;               // Offset 34
-    float unsharpRadius;          // Offset 35
-
-    float unsharpAmount;          // Offset 36
-    float unsharpThreshold;       // Offset 37
-    float curveM0;                // Offset 38
-    float curveM1;                // Offset 39
-
-    float curveM2;                // Offset 40
-    float curveM3;                // Offset 41
-    float curveM4;                // Offset 42
-    float curveR0;                // Offset 43
-
-    float curveR1;                // Offset 44
-    float curveR2;                // Offset 45
-    float curveR3;                // Offset 46
-    float curveR4;                // Offset 47
-
-    float curveG2;                // Offset 48
-    float curveB2;                // Offset 49
-    float sapphireGlowWidth;      // Offset 50
-    float sapphireGlowThreshold;  // Offset 51
-
-    float thinStreakOpacity;      // Offset 52
-    float mblMojoTealOrange;      // Offset 53
-    float bslaGodRays;            // Offset 54
-    float bslaFogDensity;         // Offset 55
-
-    float bslaFogDepth;           // Offset 56
-    float bslaBloomHaze;          // Offset 57
-    float bslFogScatter;          // Offset 58
-    float cosmoCleanHighlight;    // Offset 59
-
-    float mblColoristaLift;       // Offset 60
-    float mblColoristaGamma;      // Offset 61
-    float mblColoristaGain;       // Offset 62
-    float centerAura;             // Offset 63
-
-    // NEW EXTENDED PARAMETERS (Offsets 64..95)
-    float bilateralIntensity;     // Offset 64
-    float bilateralRadius;        // Offset 65
-    float bilateralRange;         // Offset 66
-    float debandRadius;           // Offset 67
-
-    float debandThreshold;        // Offset 68
-    float lineThinning;           // Offset 69
-    float lineThinningThreshold;  // Offset 70
-    float kawaseGlowIntensity;    // Offset 71
-
-    float kawaseGlowRadius;       // Offset 72
-    float diffuseSpGlowIntensity; // Offset 73
-    float diffuseSpGlowRadius;    // Offset 74
-    float diffuseSpGlowThreshold; // Offset 75
-
-    float lightWrapWidth;         // Offset 76
-    float lightWrapIntensity;     // Offset 77
-    float lightWrapThreshold;     // Offset 78
-    float lightWrapBlendMode;     // Offset 79 (0=Screen, 1=Add)
-
-    float pad0;                   // Offset 80
-    float pad1;                   // Offset 81
-    float pad2;                   // Offset 82
-    float pad3;                   // Offset 83
-    float pad4;                   // Offset 84
-    float pad5;                   // Offset 85
-    float pad6;                   // Offset 86
-    float pad7;                   // Offset 87
-    float pad8;                   // Offset 88
-    float pad9;                   // Offset 89
-    float pad10;                  // Offset 90
-    float pad11;                  // Offset 91
-    float pad12;                  // Offset 92
-    float pad13;                  // Offset 93
-    float pad14;                  // Offset 94
-    float pad15;                  // Offset 95
+    float isEnabled;              // 0
+    float opacity;                // 1
+    float blendMode;              // 2: 0 Norm,1 Screen,2 LinearAdd,3 Overlay,4 SoftLight,5 Multiply,6 Add,7 LinearDodge
+    float brightness;             // 3
+    float saturation;             // 4
+    float contrast;               // 5
+    float sharpness;              // 6
+    float gamma;                  // 7
+    float hue;                    // 8
+    float temperature;            // 9
+    float deepGlowIntensity;      // 10
+    float deepGlowRadius;         // 11
+    float deepGlowThreshold;      // 12
+    float edgeGlowTint;           // 13
+    float thinStreakIntensity;    // 14
+    float thinStreakWidth;        // 15
+    float lineChromaStrength;     // 16
+    float volRaysLength;          // 17
+    float volRaysDecay;           // 18
+    float shadows;                // 19
+    float highlights;             // 20
+    float blackCrush;             // 21
+    float vignette;               // 22
+    float vignetteBoxed;          // 23
+    float edgeDarken;             // 24
+    float darkOutlines;           // 25  -> S_lining slider 1 (intensity / radius)
+    float denoise;                // 26
+    float filmGrain;              // 27
+    float flickerIntensity;       // 28
+    float flickerSpeed;           // 29
+    float halationRadius;         // 30
+    float halationWarmth;         // 31
+    float depthOfField;           // 32  amount
+    float dofFocus;               // 33
+    float dofAngle;               // 34
+    float unsharpRadius;          // 35
+    float unsharpAmount;          // 36
+    float unsharpThreshold;       // 37
+    float curveM0;                // 38
+    float curveM1;                // 39
+    float curveM2;                // 40
+    float curveM3;                // 41
+    float curveM4;                // 42
+    float curveR0;                // 43
+    float curveR1;                // 44
+    float curveR2;                // 45
+    float curveR3;                // 46
+    float curveR4;                // 47
+    float curveG2;                // 48
+    float curveB2;                // 49
+    float sapphireGlowWidth;      // 50
+    float sapphireGlowThreshold;  // 51
+    float thinStreakOpacity;      // 52
+    float mblMojoTealOrange;      // 53
+    float bslaGodRays;            // 54
+    float bslaFogDensity;         // 55
+    float bslaFogDepth;           // 56
+    float bslaBloomHaze;          // 57
+    float bslFogScatter;          // 58
+    float cosmoCleanHighlight;    // 59
+    float mblColoristaLift;       // 60
+    float mblColoristaGamma;      // 61
+    float mblColoristaGain;       // 62
+    float centerAura;             // 63
+    float bilateralIntensity;     // 64
+    float bilateralRadius;        // 65
+    float bilateralRange;         // 66
+    float debandRadius;           // 67
+    float debandThreshold;        // 68
+    float lineThinning;           // 69
+    float lineThinningThreshold;  // 70
+    float kawaseGlowIntensity;    // 71
+    float kawaseGlowRadius;       // 72
+    float diffuseSpGlowIntensity; // 73
+    float diffuseSpGlowRadius;    // 74
+    float diffuseSpGlowThreshold; // 75
+    float lightWrapWidth;         // 76
+    float lightWrapIntensity;     // 77
+    float lightWrapThreshold;     // 78
+    float lightWrapBlendMode;     // 79 (0 Screen, 1 Add)
+    // ---- v2 per-layer extensions ----
+    float blendLinear;            // 80  0 = gamma-space blend (AE), 1 = linear-light blend
+    float sLiningOpacity;         // 81  S_lining slider 2
+    float dofRange;               // 82  in-focus size
+    float dofFalloff;             // 83  transition softness
+    float dofBokeh;               // 84  highlight emphasis
+    float dofMode;                // 85  0 = tilt band, 1 = radial (subject-centred)
+    float shaderlyGlowIntensity;  // 86
+    float shaderlyGlowRadius;     // 87
+    float shaderlyGlowThreshold;  // 88
+    float shaderlyGlowTint;       // 89  0 = natural colours, else hue 0..1
+    float splitToneShadowHue;     // 90
+    float splitToneShadowSat;     // 91
+    float splitToneHighHue;       // 92
+    float splitToneHighSat;       // 93
+    float splitToneBalance;       // 94
+    float deepTeal;               // 95
+    float magicCurves;            // 96
+    float copiedChromaShift;      // 97
+    float copiedEdgeRays;         // 98  Sapphire edge glow intensity
+    float copiedProMist;          // 99
+    float copiedStarGlint;        // 100
+    float horizontalRamp;         // 101
+    float edgeHaloRadius;         // 102
+    float lutOpacityUnused;       // 103
+    float pad0;  float pad1;  float pad2;  float pad3;  float pad4;  float pad5;
+    float pad6;  float pad7;  float pad8;  float pad9;  float pad10; float pad11;
+    float pad12; float pad13; float pad14; float pad15; float pad16; float pad17;
+    float pad18; float pad19; float pad20; float pad21; float pad22; float pad23;
 };
 
 layout(std430, binding = 2) readonly buffer UniformBlock {
-    float u_time;                 // 0
-    float u_layerCount;            // 1 (Up to 10)
-    float u_tonemapMode;           // 2: 0=Linear, 1=AgX Anime Punch, 2=Khronos Neutral
+    float u_time;                  // 0
+    float u_layerCount;            // 1
+    float u_tonemapMode;           // 2: 0 Linear, 1 AgX, 2 Khronos Neutral+
     float u_imgWidth;              // 3
     float u_imgHeight;             // 4
     float u_hasLut;                // 5
     float u_lutOpacity;            // 6
-    float u_copiedChromaShift;     // 7
-    float u_copiedEdgeRays;        // 8
-    float u_copiedProMist;         // 9
-    float u_copiedStarGlint;       // 10
-    float u_horizontalRamp;        // 11
+    float u_pad7;                  // 7
+    float u_pad8;                  // 8
+    float u_pad9;                  // 9
+    float u_pad10;                 // 10
+    float u_pad11;                 // 11
     float u_ditherStrength;        // 12
-
     float u_textSuiteEnabled;      // 13
     float u_textBoxX;              // 14
     float u_textBoxY;              // 15
@@ -191,73 +180,126 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_textBoxH;              // 17
     float u_textBevelDepth;        // 18
     float u_textChromeIntensity;   // 19
-
-    float u_shaderlyGlowIntensity; // 20
-    float u_shaderlyGlowRadius;    // 21
-    float u_shaderlyGlowThreshold; // 22
-    float u_splitToneShadowHue;    // 23
-    float u_splitToneShadowSat;    // 24
-    float u_splitToneHighHue;      // 25
-    float u_splitToneHighSat;      // 26
-    float u_splitToneBalance;      // 27
-
-    float u_bitDepthMode;          // 28: 0.0 = 8-bit, 1.0 = 10-bit, 2.0 = 16-bit
-    float u_deepTeal;              // 29
-    float u_magicCurves;           // 30
-    float u_edgeHaloRadius;        // 31
-
-    LayerData layers[10];          // 32 + (l * 96) -> supports up to 10 active layers
+    float u_textSpecularGlint;     // 20
+    float u_textContactShadow;     // 21
+    float u_textLumaThreshold;     // 22
+    float u_textMetallicTint;      // 23 (0 Platinum, 1 Gold, 2 Cyan, 3 Crimson, 4 Violet)
+    float u_textGlowIntensity;     // 24
+    float u_textGlowRadius;        // 25
+    float u_pad26;                 // 26
+    float u_pad27;                 // 27
+    float u_bitDepthMode;          // 28: 0 = 8-bit, 1 = 10-bit, 2 = 16-bit
+    float u_pad29;                 // 29
+    float u_pad30;                 // 30
+    float u_pad31;                 // 31
+    LayerData layers[10];          // 32 + l * 128
 };
 
+// Per-dispatch globals
+int gW;
+int gH;
+float gBit;
+float gRes;
+int gEdgeStep;
+
 // =============================================================================
-// COLOR SPACE UTILITIES: sRGB <-> LINEAR RGB
+// COLOR UTILITIES
 // =============================================================================
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec3 sanitize(vec3 c) {
+    if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
+    return clamp(c, vec3(0.0), vec3(60000.0));
+}
+
 float srgbToLinear(float c) {
     return (c <= 0.04045) ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4);
 }
-
 vec3 srgbToLinear(vec3 c) {
     return vec3(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b));
 }
-
 float linearToSrgb(float c) {
     c = clamp(c, 0.0, 1.0);
     return (c <= 0.0031308) ? (c * 12.92) : (1.055 * pow(c, 1.0 / 2.4) - 0.055);
 }
-
 vec3 linearToSrgb(vec3 c) {
     return vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
 }
 
-// =============================================================================
-// INTERLEAVED GRADIENT NOISE (IGN) DITHERING (Jorge Jimenez / Next-Gen Tech)
-// =============================================================================
-float interleavedGradientNoise(vec2 fragCoord) {
-    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
-    return fract(magic.z * fract(dot(fragCoord.xy, magic.xy)));
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
-// =============================================================================
-// KARIS AVERAGE WEIGHTING (Suppresses bright specular glints blowing into blocks)
-// =============================================================================
+float hashInt12(ivec2 p) {
+    uvec2 q = uvec2(p);
+    q = q * uvec2(1597334677u, 3812015801u);
+    uint n = (q.x ^ q.y) * 1597334677u;
+    return float(n) * (1.0 / 4294967296.0);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+        v += a * vnoise(p);
+        p = p * 2.03 + vec2(17.1, 9.2);
+        a *= 0.5;
+    }
+    return v / 0.9375;
+}
+
+vec3 hueToRGB(float h) {
+    float r = abs(h * 6.0 - 3.0) - 1.0;
+    float g = 2.0 - abs(h * 6.0 - 2.0);
+    float b = 2.0 - abs(h * 6.0 - 4.0);
+    return clamp(vec3(r, g, b), 0.0, 1.0);
+}
+
+vec3 colorTempToRGB(float kelvin) {
+    if (kelvin < 1000.0) return vec3(1.0);
+    float temp = kelvin / 100.0;
+    float red, green, blue;
+    if (temp <= 66.0) {
+        red = 255.0;
+        green = 99.4708025861 * log(max(temp, 1.0)) - 161.1195681661;
+        if (temp <= 19.0) blue = 0.0;
+        else blue = 138.5177312231 * log(max(temp - 10.0, 1.0)) - 305.0447927307;
+    } else {
+        red = 329.698727446 * pow(max(temp - 60.0, 1.0), -0.1332047592);
+        green = 288.1221695283 * pow(max(temp - 60.0, 1.0), -0.0755148492);
+        blue = 255.0;
+    }
+    return srgbToLinear(clamp(vec3(red, green, blue) / 255.0, 0.0, 1.0));
+}
+
 float karisWeight(vec3 color) {
-    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    return 1.0 / (1.0 + luma);
+    return 1.0 / (1.0 + luma(color) * 0.5);
 }
 
 // =============================================================================
-// PERCEPTUAL COLOR SPACE: OKLAB (<-> LINEAR RGB)
+// OKLAB with chroma-reduction gamut mapping
 // =============================================================================
 vec3 linearRgbToOklab(vec3 c) {
     c = max(vec3(0.0), c);
     float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
     float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
     float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
-
     float l_ = pow(max(0.0, l), 1.0 / 3.0);
     float m_ = pow(max(0.0, m), 1.0 / 3.0);
     float s_ = pow(max(0.0, s), 1.0 / 3.0);
-
     return vec3(
         0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
         1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
@@ -265,22 +307,33 @@ vec3 linearRgbToOklab(vec3 c) {
     );
 }
 
-vec3 oklabToLinearRgb(vec3 lab) {
-    float l_ = max(0.0, lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z);
-    float m_ = max(0.0, lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z);
-    float s_ = max(0.0, lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
-
+vec3 oklabToLinearRgbRaw(vec3 lab) {
+    float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
     float l = l_ * l_ * l_;
     float m = m_ * m_ * m_;
     float s = s_ * s_ * s_;
-
-    vec3 rgb = vec3(
+    return vec3(
         +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
         -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
         -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
     );
+}
 
-    return max(vec3(0.0), rgb);
+// Keeps lightness + hue, pulls chroma in until no channel is negative.
+vec3 oklabToLinearRgb(vec3 lab) {
+    lab.x = max(lab.x, 0.0);
+    vec3 rgb = oklabToLinearRgbRaw(lab);
+    if (min(rgb.r, min(rgb.g, rgb.b)) >= -0.00005) return max(rgb, vec3(0.0));
+    float lo = 0.0;
+    float hi = 1.0;
+    for (int i = 0; i < 9; i++) {
+        float mid = 0.5 * (lo + hi);
+        vec3 t = oklabToLinearRgbRaw(vec3(lab.x, lab.y * mid, lab.z * mid));
+        if (min(t.r, min(t.g, t.b)) >= -0.00005) lo = mid; else hi = mid;
+    }
+    return max(oklabToLinearRgbRaw(vec3(lab.x, lab.y * lo, lab.z * lo)), vec3(0.0));
 }
 
 vec2 oklabRotateHue(vec2 ab, float angleRadians) {
@@ -290,102 +343,73 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
 }
 
 // =============================================================================
-// CATMULL-ROM SPLINE EVALUATOR (MONOTONIC SLOPE LIMITING)
+// C1-CONTINUOUS MONOTONE CUBIC (PCHIP) 5-POINT CURVE
 // =============================================================================
-float evalCatmullRom(float x, float p0, float p1, float p2, float p3, float p4) {
+float evalCurve5(float x, float p0, float p1, float p2, float p3, float p4) {
     x = clamp(x, 0.0, 1.0);
+    float p[5] = float[5](p0, p1, p2, p3, p4);
+    float d[4];
+    for (int i = 0; i < 4; i++) d[i] = (p[i + 1] - p[i]) * 4.0;
+    float m[5];
+    m[0] = d[0];
+    m[4] = d[3];
+    for (int i = 1; i < 4; i++) {
+        float prod = d[i - 1] * d[i];
+        m[i] = (prod <= 0.0) ? 0.0 : (2.0 * prod / (d[i - 1] + d[i]));
+    }
     float seg = x * 4.0;
-    int idx = int(floor(seg));
-    if (idx >= 4) return clamp(p4, 0.0, 1.0);
+    int idx = min(int(floor(seg)), 3);
     float t = seg - float(idx);
-
-    float cp0 = (idx == 0) ? p0 : (idx == 1) ? p0 : (idx == 2) ? p1 : p2;
-    float cp1 = (idx == 0) ? p0 : (idx == 1) ? p1 : (idx == 2) ? p2 : p3;
-    float cp2 = (idx == 0) ? p1 : (idx == 1) ? p2 : (idx == 2) ? p3 : p4;
-    float cp3 = (idx == 0) ? p2 : (idx == 1) ? p3 : (idx == 2) ? p4 : p4;
-
-    float d1 = cp2 - cp1;
-    float m1 = clamp(0.5 * (cp2 - cp0), min(0.0, d1 * 3.0), max(0.0, d1 * 3.0));
-    float m2 = clamp(0.5 * (cp3 - cp1), min(0.0, d1 * 3.0), max(0.0, d1 * 3.0));
-
     float t2 = t * t;
     float t3 = t2 * t;
-
     float h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
     float h10 = t3 - 2.0 * t2 + t;
     float h01 = -2.0 * t3 + 3.0 * t2;
     float h11 = t3 - t2;
-
-    return clamp(h00 * cp1 + h10 * m1 + h01 * cp2 + h11 * m2, 0.0, 1.0);
+    float y = h00 * p[idx] + h10 * 0.25 * m[idx] + h01 * p[idx + 1] + h11 * 0.25 * m[idx + 1];
+    return clamp(y, 0.0, 1.0);
 }
 
-vec3 evalCatmullRom(vec3 c, float p0, float p1, float p2, float p3, float p4) {
-    return vec3(
-        evalCatmullRom(c.r, p0, p1, p2, p3, p4),
-        evalCatmullRom(c.g, p0, p1, p2, p3, p4),
-        evalCatmullRom(c.b, p0, p1, p2, p3, p4)
-    );
+bool curveIsIdentity(float p0, float p1, float p2, float p3, float p4) {
+    return abs(p0) < 0.0005 && abs(p1 - 0.25) < 0.0005 && abs(p2 - 0.5) < 0.0005 &&
+           abs(p3 - 0.75) < 0.0005 && abs(p4 - 1.0) < 0.0005;
 }
 
 // =============================================================================
-// BIT-DEPTH PIXEL READ & WRITE
+// PIXEL STORAGE
 // =============================================================================
 vec4 unpackRGBA_Dynamic(int pixelIndex, float bitMode) {
     if (bitMode > 1.5) {
         uint word0 = in_pixels[pixelIndex * 2];
         uint word1 = in_pixels[pixelIndex * 2 + 1];
-        float r = float(word0 & 0xFFFFu) / 65535.0;
-        float g = float((word0 >> 16u) & 0xFFFFu) / 65535.0;
-        float b = float(word1 & 0xFFFFu) / 65535.0;
-        float a = float((word1 >> 16u) & 0xFFFFu) / 65535.0;
-        return vec4(r, g, b, a);
-    } else {
-        uint val = in_pixels[pixelIndex];
-        float r = float(val & 0xFFu) / 255.0;
-        float g = float((val >> 8u) & 0xFFu) / 255.0;
-        float b = float((val >> 16u) & 0xFFu) / 255.0;
-        float a = float((val >> 24u) & 0xFFu) / 255.0;
-        return vec4(r, g, b, a);
+        return vec4(float(word0 & 0xFFFFu), float((word0 >> 16u) & 0xFFFFu),
+                    float(word1 & 0xFFFFu), float((word1 >> 16u) & 0xFFFFu)) / 65535.0;
     }
+    uint val = in_pixels[pixelIndex];
+    return vec4(float(val & 0xFFu), float((val >> 8u) & 0xFFu),
+                float((val >> 16u) & 0xFFu), float((val >> 24u) & 0xFFu)) / 255.0;
 }
 
-vec4 unpackComposite_Dynamic(int pixelIndex, float bitMode) {
-    if (bitMode > 1.5) {
-        uint word0 = temp_composite[pixelIndex * 2];
-        uint word1 = temp_composite[pixelIndex * 2 + 1];
-        float r = float(word0 & 0xFFFFu) / 65535.0;
-        float g = float((word0 >> 16u) & 0xFFFFu) / 65535.0;
-        float b = float(word1 & 0xFFFFu) / 65535.0;
-        float a = float((word1 >> 16u) & 0xFFFFu) / 65535.0;
-        return vec4(r, g, b, a);
-    } else {
-        uint val = temp_composite[pixelIndex];
-        float r = float(val & 0xFFu) / 255.0;
-        float g = float((val >> 8u) & 0xFFu) / 255.0;
-        float b = float((val >> 16u) & 0xFFu) / 255.0;
-        float a = float((val >> 24u) & 0xFFu) / 255.0;
-        return vec4(r, g, b, a);
-    }
+vec3 srcSrgb(ivec2 c) {
+    c = clamp(c, ivec2(0), ivec2(gW - 1, gH - 1));
+    return unpackRGBA_Dynamic(c.y * gW + c.x, gBit).rgb;
+}
+vec3 srcLin(ivec2 c) { return srgbToLinear(srcSrgb(c)); }
+
+vec4 unpackComposite(int idx) {
+    return vec4(unpackHalf2x16(temp_composite[idx * 2]), unpackHalf2x16(temp_composite[idx * 2 + 1]));
+}
+void packComposite(int idx, vec4 c) {
+    c.rgb = sanitize(c.rgb);
+    temp_composite[idx * 2] = packHalf2x16(c.rg);
+    temp_composite[idx * 2 + 1] = packHalf2x16(c.ba);
+}
+vec3 compAt(ivec2 c, int w, int h) {
+    c = clamp(c, ivec2(0), ivec2(w - 1, h - 1));
+    return unpackComposite(c.y * w + c.x).rgb;
 }
 
-void packComposite_Dynamic(int pixelIndex, vec4 col, float bitMode) {
-    if (bitMode > 1.5) {
-        uint r = uint(clamp(col.r * 65535.0 + 0.5, 0.0, 65535.0));
-        uint g = uint(clamp(col.g * 65535.0 + 0.5, 0.0, 65535.0));
-        uint b = uint(clamp(col.b * 65535.0 + 0.5, 0.0, 65535.0));
-        uint a = uint(clamp(col.a * 65535.0 + 0.5, 0.0, 65535.0));
-        temp_composite[pixelIndex * 2] = (g << 16u) | r;
-        temp_composite[pixelIndex * 2 + 1] = (a << 16u) | b;
-    } else {
-        uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
-        uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
-        uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
-        uint a = uint(clamp(col.a * 255.0 + 0.5, 0.0, 255.0));
-        temp_composite[pixelIndex] = (a << 24u) | (b << 16u) | (g << 8u) | r;
-    }
-}
-
-void packFinalDisplay_Dynamic(int pixelIndex, vec4 col, float bitMode) {
+void packFinalDisplay(int pixelIndex, vec4 col, float bitMode) {
     if (bitMode > 1.5) {
         uint r = uint(clamp(col.r * 65535.0 + 0.5, 0.0, 65535.0));
         uint g = uint(clamp(col.g * 65535.0 + 0.5, 0.0, 65535.0));
@@ -402,244 +426,235 @@ void packFinalDisplay_Dynamic(int pixelIndex, vec4 col, float bitMode) {
     }
 }
 
-vec3 unpackBloomHalf(uint val) {
-    float r = float(val & 0xFFu) / 255.0;
-    float g = float((val >> 8u) & 0xFFu) / 255.0;
-    float b = float((val >> 16u) & 0xFFu) / 255.0;
-    return vec3(r * r, g * g, b * b);
+// Bloom storage (fp16 RGBA)
+vec4 bloomLoad(int level, int idx) {
+    uvec2 u;
+    if (level == 0)      u = uvec2(bloom_l0[idx * 2], bloom_l0[idx * 2 + 1]);
+    else if (level == 1) u = uvec2(bloom_l1[idx * 2], bloom_l1[idx * 2 + 1]);
+    else                 u = uvec2(bloom_l2[idx * 2], bloom_l2[idx * 2 + 1]);
+    return vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y));
+}
+void bloomStore(int level, int idx, vec4 v) {
+    v = clamp(v, vec4(0.0), vec4(60000.0));
+    if (any(isnan(v))) v = vec4(0.0);
+    uint a = packHalf2x16(v.rg);
+    uint b = packHalf2x16(v.ba);
+    if (level == 0)      { bloom_l0[idx * 2] = a; bloom_l0[idx * 2 + 1] = b; }
+    else if (level == 1) { bloom_l1[idx * 2] = a; bloom_l1[idx * 2 + 1] = b; }
+    else                 { bloom_l2[idx * 2] = a; bloom_l2[idx * 2 + 1] = b; }
 }
 
-uint packBloomHalf(vec3 col) {
-    col = sqrt(max(vec3(0.0), col));
-    uint r = uint(clamp(col.r * 255.0 + 0.5, 0.0, 255.0));
-    uint g = uint(clamp(col.g * 255.0 + 0.5, 0.0, 255.0));
-    uint b = uint(clamp(col.b * 255.0 + 0.5, 0.0, 255.0));
-    return (255u << 24u) | (b << 16u) | (g << 8u) | r;
-}
-
-// Smooth Triangular Sub-Pixel Dither
-float hashInt12(ivec2 p) {
-    uvec2 q = uvec2(p);
-    q = q * uvec2(1597334677u, 3812015801u);
-    uint n = (q.x ^ q.y) * 1597334677u;
-    return float(n) * (1.0 / 4294967296.0);
-}
-
-float smoothTriangularDither(ivec2 coord) {
-    float n1 = hashInt12(coord);
-    float n2 = hashInt12(coord + ivec2(13, 27));
-    return (n1 + n2) * 0.5 - 0.5;
-}
-
-float hash12(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-vec3 hueToRGB(float h) {
-    float r = abs(h * 6.0 - 3.0) - 1.0;
-    float g = 2.0 - abs(h * 6.0 - 2.0);
-    float b = 2.0 - abs(h * 6.0 - 4.0);
-    return clamp(vec3(r, g, b), 0.0, 1.0);
-}
-
-vec3 colorTempToRGB(float kelvin) {
-    if (kelvin < 1000.0) return vec3(1.0);
-    float temp = kelvin / 100.0;
-    float red, green, blue;
-
-    if (temp <= 66.0) {
-        red = 255.0;
-        green = temp;
-        green = 99.4708025861 * log(max(green, 1.0)) - 161.1195681661;
-        if (temp <= 19.0) {
-            blue = 0.0;
-        } else {
-            blue = temp - 10.0;
-            blue = 138.5177312231 * log(max(blue, 1.0)) - 305.0447927307;
-        }
-    } else {
-        red = temp - 60.0;
-        red = 329.698727446 * pow(max(red, 1.0), -0.1332047592);
-        green = temp - 60.0;
-        green = 288.1221695283 * pow(max(green, 1.0), -0.0755148492);
-        blue = 255.0;
-    }
-
-    vec3 srgbCol = clamp(vec3(red, green, blue) / 255.0, 0.0, 1.0);
-    return srgbToLinear(srgbCol);
+vec4 sampleBloom(int level, vec2 uv, int w, int h) {
+    vec2 pos = clamp(uv * vec2(w, h) - 0.5, vec2(0.0), vec2(w - 1, h - 1));
+    ivec2 p0 = ivec2(floor(pos));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
+    vec2 f = fract(pos);
+    vec4 c00 = bloomLoad(level, p0.y * w + p0.x);
+    vec4 c10 = bloomLoad(level, p0.y * w + p1.x);
+    vec4 c01 = bloomLoad(level, p1.y * w + p0.x);
+    vec4 c11 = bloomLoad(level, p1.y * w + p1.x);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
 // =============================================================================
 // TONEMAPPERS
 // =============================================================================
-vec3 tonemapKhronosPbrNeutral(vec3 color) {
-    color = max(color, vec3(0.0));
-    const float startCompression = 0.8 - 0.04;
-    const float desaturation = 0.15;
+vec3 tonemapAgx(vec3 c) {
+    const mat3 toRec2020 = mat3(vec3(0.6274, 0.0691, 0.0164), vec3(0.3293, 0.9195, 0.0880), vec3(0.0433, 0.0113, 0.8956));
+    const mat3 inset = mat3(
+        vec3(0.856627153315983, 0.0951212405381588, 0.0482516061458583),
+        vec3(0.137318972929847, 0.761241990602591, 0.101439036467562),
+        vec3(0.11189821299995, 0.0767994186031903, 0.811302368396859));
+    const mat3 outset = mat3(
+        vec3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+        vec3(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
+        vec3(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405));
+    const mat3 toSrgb = mat3(vec3(1.6605, -0.1246, -0.0182), vec3(-0.5876, 1.1329, -0.1006), vec3(-0.0728, -0.0083, 1.1187));
 
-    float peak = max(color.r, max(color.g, color.b));
-    if (peak < startCompression) return color;
+    c = max(c, vec3(0.0));
+    c = inset * (toRec2020 * c);
+    c = log2(max(c, vec3(1e-10)));
+    c = clamp((c - (-12.47393)) / (4.026069 + 12.47393), 0.0, 1.0);
 
-    const float d = 1.0 - startCompression;
-    float newPeak = 1.0 - d * d / (peak + d - startCompression);
-    color *= newPeak / peak;
+    vec3 x2 = c * c;
+    vec3 x4 = x2 * x2;
+    c = 15.5 * x4 * x2 - 40.14 * x4 * c + 31.96 * x4 - 6.868 * x2 * c + 0.4298 * x2 + 0.1191 * c - 0.00232;
+    c = clamp(c, 0.0, 1.0);
 
-    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
-    return mix(color, newPeak * vec3(1.0), g);
+    c = pow(c, vec3(1.12));
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(l), c, 1.32);
+
+    c = outset * c;
+    c = pow(max(c, vec3(0.0)), vec3(2.2));
+    c = toSrgb * c;
+    return clamp(c, 0.0, 1.0);
 }
 
-vec3 tonemapAgxAnime(vec3 color) {
-    color = max(vec3(0.0), color);
+vec3 tonemapNeutralPlus(vec3 color) {
+    color = max(color, vec3(0.0));
+    const float startCompression = 0.55;
+    const float desaturation = 0.30;
 
-    const mat3 agxMat = mat3(
-        0.842479062253094, 0.0423282422610123, 0.0423756549057051,
-        0.0784335999999992, 0.878468636494572, 0.0784336,
-        0.0792237451477643, 0.0791661274605434, 0.879223745147764
-    );
-    vec3 val = agxMat * color;
+    float x = min(color.r, min(color.g, color.b));
+    float offset = (x < 0.08) ? (x - 6.25 * x * x) : 0.04;
+    color -= offset;
 
-    const float minEV = -10.0;
-    const float maxEV = 6.5;
-    val = clamp(log2(val + 1e-5), minEV, maxEV);
-    val = (val - minEV) / (maxEV - minEV);
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak >= startCompression) {
+        float d = 1.0 - startCompression;
+        float newPeak = 1.0 - d * d / (peak + d - startCompression);
+        color *= newPeak / peak;
+        float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+        color = mix(color, vec3(newPeak), g);
+    }
+    color = clamp(color, 0.0, 1.0);
 
-    vec3 sCurve = val * val * (3.0 - 2.0 * val);
-    val = mix(val, sCurve, 0.55);
-    val = val * (2.0 * val + 0.05) / (val * (1.8 * val + 0.50) + 0.14);
-
-    const mat3 agxMatInv = mat3(
-        1.19687900512017, -0.0528968517594969, -0.0529716355844491,
-        -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
-        -0.0990297470775088, -0.0989611768448433, 1.15107367264188
-    );
-    val = max(vec3(0.0), agxMatInv * val);
-
-    float luma = dot(val, vec3(0.2126, 0.7152, 0.0722));
-    val = mix(vec3(luma), val, 1.18);
-    return clamp(val, 0.0, 1.0);
+    vec3 e = linearToSrgb(color);
+    e = mix(e, e * e * (3.0 - 2.0 * e), 0.20);
+    return srgbToLinear(e);
 }
 
 vec3 applyToneMapping(vec3 linearCol, float mode) {
-    if (mode == 1.0) return tonemapAgxAnime(linearCol);
-    if (mode == 2.0) return tonemapKhronosPbrNeutral(linearCol);
+    if (mode > 1.5) return tonemapNeutralPlus(linearCol);
+    if (mode > 0.5) return tonemapAgx(linearCol);
     return linearCol;
 }
 
-// =============================================================================
-// HARDWARE 3D VOLUMETRIC LUT SAMPLER (Zero-Cycle Trilinear Interpolation)
-// Replaces 8 manual fetches and 7 mixes with 1-line GPU hardware sampling
-// =============================================================================
-vec3 sample3DLut(vec3 color, float opacity) {
-    if (opacity <= 0.001) return color;
-    vec3 lutCoord = (clamp(color, 0.0, 1.0) * 31.0 + 0.5) / 32.0;
+vec3 sample3DLutDisplay(vec3 srgb, float opacity) {
+    if (opacity <= 0.001) return srgb;
+    vec3 c = clamp(srgb, 0.0, 1.0);
+    vec3 lutCoord = (c * 31.0 + 0.5) / 32.0;
     vec3 graded = texture(u_lutTexture, lutCoord).rgb;
-    return mix(color, graded, opacity);
-}
-
-// EXTENDED LINEAR RGB BLEND MODES (Including Add & Linear Dodge)
-vec3 applyBlendModeLinear(vec3 baseCol, vec3 blendCol, int mode, float opacity) {
-    vec3 result = blendCol;
-    if (mode == 1) { // Screen
-        result = baseCol + blendCol - (baseCol * blendCol);
-    } else if (mode == 2) { // Linear Add
-        result = baseCol + blendCol;
-    } else if (mode == 3) { // Overlay
-        result = mix(2.0 * baseCol * blendCol, 1.0 - 2.0 * (1.0 - baseCol) * (1.0 - blendCol), step(vec3(0.5), baseCol));
-    } else if (mode == 4) { // Soft Light
-        result = (1.0 - 2.0 * blendCol) * baseCol * baseCol + 2.0 * blendCol * baseCol;
-    } else if (mode == 5) { // Multiply
-        result = baseCol * blendCol;
-    } else if (mode == 6) { // Add
-        result = min(vec3(1.0), baseCol + blendCol);
-    } else if (mode == 7) { // Linear Dodge
-        result = baseCol + blendCol;
-    }
-    return mix(baseCol, result, clamp(opacity, 0.0, 1.0));
-}
-
-// FXAA SPATIAL ANTI-ALIASING PASS
-vec3 applyFxaa(ivec2 coord, int width, int height, float bitMode) {
-    vec3 rgbM = unpackComposite_Dynamic(coord.y * width + coord.x, bitMode).rgb;
-    float lumaM = dot(rgbM, vec3(0.2126, 0.7152, 0.0722));
-
-    ivec2 up    = clamp(coord + ivec2(0, -1), ivec2(0), ivec2(width - 1, height - 1));
-    ivec2 down  = clamp(coord + ivec2(0,  1), ivec2(0), ivec2(width - 1, height - 1));
-    ivec2 left  = clamp(coord + ivec2(-1, 0), ivec2(0), ivec2(width - 1, height - 1));
-    ivec2 right = clamp(coord + ivec2( 1, 0), ivec2(0), ivec2(width - 1, height - 1));
-
-    float lumaU = dot(unpackComposite_Dynamic(up.y * width + up.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
-    float lumaD = dot(unpackComposite_Dynamic(down.y * width + down.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
-    float lumaL = dot(unpackComposite_Dynamic(left.y * width + left.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
-    float lumaR = dot(unpackComposite_Dynamic(right.y * width + right.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
-
-    float lumaMin = min(lumaM, min(min(lumaU, lumaD), min(lumaL, lumaR)));
-    float lumaMax = max(lumaM, max(max(lumaU, lumaD), max(lumaL, lumaR)));
-    float range = lumaMax - lumaMin;
-
-    if (range < max(0.04, lumaMax * 0.12)) return rgbM;
-
-    vec3 rgbFour = (unpackComposite_Dynamic(up.y * width + up.x, bitMode).rgb +
-                    unpackComposite_Dynamic(down.y * width + down.x, bitMode).rgb +
-                    unpackComposite_Dynamic(left.y * width + left.x, bitMode).rgb +
-                    unpackComposite_Dynamic(right.y * width + right.x, bitMode).rgb) * 0.25;
-
-    return mix(rgbM, rgbFour, 0.45);
-}
-
-// CONTINUOUS GAUSSIAN PYRAMID SAMPLING
-vec3 sampleBloomBuffer(int passLevel, vec2 uv, int w, int h) {
-    vec2 pos = clamp(uv * vec2(w, h) - 0.5, vec2(0.0), vec2(w - 1, h - 1));
-    ivec2 p0 = ivec2(floor(pos));
-    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), ivec2(w - 1, h - 1));
-    vec2 f = fract(pos);
-
-    vec3 c00, c10, c01, c11;
-    if (passLevel == 0) {
-        c00 = unpackBloomHalf(bloom_l0[p0.y * w + p0.x]);
-        c10 = unpackBloomHalf(bloom_l0[p0.y * w + p1.x]);
-        c01 = unpackBloomHalf(bloom_l0[p1.y * w + p0.x]);
-        c11 = unpackBloomHalf(bloom_l0[p1.y * w + p1.x]);
-    } else if (passLevel == 1) {
-        c00 = unpackBloomHalf(bloom_l1[p0.y * w + p0.x]);
-        c10 = unpackBloomHalf(bloom_l1[p0.y * w + p1.x]);
-        c01 = unpackBloomHalf(bloom_l1[p0.y * w + p0.x]);
-        c11 = unpackBloomHalf(bloom_l1[p1.y * w + p1.x]);
-    } else {
-        c00 = unpackBloomHalf(bloom_l2[p0.y * w + p0.x]);
-        c10 = unpackBloomHalf(bloom_l2[p0.y * w + p1.x]);
-        c01 = unpackBloomHalf(bloom_l2[p1.y * w + p0.x]);
-        c11 = unpackBloomHalf(bloom_l2[p1.y * w + p1.x]);
-    }
-    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return mix(srgb, clamp(graded, 0.0, 1.0), clamp(opacity, 0.0, 1.0));
 }
 
 // =============================================================================
-// PASS 1: HIGHLIGHT EXTRACTION WITH KARIS AVERAGE
+// BLEND MODES (After Effects Gamma Space Default)
+// =============================================================================
+vec3 softLightW3C(vec3 a, vec3 b) {
+    vec3 dA = mix(sqrt(a), ((16.0 * a - 12.0) * a + 4.0) * a, step(a, vec3(0.25)));
+    vec3 low  = a - (1.0 - 2.0 * b) * a * (1.0 - a);
+    vec3 high = a + (2.0 * b - 1.0) * (dA - a);
+    return mix(low, high, step(vec3(0.5), b));
+}
+
+vec3 blendCore(vec3 a, vec3 b, int mode) {
+    if (mode == 1) { // Screen
+        vec3 ca = clamp(a, 0.0, 1.0);
+        vec3 cb = clamp(b, 0.0, 1.0);
+        return (ca + cb - ca * cb) + max(a - 1.0, 0.0) + max(b - 1.0, 0.0);
+    } else if (mode == 3) { // Overlay
+        vec3 ca = clamp(a, 0.0, 1.0);
+        vec3 cb = clamp(b, 0.0, 1.0);
+        return mix(2.0 * ca * cb, 1.0 - 2.0 * (1.0 - ca) * (1.0 - cb), step(vec3(0.5), ca));
+    } else if (mode == 4) { // Soft Light
+        return softLightW3C(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0));
+    } else if (mode == 5) { // Multiply
+        return a * b;
+    } else if (mode == 6) { // Add
+        return a + b;
+    }
+    return b; // Normal
+}
+
+vec3 applyBlendMode(vec3 baseCol, vec3 blendCol, int mode, float opacity, bool linearSpace) {
+    opacity = clamp(opacity, 0.0, 1.0);
+    if (mode == 2 || mode == 7) { // Linear Add / Linear Dodge
+        return mix(baseCol, baseCol + blendCol, opacity);
+    }
+    if (mode == 0 && opacity >= 0.9999) return blendCol;
+    if (linearSpace) {
+        return mix(baseCol, blendCore(baseCol, blendCol, mode), opacity);
+    }
+    vec3 ga = pow(max(baseCol, vec3(0.0)), vec3(1.0 / 2.2));
+    vec3 gb = pow(max(blendCol, vec3(0.0)), vec3(1.0 / 2.2));
+    vec3 gr = mix(ga, blendCore(ga, gb, mode), opacity);
+    return pow(max(gr, vec3(0.0)), vec3(2.2));
+}
+
+vec3 tintFor(float id) {
+    if (id == 1.0) return vec3(1.20, 1.05, 0.65);
+    if (id == 2.0) return vec3(0.40, 1.10, 1.45);
+    if (id == 3.0) return vec3(1.25, 0.85, 0.40);
+    if (id == 4.0) return vec3(1.30, 0.25, 0.30);
+    if (id == 5.0) return vec3(1.00, 0.55, 1.45);
+    if (id == 6.0) return vec3(1.35, 0.65, 0.95);
+    return vec3(1.0);
+}
+
+vec3 saturateColor(vec3 c, float s) {
+    float l = luma(c);
+    return max(mix(vec3(l), c, s), vec3(0.0));
+}
+
+float glowExtractThreshold() {
+    float t = 1.0;
+    bool any_ = false;
+    int total = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int i = 0; i < total; i++) {
+        LayerData L = layers[i];
+        if (L.isEnabled < 0.5) continue;
+        if (L.deepGlowIntensity > 0.01 || L.kawaseGlowIntensity > 0.01) { t = min(t, L.deepGlowThreshold); any_ = true; }
+        if (L.diffuseSpGlowIntensity > 0.01) { t = min(t, L.diffuseSpGlowThreshold); any_ = true; }
+        if (L.shaderlyGlowIntensity > 0.01)  { t = min(t, L.shaderlyGlowThreshold);  any_ = true; }
+        if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.45); any_ = true; }
+        if (L.halationRadius > 0.01 || L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
+    }
+    return any_ ? clamp(t, 0.05, 0.95) : 0.60;
+}
+
+float edgeSensitivity() {
+    int total = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int i = 0; i < total; i++) {
+        LayerData L = layers[i];
+        if (L.isEnabled < 0.5) continue;
+        if (L.sapphireGlowWidth > 0.01 || L.copiedEdgeRays > 0.01 || L.edgeHaloRadius > 0.01)
+            return clamp(L.sapphireGlowThreshold, 0.1, 0.99);
+    }
+    return 0.70;
+}
+
+vec3 gateGlow(vec3 g, float th, float exMin) {
+    float rel = th - exMin;
+    if (rel <= 0.03) return g;
+    float l = luma(g);
+    return g * smoothstep(rel * 0.15, rel * 0.15 + 0.12, l);
+}
+
+// =============================================================================
+// PASS 1: HIGHLIGHT & EDGE EXTRACTION -> Bloom L0
 // =============================================================================
 void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
     vec2 centerUV = (vec2(coord) + 0.5) / vec2(l0W, l0H);
-    ivec2 srcC = ivec2(centerUV * vec2(srcW, srcH));
-    float bitMode = u_bitDepthMode;
+    ivec2 srcC = clamp(ivec2(centerUV * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
 
-    vec3 col = unpackComposite_Dynamic(srcC.y * srcW + srcC.x, bitMode).rgb;
+    vec3 col = unpackComposite(srcC.y * srcW + srcC.x).rgb;
+    float l = luma(col);
 
-    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    LayerData L = layers[0];
-    float threshold = clamp(L.deepGlowThreshold, 0.10, 0.95);
-    float knee = smoothstep(threshold, threshold + 0.20, luma);
-
-    // Apply Karis Average to prevent bright specular dots from blowing into blocks
+    float threshold = glowExtractThreshold();
+    float knee = smoothstep(threshold, threshold + 0.20, l);
     vec3 isolated = col * knee;
     isolated *= karisWeight(isolated);
 
-    bloom_l0[coord.y * l0W + coord.x] = packBloomHalf(isolated);
+    float gx = 0.0;
+    float gy = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            vec3 pc = compAt(srcC + ivec2(x, y) * 2, srcW, srcH);
+            float lp = sqrt(max(luma(pc), 0.0));
+            gx += lp * float(x) * ((y == 0) ? 2.0 : 1.0);
+            gy += lp * float(y) * ((x == 0) ? 2.0 : 1.0);
+        }
+    }
+    float grad = sqrt(gx * gx + gy * gy);
+    float sens = edgeSensitivity();
+    float edge = smoothstep(sens * 0.12, sens * 0.12 + 0.16, grad);
+
+    bloomStore(0, coord.y * l0W + coord.x, vec4(isolated, edge));
 }
 
-// =============================================================================
-// PASS 2 & 3: ANTI-GRID 13-TAP BOX DOWNSAMPLE
-// =============================================================================
+// PASS 2 & 3: 13-Tap Anti-Grid Downsample
 void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, float radius) {
     int srcLevel = (passIdx == 2) ? 0 : 1;
     int srcW = width * 2;
@@ -649,35 +664,25 @@ void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, flo
     float x = texel.x;
     float y = texel.y;
 
-    // 13 Strategic Overlapping Taps cancel out structural grid lines
-    vec3 a = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x,  2.0 * y), srcW, srcH);
-    vec3 b = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,      2.0 * y), srcW, srcH);
-    vec3 c = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x,  2.0 * y), srcW, srcH);
+    vec4 a = sampleBloom(srcLevel, uv + vec2(-2.0 * x,  2.0 * y), srcW, srcH);
+    vec4 b = sampleBloom(srcLevel, uv + vec2( 0.0,      2.0 * y), srcW, srcH);
+    vec4 c = sampleBloom(srcLevel, uv + vec2( 2.0 * x,  2.0 * y), srcW, srcH);
+    vec4 d = sampleBloom(srcLevel, uv + vec2(-2.0 * x,  0.0), srcW, srcH);
+    vec4 e = sampleBloom(srcLevel, uv, srcW, srcH);
+    vec4 f = sampleBloom(srcLevel, uv + vec2( 2.0 * x,  0.0), srcW, srcH);
+    vec4 g = sampleBloom(srcLevel, uv + vec2(-2.0 * x, -2.0 * y), srcW, srcH);
+    vec4 h = sampleBloom(srcLevel, uv + vec2( 0.0,     -2.0 * y), srcW, srcH);
+    vec4 i = sampleBloom(srcLevel, uv + vec2( 2.0 * x, -2.0 * y), srcW, srcH);
+    vec4 j = sampleBloom(srcLevel, uv + vec2(-x,  y), srcW, srcH);
+    vec4 k = sampleBloom(srcLevel, uv + vec2( x,  y), srcW, srcH);
+    vec4 l = sampleBloom(srcLevel, uv + vec2(-x, -y), srcW, srcH);
+    vec4 m = sampleBloom(srcLevel, uv + vec2( x, -y), srcW, srcH);
 
-    vec3 d = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x,  0.0), srcW, srcH);
-    vec3 e = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,      0.0), srcW, srcH);
-    vec3 f = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x,  0.0), srcW, srcH);
-
-    vec3 g = sampleBloomBuffer(srcLevel, uv + vec2(-2.0 * x, -2.0 * y), srcW, srcH);
-    vec3 h = sampleBloomBuffer(srcLevel, uv + vec2( 0.0,     -2.0 * y), srcW, srcH);
-    vec3 i = sampleBloomBuffer(srcLevel, uv + vec2( 2.0 * x, -2.0 * y), srcW, srcH);
-
-    vec3 j = sampleBloomBuffer(srcLevel, uv + vec2(-x,  y), srcW, srcH);
-    vec3 k = sampleBloomBuffer(srcLevel, uv + vec2( x,  y), srcW, srcH);
-    vec3 l = sampleBloomBuffer(srcLevel, uv + vec2(-x, -y), srcW, srcH);
-    vec3 m = sampleBloomBuffer(srcLevel, uv + vec2( x, -y), srcW, srcH);
-
-    vec3 downsample = (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (e + j + k + l + m) * 0.125;
-
-    int dstIdx = coord.y * width + coord.x;
-    if (passIdx == 2) {
-        bloom_l1[dstIdx] = packBloomHalf(downsample);
-    } else {
-        bloom_l2[dstIdx] = packBloomHalf(downsample);
-    }
+    vec4 downsample = (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (e + j + k + l + m) * 0.125;
+    bloomStore((passIdx == 2) ? 1 : 2, coord.y * width + coord.x, downsample);
 }
 
-// PASS 4 & 5: CONTINUOUS UPSAMPLE
+// PASS 4 & 5: Continuous Upsample
 void executeBloomUpsample(int passIdx, ivec2 coord, int w, int h, float radius) {
     int srcLevel = (passIdx == 4) ? 2 : 1;
     int srcW = w / 2;
@@ -685,168 +690,293 @@ void executeBloomUpsample(int passIdx, ivec2 coord, int w, int h, float radius) 
     vec2 uv = (vec2(coord) + 0.5) / vec2(w, h);
     vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.6);
 
-    vec3 sum = vec3(0.0);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(-texel.x, 0.0), srcW, srcH) * 2.0;
-    sum += sampleBloomBuffer(srcLevel, uv + vec2( texel.x, 0.0), srcW, srcH) * 2.0;
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(0.0, -texel.y), srcW, srcH) * 2.0;
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(0.0,  texel.y), srcW, srcH) * 2.0;
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(-texel.x, -texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2( texel.x, -texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2(-texel.x,  texel.y), srcW, srcH);
-    sum += sampleBloomBuffer(srcLevel, uv + vec2( texel.x,  texel.y), srcW, srcH);
+    vec4 sum = vec4(0.0);
+    sum += sampleBloom(srcLevel, uv + vec2(-texel.x, 0.0), srcW, srcH) * 2.0;
+    sum += sampleBloom(srcLevel, uv + vec2( texel.x, 0.0), srcW, srcH) * 2.0;
+    sum += sampleBloom(srcLevel, uv + vec2(0.0, -texel.y), srcW, srcH) * 2.0;
+    sum += sampleBloom(srcLevel, uv + vec2(0.0,  texel.y), srcW, srcH) * 2.0;
+    sum += sampleBloom(srcLevel, uv + vec2(-texel.x, -texel.y), srcW, srcH);
+    sum += sampleBloom(srcLevel, uv + vec2( texel.x, -texel.y), srcW, srcH);
+    sum += sampleBloom(srcLevel, uv + vec2(-texel.x,  texel.y), srcW, srcH);
+    sum += sampleBloom(srcLevel, uv + vec2( texel.x,  texel.y), srcW, srcH);
     sum /= 12.0;
 
+    int dstLevel = (passIdx == 4) ? 1 : 0;
     int dstIdx = coord.y * w + coord.x;
-    if (passIdx == 4) {
-        vec3 existing = unpackBloomHalf(bloom_l1[dstIdx]);
-        bloom_l1[dstIdx] = packBloomHalf(mix(existing, sum, 0.55));
-    } else {
-        vec3 existing = unpackBloomHalf(bloom_l0[dstIdx]);
-        bloom_l0[dstIdx] = packBloomHalf(mix(existing, sum, 0.55));
-    }
+    vec4 existing = bloomLoad(dstLevel, dstIdx);
+    bloomStore(dstLevel, dstIdx, mix(existing, sum, 0.55));
 }
 
 // =============================================================================
-// PASS 6: COMPOSITING & IGN DITHER (Reads Binding 7 -> Writes Binding 1)
+// FINAL COMPOSITE HELPERS
+// =============================================================================
+vec3 applyFxaa(ivec2 coord, int width, int height) {
+    vec3 rgbM = compAt(coord, width, height);
+    float lumaM = luma(rgbM);
+    vec3 cU = compAt(coord + ivec2(0, -1), width, height);
+    vec3 cD = compAt(coord + ivec2(0,  1), width, height);
+    vec3 cL = compAt(coord + ivec2(-1, 0), width, height);
+    vec3 cR = compAt(coord + ivec2( 1, 0), width, height);
+    float lU = luma(cU); float lD = luma(cD); float lL = luma(cL); float lR = luma(cR);
+    float lumaMin = min(lumaM, min(min(lU, lD), min(lL, lR)));
+    float lumaMax = max(lumaM, max(max(lU, lD), max(lL, lR)));
+    if ((lumaMax - lumaMin) < max(0.04, lumaMax * 0.12)) return rgbM;
+    return mix(rgbM, (cU + cD + cL + cR) * 0.25, 0.30);
+}
+
+// =============================================================================
+// PASS 6: GLOWS, LIGHT WRAP, ATMOSPHERE, TONEMAP, LUT, TPDF DITHER
 // =============================================================================
 void executeFinalComposite(ivec2 coord, int width, int height) {
     int pixelIndex = coord.y * width + coord.x;
-    float bitMode = u_bitDepthMode;
+    float bitMode = gBit;
 
-    vec3 linearBase = applyFxaa(coord, width, height, bitMode);
+    vec4 compPx = unpackComposite(pixelIndex);
+    vec3 linearBase = applyFxaa(coord, width, height);
+    float centerLuma = luma(linearBase);
     vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
 
-    vec3 tightGlow = sampleBloomBuffer(0, uv, width / 2, height / 2);
-    vec3 wideGlow  = sampleBloomBuffer(2, uv, width / 8, height / 8);
+    vec4 tightS = sampleBloom(0, uv, max(width / 2, 1), max(height / 2, 1));
+    vec4 midS   = sampleBloom(1, uv, max(width / 4, 1), max(height / 4, 1));
+    vec4 wideS  = sampleBloom(2, uv, max(width / 8, 1), max(height / 8, 1));
+    vec3 tightGlow = tightS.rgb;
+    vec3 midGlow   = midS.rgb;
+    vec3 wideGlow  = wideS.rgb;
 
-    // Calculate line-art edge gradient
-    float resScale = float(max(width, height)) / 720.0;
-    int edgeStep = max(1, int(round(resScale)));
-    float gx = 0.0, gy = 0.0;
+    float resScale = gRes;
+    int edgeStep = gEdgeStep;
+    float gx = 0.0;
+    float gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
-            ivec2 c = clamp(coord + ivec2(x * edgeStep, y * edgeStep), ivec2(0), ivec2(width - 1, height - 1));
-            float lum = dot(unpackComposite_Dynamic(c.y * width + c.x, bitMode).rgb, vec3(0.2126, 0.7152, 0.0722));
+            float lum = luma(compAt(coord + ivec2(x * edgeStep, y * edgeStep), width, height));
             gx += lum * float(x) * ((y == 0) ? 2.0 : 1.0);
             gy += lum * float(y) * ((x == 0) ? 2.0 : 1.0);
         }
     }
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
 
-    // Dynamic Glow Tint Profiles
-    LayerData L0 = layers[0];
-    vec3 glowTint = vec3(1.0);
-    if (L0.edgeGlowTint == 1.0) glowTint = vec3(1.20, 1.05, 0.65);
-    else if (L0.edgeGlowTint == 2.0) glowTint = vec3(0.40, 1.10, 1.45);
-    else if (L0.edgeGlowTint == 3.0) glowTint = vec3(1.25, 0.85, 0.40);
-    else if (L0.edgeGlowTint == 4.0) glowTint = vec3(1.30, 0.25, 0.30);
-    else if (L0.edgeGlowTint == 5.0) glowTint = vec3(1.00, 0.55, 1.45);
-    else if (L0.edgeGlowTint == 6.0) glowTint = vec3(1.35, 0.65, 0.95);
-
-    // Multi-Layer Glow Accumulation across all 10 active layers (smooth layer stacking)
+    float exMin = glowExtractThreshold();
     int totalLayers = int(clamp(u_layerCount, 1.0, 10.0));
+
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
         if (L.isEnabled < 0.5) continue;
+        float op = clamp(L.opacity, 0.0, 1.0);
+        vec3 glowTint = tintFor(L.edgeGlowTint);
 
-        // 1. Deep Glow: High-threshold atmospheric light falloff
+        // ---- S_LightWrap: background light spilling onto the darker foreground edge ----
+        if (L.lightWrapIntensity > 0.01 && L.lightWrapWidth > 0.01) {
+            float lwRad = max(2.0, L.lightWrapWidth * 46.0 * resScale);
+            float lumaP = luma(linearBase);
+            vec3 bgSum = vec3(0.0);
+            float wSum = 0.0;
+            const int LW_TAPS = 28;
+            for (int k = 0; k < LW_TAPS; k++) {
+                float fr = (float(k) + 0.5) / float(LW_TAPS);
+                float rr = sqrt(fr) * lwRad;
+                float ang = float(k) * 2.39996323;
+                ivec2 sc = coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr));
+                vec3 s = compAt(sc, width, height);
+                float ls = luma(s);
+                float bright = smoothstep(L.lightWrapThreshold, L.lightWrapThreshold + 0.25, ls);
+                float brighter = smoothstep(0.02, 0.35, ls - lumaP);
+                float gw = exp(-fr * 1.6);
+                float w = bright * brighter * gw;
+                bgSum += s * w;
+                wSum += w;
+            }
+            if (wSum > 0.0001) {
+                vec3 bgAvg = bgSum / wSum;
+                float cover = clamp(wSum / (float(LW_TAPS) * 0.30), 0.0, 1.0);
+                float receive = 1.0 - smoothstep(0.45, 0.95, lumaP);
+                vec3 wrap = saturateColor(bgAvg, 1.10) * cover * receive * L.lightWrapIntensity * 0.85;
+                float lw = luma(wrap);
+                if (lw > 1e-5) wrap *= (1.0 - exp(-lw * 1.3)) / lw;
+                if (L.lightWrapBlendMode > 0.5) linearBase += wrap * op;
+                else {
+                    vec3 cb = clamp(linearBase, 0.0, 1.0);
+                    linearBase = mix(linearBase, cb + wrap - cb * wrap + max(linearBase - 1.0, 0.0), op);
+                }
+            }
+        }
+
+        // ---- 1. Deep Glow: Continuous falloff ----
         if (L.deepGlowIntensity > 0.01) {
-            float falloff = 1.0 / (1.0 + (1.0 - L.deepGlowRadius) * 2.2);
-            vec3 deepBloom = wideGlow * glowTint * (L.deepGlowIntensity * 1.35 * falloff);
-            deepBloom *= (1.0 - lineEdge * 0.85);
-            linearBase += deepBloom * L.opacity;
+            float r = clamp(L.deepGlowRadius, 0.0, 1.0);
+            float wT = max(0.0, 1.0 - r * 1.7);
+            float wM = max(0.0, 1.0 - abs(r - 0.5) * 2.2);
+            float wW = max(0.0, r * 1.7 - 0.7) + 0.12;
+            float wn = wT + wM + wW;
+            vec3 g = (tightGlow * wT + midGlow * wM + wideGlow * wW) / wn;
+            g = gateGlow(g, L.deepGlowThreshold, exMin);
+            g = saturateColor(g, 1.15) * mix(vec3(1.0), glowTint, 0.80);
+            g *= (1.0 - lineEdge * 0.15);
+            linearBase += g * (L.deepGlowIntensity * 1.9) * op;
         }
 
-        // 2. Kawase Glow
+        // ---- 2. Kawase Glow ----
         if (L.kawaseGlowIntensity > 0.01) {
-            vec3 kGlow = mix(tightGlow, wideGlow, clamp(L.kawaseGlowRadius, 0.0, 1.0));
-            linearBase += kGlow * glowTint * (L.kawaseGlowIntensity * 1.25) * L.opacity;
+            float r = clamp(L.kawaseGlowRadius, 0.0, 1.0);
+            vec3 g = (r < 0.5) ? mix(tightGlow, midGlow, r * 2.0) : mix(midGlow, wideGlow, (r - 0.5) * 2.0);
+            g = gateGlow(g, L.deepGlowThreshold, exMin);
+            linearBase += g * glowTint * (L.kawaseGlowIntensity * 1.6) * op;
         }
 
-        // 3. Diffuse SP (Screen-Space) Glow
+        // ---- 3. Diffuse SP Glow: Prismatic Screen-Space Diffusion ----
         if (L.diffuseSpGlowIntensity > 0.01) {
-            float spKnee = smoothstep(L.diffuseSpGlowThreshold, L.diffuseSpGlowThreshold + 0.15, dot(tightGlow, vec3(0.333)));
-            vec3 diffuseBloom = tightGlow * spKnee * (L.diffuseSpGlowIntensity * 1.40);
-            linearBase += diffuseBloom * L.opacity;
+            float r = clamp(L.diffuseSpGlowRadius, 0.0, 1.0);
+            vec2 dir = (uv - vec2(0.5)) * vec2(float(width) / float(height), 1.0);
+            float disp = (0.004 + r * 0.030);
+            vec2 uvR = uv + dir * disp * 1.00 * vec2(float(height) / float(width), 1.0);
+            vec2 uvB = uv - dir * disp * 0.65 * vec2(float(height) / float(width), 1.0);
+            float lvlMix = clamp(r * 1.2, 0.0, 1.0);
+            int mw = max(width / 4, 1); int mh = max(height / 4, 1);
+            int ww = max(width / 8, 1); int wh = max(height / 8, 1);
+            vec3 cr = mix(sampleBloom(1, uvR, mw, mh).rgb, sampleBloom(2, uvR, ww, wh).rgb, lvlMix);
+            vec3 cg = mix(midGlow, wideGlow, lvlMix);
+            vec3 cb = mix(sampleBloom(1, uvB, mw, mh).rgb, sampleBloom(2, uvB, ww, wh).rgb, lvlMix);
+            vec3 prism = vec3(cr.r, cg.g, cb.b);
+            vec3 core = mix(tightGlow, midGlow, 0.5) * vec3(1.10, 1.00, 0.88);
+            vec3 g = prism * 0.75 + core * 0.55;
+            g = gateGlow(g, L.diffuseSpGlowThreshold, exMin);
+            float veil = clamp(L.diffuseSpGlowIntensity * 0.12, 0.0, 0.25);
+            linearBase += g * (L.diffuseSpGlowIntensity * 1.5) * op;
+            linearBase += wideGlow * veil * op * vec3(0.95, 0.98, 1.05);
         }
 
-        // 4. CapCut/WIS Soft Edge Glow Halo: Diffuses outwards while keeping black line-art intact
-        if (L.sapphireGlowWidth > 0.01 || u_edgeHaloRadius > 0.01) {
-            float edgeStrength = max(L.sapphireGlowWidth, u_edgeHaloRadius);
-            float baseLuma = dot(linearBase, vec3(0.2126, 0.7152, 0.0722));
-            float inkMask = smoothstep(0.02, 0.16, baseLuma);
-            float outerHalo = smoothstep(0.08, 0.45, lineEdge) * (1.0 - smoothstep(0.70, 0.98, lineEdge));
-            vec3 haloTint = (L.edgeGlowTint == 2.0) ? vec3(0.45, 1.15, 1.50) : glowTint;
-            vec3 edgeHalo = mix(linearBase, tightGlow * 1.5, 0.5) * outerHalo * haloTint * (edgeStrength * 1.6);
-            linearBase += edgeHalo * inkMask * L.opacity;
+        // ---- 4. Sapphire Edge Glow & Soft Edge Halo (True Edge Glow) ----
+        {
+            float sapInt = 0.0;
+            float sapSpread = 0.35;
+            if (L.copiedEdgeRays > 0.01) sapInt = L.copiedEdgeRays;
+            else if (L.sapphireGlowWidth > 0.01) sapInt = 0.8;
+            if (L.sapphireGlowWidth > 0.01) sapSpread = clamp(L.sapphireGlowWidth * 0.5, 0.0, 1.0);
+
+            if (sapInt > 0.01) {
+                float eT = tightS.a;
+                float eM = midS.a;
+                float eW = wideS.a;
+                float spread = sapSpread;
+                float e = (spread < 0.5) ? mix(eT, eM, spread * 2.0) : mix(eM, eW, (spread - 0.5) * 2.0);
+                e = clamp(e * (1.4 + spread * 1.6), 0.0, 1.5);
+                vec3 edgeCol = saturateColor(linearBase, 1.45) * 1.15 + midGlow * 0.5;
+                vec3 tinted = mix(edgeCol, edgeCol * glowTint + glowTint * 0.12 * luma(edgeCol), step(0.5, L.edgeGlowTint) * 0.65);
+                linearBase += tinted * e * sapInt * 0.9 * op;
+            }
+            if (L.edgeHaloRadius > 0.01) {
+                float e = clamp(mix(midS.a, wideS.a, 0.6) * 2.2, 0.0, 1.5);
+                vec3 haloCol = saturateColor(mix(linearBase, wideGlow * 2.0 + linearBase * 0.5, 0.45), 1.25);
+                vec3 tinted = haloCol * mix(vec3(1.0), glowTint, 0.7);
+                linearBase += tinted * e * L.edgeHaloRadius * 0.55 * op;
+            }
         }
 
-        // 5. True Optical Anamorphic Flares (Horizontal Streaks across entire frame)
+        // ---- 5. Anamorphic Flare Streak (Continuous Exponential Falloff) ----
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            float flareWidth = clamp(L.thinStreakWidth * 0.45, 0.05, 1.0);
-            vec3 cyanCore = vec3(0.60, 1.00, 1.45);
-            vec3 amberEdge = vec3(1.25, 0.75, 0.35);
-
-            vec3 streakSum = vec3(0.0);
-            float totalW = 0.0;
-            int streakSteps = 16;
-            float stepSize = flareWidth / float(streakSteps);
-
-            for (int s = -streakSteps; s <= streakSteps; s++) {
-                float off = float(s) * stepSize;
-                float w = exp(-3.2 * (float(s) / float(streakSteps)) * (float(s) / float(streakSteps)));
-                vec2 sampleUV = clamp(uv + vec2(off, 0.0), vec2(0.0), vec2(1.0));
-                vec3 highSample = sampleBloomBuffer(0, sampleUV, width / 2, height / 2);
-                vec3 spectral = mix(cyanCore, amberEdge, abs(float(s)) / float(streakSteps));
-                streakSum += highSample * w * spectral;
-                totalW += w;
+            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.30;
+            const int SN = 48;
+            int w8 = max(width / 8, 1);
+            int h8 = max(height / 8, 1);
+            vec3 sSum = vec3(0.0);
+            for (int s = -SN; s <= SN; s++) {
+                float t = float(s) / float(SN);
+                float wgt = exp(-abs(t) * 3.2) * (1.0 - smoothstep(0.80, 1.0, abs(t)));
+                vec2 suv = vec2(clamp(uv.x + t * halfLen, 0.0, 1.0), uv.y);
+                vec3 sm = sampleBloom(2, suv, w8, h8).rgb;
+                float gate = smoothstep(0.22, 0.75, luma(sm));
+                vec3 spectral = mix(vec3(0.75, 1.00, 1.35), vec3(1.25, 0.80, 0.45), abs(t));
+                sSum += sm * gate * wgt * mix(vec3(1.0), spectral, 0.65);
             }
+            vec3 streak = sSum / float(SN) * 3.4;
+            linearBase += streak * L.thinStreakIntensity * L.thinStreakOpacity * op;
+        }
 
-            if (totalW > 0.0) {
-                vec3 anamorphicBeam = (streakSum / totalW) * (L.thinStreakIntensity * 2.2) * L.thinStreakOpacity;
-                linearBase += anamorphicBeam * L.opacity;
-            }
+        // ---- 6. Pro-Mist Halation Diffusion ----
+        if (L.copiedProMist > 0.01) {
+            vec3 mist = mix(midGlow, wideGlow, 0.55);
+            mist = gateGlow(mist, 0.40, exMin);
+            vec3 m2 = mist * (L.copiedProMist * 1.25) * (1.0 - lineEdge * 0.65);
+            linearBase += m2 * op;
+            float l0 = luma(linearBase);
+            linearBase = mix(linearBase, vec3(l0) + (linearBase - vec3(l0)) * 0.97, clamp(L.copiedProMist * 0.5, 0.0, 0.5));
+        }
+        if (L.halationRadius > 0.01) {
+            float r = clamp(L.halationRadius / 1.5, 0.0, 1.0);
+            vec3 hal = mix(tightGlow, mix(midGlow, wideGlow, 0.5), r);
+            float warm = clamp(L.halationWarmth / 1.5, 0.0, 1.0);
+            vec3 halTint = mix(vec3(1.00, 0.30, 0.12), vec3(1.00, 0.52, 0.20), warm);
+            float hl = luma(hal);
+            linearBase += halTint * hl * 1.35 * (1.0 - lineEdge * 0.6) * L.halationRadius * 1.1 * op;
+        }
+
+        // ---- 7. Atmosphere Haze & Scatter ----
+        if (L.bslaBloomHaze > 0.01) {
+            vec3 hz = mix(wideGlow, vec3(luma(wideGlow)) * vec3(0.78, 0.90, 1.10), 0.35);
+            linearBase += hz * L.bslaBloomHaze * 1.2 * op;
+        }
+        if (L.bslFogScatter > 0.01) {
+            vec3 sc = mix(midGlow, wideGlow, 0.6) * vec3(1.05, 1.0, 0.92);
+            linearBase += sc * L.bslFogScatter * 1.1 * op;
         }
     }
 
-    // 6. Shaderly Glow: Soft creamy bloom modulated by footage color
-    if (u_shaderlyGlowIntensity > 0.01) {
-        vec3 creamyColor = mix(linearBase, tightGlow, 0.40);
-        float radiusMod = clamp(u_shaderlyGlowRadius * 1.5, 0.2, 2.0);
-        vec3 softBloom = creamyColor * (u_shaderlyGlowIntensity * 1.10 * radiusMod);
-        linearBase += softBloom * (1.0 - lineEdge * 0.50);
+    // ---- Shaderly Glow: Soft Saturated Bloom ----
+    for (int i = 0; i < totalLayers; i++) {
+        LayerData L = layers[i];
+        if (L.isEnabled < 0.5 || L.shaderlyGlowIntensity <= 0.01) continue;
+        float r = clamp(L.shaderlyGlowRadius, 0.0, 1.0);
+        vec3 g = (r < 0.5) ? mix(tightGlow, midGlow, r * 2.0) : mix(midGlow, wideGlow, (r - 0.5) * 2.0);
+        g = mix(g, g + wideGlow * 0.5, 0.35);
+        g = gateGlow(g, L.shaderlyGlowThreshold, exMin);
+        g = saturateColor(g, 1.30);
+        if (L.shaderlyGlowTint > 0.01) {
+            vec3 tint = srgbToLinear(hueToRGB(fract(L.shaderlyGlowTint)));
+            g = mix(g, tint * luma(g) * 2.2, 0.55);
+        }
+        vec3 add = g * (L.shaderlyGlowIntensity * 1.6);
+        add *= (1.0 - clamp(luma(linearBase), 0.0, 1.0) * 0.40);
+        linearBase += add * (1.0 - lineEdge * 0.30) * clamp(L.opacity, 0.0, 1.0);
     }
 
-    // 7. Master Tonemapping
+    // ---- Master Tonemap & Convert to Display sRGB ----
     vec3 finalLinear = applyToneMapping(linearBase, u_tonemapMode);
-
-    // 8. Convert to sRGB
     vec3 finalDisplay = linearToSrgb(finalLinear);
 
-    // 9. SCREEN-SPACE INTERLEAVED GRADIENT NOISE (IGN) DITHER
-    float ignNoise = interleavedGradientNoise(vec2(coord));
-    float ditherStep = (bitMode > 1.5) ? (1.0 / 65535.0) : (1.0 / 255.0);
-    vec3 ditherOffset = vec3(ignNoise - 0.5) * ditherStep * max(u_ditherStrength, 0.85);
-    finalDisplay = clamp(finalDisplay + ditherOffset, 0.0, 1.0);
-
-    // Smooth Triangular Sub-Pixel Dither
-    if (u_ditherStrength > 0.01) {
-        float dither = smoothTriangularDither(coord);
-        finalDisplay = clamp(finalDisplay + vec3(dither * ditherStep * (u_ditherStrength * 0.5)), 0.0, 1.0);
+    // ---- Display-Referred 3D LUT Application ----
+    if (u_hasLut > 0.5) {
+        finalDisplay = sample3DLutDisplay(finalDisplay, u_lutOpacity);
     }
 
-    packFinalDisplay_Dynamic(pixelIndex, vec4(finalDisplay, 1.0), bitMode);
+    // ---- TPDF Triangular Dither Before Final Quantization ----
+    float lsb = (bitMode > 1.5) ? (1.0 / 65535.0) : (1.0 / 255.0);
+    float amt = mix(0.55, 1.35, clamp(u_ditherStrength, 0.0, 1.0));
+    ivec2 shift = ivec2(int(fract(u_time * 0.1371) * 997.0), int(fract(u_time * 0.0713) * 991.0));
+    float n1 = hashInt12(coord + shift);
+    float n2 = hashInt12(coord + shift + ivec2(41, 17));
+    float tpdf = (n1 + n2) - 1.0;
+    vec3 chroma = vec3(tpdf,
+                       (hashInt12(coord + shift + ivec2(7, 91)) + hashInt12(coord + shift + ivec2(113, 3)) - 1.0),
+                       (hashInt12(coord + shift + ivec2(59, 29)) + hashInt12(coord + shift + ivec2(5, 211)) - 1.0));
+    finalDisplay = clamp(finalDisplay + mix(vec3(tpdf), chroma, 0.35) * lsb * amt, 0.0, 1.0);
+
+    packFinalDisplay(pixelIndex, vec4(finalDisplay, 1.0), bitMode);
 }
 
 // =============================================================================
-// MAIN DISPATCH ROUTER
+// MAIN
 // =============================================================================
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
     int width = u_passWidth;
     int height = u_passHeight;
-
     if (coord.x >= width || coord.y >= height) return;
+
+    gW = int(round(u_imgWidth)) > 0 ? width : width;
+    gH = height;
+    gBit = u_bitDepthMode;
+    gRes = float(max(width, height)) / 720.0;
+    gEdgeStep = max(1, int(round(gRes)));
 
     if (u_passIndex == 1) {
         executeHighlightExtraction(coord, width, height, int(u_imgWidth), int(u_imgHeight));
@@ -863,93 +993,86 @@ void main() {
     }
 
     // =========================================================================
-    // PASS 0: FULL PRIMARY GRADE & INPUT RESTORATION PIPELINE
-    // Reads in_pixels -> Writes clean composite to temp_composite (Binding 7)
+    // PASS 0: PRIMARY GRADE -> HDR half-float composite
     // =========================================================================
     int pixelIndex = coord.y * width + coord.x;
-    float bitMode = u_bitDepthMode;
-    vec4 rawPixel = unpackRGBA_Dynamic(pixelIndex, bitMode);
+    vec4 rawPixel = unpackRGBA_Dynamic(pixelIndex, gBit);
+    float resScale = gRes;
+    int edgeStep = gEdgeStep;
+    vec2 uvN = (vec2(coord) + 0.5) / vec2(width, height);
 
-    vec3 currentComposite = srgbToLinear(rawPixel.rgb);
-    float resScale = float(max(width, height)) / 720.0;
-    int edgeStep = max(1, int(round(resScale)));
-
-    // -------------------------------------------------------------------------
-    // STAGE 1: INPUT DEBANDING (Restores compressed 8-bit source gradients)
-    // -------------------------------------------------------------------------
-    LayerData L0 = layers[0];
-    if (L0.debandRadius > 0.01) {
-        float dRad = L0.debandRadius * 4.0 * resScale;
-        float dThresh = max(L0.debandThreshold, 0.005);
-        vec3 centerCol = currentComposite;
-        vec3 sumDeband = centerCol;
-        float totalW = 1.0;
-
-        for (int a = 0; a < 4; a++) {
-            float angle = float(a) * 1.5707963;
-            ivec2 off = ivec2(cos(angle) * dRad, sin(angle) * dRad);
-            ivec2 sc = clamp(coord + off, ivec2(0), ivec2(width - 1, height - 1));
-            vec3 sCol = srgbToLinear(unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb);
-            if (distance(centerCol, sCol) < dThresh) {
-                sumDeband += sCol;
-                totalW += 1.0;
+    // ---- STAGE 1: DEBAND (works in gamma space, restores 8-bit source gradients) ----
+    vec3 srcS = rawPixel.rgb;
+    {
+        float dRad = 0.0;
+        float dThr = 0.02;
+        int totalL = int(clamp(u_layerCount, 1.0, 10.0));
+        for (int i = 0; i < totalL; i++) {
+            if (layers[i].isEnabled > 0.5 && layers[i].debandRadius > dRad) {
+                dRad = layers[i].debandRadius;
+                dThr = layers[i].debandThreshold;
             }
         }
-        currentComposite = sumDeband / totalW;
+        if (dRad > 0.01) {
+            float radius = max(1.5, dRad * 7.0 * resScale);
+            float thr = max(dThr, 0.004) * 1.6;
+            float rot = hash12(vec2(coord) + 3.7) * 6.2831853;
+            vec3 sum = srcS;
+            vec3 cnt = vec3(1.0);
+            for (int k = 0; k < 14; k++) {
+                float fr = (float(k) + 0.5) / 14.0;
+                float ang = rot + float(k) * 2.39996323;
+                float rr = (0.25 + 0.75 * fr) * radius;
+                vec3 s = srcSrgb(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)));
+                vec3 m = step(abs(s - srcS), vec3(thr));
+                sum += s * m;
+                cnt += m;
+            }
+            vec3 avg = sum / cnt;
+            vec3 n = vec3(hash12(vec2(coord) * 1.13 + 11.0), hash12(vec2(coord) * 0.77 + 51.0), hash12(vec2(coord) * 1.71 + 91.0)) - 0.5;
+            srcS = clamp(avg + n * (1.0 / 255.0) * clamp(dRad, 0.0, 1.0), 0.0, 1.0);
+        }
     }
+    vec3 src0 = srgbToLinear(srcS);
+    vec3 currentComposite = src0;
 
-    // -------------------------------------------------------------------------
-    // STAGE 2: EDGE-DIRECTED LINE THINNING & DARKENING (Crisp anime line art)
-    // -------------------------------------------------------------------------
+    // ---- STAGE 2: LINE THINNING ----
+    LayerData L0 = layers[0];
     if (L0.lineThinning > 0.01) {
-        ivec2 cT = clamp(coord + ivec2(0,  edgeStep), ivec2(0), ivec2(width - 1, height - 1));
-        ivec2 cB = clamp(coord + ivec2(0, -edgeStep), ivec2(0), ivec2(width - 1, height - 1));
-        ivec2 cL = clamp(coord + ivec2(-edgeStep, 0), ivec2(0), ivec2(width - 1, height - 1));
-        ivec2 cR = clamp(coord + ivec2( edgeStep, 0), ivec2(0), ivec2(width - 1, height - 1));
-
-        vec3 colT = srgbToLinear(unpackRGBA_Dynamic(cT.y * width + cT.x, bitMode).rgb);
-        vec3 colB = srgbToLinear(unpackRGBA_Dynamic(cB.y * width + cB.x, bitMode).rgb);
-        vec3 colL = srgbToLinear(unpackRGBA_Dynamic(cL.y * width + cL.x, bitMode).rgb);
-        vec3 colR = srgbToLinear(unpackRGBA_Dynamic(cR.y * width + cR.x, bitMode).rgb);
-
-        float lumaC = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
-        float lumaT = dot(colT, vec3(0.2126, 0.7152, 0.0722));
-        float lumaB = dot(colB, vec3(0.2126, 0.7152, 0.0722));
-        float lumaL = dot(colL, vec3(0.2126, 0.7152, 0.0722));
-        float lumaR = dot(colR, vec3(0.2126, 0.7152, 0.0722));
-
-        float edgeGrad = sqrt(pow(lumaR - lumaL, 2.0) + pow(lumaT - lumaB, 2.0));
+        vec3 colT = srcLin(coord + ivec2(0,  edgeStep));
+        vec3 colB = srcLin(coord + ivec2(0, -edgeStep));
+        vec3 colL = srcLin(coord + ivec2(-edgeStep, 0));
+        vec3 colR = srcLin(coord + ivec2( edgeStep, 0));
+        float lumaC = luma(currentComposite);
+        float lumaT = luma(colT); float lumaB = luma(colB);
+        float lumaL = luma(colL); float lumaR = luma(colR);
+        float edgeGrad = sqrt((lumaR - lumaL) * (lumaR - lumaL) + (lumaT - lumaB) * (lumaT - lumaB));
         if (edgeGrad > L0.lineThinningThreshold) {
             float minLuma = min(min(lumaT, lumaB), min(lumaL, lumaR));
             if (minLuma < lumaC) {
-                vec3 darkestNeighbor = colT;
-                if (lumaB == minLuma) darkestNeighbor = colB;
-                if (lumaL == minLuma) darkestNeighbor = colL;
-                if (lumaR == minLuma) darkestNeighbor = colR;
-                currentComposite = mix(currentComposite, darkestNeighbor, clamp(L0.lineThinning * 0.65, 0.0, 1.0));
+                vec3 darkest = colT;
+                if (lumaB == minLuma) darkest = colB;
+                if (lumaL == minLuma) darkest = colL;
+                if (lumaR == minLuma) darkest = colR;
+                currentComposite = mix(currentComposite, darkest, clamp(L0.lineThinning * 0.65, 0.0, 1.0));
             }
         }
     }
 
-    // Sobel gradient for line detection and edge normal
-    float gx = 0.0, gy = 0.0;
+    // Sobel gradient (source) for edge normal / line masks
+    float gx = 0.0;
+    float gy = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
-            ivec2 c = clamp(coord + ivec2(x * edgeStep, y * edgeStep), ivec2(0), ivec2(width - 1, height - 1));
-            vec3 pLin = srgbToLinear(unpackRGBA_Dynamic(c.y * width + c.x, bitMode).rgb);
-            float lum = dot(pLin, vec3(0.2126, 0.7152, 0.0722));
-            float kx = float(x) * ((y == 0) ? 2.0 : 1.0);
-            float ky = float(y) * ((x == 0) ? 2.0 : 1.0);
-            gx += lum * kx;
-            gy += lum * ky;
+            float lum = luma(srcLin(coord + ivec2(x * edgeStep, y * edgeStep)));
+            gx += lum * float(x) * ((y == 0) ? 2.0 : 1.0);
+            gy += lum * float(y) * ((x == 0) ? 2.0 : 1.0);
         }
     }
     float lineEdge = clamp(sqrt(gx * gx + gy * gy) * 1.5, 0.0, 1.0);
     vec2 edgeNormal = (lineEdge > 0.05) ? normalize(vec2(gx, gy)) : vec2(0.0);
 
-    // -------------------------------------------------------------------------
-    // STAGE 3: MULTI-LAYER GRADING STACK (Iterate across up to 10 layers cleanly)
-    // -------------------------------------------------------------------------
+    // ---- STAGE 3: MULTI-LAYER STACK ----
     int totalLayers = int(clamp(u_layerCount, 1.0, 10.0));
 
     for (int i = 0; i < totalLayers; i++) {
@@ -958,159 +1081,192 @@ void main() {
 
         vec3 layerColor = currentComposite;
 
-        // 1. Tilt-Shift Depth of Field (in Linear Space)
+        // 1. Depth of field (tilt band or radial), disc blur with bokeh highlight emphasis
         if (L.depthOfField > 0.01) {
-            float normY = float(coord.y) / float(height);
-            float dofDist = abs(normY - L.dofFocus);
-            float dofBlurAmt = smoothstep(0.10, 0.45, dofDist) * L.depthOfField * 6.0 * resScale;
-            if (dofBlurAmt > 0.5) {
-                vec2 dofDir = vec2(cos(L.dofAngle), sin(L.dofAngle));
-                vec3 dofSum = layerColor;
-                float dofTotal = 1.0;
-                for (int step = 1; step <= 6; step++) {
-                    ivec2 dOffset = ivec2(dofDir * (float(step) * (dofBlurAmt / 6.0)));
-                    ivec2 dP1 = clamp(coord + dOffset, ivec2(0), ivec2(width - 1, height - 1));
-                    ivec2 dP2 = clamp(coord - dOffset, ivec2(0), ivec2(width - 1, height - 1));
-                    dofSum += srgbToLinear(unpackRGBA_Dynamic(dP1.y * width + dP1.x, bitMode).rgb);
-                    dofSum += srgbToLinear(unpackRGBA_Dynamic(dP2.y * width + dP2.x, bitMode).rgb);
-                    dofTotal += 2.0;
+            float dist;
+            if (L.dofMode > 0.5) {
+                vec2 dd = uvN - vec2(0.5, L.dofFocus);
+                dd.x *= float(width) / float(height);
+                dist = length(dd);
+            } else {
+                dist = abs(uvN.y - L.dofFocus);
+            }
+            float rng = clamp(L.dofRange, 0.0, 1.0) * 0.5;
+            float fall = max(0.02, L.dofFalloff * 0.6);
+            float coc = smoothstep(rng, rng + fall, dist);
+            float r = coc * L.depthOfField * 22.0 * resScale;
+            if (r > 0.6) {
+                vec3 acc = vec3(0.0);
+                float wsum = 0.0;
+                const int DOF_TAPS = 28;
+                for (int k = 0; k < DOF_TAPS; k++) {
+                    float fr = (float(k) + 0.5) / float(DOF_TAPS);
+                    float rr = sqrt(fr) * r;
+                    float th = float(k) * 2.39996323 + L.dofAngle;
+                    vec3 s = srcLin(coord + ivec2(round(vec2(cos(th), sin(th)) * rr)));
+                    float lw = 1.0 + L.dofBokeh * 6.0 * smoothstep(0.55, 1.2, luma(s));
+                    acc += s * lw;
+                    wsum += lw;
                 }
-                layerColor = dofSum / dofTotal;
+                layerColor += (acc / wsum - src0) * smoothstep(0.0, 0.15, coc);
             }
         }
 
-        // 2. Edge Chromatic Aberration
+        // 2. Edge chromatic aberration (delta)
         if (L.lineChromaStrength > 0.001 && lineEdge > 0.05) {
             float edgeFactor = smoothstep(0.08, 0.35, lineEdge);
-            ivec2 shift = ivec2(edgeNormal * (L.lineChromaStrength * 3.0 * resScale));
-            ivec2 rCoord = clamp(coord + shift, ivec2(0), ivec2(width - 1, height - 1));
-            ivec2 bCoord = clamp(coord - shift, ivec2(0), ivec2(width - 1, height - 1));
-            layerColor.r = mix(layerColor.r, srgbToLinear(unpackRGBA_Dynamic(rCoord.y * width + rCoord.x, bitMode).rgb).r, edgeFactor * 0.80);
-            layerColor.b = mix(layerColor.b, srgbToLinear(unpackRGBA_Dynamic(bCoord.y * width + bCoord.x, bitMode).rgb).b, edgeFactor * 0.80);
+            ivec2 sh = ivec2(edgeNormal * (L.lineChromaStrength * 3.0 * resScale));
+            vec3 sr = srcLin(coord + sh);
+            vec3 sb = srcLin(coord - sh);
+            layerColor.r += (sr.r - src0.r) * edgeFactor * 0.80;
+            layerColor.b += (sb.b - src0.b) * edgeFactor * 0.80;
         }
 
-        // 3. RGB Directional Warp Shift
-        if (u_copiedChromaShift > 0.001) {
-            ivec2 cShift = ivec2(int(u_copiedChromaShift * 6.0 * resScale), 0);
-            ivec2 rCoord = clamp(coord + cShift, ivec2(0), ivec2(width - 1, height - 1));
-            ivec2 bCoord = clamp(coord - cShift, ivec2(0), ivec2(width - 1, height - 1));
-            layerColor.r = srgbToLinear(unpackRGBA_Dynamic(rCoord.y * width + rCoord.x, bitMode).rgb).r;
-            layerColor.b = srgbToLinear(unpackRGBA_Dynamic(bCoord.y * width + bCoord.x, bitMode).rgb).b;
+        // 3. RGB directional warp shift (delta)
+        if (L.copiedChromaShift > 0.001) {
+            ivec2 cs = ivec2(int(L.copiedChromaShift * 6.0 * resScale), 0);
+            vec3 sr = srcLin(coord + cs);
+            vec3 sb = srcLin(coord - cs);
+            layerColor.r += sr.r - src0.r;
+            layerColor.b += sb.b - src0.b;
         }
 
-        // 4. Bilateral Denoise
+        // 4. Denoise: edge-aware bilateral, chroma cleaned harder than luma
         if (L.denoise > 0.01) {
-            vec3 centerCol = layerColor;
-            vec3 denoiseSum = centerCol;
-            float denoiseWeight = 1.0;
-            int dRad = clamp(int(round(L.denoise * 3.0 * resScale)), 1, 5);
-            float sigmaSpatial = max(1.5, L.denoise * 4.0);
-            float sigmaColor = 0.16;
-
+            float dn = clamp(L.denoise, 0.0, 1.0);
+            int dRad = clamp(int(round(1.0 + dn * 2.6 * resScale * 0.8)), 1, 4);
+            float sigS = max(1.2, float(dRad) * 0.7);
+            float sigR = mix(0.035, 0.18, dn);
+            vec3 pc = sqrt(src0);
+            vec3 acc = src0;
+            float wsum = 1.0;
             for (int dy = -dRad; dy <= dRad; dy++) {
                 for (int dx = -dRad; dx <= dRad; dx++) {
                     if (dx == 0 && dy == 0) continue;
-                    ivec2 sc = clamp(coord + ivec2(dx, dy), ivec2(0), ivec2(width - 1, height - 1));
-                    vec3 scCol = srgbToLinear(unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb);
-                    float spatialDist = float(dx * dx + dy * dy);
-                    float colorDist = distance(centerCol, scCol);
-
-                    float w = exp(-spatialDist / (2.0 * sigmaSpatial * sigmaSpatial)) * exp(-(colorDist * colorDist) / (2.0 * sigmaColor * sigmaColor));
-                    denoiseSum += scCol * w;
-                    denoiseWeight += w;
+                    vec3 s = srcLin(coord + ivec2(dx, dy));
+                    vec3 ps = sqrt(s);
+                    float sd = float(dx * dx + dy * dy);
+                    vec3 dc = pc - ps;
+                    float rd = dot(dc, dc);
+                    float w = exp(-sd / (2.0 * sigS * sigS)) * exp(-rd / (2.0 * sigR * sigR));
+                    acc += s * w;
+                    wsum += w;
                 }
             }
-            layerColor = mix(layerColor, denoiseSum / max(denoiseWeight, 0.001), clamp(L.denoise * 0.90, 0.0, 1.0));
+            vec3 avg = acc / wsum;
+            float lC = luma(src0);
+            float lA = luma(avg);
+            vec3 target = vec3(mix(lC, lA, clamp(dn * 0.85, 0.0, 1.0))) + mix(src0 - vec3(lC), avg - vec3(lA), clamp(dn * 1.15, 0.0, 1.0));
+            layerColor += (max(target, vec3(0.0)) - src0) * (1.0 - lineEdge * 0.25);
         }
 
-        // 5. Anime Bilateral Skin/Cloth Smoothing
+        // 5. Anime skin / cloth smoothing (edge + line preserving, skin weighted)
         if (L.bilateralIntensity > 0.01) {
-            vec3 bCenter = layerColor;
-            vec3 bSum = bCenter;
-            float bWeight = 1.0;
-            int bRad = clamp(int(round(L.bilateralRadius * resScale)), 1, 4);
-            float bRange = max(L.bilateralRange, 0.02);
-
-            for (int dy = -bRad; dy <= bRad; dy++) {
-                for (int dx = -bRad; dx <= bRad; dx++) {
+            float rad = clamp(L.bilateralRadius * resScale * 0.7, 1.0, 6.0);
+            int bRad = int(ceil(rad));
+            int stp = (bRad > 3) ? 2 : 1;
+            float sigS = max(1.0, rad * 0.65);
+            float sigR = max(L.bilateralRange, 0.03) * 0.6;
+            vec3 pc = sqrt(src0);
+            vec3 acc = src0;
+            float wsum = 1.0;
+            for (int dy = -bRad; dy <= bRad; dy += stp) {
+                for (int dx = -bRad; dx <= bRad; dx += stp) {
                     if (dx == 0 && dy == 0) continue;
-                    ivec2 bc = clamp(coord + ivec2(dx, dy), ivec2(0), ivec2(width - 1, height - 1));
-                    vec3 scCol = srgbToLinear(unpackRGBA_Dynamic(bc.y * width + bc.x, bitMode).rgb);
-                    float spat = float(dx * dx + dy * dy);
-                    float colDiff = distance(bCenter, scCol);
-                    float w = exp(-spat / 8.0) * exp(-(colDiff * colDiff) / (2.0 * bRange * bRange));
-                    bSum += scCol * w;
-                    bWeight += w;
+                    vec3 s = srcLin(coord + ivec2(dx, dy));
+                    vec3 dc = pc - sqrt(s);
+                    float w = exp(-float(dx * dx + dy * dy) / (2.0 * sigS * sigS)) * exp(-dot(dc, dc) / (2.0 * sigR * sigR));
+                    acc += s * w;
+                    wsum += w;
                 }
             }
-            layerColor = mix(layerColor, bSum / bWeight, clamp(L.bilateralIntensity, 0.0, 1.0));
+            vec3 smoothC = acc / wsum;
+            vec3 lab0 = linearRgbToOklab(src0);
+            float skin = smoothstep(0.02, 0.10, lab0.y) * smoothstep(0.01, 0.07, lab0.z) * smoothstep(0.50, 0.72, lab0.x);
+            float prot = 1.0 - smoothstep(0.10, 0.35, lineEdge);
+            float amount = clamp(L.bilateralIntensity, 0.0, 1.0) * mix(0.55, 1.0, skin) * prot;
+            layerColor += (smoothC - src0) * amount;
+            layerColor *= 1.0 + skin * L.bilateralIntensity * 0.035;
         }
 
-        // 6. Frequency Unsharp Mask
+        // 6. Frequency unsharp mask (delta on source detail)
         if (L.unsharpAmount > 0.01) {
             int uRad = int(clamp(L.unsharpRadius * resScale, 1.0, 6.0));
             vec3 lowPass = vec3(0.0);
-            float uWeightTotal = 0.0;
+            float uW = 0.0;
             for (int uy = -uRad; uy <= uRad; uy += 2) {
                 for (int ux = -uRad; ux <= uRad; ux += 2) {
-                    ivec2 uc = clamp(coord + ivec2(ux, uy), ivec2(0), ivec2(width - 1, height - 1));
-                    lowPass += srgbToLinear(unpackRGBA_Dynamic(uc.y * width + uc.x, bitMode).rgb);
-                    uWeightTotal += 1.0;
+                    lowPass += srcLin(coord + ivec2(ux, uy));
+                    uW += 1.0;
                 }
             }
-            lowPass /= max(uWeightTotal, 1.0);
-            vec3 highPass = layerColor - lowPass;
-            float diffLum = abs(dot(highPass, vec3(0.2126, 0.7152, 0.0722)));
+            lowPass /= max(uW, 1.0);
+            vec3 highPass = src0 - lowPass;
+            float diffLum = abs(luma(highPass));
             if (diffLum >= L.unsharpThreshold) {
                 float boost = smoothstep(L.unsharpThreshold, L.unsharpThreshold + 0.10, diffLum);
                 layerColor += highPass * (L.unsharpAmount * boost * 1.3);
             }
         }
 
-        // 7. High-Pass Anime Line Acutance Sharpness
+        // 7. Acutance sharpness (delta)
         if (L.sharpness > 0.01) {
-            vec3 blur = vec3(0.0);
-            blur += srgbToLinear(unpackRGBA_Dynamic(clamp(coord.y - edgeStep, 0, height - 1) * width + coord.x, bitMode).rgb);
-            blur += srgbToLinear(unpackRGBA_Dynamic(clamp(coord.y + edgeStep, 0, height - 1) * width + coord.x, bitMode).rgb);
-            blur += srgbToLinear(unpackRGBA_Dynamic(coord.y * width + clamp(coord.x - edgeStep, 0, width - 1), bitMode).rgb);
-            blur += srgbToLinear(unpackRGBA_Dynamic(coord.y * width + clamp(coord.x + edgeStep, 0, width - 1), bitMode).rgb);
+            vec3 blur = srcLin(coord + ivec2(0, -edgeStep)) + srcLin(coord + ivec2(0, edgeStep))
+                      + srcLin(coord + ivec2(-edgeStep, 0)) + srcLin(coord + ivec2(edgeStep, 0));
             blur *= 0.25;
-            vec3 detail = layerColor - blur;
-            layerColor += detail * (L.sharpness * 1.5);
+            layerColor += (src0 - blur) * (L.sharpness * 1.5);
         }
 
-        // 8. Cel Line Darkeners
-        if (L.darkOutlines > 0.01) {
-            float outlineFactor = smoothstep(0.12, 0.40, lineEdge);
-            layerColor = mix(layerColor, vec3(0.0), outlineFactor * L.darkOutlines * 0.75);
+        // 8. S_lining: line-art detection -> tiny inner grey-black blur on the edges
+        if (L.darkOutlines > 0.01 && L.sLiningOpacity > 0.01) {
+            float radius = (1.2 + L.darkOutlines * 4.0) * resScale;
+            float sigma = radius * 0.55;
+            float cLuma = dot(srcSrgb(coord), vec3(0.2126, 0.7152, 0.0722));
+            float centerLine = 1.0 - smoothstep(0.06, 0.30, cLuma);
+            float acc = 0.0;
+            float wacc = 0.0;
+            const int SL_TAPS = 22;
+            for (int k = 0; k < SL_TAPS; k++) {
+                float fr = (float(k) + 0.5) / float(SL_TAPS);
+                float rr = sqrt(fr) * radius;
+                float ang = float(k) * 2.39996323;
+                float sl = dot(srcSrgb(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr))), vec3(0.2126, 0.7152, 0.0722));
+                float lineness = 1.0 - smoothstep(0.06, 0.30, sl);
+                float w = exp(-(rr * rr) / (2.0 * sigma * sigma));
+                acc += lineness * w;
+                wacc += w;
+            }
+            float halo = acc / max(wacc, 1e-4);
+            float mask = pow(clamp(halo * 1.5, 0.0, 1.0), 0.85) * (1.0 - centerLine);
+            vec3 greyTarget = vec3(0.045);
+            vec3 inner = mix(layerColor * 0.30, greyTarget, 0.35);
+            layerColor = mix(layerColor, inner, clamp(mask * (0.55 + 0.45 * L.darkOutlines) * L.sLiningOpacity, 0.0, 1.0));
         }
         if (L.edgeDarken > 0.01) {
             float innerEdge = smoothstep(0.10, 0.45, lineEdge);
             layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.40);
         }
 
-        // 9. Color Temperature
+        // 9. Colour temperature
         if (L.temperature > 1000.0 && abs(L.temperature - 6500.0) > 30.0) {
-            vec3 tempColor = colorTempToRGB(L.temperature);
-            layerColor *= tempColor / colorTempToRGB(6500.0);
+            layerColor *= colorTempToRGB(L.temperature) / colorTempToRGB(6500.0);
         }
 
-        // --- CONVERT TO OKLAB FOR PERCEPTUAL TONAL & COLOR GRADING ---
+        // ---- OKLAB perceptual grading ----
         vec3 lab = linearRgbToOklab(layerColor);
 
-        // 10. Exposure, Contrast & Shadows (Oklab Lightness - zero hue drift)
+        // 10. Exposure, contrast, shadows / highlights, gamma
         if (abs(L.brightness) > 0.001) lab.x += L.brightness * 0.35;
         if (abs(L.contrast - 1.0) > 0.001) lab.x = (lab.x - 0.50) * L.contrast + 0.50;
+        lab.x = max(lab.x, 0.0);
 
-        if (L.blackCrush > 0.01) {
-            lab.x = smoothstep(L.blackCrush * 0.08, 1.0, lab.x);
-        }
+        if (L.blackCrush > 0.01) lab.x = smoothstep(L.blackCrush * 0.08, 1.0, lab.x);
 
         lab.x += lab.x * (L.shadows * (1.0 - smoothstep(0.0, 0.45, lab.x)) * 0.30);
         lab.x += lab.x * (L.highlights * smoothstep(0.55, 1.0, lab.x) * 0.30);
-        lab.x = pow(max(lab.x, 0.0), 1.0 / max(L.gamma, 0.001));
+        if (abs(L.gamma - 1.0) > 0.001) lab.x = pow(max(lab.x, 0.0), 1.0 / max(L.gamma, 0.001));
 
-        // 11. Magic Mojo II (Oklab Teal & Orange)
+        // 11. Mojo teal & orange
         if (L.mblMojoTealOrange > 0.01) {
             float shadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
             float warmMask = clamp((lab.x - 0.35) * 1.5, 0.0, 1.0);
@@ -1120,216 +1276,230 @@ void main() {
             lab.z += warmMask * L.mblMojoTealOrange * 0.035;
         }
 
-        // 12. Deep Teal with Adaptive Skin Tone Shielding
-        if (u_deepTeal > 0.01) {
+        // 12. Deep teal with skin shielding
+        if (L.deepTeal > 0.01) {
             float deepShadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
-            bool isSkinTone = (lab.y > 0.015 && lab.z > 0.015);
-            float skinShield = isSkinTone ? 0.15 : 1.0;
-            lab.z -= deepShadowMask * u_deepTeal * 0.055 * skinShield;
-            lab.y -= deepShadowMask * u_deepTeal * 0.025 * skinShield;
+            bool isSkin = (lab.y > 0.015 && lab.z > 0.015);
+            float shield = isSkin ? 0.15 : 1.0;
+            lab.z -= deepShadowMask * L.deepTeal * 0.055 * shield;
+            lab.y -= deepShadowMask * L.deepTeal * 0.025 * shield;
         }
 
-        // 13. Colorista 3-Way
+        // 13. Colorista 3-way
         if (abs(L.mblColoristaLift) > 0.001 || abs(L.mblColoristaGamma) > 0.001 || abs(L.mblColoristaGain) > 0.001) {
             lab.x += L.mblColoristaLift * (1.0 - lab.x) * 0.35;
             lab.x = pow(max(0.0, lab.x), 1.0 / max(1.0 + L.mblColoristaGamma * 0.40, 0.01));
             lab.x += L.mblColoristaGain * lab.x * 0.35;
         }
 
-        // 14. Cosmo Skin Protection
+        // 14. Cosmo skin protection
         if (L.cosmoCleanHighlight > 0.01) {
             float faceMask = smoothstep(0.50, 0.85, lab.x) * (1.0 - lineEdge);
             lab.yz = mix(lab.yz, lab.yz * 0.85, faceMask * L.cosmoCleanHighlight * 0.40);
         }
 
-        // 15. Monotonic Spline Curves on Lightness (Zero Inversion Risk)
-        lab.x = evalCatmullRom(float(lab.x), float(L.curveM0), float(L.curveM1), float(L.curveM2), float(L.curveM3), float(L.curveM4));
-
-        // Magic Curves (Secondary S-Curve on L)
-        if (u_magicCurves > 0.01) {
-            float s = lab.x * lab.x * (3.0 - 2.0 * lab.x);
-            lab.x = mix(lab.x, s, u_magicCurves * 0.50);
+        // 15. Master curve on lightness (C1 monotone cubic, float precision -> no banding)
+        if (!curveIsIdentity(L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4)) {
+            lab.x = evalCurve5(lab.x, L.curveM0, L.curveM1, L.curveM2, L.curveM3, L.curveM4);
+        }
+        if (L.magicCurves > 0.01) {
+            float lx = clamp(lab.x, 0.0, 1.0);
+            float s = lx * lx * (3.0 - 2.0 * lx);
+            lab.x = mix(lab.x, s, L.magicCurves * 0.50);
         }
 
-        // 16. Saturation & Hue Rotation (Oklab Chroma Plane)
+        // 16. Saturation & hue rotation
         lab.yz *= L.saturation;
-        if (abs(L.hue) > 0.001) {
-            lab.yz = oklabRotateHue(lab.yz, L.hue * 3.14159265);
-        }
+        if (abs(L.hue) > 0.001) lab.yz = oklabRotateHue(lab.yz, L.hue * 3.14159265);
 
-        // Convert back to Linear RGB
         layerColor = oklabToLinearRgb(lab);
 
-        // 17. Optional RGB curve offsets in Linear RGB with strict clamping
-        if (abs(L.curveR2 - 0.5) > 0.01 || abs(L.curveG2 - 0.5) > 0.01 || abs(L.curveB2 - 0.5) > 0.01) {
-            layerColor.r = evalCatmullRom(layerColor.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
-            layerColor.g = clamp(layerColor.g + (L.curveG2 - 0.5) * 0.3, 0.0, 1.0);
-            layerColor.b = clamp(layerColor.b + (L.curveB2 - 0.5) * 0.3, 0.0, 1.0);
+        // 17. Per-channel RGB curves, applied in gamma space (as AE does), no cross-channel tint
+        {
+            bool redOn = !curveIsIdentity(L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
+            bool grnOn = abs(L.curveG2 - 0.5) > 0.005;
+            bool bluOn = abs(L.curveB2 - 0.5) > 0.005;
+            if (redOn || grnOn || bluOn) {
+                vec3 over = max(layerColor - 1.0, vec3(0.0));
+                vec3 e = pow(clamp(layerColor, 0.0, 1.0), vec3(1.0 / 2.2));
+                if (redOn) e.r = evalCurve5(e.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
+                if (grnOn) {
+                    float m = L.curveG2;
+                    e.g = evalCurve5(e.g, 0.0, 0.25 + (m - 0.5) * 0.5, m, 0.75 + (m - 0.5) * 0.5, 1.0);
+                }
+                if (bluOn) {
+                    float m = L.curveB2;
+                    e.b = evalCurve5(e.b, 0.0, 0.25 + (m - 0.5) * 0.5, m, 0.75 + (m - 0.5) * 0.5, 1.0);
+                }
+                layerColor = pow(e, vec3(2.2)) + over;
+            }
         }
 
-        // 18. Split Toning
-        if (u_splitToneShadowSat > 0.01 || u_splitToneHighSat > 0.01) {
-            vec3 sTint = srgbToLinear(hueToRGB(u_splitToneShadowHue));
-            vec3 hTint = srgbToLinear(hueToRGB(u_splitToneHighHue));
-            float curLuma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-            float pivot = clamp(0.5 + u_splitToneBalance * 0.35, 0.1, 0.9);
-            layerColor = mix(layerColor, layerColor * (sTint * 1.6 + vec3(0.1)), smoothstep(pivot, 0.0, curLuma) * u_splitToneShadowSat * 0.65);
-            layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), smoothstep(pivot, 1.0, curLuma) * u_splitToneHighSat * 0.65);
+        // 18. Split toning (per layer)
+        if (L.splitToneShadowSat > 0.01 || L.splitToneHighSat > 0.01) {
+            vec3 sTint = srgbToLinear(hueToRGB(L.splitToneShadowHue));
+            vec3 hTint = srgbToLinear(hueToRGB(L.splitToneHighHue));
+            float cl = luma(layerColor);
+            float pivot = clamp(0.5 + L.splitToneBalance * 0.35, 0.1, 0.9);
+            layerColor = mix(layerColor, layerColor * (sTint * 1.6 + vec3(0.1)), smoothstep(pivot, 0.0, cl) * L.splitToneShadowSat * 0.65);
+            layerColor = mix(layerColor, layerColor * (hTint * 1.5 + vec3(0.1)), smoothstep(pivot, 1.0, cl) * L.splitToneHighSat * 0.65);
         }
 
-        // 19. 4-Point Star Sparkle Glint
-        float curLuma = dot(layerColor, vec3(0.2126, 0.7152, 0.0722));
-        if (u_copiedStarGlint > 0.01 && curLuma > 0.72) {
+        // 19. 4-point star glint
+        float curLuma = luma(layerColor);
+        if (L.copiedStarGlint > 0.01 && curLuma > 0.72) {
             float glint = 0.0;
-            int gSpan = int(clamp(u_copiedStarGlint * 16.0 * resScale, 4.0, 24.0));
+            int gSpan = int(clamp(L.copiedStarGlint * 16.0 * resScale, 4.0, 24.0));
             for (int d = -gSpan; d <= gSpan; d += 2) {
                 float decay = 1.0 - (abs(float(d)) / float(gSpan));
-                ivec2 cCross1 = clamp(coord + ivec2(d, d), ivec2(0), ivec2(width - 1, height - 1));
-                ivec2 cCross2 = clamp(coord + ivec2(d, -d), ivec2(0), ivec2(width - 1, height - 1));
-                glint += dot(srgbToLinear(unpackRGBA_Dynamic(cCross1.y * width + cCross1.x, bitMode).rgb), vec3(0.333)) * decay;
-                glint += dot(srgbToLinear(unpackRGBA_Dynamic(cCross2.y * width + cCross2.x, bitMode).rgb), vec3(0.333)) * decay;
+                glint += dot(srcLin(coord + ivec2(d, d)), vec3(0.333)) * decay;
+                glint += dot(srcLin(coord + ivec2(d, -d)), vec3(0.333)) * decay;
             }
-            glint = (glint / float(gSpan * 2)) * u_copiedStarGlint * 0.60;
+            glint = (glint / float(gSpan * 2)) * L.copiedStarGlint * 0.60;
             layerColor += vec3(glint);
         }
 
-        // 20. Volumetric God Rays
+        // 20. Volumetric god rays
         if (L.bslaGodRays > 0.01) {
             vec2 sunPos = vec2(float(width) * 0.50, float(height) * 0.06);
             vec2 rayDir = normalize(vec2(coord) - sunPos + vec2(0.0001));
             vec3 rayAccum = vec3(0.0);
             float rayWeight = 0.0;
             float stepSize = float(max(width, height)) / 36.0;
-
             float jitter = hash12(vec2(coord) + vec2(u_time));
             for (int s = 1; s <= 20; s++) {
                 float dist = (float(s) + jitter) * stepSize * 0.38;
-                ivec2 sc = clamp(ivec2(vec2(coord) - rayDir * dist), ivec2(0), ivec2(width - 1, height - 1));
-                vec3 scCol = srgbToLinear(unpackRGBA_Dynamic(sc.y * width + sc.x, bitMode).rgb);
-                float scLuma = dot(scCol, vec3(0.2126, 0.7152, 0.0722));
-
-                float shaftMask = smoothstep(0.50, 0.92, scLuma);
+                vec3 scCol = srcLin(ivec2(vec2(coord) - rayDir * dist));
+                float shaftMask = smoothstep(0.50, 0.92, luma(scCol));
                 float decay = exp(-0.07 * float(s));
                 rayAccum += scCol * shaftMask * decay;
                 rayWeight += decay;
             }
-
             if (rayWeight > 0.001) {
-                vec3 shafts = (rayAccum / rayWeight) * (L.bslaGodRays * 2.2);
-                layerColor += shafts * vec3(1.15, 1.05, 0.90);
+                layerColor += (rayAccum / rayWeight) * (L.bslaGodRays * 2.2) * vec3(1.15, 1.05, 0.90);
             }
         }
 
-        // 21. Volumetric Fog
+        // 21. Volumetric fog
         if (L.bslaFogDensity > 0.01) {
-            vec2 fuv = vec2(coord) / vec2(width, height);
-            float fogAlt = smoothstep(1.0 - L.bslaFogDepth, 0.0, fuv.y);
-            vec3 mistColor = srgbToLinear(vec3(0.68, 0.75, 0.82)) * (1.0 + L.bslaBloomHaze * 0.5);
-            float fogAmount = L.bslaFogDensity * (0.25 + 0.75 * fogAlt);
-            layerColor = mix(layerColor, mistColor, clamp(fogAmount, 0.0, 0.65));
+            float t = u_time * 0.035;
+            float n1 = fbm(uvN * vec2(2.6, 1.9) + vec2(t, -t * 0.55));
+            float n2 = fbm(uvN * vec2(6.5, 4.8) + vec2(-t * 1.6, t * 0.9) + 31.7);
+            float depth = clamp(L.bslaFogDepth, 0.0, 1.0);
+            float heightMask = mix(0.20, 1.0, smoothstep(1.0 - (0.25 + depth * 0.75), 1.0, uvN.y));
+            float dens = L.bslaFogDensity * heightMask * (0.50 + 0.95 * (n1 - 0.5) + 0.40 * (n2 - 0.5) + 0.35);
+            dens = max(dens, 0.0);
+            float trans = exp(-dens * 2.4);
+
+            vec3 amb = (srcLin(ivec2(width / 4, height / 4)) + srcLin(ivec2(3 * width / 4, height / 4))
+                      + srcLin(ivec2(width / 4, 3 * height / 4)) + srcLin(ivec2(3 * width / 4, 3 * height / 4))) * 0.25;
+            vec3 cool = srgbToLinear(vec3(0.64, 0.72, 0.82));
+            float sceneL = clamp(luma(layerColor), 0.0, 1.0);
+            vec3 fogCol = mix(cool, amb * 1.45 + cool * 0.25, 0.45) * (0.30 + 0.70 * clamp(luma(amb) * 2.4 + sceneL * 0.5, 0.0, 1.2));
+            fogCol *= 1.0 + (n1 - 0.5) * 0.35;
+            layerColor = layerColor * trans + fogCol * (1.0 - trans);
         }
 
-        // 22. Pro-Mist & Halation
-        if (L.halationRadius > 0.01 || u_copiedProMist > 0.01) {
-            float mistStrength = max(L.halationRadius, u_copiedProMist);
-            float redBleed = smoothstep(0.55, 0.95, curLuma) * mistStrength * 0.25;
-            layerColor.r += redBleed * (1.0 + L.halationWarmth * 0.40);
-            layerColor.g += redBleed * (0.20 + L.halationWarmth * 0.10);
-        }
-
-        // 23. Film Grain
+        // 23. Film grain
         if (L.filmGrain > 0.001) {
             float noise = (hash12(vec2(coord) + vec2(u_time * 17.13, u_time * 31.37)) - 0.5);
-            layerColor += vec3(noise * L.filmGrain * 0.06);
+            float lw = 0.35 + 0.65 * (1.0 - abs(clamp(luma(layerColor), 0.0, 1.0) - 0.45) * 1.4);
+            layerColor += vec3(noise * L.filmGrain * 0.06 * lw);
         }
 
-        // 24. Micro-Pulse / Flicker
+        // 24. Flicker
         if (L.flickerIntensity > 0.005) {
             float freq = max(L.flickerSpeed, 1.0) * 6.2831853;
             float fWave = sin(u_time * freq) * 0.5 + 0.5;
             layerColor *= (1.0 + (fWave - 0.5) * L.flickerIntensity * 0.30);
         }
 
-        // 25. Radial & Boxed Vignettes
+        // 25. Vignettes
         if (L.vignette > 0.01) {
-            vec2 vuv = (vec2(coord) / vec2(width, height)) - 0.5;
-            layerColor *= clamp(smoothstep(0.75, 0.15, length(vuv) * (0.7 + L.vignette * 0.8)), 0.0, 1.0);
+            vec2 vuv = uvN - 0.5;
+            layerColor *= clamp(smoothstep(0.78, 0.18, length(vuv) * (0.62 + L.vignette * 0.58)), 0.0, 1.0);
         }
         if (L.vignetteBoxed > 0.01) {
-            vec2 buv = abs((vec2(coord) / vec2(width, height)) - 0.5) * 2.0;
-            layerColor *= clamp(smoothstep(0.95, 0.20, max(buv.x, buv.y) * (0.7 + L.vignetteBoxed * 0.8)), 0.0, 1.0);
+            vec2 buv = abs(uvN - 0.5) * 2.0;
+            layerColor *= clamp(smoothstep(0.98, 0.22, max(buv.x, buv.y) * (0.62 + L.vignetteBoxed * 0.58)), 0.0, 1.0);
         }
 
-        // 26. Centre Aura & Horizontal Ramp
-        vec2 auv = vec2(coord) / vec2(width, height);
+        // 26. Centre aura + horizontal ramp
         if (L.centerAura > 0.01) {
-            layerColor += vec3(smoothstep(0.60, 0.0, length(auv - 0.5)) * L.centerAura * 0.30);
+            layerColor += vec3(smoothstep(0.60, 0.0, length(uvN - 0.5)) * L.centerAura * 0.30);
         }
-        if (u_horizontalRamp > 0.01) {
-            layerColor *= (1.0 + smoothstep(0.35, 0.65, auv.y) * u_horizontalRamp * 0.30);
-        }
-
-        // 27. S_LightWrap Algorithm: Edge contour + blurred background highlight bleed
-        if (L.lightWrapIntensity > 0.01) {
-            float lwRad = L.lightWrapWidth * 8.0 * resScale;
-            vec3 bgLightSum = vec3(0.0);
-            float bgW = 0.0;
-            for (int sy = -2; sy <= 2; sy++) {
-                for (int sx = -2; sx <= 2; sx++) {
-                    ivec2 lwc = clamp(coord + ivec2(float(sx) * lwRad * 0.5, float(sy) * lwRad * 0.5), ivec2(0), ivec2(width - 1, height - 1));
-                    vec3 scSample = srgbToLinear(unpackRGBA_Dynamic(lwc.y * width + lwc.x, bitMode).rgb);
-                    float scLuma = dot(scSample, vec3(0.2126, 0.7152, 0.0722));
-                    if (scLuma > L.lightWrapThreshold) {
-                        bgLightSum += scSample;
-                        bgW += 1.0;
-                    }
-                }
-            }
-            if (bgW > 0.0) {
-                vec3 wrapBleed = (bgLightSum / bgW) * L.lightWrapIntensity;
-                if (L.lightWrapBlendMode > 0.5) {
-                    layerColor += wrapBleed; // Add / Linear Dodge
-                } else {
-                    layerColor = layerColor + wrapBleed - (layerColor * wrapBleed); // Screen
-                }
-            }
+        if (L.horizontalRamp > 0.01) {
+            layerColor *= (1.0 + smoothstep(0.35, 0.65, uvN.y) * L.horizontalRamp * 0.30);
         }
 
-        // Physical Layer Composite in Linear Space (Normal, Screen, Linear Add, Overlay, Soft Light, Multiply, Add, Linear Dodge)
-        currentComposite = applyBlendModeLinear(currentComposite, layerColor, int(L.blendMode), L.opacity);
+        // Composite this layer
+        currentComposite = applyBlendMode(currentComposite, max(layerColor, vec3(0.0)), int(L.blendMode + 0.5), L.opacity, L.blendLinear > 0.5);
     }
 
-    // 28. ISOLATED TEXT SUITE METALLIC BEVEL
+    // =========================================================================
+    // 28. STYLIZED METALLIC CHISEL BEVEL & TEXT SUITE (Position-Adaptive)
+    // =========================================================================
     if (u_textSuiteEnabled > 0.5) {
-        vec2 normCoord = vec2(coord) / vec2(width, height);
-        bool inBox = (normCoord.x >= u_textBoxX && normCoord.x <= (u_textBoxX + u_textBoxW) &&
-                      normCoord.y >= u_textBoxY && normCoord.y <= (u_textBoxY + u_textBoxH));
-
+        bool inBox = (uvN.x >= u_textBoxX && uvN.x <= (u_textBoxX + u_textBoxW) &&
+                      uvN.y >= u_textBoxY && uvN.y <= (u_textBoxY + u_textBoxH));
         if (inBox) {
-            float textLuma = dot(currentComposite, vec3(0.2126, 0.7152, 0.0722));
-            float textMask = smoothstep(0.50, 0.80, textLuma) * smoothstep(0.08, 0.40, lineEdge);
+            float textLuma = luma(currentComposite);
+            float thresh = clamp(u_textLumaThreshold, 0.15, 0.95);
+            float textFill = smoothstep(thresh, thresh + 0.15, textLuma);
+            float textEdge = smoothstep(0.06, 0.35, lineEdge) * smoothstep(thresh - 0.20, thresh + 0.30, textLuma);
 
-            if (textMask > 0.01) {
-                vec3 N = normalize(vec3(edgeNormal.x * (u_textBevelDepth * resScale), edgeNormal.y * (u_textBevelDepth * resScale), 1.0));
-                vec3 L_dir = normalize(vec3(0.35, -0.65, 0.65));
-                float reflY = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-                float chromeReflection = pow(sin(reflY * 6.28318) * 0.5 + 0.5, 2.0) * u_textChromeIntensity;
+            // 1. Adaptive Ambient: Sample scene colour around the text box
+            vec2 boxCenter = vec2(u_textBoxX + u_textBoxW * 0.5, u_textBoxY + u_textBoxH * 0.5);
+            vec3 sceneAmb = (srcLin(ivec2(int(boxCenter.x * float(width)), int(boxCenter.y * float(height)))) +
+                             srcLin(ivec2(int(u_textBoxX * float(width)), int(u_textBoxY * float(height)))) +
+                             srcLin(ivec2(int((u_textBoxX + u_textBoxW) * float(width)), int((u_textBoxY + u_textBoxH) * float(height))))) * 0.3333;
+            sceneAmb = mix(vec3(0.5), sceneAmb, 0.65);
 
-                vec3 V = vec3(0.0, 0.0, 1.0);
-                vec3 H = normalize(L_dir + V);
-                float spec = pow(max(0.0, dot(N, H)), 24.0) * 1.8;
+            // 2. Grounding Contact Drop Shadow behind text
+            if (u_textContactShadow > 0.01) {
+                ivec2 shOff = ivec2(int(2.0 * resScale), int(3.0 * resScale));
+                float aboveLuma = luma(srcLin(coord - shOff));
+                float shadowMask = smoothstep(thresh, thresh + 0.15, aboveLuma) * (1.0 - textFill);
+                currentComposite *= mix(vec3(1.0), vec3(0.15), shadowMask * u_textContactShadow * 0.75);
+            }
 
-                vec3 chromeColor = mix(srgbToLinear(vec3(0.12, 0.14, 0.18)), srgbToLinear(vec3(0.95, 0.98, 1.05)), chromeReflection) + vec3(spec);
-                currentComposite = mix(currentComposite, chromeColor, textMask * 0.90);
+            // 3. Stylized Metallic Chisel Surface & Reflection
+            if (textEdge > 0.01 || textFill > 0.01) {
+                vec3 N = normalize(vec3(edgeNormal.x * (u_textBevelDepth * resScale),
+                                        edgeNormal.y * (u_textBevelDepth * resScale), 1.0));
+                vec3 L_dir = normalize(vec3(0.35 + (boxCenter.x - 0.5) * 0.3,
+                                            -0.65 + (boxCenter.y - 0.5) * 0.2, 0.75));
+                vec3 H = normalize(L_dir + vec3(0.0, 0.0, 1.0));
+
+                // Chrome Horizon Reflection Line (adapted to vertical screen position)
+                float reflY = clamp(dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5 + (uvN.y - boxCenter.y) * 0.5, 0.0, 1.0);
+                float chromeBands = pow(sin(reflY * 6.2831853) * 0.5 + 0.5, 2.5) * u_textChromeIntensity;
+                float horizonLine = smoothstep(0.46, 0.50, reflY) * (1.0 - smoothstep(0.50, 0.54, reflY));
+
+                // Specular Glint Core
+                float spec = pow(max(0.0, dot(N, H)), 28.0) * (2.2 * u_textSpecularGlint);
+
+                // Palette Tints: 0=Platinum Steel, 1=Gold, 2=Cyan Steel, 3=Crimson, 4=Violet
+                vec3 metalBase = vec3(0.85, 0.90, 0.95);
+                if (u_textMetallicTint == 1.0) metalBase = vec3(1.15, 0.95, 0.55);
+                else if (u_textMetallicTint == 2.0) metalBase = vec3(0.60, 1.05, 1.35);
+                else if (u_textMetallicTint == 3.0) metalBase = vec3(1.20, 0.45, 0.55);
+                else if (u_textMetallicTint == 4.0) metalBase = vec3(0.95, 0.65, 1.25);
+
+                vec3 metalColor = mix(vec3(0.08, 0.10, 0.14) * sceneAmb, metalBase * (1.0 + chromeBands * 0.6), reflY);
+                metalColor += vec3(horizonLine * 0.45) * metalBase;
+                metalColor += vec3(spec);
+
+                // Integrated Text Contour Glow
+                float textGlow = textEdge * u_textGlowIntensity * 1.8;
+                vec3 stylizedText = metalColor + metalBase * textGlow;
+
+                float blendFactor = max(textFill * 0.85, textEdge * 0.95);
+                currentComposite = mix(currentComposite, stylizedText, blendFactor);
             }
         }
     }
 
-    // 29. TRUE 3D VOLUMETRIC LUT APPLICATION (Via Hardware VkSampler)
-    if (u_hasLut > 0.5) {
-        currentComposite = sample3DLut(currentComposite, u_lutOpacity);
-    }
-
-    // Store linear composite into TempCompositeBuffer (Binding 7) for bloom & final composite pass
-    packComposite_Dynamic(pixelIndex, vec4(currentComposite, rawPixel.a), bitMode);
+    // HDR half-float store. LUT + tonemap + dither happen in pass 6, after all glows.
+    packComposite(pixelIndex, vec4(currentComposite, rawPixel.a), gBit);
 }
