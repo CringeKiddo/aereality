@@ -1501,5 +1501,5 @@ void main() {
     }
 
     // HDR half-float store. LUT + tonemap + dither happen in pass 6, after all glows.
-    packComposite(pixelIndex, vec4(currentComposite, rawPixel.a), gBit);
+    packComposite(pixelIndex, vec4(currentComposite, rawPixel.a));
 }
