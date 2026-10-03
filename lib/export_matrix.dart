@@ -29,6 +29,32 @@ class ExportMatrix {
     ],
   };
 
+  /// Codecs that are reliably available on Android mobile devices
+  /// (Fallback-safe encoder support matrix)
+  static const Set<String> _androidReliableCodecs = {
+    'H.264 (libx264)',
+    'H.265 (libx265)',
+    'HEVC / H.265 (libx265)',
+    'VP9 (libvpx-vp9)',
+  };
+
+  /// Get safe default codec based on container for Android
+  static String getAndroidSafeDefaultCodec(String container) {
+    final codecList = containerCodecs[container] ?? [];
+    // H.264 MP4 is universally supported on Android
+    if (container.toUpperCase() == 'MP4') {
+      return codecList.firstWhere(
+        (c) => c.contains('H.264'),
+        orElse: () => codecList.isNotEmpty ? codecList.first : 'H.264 (libx264)',
+      );
+    }
+    // For other containers, prefer H.264/H.265 over AV1
+    return codecList.firstWhere(
+      (c) => c.contains('H.264') || c.contains('H.265') || c.contains('HEVC'),
+      orElse: () => codecList.isNotEmpty ? codecList.first : 'H.264 (libx264)',
+    );
+  }
+
   /// 16-bit is only valid for MKV and ProRes. AV1, H.264, and HEVC black out 16-bit.
   static bool isBitDepthValid(String container, String codec, String depth) {
     final isProRes = codec.contains('ProRes');
@@ -68,7 +94,8 @@ class ExportMatrix {
   }
 
   /// Builds the complete FFmpeg encoding command incorporating all mobile driver fixes
-  static String buildFFmpegEncodeCommand({
+  /// Returns null if the codec is not valid for the given container/bitDepth combination
+  static String? buildFFmpegEncodeCommand({
     required int fps,
     required String framePattern,
     required String container,
@@ -79,6 +106,11 @@ class ExportMatrix {
     required int width,
     required int height,
   }) {
+    // Validate codec+container+bitDepth combination
+    if (!isBitDepthValid(container, codec, bitDepth)) {
+      return null; // Invalid combination
+    }
+
     final bool use16Bit = (bitDepth == '16-bit' || bitDepth == '10-bit');
     final String rawPixFmt = use16Bit ? 'rgba64le' : 'rgba';
 
@@ -119,6 +151,9 @@ class ExportMatrix {
       } else {
         codecFlags = '-c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le';
       }
+    } else {
+      // Default fallback
+      codecFlags = '-c:v libx264 -preset veryfast -crf 17 -pix_fmt yuv420p $gopFlags';
     }
 
     // 5. BT.709 Color Space Metadata & Container Faststart
