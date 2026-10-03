@@ -316,11 +316,8 @@ class ExportSuite {
     required Float32List Function(double, double) packUniforms,
     required Float32List? Function() getActiveLut,
   }) {
-    // Default to H.264 MP4 on Android for maximum compatibility
-    String selectedContainer = Platform.isAndroid ? 'MP4' : 'MKV';
-    String selectedCodec = Platform.isAndroid 
-        ? 'H.264 (libx264)'
-        : (ExportMatrix.containerCodecs['MKV']?.first ?? 'AV1 (libsvtav1 Master)');
+    String selectedContainer = 'MKV';
+    String selectedCodec = 'AV1 (libsvtav1 Master)';
     String selectedBitDepth = '8-bit';
     String selectedRes = '1080p';
     String selectedFps = '60fps';
@@ -368,14 +365,6 @@ class ExportSuite {
                       'Destination: /storage/emulated/0/Download • True 32-bit Float Pipeline',
                       style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
-                    if (Platform.isAndroid)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          '⚠ H.264 MP4 recommended for maximum Android 15 compatibility',
-                          style: TextStyle(color: Colors.orange.withOpacity(0.8), fontSize: 10),
-                        ),
-                      ),
                     const SizedBox(height: 16),
 
                     const Text('CONTAINER FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
