@@ -877,6 +877,7 @@ class ProjectScreen extends StatefulWidget {
 class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProviderStateMixin {
   late ProjectData _project;
   final List<ProjectData> _undoHistory = [];
+  final List<ProjectData> _redoHistory = [];
   late String _activeSessionId;
 
   VideoPlayerController? _controller;
@@ -935,6 +936,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _pushUndoSnapshot() {
     _undoHistory.add(_project.clone());
+    _redoHistory.clear();
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
     }
@@ -943,17 +945,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void _performUndo() {
     if (_undoHistory.length > 1) {
       setState(() {
-        _undoHistory.removeLast();
+        _redoHistory.add(_undoHistory.removeLast());
         _project = _undoHistory.last.clone();
       });
       _applyGrade();
       _autoSaveProject();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Reverted latest change'), duration: Duration(milliseconds: 750)),
+        const SnackBar(content: Text('Reverted latest change'), duration: Duration(milliseconds: 600)),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Already at initial state'), duration: Duration(milliseconds: 750)),
+        const SnackBar(content: Text('Already at initial state'), duration: Duration(milliseconds: 600)),
+      );
+    }
+  }
+
+  void _performRedo() {
+    if (_redoHistory.isNotEmpty) {
+      setState(() {
+        final nextState = _redoHistory.removeLast();
+        _undoHistory.add(nextState);
+        _project = nextState.clone();
+      });
+      _applyGrade();
+      _autoSaveProject();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Redone change'), duration: Duration(milliseconds: 600)),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No further actions to redo'), duration: Duration(milliseconds: 600)),
       );
     }
   }
@@ -1168,12 +1189,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  // ===========================================================================
-  // EXPORT BRIDGE: gives ExportSuite the real video info + a full-res frame renderer
-  // ===========================================================================
-  Uint8List? _lastExportSource; // reused if ffmpeg can't decode the very last frame
-
-  /// Native export size. Video: real size rounded down to even. Image: decoded size.
   List<int> _exportSize() {
     if (_project.isImage && _cachedRawImage != null) {
       return [_cachedRawImage!.width, _cachedRawImage!.height];
@@ -1198,7 +1213,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return;
     }
 
-    // Stop playback so the preview timer doesn't compete with the export.
     _controller?.pause();
     _isPlaying = false;
 
@@ -1210,15 +1224,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       packUniforms: _packMultiLayerUniforms,
       getActiveLut: _getActiveLutTable,
       renderFrameToRgba: _renderFrameForExport,
-      videoDurationMs: _videoDurationSeconds * 1000.0, // seconds -> milliseconds
-      videoFps: 30.0, // video_player can't report fps; see note
+      videoDurationMs: _videoDurationSeconds * 1000.0,
+      videoFps: 30.0,
       videoWidth: size[0],
       videoHeight: size[1],
       audioSourcePath: isImage ? null : _project.mediaPath,
     );
   }
 
-  /// Returns ONE graded RGBA8 frame at native resolution (width*height*4 bytes).
+  Uint8List? _lastExportSource;
+
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
     final size = _exportSize();
     final w = size[0];
@@ -1242,7 +1257,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         raw = await rawFile.readAsBytes();
         _lastExportSource = raw;
       } else {
-        raw = _lastExportSource; // end-of-stream: repeat previous frame
+        raw = _lastExportSource;
       }
       try { if (rawFile.existsSync()) rawFile.deleteSync(); } catch (_) {}
     }
@@ -1252,10 +1267,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
-    uniforms[0] = timestampMs / 1000.0; // time uniform = export time, not preview position
+    uniforms[0] = timestampMs / 1000.0;
     final out = processImage(raw, w, h, w, h, uniforms, lutTable: _getActiveLutTable());
 
-    // Let the UI breathe between frames so the progress bar can repaint.
     await Future<void>.delayed(Duration.zero);
     return out;
   }
@@ -1282,9 +1296,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       setState(() => _isSavingProject = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Project saved successfully (Synced to Home)'),
+          content: Text('Project saved to Home!'),
           backgroundColor: Colors.teal,
-          duration: Duration(milliseconds: 1000),
+          duration: Duration(milliseconds: 900),
         ),
       );
     }
@@ -1303,11 +1317,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ===========================================================================
-  // 10-LAYER UNIFORM BUFFER ENGINE (1024 Floats • 96-Float Stride per Layer)
-  // Fixes the opacity jump bug by writing each layer's independent properties
+  // UNIFORM BUFFER ENGINE (128-Float Stride per Layer, 2048 Floats Capacity)
+  // Perfectly synchronised with aereality_core.comp layout
   // ===========================================================================
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
-    final uniforms = Float32List(1024);
+    final uniforms = Float32List(2048);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
@@ -1319,14 +1333,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[4] = imgH;
     uniforms[5] = _cur.activeLutId != null ? 1.0 : 0.0;
     uniforms[6] = _cur.lutOpacity;
-    uniforms[7] = _cur.copiedChromaShift;
-    uniforms[8] = _cur.copiedEdgeRays;
-    uniforms[9] = _cur.copiedProMist;
-    uniforms[10] = _cur.copiedStarGlint;
-    uniforms[11] = _cur.horizontalRamp;
     uniforms[12] = _project.ditherStrength;
 
-    // Offsets 13..19: Isolated Text Suite Uniforms
+    // Offsets 13..25: Isolated Metallic Text Suite
     uniforms[13] = _project.textSuiteEnabled ? 1.0 : 0.0;
     uniforms[14] = _project.textBoxX;
     uniforms[15] = _project.textBoxY;
@@ -1334,29 +1343,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[17] = _project.textBoxH;
     uniforms[18] = _project.textBevelDepth;
     uniforms[19] = _project.textChromeIntensity;
+    uniforms[20] = _project.textSpecularGlint;
+    uniforms[21] = _project.textContactShadow;
+    uniforms[22] = _project.textLumaThreshold;
+    uniforms[23] = _project.textMetallicTint;
+    uniforms[24] = 0.40; // Default Text Glow
+    uniforms[25] = 0.50; // Text Glow Radius
 
-    // Offsets 20..27: Glow & Split Toning Uniforms
-    uniforms[20] = _cur.shaderlyGlowIntensity;
-    uniforms[21] = _cur.shaderlyGlowRadius;
-    uniforms[22] = _cur.shaderlyGlowThreshold;
-    uniforms[23] = _cur.splitToneShadowHue;
-    uniforms[24] = _cur.splitToneShadowSat;
-    uniforms[25] = _cur.splitToneHighHue;
-    uniforms[26] = _cur.splitToneHighSat;
-    uniforms[27] = _cur.splitToneBalance;
+    uniforms[28] = 0.0; // Bit depth preview mode
 
-    // Offset 28: Bit-depth mode (0.0=8-bit for UI preview)
-    uniforms[28] = 0.0;
-
-    // Offsets 29..31: Magic Bullets & Edge Halo Extensions
-    uniforms[29] = _cur.deepTeal;
-    uniforms[30] = _cur.magicCurves;
-    uniforms[31] = _cur.edgeHaloRadius;
-
-    // Up to 10 Adjustment Layers (96 floats each starting at offset 32)
+    // 10 Layers with 128-float stride (offsets 32 + l * 128)
     for (int l = 0; l < math.min(_project.layers.length, 10); l++) {
       final layer = _project.layers[l];
-      final offset = 32 + (l * 96);
+      final offset = 32 + (l * 128);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1389,7 +1388,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 23] = layer.vignetteBoxed;
 
       uniforms[offset + 24] = layer.edgeDarken;
-      uniforms[offset + 25] = layer.darkOutlines;
+      uniforms[offset + 25] = layer.darkOutlines; // S_lining Slider 1
       uniforms[offset + 26] = layer.denoise;
       uniforms[offset + 27] = layer.filmGrain;
 
@@ -1438,7 +1437,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 62] = layer.mblColoristaGain;
       uniforms[offset + 63] = layer.centerAura;
 
-      // Offsets 64..79: New Effects Packed from Each Layer's Own Properties
       uniforms[offset + 64] = layer.bilateralIntensity;
       uniforms[offset + 65] = layer.bilateralRadius;
       uniforms[offset + 66] = layer.bilateralRange;
@@ -1458,6 +1456,31 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 77] = layer.lightWrapIntensity;
       uniforms[offset + 78] = layer.lightWrapThreshold;
       uniforms[offset + 79] = layer.lightWrapBlendMode.toDouble();
+
+      // Extended offsets 80..102
+      uniforms[offset + 80] = layer.blendLinear ? 1.0 : 0.0;
+      uniforms[offset + 81] = layer.sLiningOpacity; // S_lining Slider 2
+      uniforms[offset + 82] = layer.dofRange;
+      uniforms[offset + 83] = layer.dofFalloff;
+      uniforms[offset + 84] = layer.dofBokeh;
+      uniforms[offset + 85] = layer.dofMode;
+      uniforms[offset + 86] = layer.shaderlyGlowIntensity;
+      uniforms[offset + 87] = layer.shaderlyGlowRadius;
+      uniforms[offset + 88] = layer.shaderlyGlowThreshold;
+      uniforms[offset + 89] = layer.shaderlyGlowTint;
+      uniforms[offset + 90] = layer.splitToneShadowHue;
+      uniforms[offset + 91] = layer.splitToneShadowSat;
+      uniforms[offset + 92] = layer.splitToneHighHue;
+      uniforms[offset + 93] = layer.splitToneHighSat;
+      uniforms[offset + 94] = layer.splitToneBalance;
+      uniforms[offset + 95] = layer.deepTeal;
+      uniforms[offset + 96] = layer.magicCurves;
+      uniforms[offset + 97] = layer.copiedChromaShift;
+      uniforms[offset + 98] = layer.copiedEdgeRays;
+      uniforms[offset + 99] = layer.copiedProMist;
+      uniforms[offset + 100] = layer.copiedStarGlint;
+      uniforms[offset + 101] = layer.horizontalRamp;
+      uniforms[offset + 102] = layer.edgeHaloRadius;
     }
 
     return uniforms;
@@ -1622,6 +1645,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             icon: const Icon(Icons.undo_rounded, color: Colors.white70, size: 20),
             tooltip: 'Undo',
             onPressed: _performUndo,
+          ),
+          IconButton(
+            icon: const Icon(Icons.redo_rounded, color: Colors.white70, size: 20),
+            tooltip: 'Redo',
+            onPressed: _performRedo,
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
@@ -1817,8 +1845,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
-                        : Icon(Icons.play_circle_fill_rounded, color: accent, size: 26),
-                    tooltip: 'Quick-Save Project (Synced to Home)',
+                        : Icon(Icons.home_outlined, color: accent, size: 24),
+                    tooltip: 'Save Project to Home',
                     onPressed: _isSavingProject ? null : _manualSaveProject,
                   ),
                   const SizedBox(width: 4),
@@ -1858,6 +1886,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   icon: const Icon(Icons.undo_rounded, color: Colors.white70),
                   tooltip: 'Undo',
                   onPressed: _performUndo,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.redo_rounded, color: Colors.white70),
+                  tooltip: 'Redo',
+                  onPressed: _performRedo,
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
@@ -2029,7 +2062,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           setState(() {});
                         },
                         onImportPreset: () async {
-                          await EditorViews.importPresetFromFile(context, _project);
+                          await EditorViews.importPresetFromFile(context, _project, _customPresets);
                           _pushUndoSnapshot();
                           setState(() {});
                           _applyGrade();
