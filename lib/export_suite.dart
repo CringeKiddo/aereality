@@ -316,9 +316,12 @@ class ExportSuite {
     required Float32List Function(double, double) packUniforms,
     required Float32List? Function() getActiveLut,
   }) {
-    String selectedContainer = 'MKV';
-    String selectedCodec = 'AV1 (libsvtav1 Master)';
-    String selectedBitDepth = '10-bit';
+    // Default to H.264 MP4 on Android for maximum compatibility
+    String selectedContainer = Platform.isAndroid ? 'MP4' : 'MKV';
+    String selectedCodec = Platform.isAndroid 
+        ? 'H.264 (libx264)'
+        : (ExportMatrix.containerCodecs['MKV']?.first ?? 'AV1 (libsvtav1 Master)');
+    String selectedBitDepth = '8-bit';
     String selectedRes = '1080p';
     String selectedFps = '60fps';
     String selectedBitrate = '50 Mbps';
@@ -338,13 +341,13 @@ class ExportSuite {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateModal) {
-            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['AV1 (libsvtav1 Master)'];
+            final availableCodecs = ExportMatrix.containerCodecs[selectedContainer] ?? ['H.264 (libx264)'];
             if (!availableCodecs.contains(selectedCodec)) {
               selectedCodec = availableCodecs.first;
             }
 
             if (!ExportMatrix.isBitDepthValid(selectedContainer, selectedCodec, selectedBitDepth)) {
-              selectedBitDepth = '10-bit';
+              selectedBitDepth = '8-bit';
             }
 
             return Padding(
@@ -365,6 +368,14 @@ class ExportSuite {
                       'Destination: /storage/emulated/0/Download • True 32-bit Float Pipeline',
                       style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
+                    if (Platform.isAndroid)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '⚠ H.264 MP4 recommended for maximum Android 15 compatibility',
+                          style: TextStyle(color: Colors.orange.withOpacity(0.8), fontSize: 10),
+                        ),
+                      ),
                     const SizedBox(height: 16),
 
                     const Text('CONTAINER FORMAT', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
@@ -381,7 +392,7 @@ class ExportSuite {
                           if (sel) {
                             setStateModal(() {
                               selectedContainer = c;
-                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['AV1 (libsvtav1 Master)']).first;
+                              selectedCodec = (ExportMatrix.containerCodecs[c] ?? ['H.264 (libx264)']).first;
                             });
                           }
                         },
@@ -713,7 +724,13 @@ class ExportSuite {
         // CRITICAL FIX: Use -f image2 -c:v rawvideo so all 30 frames are saved as separate files
         final extractCmd = '-hide_banner -accurate_seek -ss $chunkStartSec -i "${project.mediaPath}" '
             '-frames:v $framesInThisChunk -r $targetFps -s ${outW}x${outH} -f image2 -c:v rawvideo -pix_fmt rgba -y "${chunkRawDir.path}/f_%05d.raw"';
-        await FFmpegKit.execute(extractCmd);
+        
+        final extractSession = await FFmpegKit.execute(extractCmd);
+        final extractReturnCode = await extractSession.getReturnCode();
+        if (!extractReturnCode.isValueSuccess()) {
+          final logs = await extractSession.getAllLogsAsString();
+          throw Exception('Frame extraction failed at batch $c:\n$logs');
+        }
 
         final rawEntities = await chunkRawDir.list().toList();
         final rawFiles = rawEntities.whereType<File>().toList();
@@ -775,7 +792,23 @@ class ExportSuite {
           width: outW,
           height: outH,
         );
-        await FFmpegKit.execute(encodeChunkCmd);
+
+        if (encodeChunkCmd == null) {
+          throw Exception('Codec $codec is not valid for $container in $bitDepth');
+        }
+
+        activeSession = await FFmpegKit.execute(encodeChunkCmd);
+        final encodeReturnCode = await activeSession.getReturnCode();
+        
+        if (!encodeReturnCode.isValueSuccess()) {
+          final errorLogs = await activeSession.getAllLogsAsString();
+          throw Exception('Video encoding failed at chunk $c:\nCodec: $codec\nContainer: $container\n$errorLogs');
+        }
+
+        if (!await File(chunkPartPath).exists()) {
+          final errorLogs = await activeSession.getAllLogsAsString();
+          throw Exception('Encoded chunk file not created at chunk $c. FFmpeg output:\n$errorLogs');
+        }
 
         chunkVideoParts.add(chunkPartPath);
 
@@ -856,9 +889,10 @@ class ExportSuite {
       }
       if (!isCancelled && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Export Failed: $e'), backgroundColor: Colors.red, duration: const Duration(seconds: 6)),
         );
       }
+      debugPrint('[ExportSuite] Video export error: $e');
     } finally {
       // Purge scratch cache directory
       try {
