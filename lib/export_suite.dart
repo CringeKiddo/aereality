@@ -10,9 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
-import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_config.dart';
+import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
 import 'models.dart';
 import 'export_matrix.dart';
@@ -70,6 +68,7 @@ class ExportSuite {
   static void showExportSheet({
     required BuildContext context,
     required ProjectData project,
+    AdjustmentLayer? curLayer,
     dynamic lutTextureId,
     dynamic lutSize,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
@@ -83,12 +82,14 @@ class ExportSuite {
       showImageExportSheet(
         context: context,
         project: project,
+        curLayer: curLayer,
         renderFrameToRgba: renderFrameToRgba,
       );
     } else {
       showVideoExportSheet(
         context: context,
         project: project,
+        curLayer: curLayer,
         renderFrameToRgba: renderFrameToRgba,
         videoDurationMs: videoDurationMs ?? 5000.0,
         videoFps: videoFps ?? 30.0,
@@ -105,6 +106,7 @@ class ExportSuite {
   static void showImageExportSheet({
     required BuildContext context,
     required ProjectData project,
+    AdjustmentLayer? curLayer,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
   }) {
     String selectedFormat = 'PNG';
@@ -270,11 +272,12 @@ class ExportSuite {
   }
 
   // ===========================================================================
-  // VIDEO EXPORT SHEET (Full Codecs, Bit Depths, Containers, Bitrates)
+  // VIDEO EXPORT SHEET
   // ===========================================================================
   static void showVideoExportSheet({
     required BuildContext context,
     required ProjectData project,
+    AdjustmentLayer? curLayer,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     required double videoDurationMs,
     required double videoFps,
@@ -529,6 +532,7 @@ class ExportSuite {
                               await executeVideoExport(
                                 context: context,
                                 project: project,
+                                curLayer: curLayer,
                                 renderFrameToRgba: renderFrameToRgba,
                                 videoDurationMs: videoDurationMs,
                                 videoFps: videoFps,
@@ -681,6 +685,7 @@ class ExportSuite {
   static Future<void> executeVideoExport({
     required BuildContext context,
     required ProjectData project,
+    AdjustmentLayer? curLayer,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     required double videoDurationMs,
     required double videoFps,
