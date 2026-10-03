@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Configure FFmpegKit native libraries (reads gpl/type from pubspec.yaml)
+        run: dart run ffmpeg_kit_extended_flutter:configure || echo "configure step not available in this plugin version, relying on build hooks"
+
       - name: Generate App Launcher Icons
         run: |
           if [ -f "assets/icon/app_icon.png" ]; then
