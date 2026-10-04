@@ -476,6 +476,7 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Exposure', val: cur.brightness, min: -0.8, max: 0.8, onChanged: (v) { cur.brightness = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Contrast', val: cur.contrast, min: 0.2, max: 2.5, onChanged: (v) { cur.contrast = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Saturation', val: cur.saturation, min: 0.0, max: 2.5, onChanged: (v) { cur.saturation = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Chroma Contrast', val: cur.chromaContrast, min: 0.0, max: 1.0, onChanged: (v) { cur.chromaContrast = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Hue / Color Rotate (Oklab Angle)', val: cur.hue, min: -1.0, max: 1.0, onChanged: (v) { cur.hue = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Gamma', val: cur.gamma, min: 0.2, max: 2.5, onChanged: (v) { cur.gamma = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Sharpness', val: cur.sharpness, min: 0.0, max: 2.0, onChanged: (v) { cur.sharpness = v; onChanged(); }, onEnded: onEnded),
