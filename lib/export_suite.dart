@@ -22,14 +22,14 @@ class ExportSuite {
   // ===========================================================================
   // COPILOT MEDIASTORE SAVE INTEGRATION (Android 10 - 15 Compliant)
   // ===========================================================================
-  static Future<String> saveToDownloads({
+  static Future<String> saveToMovies({
     required String sourcePath,
     required String fileName,
     required String mimeType,
   }) async {
     Object? nativeError;
     try {
-      final uri = await _mediaChannel.invokeMethod<String>('saveToDownloads', {
+      final uri = await _mediaChannel.invokeMethod<String>('saveToMovies', {
         'sourcePath': sourcePath,
         'fileName': fileName,
         'mimeType': mimeType,
@@ -47,11 +47,11 @@ class ExportSuite {
 
     // Direct filesystem fallback (only works if "All files access" was granted)
     try {
-      final downloadsDir = Directory('/storage/emulated/0/Download');
-      if (!downloadsDir.existsSync()) {
-        downloadsDir.createSync(recursive: true);
+      final moviesDir = Directory('/storage/emulated/0/Movies/Shaderly');
+      if (!moviesDir.existsSync()) {
+        moviesDir.createSync(recursive: true);   // also creates root Movies if it is missing
       }
-      final targetFile = File('${downloadsDir.path}/$fileName');
+      final targetFile = File('${moviesDir.path}/$fileName');
       await File(sourcePath).copy(targetFile.path);
 
       try {
@@ -62,7 +62,7 @@ class ExportSuite {
     } catch (e) {
       // IMPORTANT: do NOT return sourcePath here. The temp file is deleted in the
       // caller's finally block, so pretending it was saved loses the export silently.
-      throw Exception('Could not save to Downloads.\nMediaStore: $nativeError\nDirect copy: $e');
+      throw Exception('Could not save to Movies/Shaderly.\nMediaStore: $nativeError\nDirect copy: $e');
     }
   }
 
@@ -883,9 +883,9 @@ class ExportSuite {
         throw Exception('FFmpeg image encode failed with code: $rc');
       }
 
-      onProgress(0.9, 'Saving via MediaStore to Downloads...');
+      onProgress(0.9, 'Saving to Movies/Shaderly...');
       final mime = format == 'PNG' ? 'image/png' : (format == 'JPG' ? 'image/jpeg' : 'image/webp');
-      final finalUri = await saveToDownloads(
+      final finalUri = await saveToMovies(
         sourcePath: tempEncodedFile.path,
         fileName: 'Shaderly_Art_${resolution}_$timestamp.$ext',
         mimeType: mime,
@@ -894,7 +894,7 @@ class ExportSuite {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to Downloads: $finalUri'),
+            content: Text('Saved to Movies/Shaderly: $finalUri'),
             backgroundColor: const Color(0xFF00E5FF),
           ),
         );
@@ -1059,7 +1059,7 @@ class ExportSuite {
         throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
       }
 
-      // Pass 3: MediaStore save to Downloads
+      // Pass 3: save to Movies/Shaderly
       onProgress(0.92, 'Registering video with Android MediaStore...');
       final cleanCodec = codec.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
       final cleanBitDepth = bitDepth.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
@@ -1074,7 +1074,7 @@ class ExportSuite {
                   ? 'video/x-matroska'
                   : 'video/mp4';
 
-      final finalUri = await saveToDownloads(
+      final finalUri = await saveToMovies(
         sourcePath: tempFinalFile.path,
         fileName: fileName,
         mimeType: mimeType,
@@ -1085,7 +1085,7 @@ class ExportSuite {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to Downloads: $fileName'),
+            content: Text('Saved to Movies/Shaderly: $fileName'),
             backgroundColor: const Color(0xFF00E5FF),
           ),
         );
@@ -1153,14 +1153,15 @@ class ExportSuite {
         pixFmt = '-pix_fmt yuv422p10le';
       }
     } else if (isHevc) {
-      cOption = '-c:v libx265 -tag:v hvc1';
-      speed = '-preset fast';
+      // hvc1 is only valid in MP4 / MOV; Matroska rejects the tag and aborts the muxer.
+      final hvcTag = (container.toUpperCase() == 'MP4' || container.toUpperCase() == 'MOV') ? ' -tag:v hvc1' : '';
+      cOption = '-c:v libx265$hvcTag';
+      speed = '-preset veryfast';
       rate = '-crf 20';
-      // Stability profile for mobile. x265's "fast" preset queues a 15-frame lookahead window
-      // (a 17-frame test clip dies right around frame 15, i.e. when that window fills and the
-      // worker threads start). A shallow lookahead plus 2 frame threads keeps the encoder away
-      // from that path and costs almost nothing in quality at these bitrates.
-      codecExtra = '-x265-params log-level=error:rc-lookahead=10:bframes=3:frame-threads=2';
+      // Crash-safe x265 profile for Android: no worker thread pools (the pool / thread-affinity setup is what
+      // brings the encoder down on mobile CPUs as soon as the lookahead window fills), a single frame thread,
+      // and a lookahead that is always larger than the B-frame count. Slower than a threaded encode, but stable.
+      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 6';
@@ -1182,7 +1183,7 @@ class ExportSuite {
     if (!isProRes) {
       if (bitrateProfile.contains('Lossless')) {
         rate = isHevc ? '-crf 12' : (isVp9 ? '-crf 14 -b:v 0' : '-crf 14');
-        if (!isAv1 && !isVp9) speed = '-preset medium';
+        if (!isAv1 && !isVp9 && !isHevc) speed = '-preset medium';   // HEVC stays on the crash-safe veryfast preset
       } else {
         int mbps = 0;
         if (bitrateProfile.contains('Master')) {
