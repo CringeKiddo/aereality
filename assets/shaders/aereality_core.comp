@@ -74,6 +74,8 @@ layout(push_constant) uniform PushConsts {
     int u_passHeight;
     float u_passRadius;
     int u_bandY;       // row offset for banded dispatch (keeps each GPU submit short)
+    int u_srcW;        // true width of the parent bloom level (downsample passes)
+    int u_srcH;        // true height of the parent bloom level (downsample passes)
 };
 
 // =============================================================================
@@ -767,8 +769,11 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
 // PASS 2, 3, 7, 8: 13-tap anti-grid downsample (2: L0->L1, 3: L1->L2, 7: L2->L3, 8: L3->L4)
 void executeBloomDownsample(int passIdx, ivec2 coord, int width, int height, float radius) {
     int srcLevel = (passIdx == 2) ? 0 : ((passIdx == 3) ? 1 : ((passIdx == 7) ? 2 : 3));
-    int srcW = width * 2;
-    int srcH = height * 2;
+    // The parent level is built with integer shifts (w >> n), so it is NOT always 2x the child
+    // (e.g. 819 -> 409). Using width*2 read the parent with the wrong row stride at odd sizes and
+    // sheared the whole bloom pyramid into ghost copies. The host now passes the exact parent size.
+    int srcW = (u_srcW > 0) ? u_srcW : width * 2;
+    int srcH = (u_srcH > 0) ? u_srcH : height * 2;
     vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
     vec2 texel = (1.0 / vec2(srcW, srcH)) * max(radius, 0.6);
     float x = texel.x;
