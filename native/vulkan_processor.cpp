@@ -182,7 +182,7 @@ void create3DLutImage() {
     imageInfo.extent.depth = 32;
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;   // linear filtering of RGBA32F is optional on mobile GPUs
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -213,7 +213,7 @@ void create3DLutImage() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = gVk.lutImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
-    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
@@ -261,7 +261,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     cleanupBuffers();
 
     VkDeviceSize pixelBufferSize = requiredPixels * 8; // 64bpp for up to 16-bit
-    // 2048 floats capacity (accommodates 10 layers with 128 floats each without overflow)
+    // 2048 floats capacity (10 layers x 192 floats + 32 header = 1952, fits without overflow)
     VkDeviceSize uboBufferSize = 2048 * sizeof(float);
     VkDeviceSize lutStagingSize = 32 * 32 * 32 * 4 * sizeof(float);
 
@@ -423,7 +423,7 @@ float cpuLinearToSrgb(float c) {
     return (c <= 0.0031308f) ? (c * 12.92f) : (1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f);
 }
 
-// 128-float stride CPU fallback loop
+// 192-float stride CPU fallback loop
 void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h, const float* ubo) {
     int layerCount = static_cast<int>(ubo[1]);
     if (layerCount <= 0) {
@@ -443,7 +443,7 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
             float a = ((pixel >> 24) & 0xFF) / 255.0f;
 
             for (int l = 0; l < std::min(layerCount, 10); l++) {
-                int off = 32 + (l * 128); // Strict 128-float stride
+                int off = 32 + (l * 192); // Strict 192-float stride (must match LayerData in the shader)
                 if (ubo[off + 0] < 0.5f) continue;
 
                 float opacity = ubo[off + 1];
@@ -475,22 +475,47 @@ void executeCpuFallbackGrading(const uint32_t* src, uint32_t* dst, int w, int h,
     }
 }
 
+// float -> IEEE half (round to nearest even), used for the 3D LUT texture
+static uint16_t floatToHalf(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    uint32_t sign = (x >> 16) & 0x8000u;
+    int32_t exp = (int32_t)((x >> 23) & 0xFFu) - 127 + 15;
+    uint32_t mant = x & 0x7FFFFFu;
+    if (((x >> 23) & 0xFFu) == 0xFFu) return (uint16_t)(sign | 0x7C00u | (mant ? 0x200u : 0u));
+    if (exp >= 31) return (uint16_t)(sign | 0x7C00u);
+    if (exp <= 0) {
+        if (exp < -10) return (uint16_t)sign;
+        mant |= 0x800000u;
+        uint32_t shift = (uint32_t)(14 - exp);
+        uint32_t half = mant >> shift;
+        uint32_t rem = mant & ((1u << shift) - 1u);
+        uint32_t mid = 1u << (shift - 1);
+        if (rem > mid || (rem == mid && (half & 1u))) half++;
+        return (uint16_t)(sign | half);
+    }
+    uint32_t half = (uint32_t)(exp << 10) | (mant >> 13);
+    uint32_t rem = mant & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) half++;
+    return (uint16_t)(sign | half);
+}
+
 void uploadLutTo3DTexture(const float* lutTable, int32_t lutCount) {
     if (lutTable == nullptr || lutCount <= 0 || gVk.lutImage == VK_NULL_HANDLE) return;
 
     size_t totalPoints = 32 * 32 * 32;
-    std::vector<float> rgbaLut(totalPoints * 4);
+    std::vector<uint16_t> rgbaLut(totalPoints * 4, 0);
 
     for (size_t i = 0; i < totalPoints; i++) {
         if ((i * 3 + 2) < (size_t)lutCount) {
-            rgbaLut[i * 4 + 0] = lutTable[i * 3 + 0];
-            rgbaLut[i * 4 + 1] = lutTable[i * 3 + 1];
-            rgbaLut[i * 4 + 2] = lutTable[i * 3 + 2];
-            rgbaLut[i * 4 + 3] = 1.0f;
+            rgbaLut[i * 4 + 0] = floatToHalf(lutTable[i * 3 + 0]);
+            rgbaLut[i * 4 + 1] = floatToHalf(lutTable[i * 3 + 1]);
+            rgbaLut[i * 4 + 2] = floatToHalf(lutTable[i * 3 + 2]);
+            rgbaLut[i * 4 + 3] = floatToHalf(1.0f);
         }
     }
 
-    size_t copyBytes = rgbaLut.size() * sizeof(float);
+    size_t copyBytes = rgbaLut.size() * sizeof(uint16_t);
     void* mappedStaging = nullptr;
     vkMapMemory(gVk.device, gVk.lutStagingMemory, 0, copyBytes, 0, &mappedStaging);
     std::memcpy(mappedStaging, rgbaLut.data(), copyBytes);
@@ -880,7 +905,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // 2. Upload Uniforms (Up to 2048 floats capacity for 10 layers with 128 stride)
+    // 2. Upload Uniforms (Up to 2048 floats capacity for 10 layers with 192 stride)
     void* mappedUbo = nullptr;
     size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(2048 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
