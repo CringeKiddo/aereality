@@ -14,7 +14,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 //  * Proper AgX + enhanced Khronos Neutral, LUT applied display-referred
 //  * Continuous anamorphic streak, true edge glow, prismatic diffuse glow
 //  * TPDF dither right before the final quantise
-// Layer stride = 128 floats, 10 layers -> UBO of 2048 floats.
+// Layer stride = 192 floats, 10 layers -> 32 + 10*192 = 1952 floats (UBO capacity 2048).
 // -----------------------------------------------------------------------------
 // v2.1 changes
 //  * AgX: inset matrix was transposed (pink/dark cast) -> fixed, SDR white restored, mids kept
@@ -24,6 +24,17 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 //  * S_lining: stronger, soft dark falloff outside the line art
 //  * Anime skin smoothing: Oklab skin mask + ink shielding (skin only, lines untouched)
 //  * Text bevel: scene-aware chrome, contact shadow, horizon bands, glints, contour glow
+// -----------------------------------------------------------------------------
+// v2.3 changes
+//  * FIX: Chroma Contrast slider was packed (slot 103) but never read by the shader. It is now a real
+//    Oklab chroma S-curve: + separates dull from vivid colours, - flattens chroma.
+//  * FIX: Green / Blue curves only received their midpoint. All 5 points of R, G, B now reach the GPU.
+//  * FIX: Anamorphic flare was a weight-averaged line (a small highlight became ~5% of its own value),
+//    then gated a second time. It now keeps the highlight's energy and picks its bloom-pyramid level from
+//    the tap spacing, so a long / stretched flare stays one continuous smear (never repeated copies).
+//  * NEW: Hue vs Saturation / Hue / Luminance (8 hue bands + custom hue-range qualifier)
+//  * NEW: Colorista: Lift / Gamma / Gain / Offset colour wheels, range saturation, contrast + pivot,
+//         temperature / tint, preserve-luma, mix
 // -----------------------------------------------------------------------------
 // v2.2 changes
 //  * FIX: packComposite() was called with 3 args but declared with 2 (shader would not compile)
@@ -79,7 +90,7 @@ layout(push_constant) uniform PushConsts {
 };
 
 // =============================================================================
-// UNIFORMS (128 floats per layer)
+// UNIFORMS (192 floats per layer)
 // =============================================================================
 struct LayerData {
     float isEnabled;              // 0
@@ -186,11 +197,67 @@ struct LayerData {
     float copiedStarGlint;        // 100
     float horizontalRamp;         // 101
     float edgeHaloRadius;         // 102
-    float lutOpacityUnused;       // 103
-    float pad0;  float pad1;  float pad2;  float pad3;  float pad4;  float pad5;
-    float pad6;  float pad7;  float pad8;  float pad9;  float pad10; float pad11;
-    float pad12; float pad13; float pad14; float pad15; float pad16; float pad17;
-    float pad18; float pad19; float pad20; float pad21; float pad22; float pad23;
+    float chromaContrast;         // 103 Oklab chroma S-curve (-1..1)
+    // ---- v2.3: full 5-point G / B curves (G2 / B2 stay at 48 / 49) ----
+    float curveG0; float curveG1; float curveG3; float curveG4;   // 104..107
+    float curveB0; float curveB1; float curveB3; float curveB4;   // 108..111
+    // ---- v2.3: Hue vs Sat / Hue / Lum ----
+    float hsSat[8];               // 112..119  Red Orange Yellow Green Aqua Blue Purple Magenta (-1..1)
+    float hsHue[8];               // 120..127  (-1..1 = about +-50 degrees)
+    float hsLum[8];               // 128..135  (-1..1)
+    float hsSoftness;             // 136 band blend softness
+    float hsCustomCenter;         // 137 0..1 around the Oklab hue wheel
+    float hsCustomWidth;          // 138
+    float hsCustomSoft;           // 139
+    float hsCustomSat;            // 140
+    float hsCustomHue;            // 141
+    float hsCustomLum;            // 142
+    // ---- v2.3: Colorista ----
+    float cLiftX;  float cLiftY;  // 143 144 wheel vectors (-1..1, length <= 1)
+    float cGammaX; float cGammaY; // 145 146
+    float cGainX;  float cGainY;  // 147 148
+    float cOffX;   float cOffY;   // 149 150
+    float cOffLuma;               // 151
+    float cSat;                   // 152 (1 = unchanged)
+    float cSatShadows;            // 153
+    float cSatMids;               // 154
+    float cSatHighs;              // 155
+    float cContrast;              // 156 (-1..1)
+    float cPivot;                 // 157 gamma-space pivot
+    float cTemp;                  // 158
+    float cTint;                  // 159
+    float cShadowRange;           // 160
+    float cHighRange;             // 161
+    float cMix;                   // 162
+    float cPreserveLuma;          // 163
+    float thinStreakSoftness;     // 164
+    float lineArtStrength;  // 165  coloured line art amount
+    float lineArtWidth;  // 166  line art sample width
+    float lineArtPlacement;  // 167  0 = every thin line, 0.5 = only lines bordering lit areas, 1 = only skin contours
+    float lineArtSaturation;  // 168  line art colour saturation
+    float radialChroma;  // 169  radial chromatic aberration (lens, grows to the corners)
+    float clarity;  // 170  local contrast / clarity (-1..1)
+    float clarityRadius;  // 171  clarity size
+    float skinEdgeBleed;  // 172  inner skin edge bleed
+    float skinEdgeWidth;  // 173  skin edge bleed width
+    float halationStrength;  // 174  halation strength
+    float halationThreshold;  // 175  halation highlight threshold
+    float pad176;
+    float pad177;
+    float pad178;
+    float pad179;
+    float pad180;
+    float pad181;
+    float pad182;
+    float pad183;
+    float pad184;
+    float pad185;
+    float pad186;
+    float pad187;
+    float pad188;
+    float pad189;
+    float pad190;
+    float pad191;
 };
 
 layout(std430, binding = 2) readonly buffer UniformBlock {
@@ -218,7 +285,7 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_g24; float u_g25; float u_g26; float u_g27;   // 20..27 (legacy, now per-layer)
     float u_bitDepthMode;          // 28: 0 = 8-bit, 1 = 10-bit, 2 = 16-bit
     float u_g29; float u_g30; float u_g31;                // 29..31 (legacy, now per-layer)
-    LayerData layers[10];          // 32 + l * 128
+    LayerData layers[10];          // 32 + l * 192
 };
 
 // Per-dispatch globals
@@ -367,6 +434,17 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
     float cosA = cos(angleRadians * 0.45);
     float sinA = sin(angleRadians * 0.45);
     return vec2(ab.x * cosA - ab.y * sinA, ab.x * sinA + ab.y * cosA);
+}
+
+// Colour wheel vector (x right, y up, |v| <= 1) -> zero-mean RGB push. Angle = hue (0 = red),
+// radius = amount, so the centre is neutral. Zero-mean means the wheel never changes brightness.
+vec3 wheelTint(vec2 w) {
+    float m = min(length(w), 1.0);
+    if (m < 1e-4) return vec3(0.0);
+    float hue = fract(atan(w.y, w.x) / 6.28318530718);
+    vec3 c = hueToRGB(hue);
+    c -= vec3((c.r + c.g + c.b) * (1.0 / 3.0));
+    return c * (1.5 * m);
 }
 
 // =============================================================================
@@ -520,6 +598,17 @@ vec4 sampleBloom(int level, vec2 uv, int w, int h) {
     vec4 c01 = bloomLoad(level, p1.y * w + p0.x);
     vec4 c11 = bloomLoad(level, p1.y * w + p1.x);
     return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+// Fractional pyramid level (1..4): blends two levels so a streak never pops between them.
+vec3 sampleBloomLevelF(float lvlF, vec2 uv, int width, int height) {
+    int lo = int(floor(lvlF));
+    int hi = min(lo + 1, 4);
+    float f = lvlF - float(lo);
+    vec3 a = sampleBloom(lo, uv, max(width >> (lo + 1), 1), max(height >> (lo + 1), 1)).rgb;
+    if (hi == lo || f < 0.001) return a;
+    vec3 b = sampleBloom(hi, uv, max(width >> (hi + 1), 1), max(height >> (hi + 1), 1)).rgb;
+    return mix(a, b, f);
 }
 
 // =============================================================================
@@ -709,8 +798,9 @@ float glowExtractThreshold() {
         if (L.diffuseSpGlowIntensity > 0.01) { t = min(t, L.diffuseSpGlowThreshold); any_ = true; }
         if (L.shaderlyGlowIntensity > 0.01)  { t = min(t, L.shaderlyGlowThreshold);  any_ = true; }
         if (L.lightWrapIntensity > 0.01 && L.lightWrapWidth > 0.01) { t = min(t, L.lightWrapThreshold); any_ = true; }
-        if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.45); any_ = true; }
-        if (L.halationRadius > 0.01 || L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
+        if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.32); any_ = true; }
+        if (L.halationRadius > 0.01 && L.halationStrength > 0.01) { t = min(t, clamp(L.halationThreshold, 0.25, 0.95)); any_ = true; }
+        if (L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
     }
     return any_ ? clamp(t, 0.05, 0.95) : 0.60;
 }
@@ -1212,60 +1302,74 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             linearBase += haloCol * eH * sideGate * L.edgeHaloRadius * 0.60 * (1.0 - lineEdge * 0.30) * op;
         }
 
-        // ---- 5. Anamorphic streak: continuous, jittered, scene-coloured (no stepped copies) ----
+        // ---- 5. Anamorphic streak (flare): continuous, energy-preserving, scene-coloured ----
+        // v2.3: the old kernel AVERAGED a thin line (a small highlight became a few % of its own value)
+        // and then gated it again, so flares were nearly invisible. Now the line SUMS the highlight with a
+        // peak-normalised kernel (core keeps the highlight's brightness), and the pyramid level follows
+        // the tap spacing: texel size >= spacing, so even a stretched / very long flare is a bilinear read
+        // of a genuinely blurred image = one smooth smear, never repeated copies.
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.30;
+            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.30;     // fraction of frame width, each side
             const int SN = 40;
-            int w8 = max(width / 8, 1);
-            int h8 = max(height / 8, 1);
-            int w4 = max(width / 4, 1);
-            int h4 = max(height / 4, 1);
-            // per-pixel jitter: taps never land on the same lattice twice, so no ghosted repeats
-            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;
+            float tapPx = max(2.0 * halfLen * float(width) / float(2 * SN), 1.0);
+            float lvlF = clamp(log2(tapPx * 0.5), 1.0, 4.0);               // texel(level k) = 2^(k+1) px
+            float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
+            float decay = mix(4.5, 1.2, soft);                              // 0 = tight core, 1 = long slow fade
+            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;         // hides any residual tap lattice
             vec3 sSum = vec3(0.0);
-            float wSumS = 0.0;
             for (int s = -SN; s <= SN; s++) {
                 float t = (float(s) + jit) / float(SN);
                 float at = abs(t);
-                float wgt = exp(-at * 3.0) * (1.0 - smoothstep(0.70, 1.0, at));
-                vec2 suv = vec2(clamp(uv.x + t * halfLen, 0.0, 1.0), uv.y);
-                vec3 sm = mix(sampleBloom(1, suv, w4, h4).rgb, sampleBloom(2, suv, w8, h8).rgb, 0.55);
-                float gate = smoothstep(0.18, 0.70, luma(sm));
+                float sx = uv.x + t * halfLen;
+                float inside = step(0.0, sx) * step(sx, 1.0);               // no smear of the border column
+                float wgt = exp(-at * decay) * (1.0 - smoothstep(0.75, 1.0, at)) * inside;
+                vec3 sm = sampleBloomLevelF(lvlF, vec2(clamp(sx, 0.0, 1.0), uv.y), width, height);
+                sm *= smoothstep(0.0, 0.06, luma(sm));                      // noise-floor gate only
                 vec3 spectral = mix(vec3(0.80, 1.00, 1.30), vec3(1.25, 0.85, 0.55), at);
-                sSum += sm * gate * wgt * mix(vec3(1.0), spectral, 0.22);
-                wSumS += wgt;
+                sSum += sm * wgt * mix(vec3(1.0), spectral, 0.30);
             }
-            vec3 streak = sSum / max(wSumS, 1e-3) * 1.6;
+            float refPx = 0.035 * float(max(width, height));                // a typical highlight blob
+            vec3 streak = sSum * (tapPx / refPx) * 1.8;
             streak = colorizeGlow(streak, ambientCol, 0.70);
             streak = saturateColor(streak, 1.25) * mix(vec3(1.0), glowTint, 0.60);
-            // soft shoulder (never hard-clips), and it reads less on already-bright backgrounds
-            streak = vec3(1.0) - exp(-streak);
-            streak *= 1.0 - 0.45 * clamp(luma(linearBase), 0.0, 1.0);
-            linearBase += streak * L.thinStreakIntensity * L.thinStreakOpacity * op;
+            streak = vec3(1.0) - exp(-streak);                              // soft shoulder, never hard-clips
+            streak *= 1.0 - 0.30 * clamp(luma(linearBase), 0.0, 1.0);
+            linearBase += streak * L.thinStreakIntensity * 1.5 * L.thinStreakOpacity * op;
         }
 
-        // ---- 6. Pro-Mist diffusion + red/orange halation ----
+        // ---- 6a. Pro-Mist: soft diffusion veil. Colour of the scene is kept (no tint), highlights bleed softly into
+        //          the surroundings and contrast eases a little. Not an additive glow.
         if (L.copiedProMist > 0.01) {
-            vec3 mist = mix(midGlow, wideGlow, 0.55);
+            vec3 mist = mix(midGlow, wideGlow, 0.60);
             mist = gateGlow(mist, 0.40, exMin);
-            vec3 m2 = mist * (L.copiedProMist * 1.25) * (1.0 - lineEdge * 0.65);
-            linearBase += m2 * op;
-            // diffusion also gently flattens contrast
+            vec3 veil = vec3(1.0) - exp(-mist * (L.copiedProMist * 1.1));
+            vec3 cb = clamp(linearBase, 0.0, 1.0);
+            vec3 screened = cb + veil * 0.55 - cb * veil * 0.55 + max(linearBase - 1.0, vec3(0.0));
+            linearBase = mix(linearBase, screened, op * (1.0 - lineEdge * 0.65));
             float l0 = luma(linearBase);
             linearBase = mix(linearBase, vec3(l0) + (linearBase - vec3(l0)) * 0.97, clamp(L.copiedProMist * 0.5, 0.0, 0.5));
         }
-        if (L.halationRadius > 0.01) {
-            // Real halation: light from bright areas scatters back through the film base and exposes it red/orange,
-            // forming a soft warm fringe AROUND highlights (wide, falls on the darker side of the edge),
-            // while bright areas themselves are barely touched.
-            float r = clamp(L.halationRadius / 1.5, 0.0, 1.0);
-            vec3 hal = mix(mix(tightGlow, midGlow, 0.6), mix(midGlow, wideGlow, 0.7), r);
-            float warm = clamp(L.halationWarmth / 1.5, 0.0, 1.0);
-            vec3 halTint = mix(vec3(1.00, 0.28, 0.10), vec3(1.00, 0.50, 0.18), warm);
-            float hl = luma(hal);
-            vec3 halCol = mix(halTint, normalize(max(hal, vec3(1e-4))) * 1.2, 0.18) * hl * 1.5;
-            float halRecv = 1.0 - smoothstep(0.45, 1.10, luma(linearBase));   // bright pixels receive little
-            linearBase += halCol * mix(0.15, 1.0, halRecv) * (1.0 - lineEdge * 0.5) * L.halationRadius * 1.1 * op;
+
+        // ---- 6b. TRUE HALATION. Light from bright highlights passes through the film, reflects off the film base
+        //          and re-exposes the emulsion from behind. The red layer is exposed most, green a little, blue
+        //          almost not at all, so the spill is a red-orange fringe that is WIDE and sits OUTSIDE the
+        //          highlight edge. Channels spread by different amounts (red widest). It is never a white
+        //          luminance glow and the highlight cores themselves are left alone.
+        if (L.halationRadius > 0.01 && L.halationStrength > 0.01) {
+            float hr = clamp(L.halationRadius / 1.5, 0.0, 1.0);
+            float lvlR = 1.0 + hr * 2.6;                       // red: widest pyramid level
+            float lvlG = max(lvlR - 0.9, 0.0);                 // green: narrower
+            vec3 hR = sampleBloomLevelF(lvlR, uv, width, height);
+            vec3 hG = sampleBloomLevelF(lvlG, uv, width, height);
+            float th = clamp(L.halationThreshold, 0.25, 0.95);
+            float spillR = luma(gateGlow(hR, th, exMin));      // only highlights above the threshold feed it
+            float spillG = luma(gateGlow(hG, th, exMin));
+            float warm = clamp(L.halationWarmth / 1.5, 0.0, 1.0);   // 0 = deep red, 1 = orange
+            vec3 halRGB = vec3(spillR * 1.00, spillG * mix(0.10, 0.34, warm), spillG * mix(0.0, 0.03, warm));
+            // fringe sits outside the highlight: bright pixels receive little, dark neighbours receive the most
+            float halRecv = 1.0 - smoothstep(0.50, 1.00, luma(linearBase));
+            float hl = L.halationStrength * 1.4;
+            linearBase += halRGB * hl * mix(0.10, 1.0, halRecv) * (1.0 - lineEdge * 0.6) * op;
         }
 
         // ---- 7. Atmosphere haze / scatter (glow-driven) ----
@@ -1308,9 +1412,13 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     vec3 finalLinear = applyToneMapping(linearBase, u_tonemapMode);
     vec3 finalDisplay = linearToSrgb(finalLinear);
 
-    // ---- LUT: display-referred, after tonemap ----
+    // ---- LUT: display-referred. The LUT gets a NEUTRAL display transform (identity below the knee, soft
+    //      shoulder above), NOT the AgX / Neutral look. Feeding a creative LUT an already flattened AgX image is what
+    //      made every LUT look washed out. LUT Opacity blends between the tonemapped look and the LUT look. ----
     if (u_hasLut > 0.5) {
-        finalDisplay = sample3DLutDisplay(finalDisplay, u_lutOpacity);
+        vec3 lutIn = linearToSrgb(tonemapLinearSoft(linearBase));
+        vec3 lutOut = sample3DLutDisplay(lutIn, 1.0);
+        finalDisplay = mix(finalDisplay, lutOut, clamp(u_lutOpacity, 0.0, 1.0));
     }
 
     // ---- TPDF dither right before the quantise (+-1 LSB triangular, scaled) ----
@@ -1325,6 +1433,30 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     finalDisplay = clamp(finalDisplay + mix(vec3(tpdf), chroma, 0.35) * lsb * amt, 0.0, 1.0);
 
     packFinalDisplay(pixelIndex, vec4(finalDisplay, 1.0), bitMode);
+}
+
+// =============================================================================
+// v2.4 helpers (pass 0)
+// =============================================================================
+vec3 srcLinBilinear(vec2 p) {
+    vec2 q = p - 0.5;
+    ivec2 i0 = ivec2(floor(q));
+    vec2 f = q - vec2(i0);
+    vec3 a = srcLin(i0);
+    vec3 b = srcLin(i0 + ivec2(1, 0));
+    vec3 c = srcLin(i0 + ivec2(0, 1));
+    vec3 d = srcLin(i0 + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Oklab hue/chroma/lightness skin-tone mask (same range the anime skin smoother uses)
+float skinMaskOf(vec3 lin) {
+    vec3 lab = linearRgbToOklab(lin);
+    float ch = length(lab.yz);
+    float h = atan(lab.z, lab.y);
+    return smoothstep(0.30, 0.55, h) * (1.0 - smoothstep(1.20, 1.50, h))
+         * smoothstep(0.015, 0.040, ch) * (1.0 - smoothstep(0.13, 0.19, ch))
+         * smoothstep(0.42, 0.62, lab.x);
 }
 
 // =============================================================================
@@ -1486,7 +1618,7 @@ void main() {
         // 2. Edge chromatic aberration (delta)
         if (L.lineChromaStrength > 0.001 && lineEdge > 0.05) {
             float edgeFactor = smoothstep(0.08, 0.35, lineEdge);
-            ivec2 sh = ivec2(edgeNormal * (L.lineChromaStrength * 3.0 * resScale));
+            ivec2 sh = ivec2(round(edgeNormal * (L.lineChromaStrength * 3.0 * resScale)));
             vec3 sr = srcLin(coord + sh);
             vec3 sb = srcLin(coord - sh);
             layerColor.r += (sr.r - src0.r) * edgeFactor * 0.80;
@@ -1495,11 +1627,25 @@ void main() {
 
         // 3. RGB directional warp shift (delta)
         if (L.copiedChromaShift > 0.001) {
-            ivec2 cs = ivec2(int(L.copiedChromaShift * 6.0 * resScale), 0);
+            ivec2 cs = ivec2(int(round(L.copiedChromaShift * 6.0 * resScale)), 0);
             vec3 sr = srcLin(coord + cs);
             vec3 sb = srcLin(coord - cs);
             layerColor.r += sr.r - src0.r;
             layerColor.b += sb.b - src0.b;
+        }
+
+        // 3b. RADIAL chromatic aberration (lens style): red is pushed outward and blue pulled inward along the
+        //     line from the frame centre, growing with distance (zero at the centre, strongest in the corners).
+        if (L.radialChroma > 0.001) {
+            vec2 sz = vec2(float(width), float(height));
+            vec2 rc = (vec2(coord) + 0.5) - sz * 0.5;
+            vec2 rdir = rc / max(0.5 * length(sz), 1.0);             // ~1 in the corners
+            float rlen = length(rdir);
+            vec2 shiftPx = rdir * rlen * (L.radialChroma * 14.0 * resScale);
+            vec3 srR = srcLinBilinear(vec2(coord) + 0.5 + shiftPx);
+            vec3 srB = srcLinBilinear(vec2(coord) + 0.5 - shiftPx);
+            layerColor.r += srR.r - src0.r;
+            layerColor.b += srB.b - src0.b;
         }
 
         // 4. Denoise: edge-aware bilateral, chroma cleaned harder than luma
@@ -1628,6 +1774,105 @@ void main() {
             float amt = mask * (0.85 + 0.65 * L.darkOutlines) * L.sLiningOpacity * 1.25;
             layerColor = mix(layerColor, inner, clamp(amt, 0.0, 1.0));
         }
+        // 7b. CLARITY / LOCAL CONTRAST: large-radius, midtone-weighted local contrast. Works on perceptual
+        //     luma and scales colour multiplicatively, so hue is kept and highlights / shadows don't halo.
+        if (abs(L.clarity) > 0.001) {
+            float cR = (5.0 + L.clarityRadius * 20.0) * resScale;
+            float cSig = cR * 0.55;
+            float lowAcc = 0.0;
+            float lowW = 0.0;
+            const int CL_TAPS = 24;
+            for (int k = 0; k < CL_TAPS; k++) {
+                float fr = (float(k) + 0.5) / float(CL_TAPS);
+                float rr = sqrt(fr) * cR;
+                float ang = float(k) * 2.39996323;
+                float sl = sqrt(max(luma(srcLin(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)))), 0.0));
+                float w = exp(-(rr * rr) / (2.0 * cSig * cSig));
+                lowAcc += sl * w;
+                lowW += w;
+            }
+            float lc = sqrt(max(luma(src0), 0.0));
+            float dl = clamp(lc - (lowAcc + lc) / (lowW + 1.0), -0.22, 0.22);   // detail vs local average
+            float mid = clamp(4.0 * lc * (1.0 - lc), 0.0, 1.0);
+            mid = 0.25 + 0.75 * mid;
+            layerColor *= exp2(dl * L.clarity * 3.0 * mid);
+        }
+
+        // 8b. COLOURED LINE ART: only thin ink lines are recoloured (never solid black areas). The colour is a
+        //     darker, richer version of the fill the line borders, so the line belongs to the picture.
+        //     Placement: 0 = every thin line, 0.5 = only lines next to lit areas, 1 = only skin contours.
+        if (L.lineArtStrength > 0.01) {
+            float cL = luma(srcSrgb(coord));
+            float inkSelf = 1.0 - smoothstep(0.10, 0.34, cL);
+            if (inkSelf > 0.02) {
+                float laR = (1.5 + L.lineArtWidth * 4.5) * resScale;
+                float inkMass = 0.0;
+                vec3 fillAcc = vec3(0.0);
+                float fillW = 0.0;
+                const int LA_TAPS = 16;
+                for (int k = 0; k < LA_TAPS; k++) {
+                    float fr = (float(k) + 0.5) / float(LA_TAPS);
+                    float rr = (0.35 + 0.65 * fr) * laR;
+                    float ang = float(k) * 2.39996323;
+                    vec3 sSrgb = srcSrgb(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)));
+                    float ink = 1.0 - smoothstep(0.10, 0.34, luma(sSrgb));
+                    inkMass += ink;
+                    float wf = 1.0 - ink;
+                    fillAcc += srgbToLinear(sSrgb) * wf;
+                    fillW += wf;
+                }
+                inkMass /= float(LA_TAPS);
+                float thinLine = inkSelf * (1.0 - smoothstep(0.35, 0.70, inkMass));
+                if (fillW > 0.5 && thinLine > 0.01) {
+                    vec3 fillCol = fillAcc / fillW;
+                    float lit = smoothstep(0.08, 0.40, luma(fillCol));
+                    float skinF = skinMaskOf(fillCol);
+                    float pl = clamp(L.lineArtPlacement, 0.0, 1.0);
+                    float place = mix(1.0, lit, clamp(pl * 2.0, 0.0, 1.0));
+                    place = mix(place, skinF, clamp(pl * 2.0 - 1.0, 0.0, 1.0));
+                    vec3 lineCol = saturateColor(fillCol, 1.0 + L.lineArtSaturation * 1.2) * 0.42;
+                    layerColor = mix(layerColor, lineCol, clamp(thinLine * place * L.lineArtStrength * 0.9, 0.0, 1.0));
+                }
+            }
+        }
+
+        // 8c. SKIN EDGE BLEED: a thin band on the INSIDE of the skin edge picks up colour from both sides of the
+        //     edge (the neighbour outside + the deep skin tone inside), which gives the skin depth.
+        if (L.skinEdgeBleed > 0.01) {
+            float skinC = skinMaskOf(src0);
+            float inkC = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
+            if (skinC > 0.05 && inkC < 0.6) {
+                float sbW = (1.5 + L.skinEdgeWidth * 5.5) * resScale;
+                vec3 outAcc = vec3(0.0);
+                float outW = 0.0;
+                vec3 inAcc = vec3(0.0);
+                float inW = 0.0;
+                float nonSkin = 0.0;
+                const int SB_TAPS = 16;
+                for (int k = 0; k < SB_TAPS; k++) {
+                    float fr = (float(k) + 0.5) / float(SB_TAPS);
+                    float rr = (0.30 + 0.70 * fr) * sbW;
+                    float ang = float(k) * 2.39996323;
+                    vec3 s = srcLin(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)));
+                    float sk = skinMaskOf(s);
+                    float ink = 1.0 - smoothstep(0.006, 0.06, luma(s));
+                    float isOut = (1.0 - sk) * (1.0 - ink);
+                    outAcc += s * isOut;
+                    outW += isOut;
+                    inAcc += s * sk;
+                    inW += sk;
+                    nonSkin += 1.0 - sk;
+                }
+                float band = smoothstep(0.08, 0.50, nonSkin / float(SB_TAPS));
+                vec3 outsideCol = (outW > 0.25) ? outAcc / outW : src0;
+                vec3 insideCol = (inW > 0.25) ? inAcc / inW : src0;
+                vec3 deep = saturateColor(insideCol, 1.55) * 0.82;
+                vec3 bleed = mix(deep, outsideCol, 0.40);
+                bleed *= (0.90 * luma(layerColor)) / max(luma(bleed), 1e-4);   // colour change, not a brightness jump
+                layerColor = mix(layerColor, bleed, clamp(skinC * band * (1.0 - inkC) * L.skinEdgeBleed * 0.85, 0.0, 0.90));
+            }
+        }
+
         if (L.edgeDarken > 0.01) {
             float innerEdge = smoothstep(0.10, 0.45, lineEdge);
             layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.40);
@@ -1727,26 +1972,143 @@ void main() {
         }
         if (abs(L.hue) > 0.001) lab.yz = oklabRotateHue(lab.yz, L.hue * 3.14159265);
 
+        // 16a. CHROMA CONTRAST: S-curve on Oklab chroma around mid-chroma. + pulls dull colours down and
+        //      vivid ones up (more separation), - flattens everything toward the middle. Monotone for -1..1.
+        if (abs(L.chromaContrast) > 0.001) {
+            float cc0 = length(lab.yz);
+            if (cc0 > 1e-5) {
+                float cn = clamp(cc0 / 0.30, 0.0, 1.0);
+                float cs = cn * cn * (3.0 - 2.0 * cn);
+                float cn2 = mix(cn, cs, clamp(L.chromaContrast, -1.0, 1.0));
+                lab.yz *= max(cc0 + (cn2 - cn) * 0.30, 0.0) / cc0;
+            }
+        }
+
+        // 16b. HUE vs SATURATION / HUE / LUMINANCE: 8 periodic hue bands (partition-of-unity blend, so
+        //      neighbouring bands never leave gaps or steps) + one custom hue-range qualifier. Works on the
+        //      same Oklab hue axis the Hue slider rotates. Greys are ignored (they have no hue).
+        {
+            bool hsOn = false;
+            for (int hb = 0; hb < 8; hb++) {
+                if (abs(L.hsSat[hb]) > 0.002 || abs(L.hsHue[hb]) > 0.002 || abs(L.hsLum[hb]) > 0.002) hsOn = true;
+            }
+            bool cuOn = abs(L.hsCustomSat) > 0.002 || abs(L.hsCustomHue) > 0.002 || abs(L.hsCustomLum) > 0.002;
+            float chroma16 = length(lab.yz);
+            if ((hsOn || cuOn) && chroma16 > 1e-4) {
+                const float HS_C[8] = float[8](29.0, 65.0, 110.0, 142.0, 195.0, 264.0, 305.0, 340.0);
+                float hDeg = degrees(atan(lab.z, lab.y));
+                if (hDeg < 0.0) hDeg += 360.0;
+                float dSat = 0.0;
+                float dHue = 0.0;
+                float dLum = 0.0;
+                if (hsOn) {
+                    int i0 = 7;
+                    for (int hb = 0; hb < 8; hb++) { if (hDeg >= HS_C[hb]) i0 = hb; }
+                    int i1 = (i0 + 1) & 7;
+                    float span = HS_C[i1] - HS_C[i0];
+                    if (span <= 0.0) span += 360.0;
+                    float dh = hDeg - HS_C[i0];
+                    if (dh < 0.0) dh += 360.0;
+                    float tb = clamp(dh / span, 0.0, 1.0);
+                    float hsEdge = (1.0 - clamp(L.hsSoftness, 0.0, 1.0)) * 0.45;
+                    tb = smoothstep(hsEdge, 1.0 - hsEdge, tb);
+                    dSat = mix(L.hsSat[i0], L.hsSat[i1], tb);
+                    dHue = mix(L.hsHue[i0], L.hsHue[i1], tb);
+                    dLum = mix(L.hsLum[i0], L.hsLum[i1], tb);
+                }
+                if (cuOn) {
+                    float hc = fract(L.hsCustomCenter) * 360.0;
+                    float dist = abs(hDeg - hc);
+                    dist = min(dist, 360.0 - dist);
+                    float halfW = clamp(L.hsCustomWidth, 0.0, 1.0) * 90.0;
+                    float feather = max(clamp(L.hsCustomSoft, 0.0, 1.0) * 90.0, 2.0);
+                    float wq = 1.0 - smoothstep(halfW, halfW + feather, dist);
+                    dSat += wq * L.hsCustomSat;
+                    dHue += wq * L.hsCustomHue;
+                    dLum += wq * L.hsCustomLum;
+                }
+                dSat = clamp(dSat, -1.0, 1.0);
+                dHue = clamp(dHue, -1.0, 1.0);
+                dLum = clamp(dLum, -1.0, 1.0);
+                float hueGate = smoothstep(0.003, 0.035, chroma16);
+                float lumGate = smoothstep(0.010, 0.070, chroma16);
+                float hAng = dHue * 0.90 * hueGate;
+                float hCa = cos(hAng);
+                float hSa = sin(hAng);
+                lab.yz = vec2(lab.y * hCa - lab.z * hSa, lab.y * hSa + lab.z * hCa);
+                lab.yz *= (dSat >= 0.0) ? (1.0 + dSat * 1.5) : (1.0 + dSat);
+                lab.x *= 1.0 + dLum * 0.30 * lumGate;
+            }
+        }
+
         layerColor = oklabToLinearRgb(lab);
 
         // 17. Per-channel RGB curves, applied in gamma space (as AE does), no cross-channel tint
         {
             bool redOn = !curveIsIdentity(L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
-            bool grnOn = abs(L.curveG2 - 0.5) > 0.005;
-            bool bluOn = abs(L.curveB2 - 0.5) > 0.005;
+            bool grnOn = !curveIsIdentity(L.curveG0, L.curveG1, L.curveG2, L.curveG3, L.curveG4);
+            bool bluOn = !curveIsIdentity(L.curveB0, L.curveB1, L.curveB2, L.curveB3, L.curveB4);
             if (redOn || grnOn || bluOn) {
                 vec3 over = max(layerColor - 1.0, vec3(0.0));
                 vec3 e = pow(clamp(layerColor, 0.0, 1.0), vec3(1.0 / 2.2));
                 if (redOn) e.r = evalCurve5(e.r, L.curveR0, L.curveR1, L.curveR2, L.curveR3, L.curveR4);
-                if (grnOn) {
-                    float m = L.curveG2;
-                    e.g = evalCurve5(e.g, 0.0, 0.25 + (m - 0.5) * 0.5, m, 0.75 + (m - 0.5) * 0.5, 1.0);
-                }
-                if (bluOn) {
-                    float m = L.curveB2;
-                    e.b = evalCurve5(e.b, 0.0, 0.25 + (m - 0.5) * 0.5, m, 0.75 + (m - 0.5) * 0.5, 1.0);
-                }
+                if (grnOn) e.g = evalCurve5(e.g, L.curveG0, L.curveG1, L.curveG2, L.curveG3, L.curveG4);
+                if (bluOn) e.b = evalCurve5(e.b, L.curveB0, L.curveB1, L.curveB2, L.curveB3, L.curveB4);
                 layerColor = pow(e, vec3(2.2)) + over;
+            }
+        }
+
+        // 17b. COLORISTA: Lift / Gamma / Gain / Offset colour wheels (+ the luma sliders already applied in
+        //      step 13), range saturation, contrast + pivot, temperature / tint, preserve-luma, mix.
+        //      Works per channel in gamma space like the RGB curves (AE / Magic Bullet behaviour).
+        {
+            vec2 wLift = vec2(L.cLiftX, L.cLiftY);
+            vec2 wGamma = vec2(L.cGammaX, L.cGammaY);
+            vec2 wGain = vec2(L.cGainX, L.cGainY);
+            vec2 wOff = vec2(L.cOffX, L.cOffY);
+            bool wheelsOn = (dot(wLift, wLift) + dot(wGamma, wGamma) + dot(wGain, wGain) + dot(wOff, wOff)) > 1e-6
+                         || abs(L.cOffLuma) > 0.001;
+            bool toneOn = abs(L.cSat - 1.0) > 0.002 || abs(L.cSatShadows) > 0.002 || abs(L.cSatMids) > 0.002 || abs(L.cSatHighs) > 0.002;
+            bool conOn = abs(L.cContrast) > 0.002;
+            bool ttOn = abs(L.cTemp) > 0.002 || abs(L.cTint) > 0.002;
+            if (wheelsOn || toneOn || conOn || ttOn) {
+                vec3 over = max(layerColor - 1.0, vec3(0.0));
+                vec3 e0 = pow(clamp(layerColor, 0.0, 1.0), vec3(1.0 / 2.2));
+                vec3 e = e0;
+                float y0 = luma(e0);
+                if (wheelsOn) {
+                    e += wheelTint(wOff) * 0.20 + vec3(L.cOffLuma * 0.25);          // Offset: moves everything
+                    e += wheelTint(wLift) * 0.30 * (1.0 - e);                       // Lift: weighs shadows most
+                    e *= vec3(1.0) + wheelTint(wGain) * 0.60;                       // Gain: weighs highlights most
+                    e = pow(max(e, vec3(0.0)), clamp(vec3(1.0) - wheelTint(wGamma) * 0.55, vec3(0.30), vec3(3.0)));   // Gamma: mids
+                }
+                if (ttOn) {
+                    e.r *= 1.0 + 0.12 * L.cTemp;
+                    e.b *= 1.0 - 0.12 * L.cTemp;
+                    e.g *= 1.0 - 0.10 * L.cTint;
+                    e.r *= 1.0 + 0.05 * L.cTint;
+                    e.b *= 1.0 + 0.05 * L.cTint;
+                }
+                if (conOn) {
+                    float piv = clamp(L.cPivot, 0.05, 0.95);
+                    e = (e - vec3(piv)) * max(1.0 + L.cContrast, 0.0) + vec3(piv);
+                }
+                if (L.cPreserveLuma > 0.001) {
+                    float y1 = luma(max(e, vec3(0.0)));
+                    e *= mix(1.0, clamp(y0 / max(y1, 1e-4), 0.25, 4.0), clamp(L.cPreserveLuma, 0.0, 1.0));
+                }
+                if (toneOn) {
+                    float yy = luma(max(e, vec3(0.0)));
+                    float sR = max(L.cShadowRange, 0.05);
+                    float hR = min(L.cHighRange, 0.95);
+                    float shM = 1.0 - smoothstep(0.0, sR, yy);
+                    float hiM = smoothstep(hR, 1.0, yy);
+                    float miM = clamp(1.0 - shM - hiM, 0.0, 1.0);
+                    float sat = L.cSat + shM * L.cSatShadows + miM * L.cSatMids + hiM * L.cSatHighs;
+                    e = vec3(yy) + (e - vec3(yy)) * max(sat, 0.0);
+                }
+                e = mix(e0, e, clamp(L.cMix, 0.0, 1.0));
+                layerColor = pow(max(e, vec3(0.0)), vec3(2.2)) + over;
             }
         }
 
