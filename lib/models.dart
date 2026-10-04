@@ -244,6 +244,7 @@ class AdjustmentLayer {
 
   // Soft Edge Glow Halo
   double edgeHaloRadius;
+  double chromaContrast;
 
   AdjustmentLayer({
     required this.id,
@@ -347,6 +348,7 @@ class AdjustmentLayer {
     this.copiedProMist = 0.0,
     this.copiedStarGlint = 0.0,
     this.edgeHaloRadius = 0.0, // Clean 0.0 default
+    this.chromaContrast = 0.0,
   })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveRed = curveRed ?? [0.0, 0.25, 0.50, 0.75, 1.0],
         curveGreen = curveGreen ?? [0.0, 0.25, 0.50, 0.75, 1.0],
@@ -455,6 +457,7 @@ class AdjustmentLayer {
       copiedProMist: copiedProMist,
       copiedStarGlint: copiedStarGlint,
       edgeHaloRadius: edgeHaloRadius,
+      chromaContrast: chromaContrast,
     );
   }
 
@@ -561,6 +564,7 @@ class AdjustmentLayer {
       'copiedProMist': copiedProMist,
       'copiedStarGlint': copiedStarGlint,
       'edgeHaloRadius': edgeHaloRadius,
+      'chromaContrast': chromaContrast,
     };
   }
 
@@ -672,6 +676,7 @@ class AdjustmentLayer {
       copiedProMist: (json['copiedProMist'] as num?)?.toDouble() ?? 0.0,
       copiedStarGlint: (json['copiedStarGlint'] as num?)?.toDouble() ?? 0.0,
       edgeHaloRadius: (json['edgeHaloRadius'] as num?)?.toDouble() ?? 0.0,
+      chromaContrast: (json['chromaContrast'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
