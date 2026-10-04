@@ -1,6 +1,6 @@
 // =============================================================================
 // AEReality / Shaderly - Master Data Models & Layer State
-// True 32-Bit Linear RGB + Oklab Pipeline • 10-Layer Stack • 128-Stride Support
+// True 32-Bit Linear RGB + Oklab Pipeline • 10-Layer Stack • 192-Stride Support
 // 100% Complete File - Zero Feature Omissions
 // =============================================================================
 
@@ -190,6 +190,17 @@ class AdjustmentLayer {
   double thinStreakWidth;
   double thinStreakOpacity;
   double thinStreakSoftness;
+  double lineArtStrength;
+  double lineArtWidth;
+  double lineArtPlacement;
+  double lineArtSaturation;
+  double radialChroma;
+  double clarity;
+  double clarityRadius;
+  double skinEdgeBleed;
+  double skinEdgeWidth;
+  double halationStrength;
+  double halationThreshold;
   double lineChromaStrength;
   double centerAura;
   double horizontalRamp;
@@ -245,6 +256,39 @@ class AdjustmentLayer {
   // Soft Edge Glow Halo
   double edgeHaloRadius;
   double chromaContrast;
+
+  // Hue vs Saturation / Hue / Luminance (bands: Red Orange Yellow Green Aqua Blue Purple Magenta)
+  List<double> hsSat;
+  List<double> hsHue;
+  List<double> hsLum;
+  double hsSoftness;
+  double hsCustomCenter;
+  double hsCustomWidth;
+  double hsCustomSoft;
+  double hsCustomSat;
+  double hsCustomHue;
+  double hsCustomLum;
+  double coloristaLiftX;
+  double coloristaLiftY;
+  double coloristaGammaX;
+  double coloristaGammaY;
+  double coloristaGainX;
+  double coloristaGainY;
+  double coloristaOffsetX;
+  double coloristaOffsetY;
+  double coloristaOffsetLuma;
+  double coloristaSaturation;
+  double coloristaSatShadows;
+  double coloristaSatMids;
+  double coloristaSatHighs;
+  double coloristaContrast;
+  double coloristaPivot;
+  double coloristaTemp;
+  double coloristaTint;
+  double coloristaShadowRange;
+  double coloristaHighlightRange;
+  double coloristaMix;
+  double coloristaPreserveLuma;
 
   AdjustmentLayer({
     required this.id,
@@ -310,6 +354,17 @@ class AdjustmentLayer {
     this.thinStreakWidth = 0.50,
     this.thinStreakOpacity = 0.80,
     this.thinStreakSoftness = 0.50,
+    this.lineArtStrength = 0.0,
+    this.lineArtWidth = 0.50,
+    this.lineArtPlacement = 0.0,
+    this.lineArtSaturation = 0.50,
+    this.radialChroma = 0.0,
+    this.clarity = 0.0,
+    this.clarityRadius = 0.50,
+    this.skinEdgeBleed = 0.0,
+    this.skinEdgeWidth = 0.50,
+    this.halationStrength = 1.0,
+    this.halationThreshold = 0.60,
     this.lineChromaStrength = 0.0,
     this.centerAura = 0.0,
     this.horizontalRamp = 0.0,
@@ -349,10 +404,126 @@ class AdjustmentLayer {
     this.copiedStarGlint = 0.0,
     this.edgeHaloRadius = 0.0, // Clean 0.0 default
     this.chromaContrast = 0.0,
-  })  : curveMaster = curveMaster ?? [0.0, 0.25, 0.50, 0.75, 1.0],
-        curveRed = curveRed ?? [0.0, 0.25, 0.50, 0.75, 1.0],
-        curveGreen = curveGreen ?? [0.0, 0.25, 0.50, 0.75, 1.0],
-        curveBlue = curveBlue ?? [0.0, 0.25, 0.50, 0.75, 1.0];
+    List<double>? hsSat,
+    List<double>? hsHue,
+    List<double>? hsLum,
+    this.hsSoftness = 0.6,
+    this.hsCustomCenter = 0.0,
+    this.hsCustomWidth = 0.12,
+    this.hsCustomSoft = 0.15,
+    this.hsCustomSat = 0.0,
+    this.hsCustomHue = 0.0,
+    this.hsCustomLum = 0.0,
+    this.coloristaLiftX = 0.0,
+    this.coloristaLiftY = 0.0,
+    this.coloristaGammaX = 0.0,
+    this.coloristaGammaY = 0.0,
+    this.coloristaGainX = 0.0,
+    this.coloristaGainY = 0.0,
+    this.coloristaOffsetX = 0.0,
+    this.coloristaOffsetY = 0.0,
+    this.coloristaOffsetLuma = 0.0,
+    this.coloristaSaturation = 1.0,
+    this.coloristaSatShadows = 0.0,
+    this.coloristaSatMids = 0.0,
+    this.coloristaSatHighs = 0.0,
+    this.coloristaContrast = 0.0,
+    this.coloristaPivot = 0.46,
+    this.coloristaTemp = 0.0,
+    this.coloristaTint = 0.0,
+    this.coloristaShadowRange = 0.4,
+    this.coloristaHighlightRange = 0.6,
+    this.coloristaMix = 1.0,
+    this.coloristaPreserveLuma = 0.0,
+  })  : curveMaster = sanitizeCurve(curveMaster),
+        curveRed = sanitizeCurve(curveRed),
+        curveGreen = sanitizeCurve(curveGreen),
+        curveBlue = sanitizeCurve(curveBlue),
+        hsSat = _band8(hsSat),
+        hsHue = _band8(hsHue),
+        hsLum = _band8(hsLum);
+
+  // ---------------------------------------------------------------------------
+  // CURVE SAFETY: every curve is forced into 0..1 and NON-DECREASING (a point can never sit below the
+  // one before it), so a curve can never fold back / invert, whatever the source (UI, preset JSON, import).
+  // The shader applies the same rule, so what you see is what is rendered.
+  // ---------------------------------------------------------------------------
+  static const List<double> kIdentityCurve = [0.0, 0.25, 0.50, 0.75, 1.0];
+
+  static List<double> sanitizeCurve(List<double>? src) {
+    if (src == null || src.isEmpty) return List<double>.from(kIdentityCurve);
+    List<double> pts = src;
+    if (src.length != 5) {
+      final n = src.length;
+      pts = List<double>.generate(5, (i) {
+        final f = (i / 4.0) * (n - 1);
+        final i0 = f.floor();
+        final i1 = (i0 + 1 < n) ? i0 + 1 : n - 1;
+        final t = f - i0;
+        return src[i0] * (1.0 - t) + src[i1] * t;
+      });
+    }
+    final out = <double>[];
+    for (int i = 0; i < 5; i++) {
+      double v = pts[i];
+      if (v.isNaN || v.isInfinite) v = kIdentityCurve[i];
+      v = v.clamp(0.0, 1.0).toDouble();
+      if (i > 0 && v < out[i - 1]) v = out[i - 1];
+      out.add(v);
+    }
+    return out;
+  }
+
+  /// In-place version used right before the values are packed for the GPU.
+  static void enforceMonotone(List<double> pts) {
+    for (int i = 0; i < pts.length; i++) {
+      double v = pts[i];
+      if (v.isNaN || v.isInfinite) v = i / (pts.length - 1);
+      v = v.clamp(0.0, 1.0).toDouble();
+      if (i > 0 && v < pts[i - 1]) v = pts[i - 1];
+      pts[i] = v;
+    }
+  }
+
+  static List<double> _band8(List<double>? src) {
+    final out = List<double>.filled(8, 0.0);
+    if (src != null) {
+      for (int i = 0; i < 8 && i < src.length; i++) {
+        final v = src[i];
+        out[i] = (v.isNaN || v.isInfinite) ? 0.0 : v.clamp(-1.0, 1.0).toDouble();
+      }
+    }
+    return out;
+  }
+
+  void resetHueSat() {
+    for (int i = 0; i < 8; i++) {
+      hsSat[i] = 0.0;
+      hsHue[i] = 0.0;
+      hsLum[i] = 0.0;
+    }
+    hsSoftness = 0.60;
+    hsCustomCenter = 0.0;
+    hsCustomWidth = 0.12;
+    hsCustomSoft = 0.15;
+    hsCustomSat = 0.0;
+    hsCustomHue = 0.0;
+    hsCustomLum = 0.0;
+  }
+
+  void resetColorista() {
+    coloristaLiftX = 0.0; coloristaLiftY = 0.0;
+    coloristaGammaX = 0.0; coloristaGammaY = 0.0;
+    coloristaGainX = 0.0; coloristaGainY = 0.0;
+    coloristaOffsetX = 0.0; coloristaOffsetY = 0.0; coloristaOffsetLuma = 0.0;
+    mblColoristaLift = 0.0; mblColoristaGamma = 0.0; mblColoristaGain = 0.0;
+    coloristaSaturation = 1.0;
+    coloristaSatShadows = 0.0; coloristaSatMids = 0.0; coloristaSatHighs = 0.0;
+    coloristaContrast = 0.0; coloristaPivot = 0.46;
+    coloristaTemp = 0.0; coloristaTint = 0.0;
+    coloristaShadowRange = 0.40; coloristaHighlightRange = 0.60;
+    coloristaMix = 1.0; coloristaPreserveLuma = 0.0;
+  }
 
   AdjustmentLayer clone() {
     return AdjustmentLayer(
@@ -419,6 +590,17 @@ class AdjustmentLayer {
       thinStreakWidth: thinStreakWidth,
       thinStreakOpacity: thinStreakOpacity,
       thinStreakSoftness: thinStreakSoftness,
+      lineArtStrength: lineArtStrength,
+      lineArtWidth: lineArtWidth,
+      lineArtPlacement: lineArtPlacement,
+      lineArtSaturation: lineArtSaturation,
+      radialChroma: radialChroma,
+      clarity: clarity,
+      clarityRadius: clarityRadius,
+      skinEdgeBleed: skinEdgeBleed,
+      skinEdgeWidth: skinEdgeWidth,
+      halationStrength: halationStrength,
+      halationThreshold: halationThreshold,
       lineChromaStrength: lineChromaStrength,
       centerAura: centerAura,
       horizontalRamp: horizontalRamp,
@@ -458,6 +640,37 @@ class AdjustmentLayer {
       copiedStarGlint: copiedStarGlint,
       edgeHaloRadius: edgeHaloRadius,
       chromaContrast: chromaContrast,
+      hsSat: List<double>.from(hsSat),
+      hsHue: List<double>.from(hsHue),
+      hsLum: List<double>.from(hsLum),
+      hsSoftness: hsSoftness,
+      hsCustomCenter: hsCustomCenter,
+      hsCustomWidth: hsCustomWidth,
+      hsCustomSoft: hsCustomSoft,
+      hsCustomSat: hsCustomSat,
+      hsCustomHue: hsCustomHue,
+      hsCustomLum: hsCustomLum,
+      coloristaLiftX: coloristaLiftX,
+      coloristaLiftY: coloristaLiftY,
+      coloristaGammaX: coloristaGammaX,
+      coloristaGammaY: coloristaGammaY,
+      coloristaGainX: coloristaGainX,
+      coloristaGainY: coloristaGainY,
+      coloristaOffsetX: coloristaOffsetX,
+      coloristaOffsetY: coloristaOffsetY,
+      coloristaOffsetLuma: coloristaOffsetLuma,
+      coloristaSaturation: coloristaSaturation,
+      coloristaSatShadows: coloristaSatShadows,
+      coloristaSatMids: coloristaSatMids,
+      coloristaSatHighs: coloristaSatHighs,
+      coloristaContrast: coloristaContrast,
+      coloristaPivot: coloristaPivot,
+      coloristaTemp: coloristaTemp,
+      coloristaTint: coloristaTint,
+      coloristaShadowRange: coloristaShadowRange,
+      coloristaHighlightRange: coloristaHighlightRange,
+      coloristaMix: coloristaMix,
+      coloristaPreserveLuma: coloristaPreserveLuma,
     );
   }
 
@@ -526,6 +739,17 @@ class AdjustmentLayer {
       'thinStreakWidth': thinStreakWidth,
       'thinStreakOpacity': thinStreakOpacity,
       'thinStreakSoftness': thinStreakSoftness,
+      'lineArtStrength': lineArtStrength,
+      'lineArtWidth': lineArtWidth,
+      'lineArtPlacement': lineArtPlacement,
+      'lineArtSaturation': lineArtSaturation,
+      'radialChroma': radialChroma,
+      'clarity': clarity,
+      'clarityRadius': clarityRadius,
+      'skinEdgeBleed': skinEdgeBleed,
+      'skinEdgeWidth': skinEdgeWidth,
+      'halationStrength': halationStrength,
+      'halationThreshold': halationThreshold,
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
       'horizontalRamp': horizontalRamp,
@@ -565,6 +789,37 @@ class AdjustmentLayer {
       'copiedStarGlint': copiedStarGlint,
       'edgeHaloRadius': edgeHaloRadius,
       'chromaContrast': chromaContrast,
+      'hsSat': hsSat,
+      'hsHue': hsHue,
+      'hsLum': hsLum,
+      'hsSoftness': hsSoftness,
+      'hsCustomCenter': hsCustomCenter,
+      'hsCustomWidth': hsCustomWidth,
+      'hsCustomSoft': hsCustomSoft,
+      'hsCustomSat': hsCustomSat,
+      'hsCustomHue': hsCustomHue,
+      'hsCustomLum': hsCustomLum,
+      'coloristaLiftX': coloristaLiftX,
+      'coloristaLiftY': coloristaLiftY,
+      'coloristaGammaX': coloristaGammaX,
+      'coloristaGammaY': coloristaGammaY,
+      'coloristaGainX': coloristaGainX,
+      'coloristaGainY': coloristaGainY,
+      'coloristaOffsetX': coloristaOffsetX,
+      'coloristaOffsetY': coloristaOffsetY,
+      'coloristaOffsetLuma': coloristaOffsetLuma,
+      'coloristaSaturation': coloristaSaturation,
+      'coloristaSatShadows': coloristaSatShadows,
+      'coloristaSatMids': coloristaSatMids,
+      'coloristaSatHighs': coloristaSatHighs,
+      'coloristaContrast': coloristaContrast,
+      'coloristaPivot': coloristaPivot,
+      'coloristaTemp': coloristaTemp,
+      'coloristaTint': coloristaTint,
+      'coloristaShadowRange': coloristaShadowRange,
+      'coloristaHighlightRange': coloristaHighlightRange,
+      'coloristaMix': coloristaMix,
+      'coloristaPreserveLuma': coloristaPreserveLuma,
     };
   }
 
@@ -638,6 +893,17 @@ class AdjustmentLayer {
       thinStreakWidth: (json['thinStreakWidth'] as num?)?.toDouble() ?? 0.50,
       thinStreakOpacity: (json['thinStreakOpacity'] as num?)?.toDouble() ?? 0.80,
       thinStreakSoftness: (json['thinStreakSoftness'] as num?)?.toDouble() ?? 0.50,
+      lineArtStrength: (json['lineArtStrength'] as num?)?.toDouble() ?? 0.0,
+      lineArtWidth: (json['lineArtWidth'] as num?)?.toDouble() ?? 0.50,
+      lineArtPlacement: (json['lineArtPlacement'] as num?)?.toDouble() ?? 0.0,
+      lineArtSaturation: (json['lineArtSaturation'] as num?)?.toDouble() ?? 0.50,
+      radialChroma: (json['radialChroma'] as num?)?.toDouble() ?? 0.0,
+      clarity: (json['clarity'] as num?)?.toDouble() ?? 0.0,
+      clarityRadius: (json['clarityRadius'] as num?)?.toDouble() ?? 0.50,
+      skinEdgeBleed: (json['skinEdgeBleed'] as num?)?.toDouble() ?? 0.0,
+      skinEdgeWidth: (json['skinEdgeWidth'] as num?)?.toDouble() ?? 0.50,
+      halationStrength: (json['halationStrength'] as num?)?.toDouble() ?? 1.0,
+      halationThreshold: (json['halationThreshold'] as num?)?.toDouble() ?? 0.60,
       lineChromaStrength: (json['lineChromaStrength'] as num?)?.toDouble() ?? 0.0,
       centerAura: (json['centerAura'] as num?)?.toDouble() ?? 0.0,
       horizontalRamp: (json['horizontalRamp'] as num?)?.toDouble() ?? 0.0,
@@ -677,6 +943,37 @@ class AdjustmentLayer {
       copiedStarGlint: (json['copiedStarGlint'] as num?)?.toDouble() ?? 0.0,
       edgeHaloRadius: (json['edgeHaloRadius'] as num?)?.toDouble() ?? 0.0,
       chromaContrast: (json['chromaContrast'] as num?)?.toDouble() ?? 0.0,
+      hsSat: (json['hsSat'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      hsHue: (json['hsHue'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      hsLum: (json['hsLum'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      hsSoftness: (json['hsSoftness'] as num?)?.toDouble() ?? 0.6,
+      hsCustomCenter: (json['hsCustomCenter'] as num?)?.toDouble() ?? 0.0,
+      hsCustomWidth: (json['hsCustomWidth'] as num?)?.toDouble() ?? 0.12,
+      hsCustomSoft: (json['hsCustomSoft'] as num?)?.toDouble() ?? 0.15,
+      hsCustomSat: (json['hsCustomSat'] as num?)?.toDouble() ?? 0.0,
+      hsCustomHue: (json['hsCustomHue'] as num?)?.toDouble() ?? 0.0,
+      hsCustomLum: (json['hsCustomLum'] as num?)?.toDouble() ?? 0.0,
+      coloristaLiftX: (json['coloristaLiftX'] as num?)?.toDouble() ?? 0.0,
+      coloristaLiftY: (json['coloristaLiftY'] as num?)?.toDouble() ?? 0.0,
+      coloristaGammaX: (json['coloristaGammaX'] as num?)?.toDouble() ?? 0.0,
+      coloristaGammaY: (json['coloristaGammaY'] as num?)?.toDouble() ?? 0.0,
+      coloristaGainX: (json['coloristaGainX'] as num?)?.toDouble() ?? 0.0,
+      coloristaGainY: (json['coloristaGainY'] as num?)?.toDouble() ?? 0.0,
+      coloristaOffsetX: (json['coloristaOffsetX'] as num?)?.toDouble() ?? 0.0,
+      coloristaOffsetY: (json['coloristaOffsetY'] as num?)?.toDouble() ?? 0.0,
+      coloristaOffsetLuma: (json['coloristaOffsetLuma'] as num?)?.toDouble() ?? 0.0,
+      coloristaSaturation: (json['coloristaSaturation'] as num?)?.toDouble() ?? 1.0,
+      coloristaSatShadows: (json['coloristaSatShadows'] as num?)?.toDouble() ?? 0.0,
+      coloristaSatMids: (json['coloristaSatMids'] as num?)?.toDouble() ?? 0.0,
+      coloristaSatHighs: (json['coloristaSatHighs'] as num?)?.toDouble() ?? 0.0,
+      coloristaContrast: (json['coloristaContrast'] as num?)?.toDouble() ?? 0.0,
+      coloristaPivot: (json['coloristaPivot'] as num?)?.toDouble() ?? 0.46,
+      coloristaTemp: (json['coloristaTemp'] as num?)?.toDouble() ?? 0.0,
+      coloristaTint: (json['coloristaTint'] as num?)?.toDouble() ?? 0.0,
+      coloristaShadowRange: (json['coloristaShadowRange'] as num?)?.toDouble() ?? 0.4,
+      coloristaHighlightRange: (json['coloristaHighlightRange'] as num?)?.toDouble() ?? 0.6,
+      coloristaMix: (json['coloristaMix'] as num?)?.toDouble() ?? 1.0,
+      coloristaPreserveLuma: (json['coloristaPreserveLuma'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
@@ -939,7 +1236,7 @@ class LutModel {
       name: json['name'],
       filePath: json['filePath'],
       size: json['size'],
-      table: Float32List.view(bytes.buffer),
+      table: Float32List.fromList(bytes.buffer.asFloat32List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 4)),
     );
   }
 }
