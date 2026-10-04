@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
 import 'models.dart';
+import 'crash_log.dart';
 import 'export_matrix.dart';
 import 'constants.dart' hide ExportMatrix;
 
@@ -63,6 +64,27 @@ class ExportSuite {
       // IMPORTANT: do NOT return sourcePath here. The temp file is deleted in the
       // caller's finally block, so pretending it was saved loses the export silently.
       throw Exception('Could not save to Movies/Shaderly.\nMediaStore: $nativeError\nDirect copy: $e');
+    }
+  }
+
+  // ===========================================================================
+  // IMAGE SAVE -> Pictures/Shaderly (MediaStore refuses images inside Movies, EPERM)
+  // ===========================================================================
+  static Future<String> saveImage({
+    required String sourcePath,
+    required String fileName,
+    required String mimeType,
+  }) async {
+    try {
+      final res = await _mediaChannel.invokeMethod<dynamic>('saveImage', {
+        'sourcePath': sourcePath,
+        'fileName': fileName,
+        'mimeType': mimeType,
+      });
+      if (res is Map && res['location'] != null) return res['location'].toString();
+      throw Exception('native image save returned no location');
+    } catch (e) {
+      throw Exception('Could not save image: $e');
     }
   }
 
@@ -857,6 +879,7 @@ class ExportSuite {
     final tempEncodedFile = File('${tempDir.path}/Shaderly_Art_${resolution}_$timestamp.$ext');
 
     try {
+      CrashLog.begin('Image export', {'format': format, 'resolution': resolution, 'source': '${srcW}x$srcH'});
       onProgress(0.3, 'Rasterizing 32-bit linear texture...');
       if (renderFrameToRgba == null) {
         throw Exception('No frame renderer connected (renderFrameToRgba is null).');
@@ -883,9 +906,9 @@ class ExportSuite {
         throw Exception('FFmpeg image encode failed with code: $rc');
       }
 
-      onProgress(0.9, 'Saving to Movies/Shaderly...');
+      onProgress(0.9, 'Saving image...');
       final mime = format == 'PNG' ? 'image/png' : (format == 'JPG' ? 'image/jpeg' : 'image/webp');
-      final finalUri = await saveToMovies(
+      final location = await saveImage(
         sourcePath: tempEncodedFile.path,
         fileName: 'Shaderly_Art_${resolution}_$timestamp.$ext',
         mimeType: mime,
@@ -894,11 +917,15 @@ class ExportSuite {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to Movies/Shaderly: $finalUri'),
+            content: Text('Saved to $location'),
             backgroundColor: const Color(0xFF00E5FF),
           ),
         );
       }
+      CrashLog.end('image export finished');
+    } catch (e) {
+      CrashLog.end('FAILED with a Dart exception: $e');
+      rethrow;
     } finally {
       if (tempRawFile.existsSync()) tempRawFile.deleteSync();
       if (tempEncodedFile.existsSync()) tempEncodedFile.deleteSync();
@@ -931,6 +958,14 @@ class ExportSuite {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     try {
+      CrashLog.begin('Video export', {
+        'codec': codec,
+        'container': container,
+        'bitDepth': bitDepth,
+        'bitrateProfile': bitrateProfile,
+        'resolution': resolution,
+        'source': '${videoWidth}x$videoHeight @ ${videoFps}fps, ${videoDurationMs.round()} ms',
+      });
       final appTempDir = await getTemporaryDirectory();
       sessionTempDir = Directory('${appTempDir.path}/export_sess_$timestamp');
       if (!sessionTempDir.existsSync()) {
@@ -956,6 +991,10 @@ class ExportSuite {
       final totalFrames = ((videoDurationMs / 1000.0) * videoFps).round().clamp(1, 999999);
       final frameIntervalMs = 1000.0 / videoFps;
 
+      final bool isHevcExport = codec.contains('HEVC') || codec.contains('H.265');
+
+      CrashLog.note('plan: $totalFrames frames -> ${outW}x$outH');
+
       const batchSize = 30;
       final totalBatches = (totalFrames / batchSize).ceil();
       final List<String> partVideoPaths = [];
@@ -976,6 +1015,7 @@ class ExportSuite {
             final globalFrameIdx = startFrame + f;
             final timeMs = globalFrameIdx * frameIntervalMs;
 
+            CrashLog.note('frame ${globalFrameIdx + 1}/$totalFrames (batch $b) render START t=${timeMs.round()}ms');
             final bytes = await render(timeMs);
             if (bytes.length != expectedBytes) {
               throw Exception(
@@ -984,6 +1024,7 @@ class ExportSuite {
               );
             }
             await raf.writeFrom(bytes);
+            CrashLog.note('frame ${globalFrameIdx + 1}/$totalFrames written');
 
             final progressRatio = (globalFrameIdx / totalFrames) * 0.70;
             onProgress(progressRatio, 'Rendering frames (${globalFrameIdx + 1}/$totalFrames)...');
@@ -994,10 +1035,23 @@ class ExportSuite {
         }
 
         // Encode batch part
-        final partExt = container.toLowerCase();
+        // HEVC: batches are stored as lossless FFV1 (pure FFmpeg core, no external codec library) and the real
+        // HEVC encode runs ONCE over the whole clip afterwards. That means a single encoder start / stop instead
+        // of one per 30 frames, no forced keyframe every second, and a guarded fallback chain (see _encodeHevcFinal).
+        final partExt = isHevcExport ? 'mkv' : container.toLowerCase();
         final partFile = File('${sessionTempDir.path}/part_${b.toString().padLeft(4, '0')}.$partExt');
 
-        final ffmpegBatchCmd = _buildBatchEncodeCmd(
+        final ffmpegBatchCmd = isHevcExport
+            ? _buildMezzanineCmd(
+                inputFile: rawFile.path,
+                outputFile: partFile.path,
+                fps: videoFps,
+                inW: videoWidth,
+                inH: videoHeight,
+                outW: outW,
+                outH: outH,
+              )
+            : _buildBatchEncodeCmd(
           inputFile: rawFile.path,
           outputFile: partFile.path,
           fps: videoFps,
@@ -1011,9 +1065,11 @@ class ExportSuite {
           container: container,
         );
 
+        CrashLog.note('batch $b encode START: ffmpeg $ffmpegBatchCmd');
         final session = await FFmpegKit.execute(ffmpegBatchCmd);
         final rc = await session.getReturnCode();
 
+        CrashLog.note('batch $b encode RETURNED rc=$rc');
         if (!ReturnCode.isSuccess(rc) || !partFile.existsSync() || partFile.lengthSync() == 0) {
           final logTail = await _sessionLogTail(session);
           debugPrint('FFmpeg cmd: $ffmpegBatchCmd\n$logTail');
@@ -1050,13 +1106,27 @@ class ExportSuite {
         concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -c copy $fastStart "${tempFinalFile.path}"';
       }
 
-      final concatSession = await FFmpegKit.execute(concatCmd);
-      final concatRc = await concatSession.getReturnCode();
+      if (isHevcExport) {
+        // Single-pass HEVC encode (+ audio) over the lossless parts.
+        await _encodeHevcFinal(
+          concatList: concatListFile,
+          audioSourcePath: audioSourcePath,
+          outFile: tempFinalFile,
+          container: container,
+          bitDepth: bitDepth,
+          bitrateProfile: bitrateProfile,
+          onProgress: onProgress,
+        );
+      } else {
+        CrashLog.note('concat START: ffmpeg $concatCmd');
+        final concatSession = await FFmpegKit.execute(concatCmd);
+        final concatRc = await concatSession.getReturnCode();
 
-      if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
-        final logTail = await _sessionLogTail(concatSession);
-        debugPrint('FFmpeg concat cmd: $concatCmd\n$logTail');
-        throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
+        if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
+          final logTail = await _sessionLogTail(concatSession);
+          debugPrint('FFmpeg concat cmd: $concatCmd\n$logTail');
+          throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
+        }
       }
 
       // Pass 3: save to Movies/Shaderly
@@ -1080,6 +1150,8 @@ class ExportSuite {
         mimeType: mimeType,
       );
 
+      CrashLog.note('saved to MediaStore: $finalUri');
+      CrashLog.end('video export finished');
       onProgress(1.0, 'Export complete!');
 
       if (context.mounted) {
@@ -1090,6 +1162,9 @@ class ExportSuite {
           ),
         );
       }
+    } catch (e) {
+      CrashLog.end('FAILED with a Dart exception: $e');
+      rethrow;
     } finally {
       // Purge session scratch directory
       try {
@@ -1129,13 +1204,13 @@ class ExportSuite {
     String colorMetadata;
     if (is10Bit) {
       pixFmt = '-pix_fmt yuv420p10le';
-      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
+      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
     } else if (is16Bit) {
       pixFmt = '-pix_fmt yuv444p10le';
-      colorMetadata = '-colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
+      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
     } else {
       pixFmt = '-pix_fmt yuv420p';
-      colorMetadata = '-colorspace bt709 -color_primaries bt709 -color_trc bt709';
+      colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
     }
 
     // 2. Codec, speed preset and default quality
@@ -1203,10 +1278,134 @@ class ExportSuite {
       }
     }
 
-    final scaleFilter = 'scale=$outW:$outH:flags=lanczos$extraFilters';
+    // RGB -> YUV with the matrix the file is tagged with (default swscale uses BT.601 even when the tags say 709).
+    // 'format=' right after the scale makes the conversion happen HERE, before unsharp (which cannot run on RGB).
+    final String pixName = pixFmt.replaceFirst('-pix_fmt ', '');
+    final String matrix = (is10Bit || is16Bit) ? 'bt2020' : 'bt709';
+    final scaleFilter = 'scale=$outW:$outH:flags=lanczos+accurate_rnd:out_color_matrix=$matrix:out_range=tv,'
+        'format=$pixName$extraFilters';
 
     return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
         '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $codecExtra $pixFmt $colorMetadata $rate "$outputFile"';
+  }
+
+  // ===========================================================================
+  // HEVC: LOSSLESS MEZZANINE + ONE SINGLE-PASS x265 ENCODE (no fallbacks)
+  // ===========================================================================
+  /// rgba batch -> scaled, lossless FFV1 (bgr0) part. FFV1 is built into FFmpeg itself, so this step never
+  /// touches x265.
+  static String _buildMezzanineCmd({
+    required String inputFile,
+    required String outputFile,
+    required double fps,
+    required int inW,
+    required int inH,
+    required int outW,
+    required int outH,
+  }) {
+    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
+        '-i "$inputFile" -vf "scale=$outW:$outH:flags=lanczos,format=bgr0" '
+        '-c:v ffv1 -level 3 -g 1 -slicecrc 0 -an "$outputFile"';
+  }
+
+  static int _profileMbps(String bitrateProfile) {
+    if (bitrateProfile.contains('Master')) return 80;
+    if (bitrateProfile.contains('Ultra')) return 50;
+    if (bitrateProfile.contains('High')) return 25;
+    if (bitrateProfile.contains('Standard')) return 12;
+    return 0;
+  }
+
+  static String _hevcFinalCmd({
+    required String concatList,
+    required String? audioSourcePath,
+    required String outFile,
+    required String container,
+    required String bitDepth,
+    required String bitrateProfile,
+  }) {
+    final is10 = bitDepth.startsWith('10');
+    final is16 = bitDepth.startsWith('16');
+    final c = container.toUpperCase();
+    final isMp4Family = c == 'MP4' || c == 'MOV';
+    final lossless = bitrateProfile.contains('Lossless');
+    final mbps = _profileMbps(bitrateProfile);
+
+    String pixFmt;
+    String colorMetadata;
+    String matrix;
+    if (is10) {
+      pixFmt = 'yuv420p10le';
+      matrix = 'bt2020';
+      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
+    } else if (is16) {
+      pixFmt = 'yuv444p10le';
+      matrix = 'bt2020';
+      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
+    } else {
+      pixFmt = 'yuv420p';
+      matrix = 'bt709';
+      colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
+    }
+
+    String rate;
+    if (lossless) {
+      rate = '-crf 12';
+    } else if (mbps > 0) {
+      rate = '-b:v ${mbps}M -maxrate ${(mbps * 1.2).round()}M -bufsize ${mbps * 2}M';
+    } else {
+      rate = '-crf 20';
+    }
+
+    // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no worker thread pools, one frame thread,
+    // lookahead always larger than the B-frame count.
+    final video = '-c:v libx265${isMp4Family ? ' -tag:v hvc1' : ''} -preset veryfast '
+        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
+
+    final fastStart = isMp4Family ? '-movflags +faststart' : '';
+    final hasAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
+    final audioIn = hasAudio ? '-i "$audioSourcePath" ' : '';
+    final audioOpts = hasAudio
+        ? '-map 0:v:0 -map 1:a:0? -c:a ${ExportMatrix.getAudioCodec(container)} -b:a 320k -shortest'
+        : '-map 0:v:0 -an';
+
+    // RGB -> YUV with the SAME matrix that the file is tagged with (the old default was BT.601 while the
+    // tags said BT.709, which shifted colours in players).
+    return '-y -f concat -safe 0 -i "$concatList" $audioIn'
+        '-vf "scale=out_color_matrix=$matrix:out_range=tv:flags=accurate_rnd,format=$pixFmt" '
+        '$video $colorMetadata $audioOpts $fastStart "$outFile"';
+  }
+
+  static Future<void> _encodeHevcFinal({
+    required File concatList,
+    required String? audioSourcePath,
+    required File outFile,
+    required String container,
+    required String bitDepth,
+    required String bitrateProfile,
+    required Function(double, String) onProgress,
+  }) async {
+    onProgress(0.80, 'Encoding HEVC (x265)...');
+    final cmd = _hevcFinalCmd(
+      concatList: concatList.path,
+      audioSourcePath: audioSourcePath,
+      outFile: outFile.path,
+      container: container,
+      bitDepth: bitDepth,
+      bitrateProfile: bitrateProfile,
+    );
+
+    // If the app dies inside this call, the crash report shown on the next launch ends with these lines.
+    CrashLog.note('HEVC final encode START: ffmpeg $cmd');
+    final session = await FFmpegKit.execute(cmd);
+    final rc = await session.getReturnCode();
+    CrashLog.note('HEVC final encode RETURNED rc=$rc size=${outFile.existsSync() ? outFile.lengthSync() : -1}');
+
+    if (!ReturnCode.isSuccess(rc) || !outFile.existsSync() || outFile.lengthSync() < 2048) {
+      final tail = await _sessionLogTail(session);
+      debugPrint('FFmpeg HEVC final cmd: $cmd\n$tail');
+      throw Exception('HEVC encode failed (rc: $rc)\n$tail');
+    }
   }
 
   // ===========================================================================
