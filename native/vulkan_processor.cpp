@@ -21,6 +21,8 @@ struct ComputePushConstants {
     int32_t passHeight;
     float passRadius;
     int32_t bandY;
+    int32_t srcW;   // exact parent bloom-level size for downsample passes (0 = unused)
+    int32_t srcH;
 };
 
 struct VulkanContext {
@@ -619,8 +621,9 @@ static void recordBarrier() {
 }
 
 // One compute pass over rows [bandY, bandY + rows) of a (w x h) pass.
-static void recordPass(int32_t pass, int32_t w, int32_t h, float radius, int32_t bandY, int32_t rows) {
-    ComputePushConstants pc{pass, w, h, radius, bandY};
+static void recordPass(int32_t pass, int32_t w, int32_t h, float radius, int32_t bandY, int32_t rows,
+                       int32_t srcW = 0, int32_t srcH = 0) {
+    ComputePushConstants pc{pass, w, h, radius, bandY, srcW, srcH};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (w + 15) / 16, (rows + 15) / 16, 1);
@@ -658,10 +661,10 @@ static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixe
     // 2. Bloom pyramid (cheap, low-res) in a single submit.
     if (!submitAndWait([&]() {
             recordPass(1, wL0, hL0, 1.0f, 0, hL0); recordBarrier();
-            recordPass(2, wL1, hL1, 1.5f, 0, hL1); recordBarrier();
-            recordPass(3, wL2, hL2, 2.0f, 0, hL2); recordBarrier();
-            recordPass(7, wL3, hL3, 2.0f, 0, hL3); recordBarrier();
-            recordPass(8, wL4, hL4, 2.0f, 0, hL4); recordBarrier();
+            recordPass(2, wL1, hL1, 1.5f, 0, hL1, wL0, hL0); recordBarrier();
+            recordPass(3, wL2, hL2, 2.0f, 0, hL2, wL1, hL1); recordBarrier();
+            recordPass(7, wL3, hL3, 2.0f, 0, hL3, wL2, hL2); recordBarrier();
+            recordPass(8, wL4, hL4, 2.0f, 0, hL4, wL3, hL3); recordBarrier();
             recordPass(9, wL3, hL3, 2.0f, 0, hL3); recordBarrier();
             recordPass(4, wL1, hL1, 2.0f, 0, hL1); recordBarrier();
             recordPass(5, wL0, hL0, 1.5f, 0, hL0);
