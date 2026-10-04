@@ -40,6 +40,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 //  * Volumetric fog rebuilt (BSL-style): pseudo-depth + ground fog, domain-warped drifting noise,
 //    per-channel Beer-Lambert extinction, forward-scatter sun glow, sky/ground in-scatter colour
 //  * TPDF dither: exact +-1 LSB triangular at default strength
+//  * Saturation slider: <1 = saturation, >1 = skin-protected vibrance
+//  * Text bevel: rounder 4-scale height, glow + metal follow the text's own colour, inner rim light, smoky halo
 //  * Linear tonemap mode now has a hue-preserving soft shoulder (identity below 0.92) instead of hard clipping
 // -----------------------------------------------------------------------------
 // =============================================================================
@@ -1605,7 +1607,24 @@ void main() {
         }
 
         // 16. Saturation & hue rotation
-        lab.yz *= L.saturation;
+        // Saturation slider = saturation below 1.0, VIBRANCE above 1.0 (continuous at 1.0).
+        //  0..1  : plain Oklab chroma scale (0 = fully grey)
+        //  1..2.5: dull colours get the boost, already-vivid colours barely move, skin tones are
+        //          protected, so pushing it up no longer turns skin/eyes neon or clips them.
+        if (L.saturation <= 1.0) {
+            lab.yz *= max(L.saturation, 0.0);
+        } else {
+            float boost = L.saturation - 1.0;
+            float cch = length(lab.yz);
+            float lowChroma = 1.0 - smoothstep(0.05, 0.28, cch);          // 1 = dull, 0 = already vivid
+            float wv = mix(0.12, 1.0, lowChroma);                          // vivid colours still move a little
+            float vh = atan(lab.z, lab.y);
+            float skinV = smoothstep(0.30, 0.55, vh) * (1.0 - smoothstep(1.20, 1.50, vh))
+                        * smoothstep(0.015, 0.040, cch) * (1.0 - smoothstep(0.13, 0.19, cch))
+                        * smoothstep(0.42, 0.62, lab.x);
+            wv *= 1.0 - 0.65 * skinV;
+            lab.yz *= 1.0 + boost * wv;
+        }
         if (abs(L.hue) > 0.001) lab.yz = oklabRotateHue(lab.yz, L.hue * 3.14159265);
 
         layerColor = oklabToLinearRgb(lab);
@@ -1814,9 +1833,9 @@ void main() {
             // ---- bevel normal from a 3-scale height gradient of the text mask ----
             float fillC = textFillAt(coord);
             vec2 grad = vec2(0.0);
-            for (int bi = 0; bi < 3; bi++) {
-                float br = (bi == 0) ? 1.2 : ((bi == 1) ? 2.6 : 4.5);
-                float bw = (bi == 0) ? 0.5 : ((bi == 1) ? 0.3 : 0.2);
+            for (int bi = 0; bi < 4; bi++) {
+                float br = (bi == 0) ? 1.2 : ((bi == 1) ? 2.6 : ((bi == 2) ? 4.5 : 8.0));
+                float bw = (bi == 0) ? 0.40 : ((bi == 1) ? 0.28 : ((bi == 2) ? 0.20 : 0.12));
                 int bo = int(max(round(br * tpx), 1.0));
                 grad.x += (textFillAt(coord + ivec2(bo, 0)) - textFillAt(coord - ivec2(bo, 0))) * bw;
                 grad.y += (textFillAt(coord + ivec2(0, bo)) - textFillAt(coord - ivec2(0, bo))) * bw;
@@ -1847,13 +1866,21 @@ void main() {
             float blurNear = 0.0;
             float blurFar = 0.0;
             float shadowAcc = 0.0;
+            vec3 ringCol = vec3(0.0);
+            float ringW = 0.0;
             const int TX_TAPS = 16;
             for (int tk = 0; tk < TX_TAPS; tk++) {
                 float tfr = (float(tk) + 0.5) / float(TX_TAPS);
                 float tang = rotT + float(tk) * 2.39996323;
                 vec2 tdir = vec2(cos(tang), sin(tang));
-                blurNear += textFillAt(coord + ivec2(round(tdir * (3.0 + 5.0 * tfr) * tpx)));
-                blurFar  += textFillAt(coord + ivec2(round(tdir * (9.0 + 16.0 * tfr) * tpx)));
+                ivec2 pNear = coord + ivec2(round(tdir * (3.0 + 5.0 * tfr) * tpx));
+                ivec2 pFar  = coord + ivec2(round(tdir * (9.0 + 16.0 * tfr) * tpx));
+                float fNear = textFillAt(pNear);
+                float fFar  = textFillAt(pFar);
+                blurNear += fNear;
+                blurFar  += fFar;
+                ringCol += srcLin(pNear) * fNear + srcLin(pFar) * fFar;
+                ringW += fNear + fFar;
                 shadowAcc += textFillAt(coord - ivec2(round(shOff)) + ivec2(round(tdir * (1.0 + 5.0 * tfr) * tpx)));
             }
             blurNear /= float(TX_TAPS);
@@ -1861,22 +1888,44 @@ void main() {
             shadowAcc /= float(TX_TAPS);
             float outside = 1.0 - fillC;
 
+            // the text's own colour (hue only, luma = 1): glow + metal follow it instead of fixed colours
+            vec3 textHue = vec3(1.0);
+            if (ringW > 0.5) {
+                vec3 tcol = ringCol / ringW;
+                float tl = max(luma(tcol), 1e-4);
+                textHue = saturateColor(clamp(tcol / tl, vec3(0.05), vec3(6.0)), 1.25);
+                textHue /= max(luma(textHue), 1e-4);
+            }
+            // 1 just inside the letter edges, 0 deep inside: drives the bright rim light
+            float edgeIn = clamp(fillC * (1.0 - blurNear) * 2.2, 0.0, 1.0);
+            // wide dark smoky halo behind the letters (makes the neon read as deep, like the reference)
+            float smokeAcc = 0.0;
+            for (int sk = 0; sk < 8; sk++) {
+                float sa = rotT + float(sk) * 2.39996323;
+                float sr = (26.0 + 34.0 * (float(sk) + 0.5) / 8.0) * tpx;
+                smokeAcc += textFillAt(coord + ivec2(round(vec2(cos(sa), sin(sa)) * sr)));
+            }
+            float smoke = (smokeAcc / 8.0) * outside;
+
             // grounded shadow (tight contact + wide soft), tinted by the scene instead of pure black
             float contact = shadowAcc * outside;
             float soft = blurFar * outside * 0.35;
             vec3 shadowTint = mix(vec3(0.02), midAmb * 0.12, 0.5);
-            currentComposite = mix(currentComposite, shadowTint, clamp(contact * 0.78 + soft * 0.45, 0.0, 0.85));
+            currentComposite = mix(currentComposite, shadowTint, clamp(contact * 0.78 + soft * 0.45 + smoke * 0.55, 0.0, 0.92));
 
             // reflective contour glow: takes the chrome band colour of its own height, so it reads as light
             // bouncing off the metal rather than a flat halo
             vec3 glowBand = saturateColor(chromeBands(clamp(relBox.y, 0.0, 1.0), skyRef, gndRef), 1.4);
             float glowAmt = (blurNear * 0.9 + blurFar * 1.1) * outside;
-            vec3 contourGlow = glowBand * glowAmt * 0.55 * max(tChrome, 0.2);
+            vec3 glowCol = mix(glowBand, textHue * max(luma(glowBand), 0.40), 0.65);
+            vec3 contourGlow = glowCol * glowAmt * 0.60 * max(tChrome, 0.2);
             contourGlow *= 1.0 - 0.50 * clamp(luma(currentComposite), 0.0, 1.0);
             currentComposite += contourGlow;
 
             // finally the metal itself
-            currentComposite = mix(currentComposite, max(chromeCol, vec3(0.0)), smoothstep(0.0, 1.0, fillC) * 0.96);
+            vec3 metal = chromeCol * mix(vec3(1.0), textHue, 0.55);
+            metal += mix(vec3(1.0), textHue, 0.25) * pow(edgeIn, 1.6) * (0.55 + 0.45 * lambert) * 0.90 * max(tChrome, 0.25);
+            currentComposite = mix(currentComposite, max(metal, vec3(0.0)), smoothstep(0.0, 1.0, fillC) * 0.96);
         }
     }
 
