@@ -1481,6 +1481,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 100] = layer.copiedStarGlint;
       uniforms[offset + 101] = layer.horizontalRamp;
       uniforms[offset + 102] = layer.edgeHaloRadius;
+      uniforms[offset + 103] = layer.chromaContrast;
     }
 
     return uniforms;
