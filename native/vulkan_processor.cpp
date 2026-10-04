@@ -65,6 +65,11 @@ struct VulkanContext {
     VkDeviceMemory bloomL1Memory = VK_NULL_HANDLE;
     VkBuffer bloomL2Buffer = VK_NULL_HANDLE;
     VkDeviceMemory bloomL2Memory = VK_NULL_HANDLE;
+    // Long-tail levels for Deep Glow (1/16 and 1/32 res)
+    VkBuffer bloomL3Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory bloomL3Memory = VK_NULL_HANDLE;
+    VkBuffer bloomL4Buffer = VK_NULL_HANDLE;
+    VkDeviceMemory bloomL4Memory = VK_NULL_HANDLE;
 
     // Intermediate Linear Composite (fp16 RGBA = 8 bytes per pixel)
     VkBuffer tempCompositeBuffer = VK_NULL_HANDLE;
@@ -237,6 +242,8 @@ void cleanupBuffers() {
     safeDestroy(gVk.bloomL0Buffer, gVk.bloomL0Memory);
     safeDestroy(gVk.bloomL1Buffer, gVk.bloomL1Memory);
     safeDestroy(gVk.bloomL2Buffer, gVk.bloomL2Memory);
+    safeDestroy(gVk.bloomL3Buffer, gVk.bloomL3Memory);
+    safeDestroy(gVk.bloomL4Buffer, gVk.bloomL4Memory);
     safeDestroy(gVk.tempCompositeBuffer, gVk.tempCompositeMemory);
 
     gVk.allocatedPixelCapacity = 0;
@@ -258,6 +265,8 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     VkDeviceSize l0Size = ((requiredPixels / 4) + 64) * 8;
     VkDeviceSize l1Size = ((requiredPixels / 16) + 64) * 8;
     VkDeviceSize l2Size = ((requiredPixels / 64) + 64) * 8;
+    VkDeviceSize l3Size = ((requiredPixels / 256) + 64) * 8;
+    VkDeviceSize l4Size = ((requiredPixels / 1024) + 64) * 8;
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -294,6 +303,16 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
+    createBuffer(gVk.device, gVk.physicalDevice, l3Size,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.bloomL3Buffer, gVk.bloomL3Memory);
+
+    createBuffer(gVk.device, gVk.physicalDevice, l4Size,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 gVk.bloomL4Buffer, gVk.bloomL4Memory);
+
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -309,8 +328,10 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     VkDescriptorBufferInfo l1BufferInfo{gVk.bloomL1Buffer, 0, l1Size};
     VkDescriptorBufferInfo l2BufferInfo{gVk.bloomL2Buffer, 0, l2Size};
     VkDescriptorBufferInfo tempCompInfo{gVk.tempCompositeBuffer, 0, pixelBufferSize};
+    VkDescriptorBufferInfo l3BufferInfo{gVk.bloomL3Buffer, 0, l3Size};
+    VkDescriptorBufferInfo l4BufferInfo{gVk.bloomL4Buffer, 0, l4Size};
 
-    VkWriteDescriptorSet descriptorWrites[8]{};
+    VkWriteDescriptorSet descriptorWrites[10]{};
 
     descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[0].dstSet = gVk.descriptorSet;
@@ -368,7 +389,21 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     descriptorWrites[7].descriptorCount = 1;
     descriptorWrites[7].pBufferInfo = &tempCompInfo;
 
-    vkUpdateDescriptorSets(gVk.device, 8, descriptorWrites, 0, nullptr);
+    descriptorWrites[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[8].dstSet = gVk.descriptorSet;
+    descriptorWrites[8].dstBinding = 8;
+    descriptorWrites[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[8].descriptorCount = 1;
+    descriptorWrites[8].pBufferInfo = &l3BufferInfo;
+
+    descriptorWrites[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[9].dstSet = gVk.descriptorSet;
+    descriptorWrites[9].dstBinding = 9;
+    descriptorWrites[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[9].descriptorCount = 1;
+    descriptorWrites[9].pBufferInfo = &l4BufferInfo;
+
+    vkUpdateDescriptorSets(gVk.device, 10, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
     LOGI("Configured Vulkan Samplers, 3D LUT Image, and Buffers for %zu pixels (UBO 2048 floats).", requiredPixels);
@@ -598,8 +633,8 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
 
-    VkDescriptorSetLayoutBinding bindings[8]{};
-    for (int b = 0; b < 8; b++) {
+    VkDescriptorSetLayoutBinding bindings[10]{};
+    for (int b = 0; b < 10; b++) {
         bindings[b].binding = b;
         bindings[b].descriptorType = (b == 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
@@ -608,7 +643,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 8;
+    layoutInfo.bindingCount = 10;
     layoutInfo.pBindings = bindings;
     vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
 
@@ -636,7 +671,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 7;
+    poolSizes[0].descriptorCount = 9;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 1;
 
@@ -743,6 +778,10 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     int32_t hL1 = std::max(1, outHeight >> 2);
     int32_t wL2 = std::max(1, outWidth >> 3);
     int32_t hL2 = std::max(1, outHeight >> 3);
+    int32_t wL3 = std::max(1, outWidth >> 4);
+    int32_t hL3 = std::max(1, outHeight >> 4);
+    int32_t wL4 = std::max(1, outWidth >> 5);
+    int32_t hL4 = std::max(1, outHeight >> 5);
 
     ComputePushConstants pc{};
 
@@ -768,6 +807,24 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     pc = {3, wL2, hL2, 2.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 7: 13-Tap Downsample L2 -> L3 (1/16 res, Deep Glow long tail)
+    pc = {7, wL3, hL3, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 8: 13-Tap Downsample L3 -> L4 (1/32 res)
+    pc = {8, wL4, hL4, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL4 + 15) / 16, (hL4 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 9: Continuous Upsample L4 -> L3 (smooths the tail; L2/L1/L0 are left untouched)
+    pc = {9, wL3, hL3, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
     insertBarrier();
 
     // Pass 4: Continuous Upsample L2 -> L1
@@ -873,6 +930,10 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     int32_t hL1 = std::max(1, outHeight >> 2);
     int32_t wL2 = std::max(1, outWidth >> 3);
     int32_t hL2 = std::max(1, outHeight >> 3);
+    int32_t wL3 = std::max(1, outWidth >> 4);
+    int32_t hL3 = std::max(1, outHeight >> 4);
+    int32_t wL4 = std::max(1, outWidth >> 5);
+    int32_t hL4 = std::max(1, outHeight >> 5);
 
     ComputePushConstants pc{};
 
@@ -898,6 +959,24 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     pc = {3, wL2, hL2, 2.0f};
     vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
     vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 7: 13-Tap Downsample L2 -> L3 (1/16 res, Deep Glow long tail)
+    pc = {7, wL3, hL3, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 8: 13-Tap Downsample L3 -> L4 (1/32 res)
+    pc = {8, wL4, hL4, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL4 + 15) / 16, (hL4 + 15) / 16, 1);
+    insertBarrier();
+
+    // Pass 9: Continuous Upsample L4 -> L3 (smooths the tail; L2/L1/L0 are left untouched)
+    pc = {9, wL3, hL3, 2.0f};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
     insertBarrier();
 
     // Pass 4: Continuous Upsample L2 -> L1
