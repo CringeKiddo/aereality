@@ -28,6 +28,7 @@ import 'vulkan_bridge.dart';
 import 'touch_particles.dart';
 import 'editor_views.dart';
 import 'export_suite.dart';
+import 'crash_log.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,6 +37,10 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
+  // Crash evidence: reads what happened last session (shown as a dialog after the first frame).
+  await CrashLog.init();
+  CrashLog.install();
+
   try {
     await FFmpegKitExtended.initialize();
   } catch (e) {
@@ -43,6 +48,7 @@ Future<void> main() async {
   }
 
   runApp(const ShaderlyApp());
+  CrashLog.scheduleReport();
 }
 
 class ShaderlyApp extends StatelessWidget {
@@ -54,6 +60,7 @@ class ShaderlyApp extends StatelessWidget {
       valueListenable: gCustomAccentColor,
       builder: (context, accentColor, _) {
         return MaterialApp(
+          navigatorKey: CrashLog.navigatorKey,
           title: 'Shaderly',
           theme: ThemeData.dark().copyWith(
             scaffoldBackgroundColor: kBackgroundDark,
@@ -1248,6 +1255,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (rawFile.existsSync()) rawFile.deleteSync();
 
       final t = (timestampMs / 1000.0).toStringAsFixed(3);
+      CrashLog.note('  decode source frame (ffmpeg -ss $t)');
       await FFmpegKit.execute(
         '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
         '-vf scale=$w:$h -f rawvideo -pix_fmt rgba "${rawFile.path}"',
@@ -1268,7 +1276,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
     uniforms[0] = timestampMs / 1000.0;
+    CrashLog.note('  vulkan processImage ${w}x$h');
     final out = processImage(raw, w, h, w, h, uniforms, lutTable: _getActiveLutTable());
+    CrashLog.note('  vulkan done, gpu status=${vulkanLastRenderStatus()} (0 = ok)');
 
     await Future<void>.delayed(Duration.zero);
     return out;
