@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <mutex>
+#include <functional>
 
 #define LOG_TAG "ShaderlyVulkan"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -19,6 +20,7 @@ struct ComputePushConstants {
     int32_t passWidth;
     int32_t passHeight;
     float passRadius;
+    int32_t bandY;
 };
 
 struct VulkanContext {
@@ -274,7 +276,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  gVk.inBuffer, gVk.inMemory);
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.outBuffer, gVk.outMemory);
 
@@ -289,32 +291,32 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  gVk.lutStagingBuffer, gVk.lutStagingMemory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l0Size,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL0Buffer, gVk.bloomL0Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l1Size,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL1Buffer, gVk.bloomL1Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l2Size,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL2Buffer, gVk.bloomL2Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l3Size,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL3Buffer, gVk.bloomL3Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, l4Size,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.bloomL4Buffer, gVk.bloomL4Memory);
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.tempCompositeBuffer, gVk.tempCompositeMemory);
 
@@ -554,9 +556,147 @@ void uploadLutTo3DTexture(const float* lutTable, int32_t lutCount) {
     LOGI("Uploaded 3D Volumetric LUT directly to hardware sampler.");
 }
 
+// =============================================================================
+// ROBUST, BANDED GPU PIPELINE
+//  * Every submit is short (bands of rows), so the Android GPU watchdog never kills a big render.
+//  * Every VkResult is checked; a failed render is reported (status code) instead of silently
+//    returning stale / half-written buffers.
+//  * Bloom + composite + output buffers are cleared on every render, so nothing from a previous
+//    (differently sized) render can leak into the next one as a "ghost".
+// =============================================================================
+static int32_t gLastRenderStatus = 0;   // 0 ok, 1 GPU error (CPU fallback used), 2 device lost, 3 timeout
+
+constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
+constexpr int32_t  kMaxPixelsPerSubmit = 500000;   // ~0.5 MP of heavy shader work per submit
+
+static bool submitAndWait(const std::function<void()>& record) {
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkResetCommandBuffer(gVk.commandBuffer, 0);
+    if (vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo) != VK_SUCCESS) {
+        LOGE("vkBeginCommandBuffer failed");
+        return false;
+    }
+    vkCmdBindPipeline(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gVk.computePipeline);
+    vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
+    record();
+    if (vkEndCommandBuffer(gVk.commandBuffer) != VK_SUCCESS) {
+        LOGE("vkEndCommandBuffer failed");
+        return false;
+    }
+
+    vkResetFences(gVk.device, 1, &gVk.computeFence);
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &gVk.commandBuffer;
+
+    VkResult sr = vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
+    if (sr != VK_SUCCESS) {
+        LOGE("vkQueueSubmit failed: %d", (int)sr);
+        gLastRenderStatus = (sr == VK_ERROR_DEVICE_LOST) ? 2 : 1;
+        return false;
+    }
+    VkResult wr = vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, kFenceTimeoutNs);
+    if (wr != VK_SUCCESS) {
+        LOGE("vkWaitForFences failed: %d (GPU timeout / device lost)", (int)wr);
+        gLastRenderStatus = (wr == VK_ERROR_DEVICE_LOST) ? 2 : 3;
+        return false;
+    }
+    return true;
+}
+
+static void recordBarrier() {
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(gVk.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+}
+
+// One compute pass over rows [bandY, bandY + rows) of a (w x h) pass.
+static void recordPass(int32_t pass, int32_t w, int32_t h, float radius, int32_t bandY, int32_t rows) {
+    ComputePushConstants pc{pass, w, h, radius, bandY};
+    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(ComputePushConstants), &pc);
+    vkCmdDispatch(gVk.commandBuffer, (w + 15) / 16, (rows + 15) / 16, 1);
+}
+
+static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixelsPerSubmit) {
+    const int32_t wL0 = std::max(1, outWidth >> 1),  hL0 = std::max(1, outHeight >> 1);
+    const int32_t wL1 = std::max(1, outWidth >> 2),  hL1 = std::max(1, outHeight >> 2);
+    const int32_t wL2 = std::max(1, outWidth >> 3),  hL2 = std::max(1, outHeight >> 3);
+    const int32_t wL3 = std::max(1, outWidth >> 4),  hL3 = std::max(1, outHeight >> 4);
+    const int32_t wL4 = std::max(1, outWidth >> 5),  hL4 = std::max(1, outHeight >> 5);
+
+    // Band height must be a multiple of the 16-row workgroup so shared-memory passes stay aligned.
+    const int32_t bandRows = std::max<int32_t>(16, ((pixelsPerSubmit / std::max(outWidth, 1)) / 16) * 16);
+
+    // 0. Clear every intermediate + output buffer (no stale data from a previous render).
+    if (!submitAndWait([&]() {
+            VkBuffer bufs[] = {gVk.bloomL0Buffer, gVk.bloomL1Buffer, gVk.bloomL2Buffer, gVk.bloomL3Buffer,
+                               gVk.bloomL4Buffer, gVk.tempCompositeBuffer, gVk.outBuffer};
+            for (VkBuffer b : bufs) vkCmdFillBuffer(gVk.commandBuffer, b, 0, VK_WHOLE_SIZE, 0);
+            VkMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(gVk.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        })) return false;
+
+    // 1. Pass 0 (primary grade -> TempComposite), banded.
+    for (int32_t y = 0; y < outHeight; y += bandRows) {
+        const int32_t rows = std::min(bandRows, outHeight - y);
+        if (!submitAndWait([&]() { recordPass(0, outWidth, outHeight, 1.0f, y, rows); })) return false;
+    }
+
+    // 2. Bloom pyramid (cheap, low-res) in a single submit.
+    if (!submitAndWait([&]() {
+            recordPass(1, wL0, hL0, 1.0f, 0, hL0); recordBarrier();
+            recordPass(2, wL1, hL1, 1.5f, 0, hL1); recordBarrier();
+            recordPass(3, wL2, hL2, 2.0f, 0, hL2); recordBarrier();
+            recordPass(7, wL3, hL3, 2.0f, 0, hL3); recordBarrier();
+            recordPass(8, wL4, hL4, 2.0f, 0, hL4); recordBarrier();
+            recordPass(9, wL3, hL3, 2.0f, 0, hL3); recordBarrier();
+            recordPass(4, wL1, hL1, 2.0f, 0, hL1); recordBarrier();
+            recordPass(5, wL0, hL0, 1.5f, 0, hL0);
+        })) return false;
+
+    // 3. Pass 6 (master composite -> outBuffer), banded.
+    for (int32_t y = 0; y < outHeight; y += bandRows) {
+        const int32_t rows = std::min(bandRows, outHeight - y);
+        if (!submitAndWait([&]() { recordPass(6, outWidth, outHeight, 1.0f, y, rows); })) return false;
+    }
+    return true;
+}
+
+// Retries with smaller bands on a recoverable failure. Returns false if the GPU render failed.
+static bool runGpuPipeline(int32_t outWidth, int32_t outHeight) {
+    gLastRenderStatus = 0;
+    int32_t budget = kMaxPixelsPerSubmit;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (runGpuPipelineOnce(outWidth, outHeight, budget)) return true;
+        if (gLastRenderStatus == 2 || gLastRenderStatus == 3) break;   // device lost / hung: no point retrying
+        budget = std::max(65536, budget / 2);
+        LOGE("GPU render failed, retrying with smaller bands (%d px/submit)", budget);
+    }
+    if (gLastRenderStatus == 0) gLastRenderStatus = 1;
+    LOGE("GPU render FAILED (status %d) for %dx%d", gLastRenderStatus, outWidth, outHeight);
+    return false;
+}
+
+
 } // namespace
 
 extern "C" {
+
+// 0 = last render OK, 1 = GPU error (CPU fallback was used), 2 = device lost, 3 = GPU timeout
+int32_t get_last_render_status() { return gLastRenderStatus; }
 
 int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
@@ -751,111 +891,13 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
         uploadLutTo3DTexture(lutTable, lutCount);
     }
 
-    // 4. Record Multi-Pass Compute Commands with integer bit-shifts (>> 1)
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo);
-    vkCmdBindPipeline(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gVk.computePipeline);
-    vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
-
-    auto insertBarrier = []() {
-        VkMemoryBarrier memoryBarrier{};
-        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(gVk.commandBuffer,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
-    };
-
-    int32_t wL0 = std::max(1, outWidth >> 1);
-    int32_t hL0 = std::max(1, outHeight >> 1);
-    int32_t wL1 = std::max(1, outWidth >> 2);
-    int32_t hL1 = std::max(1, outHeight >> 2);
-    int32_t wL2 = std::max(1, outWidth >> 3);
-    int32_t hL2 = std::max(1, outHeight >> 3);
-    int32_t wL3 = std::max(1, outWidth >> 4);
-    int32_t hL3 = std::max(1, outHeight >> 4);
-    int32_t wL4 = std::max(1, outWidth >> 5);
-    int32_t hL4 = std::max(1, outHeight >> 5);
-
-    ComputePushConstants pc{};
-
-    // Pass 0: Primary Grade & Input Restoration -> TempCompositeBuffer
-    pc = {0, outWidth, outHeight, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 1: Karis-Weighted Highlight Extraction -> Bloom L0
-    pc = {1, wL0, hL0, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 2: 13-Tap Anti-Grid Downsample L0 -> L1
-    pc = {2, wL1, hL1, 1.5f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 3: 13-Tap Anti-Grid Downsample L1 -> L2
-    pc = {3, wL2, hL2, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 7: 13-Tap Downsample L2 -> L3 (1/16 res, Deep Glow long tail)
-    pc = {7, wL3, hL3, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 8: 13-Tap Downsample L3 -> L4 (1/32 res)
-    pc = {8, wL4, hL4, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL4 + 15) / 16, (hL4 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 9: Continuous Upsample L4 -> L3 (smooths the tail; L2/L1/L0 are left untouched)
-    pc = {9, wL3, hL3, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 4: Continuous Upsample L2 -> L1
-    pc = {4, wL1, hL1, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 5: Continuous Upsample L1 -> L0
-    pc = {5, wL0, hL0, 1.5f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 6: Master Composite, FXAA, Tonemap & IGN Dither -> outBuffer
-    pc = {6, outWidth, outHeight, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
-
-    vkEndCommandBuffer(gVk.commandBuffer);
-
-    // 5. Submit with Fence Synchronization
-    vkResetFences(gVk.device, 1, &gVk.computeFence);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &gVk.commandBuffer;
-
-    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
-    vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
+    // 4. Banded, checked GPU pipeline (clears buffers, short submits, reports failure)
+    if (!runGpuPipeline(outWidth, outHeight)) {
+        executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
+                                  reinterpret_cast<uint32_t*>(outputBytes),
+                                  outWidth, outHeight, uniforms);
+        return;
+    }
 
     // 6. Read Back Output
     void* mappedOutput = nullptr;
@@ -903,111 +945,11 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
         uploadLutTo3DTexture(lutTable, lutCount);
     }
 
-    // 4. Record Multi-Pass Compute Commands
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(gVk.commandBuffer, &beginInfo);
-    vkCmdBindPipeline(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gVk.computePipeline);
-    vkCmdBindDescriptorSets(gVk.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            gVk.pipelineLayout, 0, 1, &gVk.descriptorSet, 0, nullptr);
-
-    auto insertBarrier = []() {
-        VkMemoryBarrier memoryBarrier{};
-        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(gVk.commandBuffer,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
-    };
-
-    int32_t wL0 = std::max(1, outWidth >> 1);
-    int32_t hL0 = std::max(1, outHeight >> 1);
-    int32_t wL1 = std::max(1, outWidth >> 2);
-    int32_t hL1 = std::max(1, outHeight >> 2);
-    int32_t wL2 = std::max(1, outWidth >> 3);
-    int32_t hL2 = std::max(1, outHeight >> 3);
-    int32_t wL3 = std::max(1, outWidth >> 4);
-    int32_t hL3 = std::max(1, outHeight >> 4);
-    int32_t wL4 = std::max(1, outWidth >> 5);
-    int32_t hL4 = std::max(1, outHeight >> 5);
-
-    ComputePushConstants pc{};
-
-    // Pass 0: 16-Bit Primary Color Grade & Input Restoration -> TempCompositeBuffer
-    pc = {0, outWidth, outHeight, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 1: Karis-Weighted Highlight Extraction -> Bloom L0
-    pc = {1, wL0, hL0, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 2: 13-Tap Anti-Grid Downsample L0 -> L1
-    pc = {2, wL1, hL1, 1.5f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 3: 13-Tap Anti-Grid Downsample L1 -> L2
-    pc = {3, wL2, hL2, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL2 + 15) / 16, (hL2 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 7: 13-Tap Downsample L2 -> L3 (1/16 res, Deep Glow long tail)
-    pc = {7, wL3, hL3, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 8: 13-Tap Downsample L3 -> L4 (1/32 res)
-    pc = {8, wL4, hL4, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL4 + 15) / 16, (hL4 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 9: Continuous Upsample L4 -> L3 (smooths the tail; L2/L1/L0 are left untouched)
-    pc = {9, wL3, hL3, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL3 + 15) / 16, (hL3 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 4: Continuous Upsample L2 -> L1
-    pc = {4, wL1, hL1, 2.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL1 + 15) / 16, (hL1 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 5: Continuous Upsample L1 -> L0
-    pc = {5, wL0, hL0, 1.5f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (wL0 + 15) / 16, (hL0 + 15) / 16, 1);
-    insertBarrier();
-
-    // Pass 6: Master Composite & 16-Bit Tonemapped Pack with IGN Dither -> outBuffer
-    pc = {6, outWidth, outHeight, 1.0f};
-    vkCmdPushConstants(gVk.commandBuffer, gVk.pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &pc);
-    vkCmdDispatch(gVk.commandBuffer, (outWidth + 15) / 16, (outHeight + 15) / 16, 1);
-
-    vkEndCommandBuffer(gVk.commandBuffer);
-
-    // 5. Submit with Fence Synchronization
-    vkResetFences(gVk.device, 1, &gVk.computeFence);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &gVk.commandBuffer;
-
-    vkQueueSubmit(gVk.computeQueue, 1, &submitInfo, gVk.computeFence);
-    vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, UINT64_MAX);
+    // 4. Banded, checked GPU pipeline (clears buffers, short submits, reports failure)
+    if (!runGpuPipeline(outWidth, outHeight)) {
+        std::memcpy(outputBytes, inputBytes, pixelCount * 8);
+        return;
+    }
 
     // 6. Direct Read Back of Full 16-Bit Words (Zero Truncation)
     void* mappedOutput = nullptr;
