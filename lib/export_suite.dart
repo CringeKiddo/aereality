@@ -1143,6 +1143,7 @@ class ExportSuite {
     String speed = '';
     String rate = '';
     String extraFilters = '';
+    String codecExtra = '';
     if (isProRes) {
       if (is16Bit) {
         cOption = '-c:v prores_ks -profile:v 4';
@@ -1155,6 +1156,11 @@ class ExportSuite {
       cOption = '-c:v libx265 -tag:v hvc1';
       speed = '-preset fast';
       rate = '-crf 20';
+      // Stability profile for mobile. x265's "fast" preset queues a 15-frame lookahead window
+      // (a 17-frame test clip dies right around frame 15, i.e. when that window fills and the
+      // worker threads start). A shallow lookahead plus 2 frame threads keeps the encoder away
+      // from that path and costs almost nothing in quality at these bitrates.
+      codecExtra = '-x265-params log-level=error:rc-lookahead=10:bframes=3:frame-threads=2';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 6';
@@ -1199,7 +1205,7 @@ class ExportSuite {
     final scaleFilter = 'scale=$outW:$outH:flags=lanczos$extraFilters';
 
     return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
-        '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $pixFmt $colorMetadata $rate "$outputFile"';
+        '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $codecExtra $pixFmt $colorMetadata $rate "$outputFile"';
   }
 
   // ===========================================================================
