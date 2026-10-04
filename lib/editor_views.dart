@@ -476,14 +476,19 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Exposure', val: cur.brightness, min: -0.8, max: 0.8, onChanged: (v) { cur.brightness = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Contrast', val: cur.contrast, min: 0.2, max: 2.5, onChanged: (v) { cur.contrast = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Saturation', val: cur.saturation, min: 0.0, max: 2.5, onChanged: (v) { cur.saturation = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Chroma Contrast', val: cur.chromaContrast, min: 0.0, max: 1.0, onChanged: (v) { cur.chromaContrast = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Chroma Contrast (S-Curve on Colour Intensity)', val: cur.chromaContrast, min: -1.0, max: 1.0, onChanged: (v) { cur.chromaContrast = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Hue / Color Rotate (Oklab Angle)', val: cur.hue, min: -1.0, max: 1.0, onChanged: (v) { cur.hue = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Gamma', val: cur.gamma, min: 0.2, max: 2.5, onChanged: (v) { cur.gamma = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Sharpness', val: cur.sharpness, min: 0.0, max: 2.0, onChanged: (v) { cur.sharpness = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Clarity / Local Contrast', val: cur.clarity, min: -1.0, max: 1.0, onChanged: (v) { cur.clarity = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Clarity Size (Fine to Broad)', val: cur.clarityRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.clarityRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Temperature', val: cur.temperature, min: 2000.0, max: 12000.0, onChanged: (v) { cur.temperature = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Highlights', val: cur.highlights, min: -1.0, max: 1.0, onChanged: (v) { cur.highlights = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Shadows', val: cur.shadows, min: -1.0, max: 1.0, onChanged: (v) { cur.shadows = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Black Crush', val: cur.blackCrush, min: 0.0, max: 0.5, onChanged: (v) { cur.blackCrush = v; onChanged(); }, onEnded: onEnded),
+
+        const SizedBox(height: 10),
+        HueSatPanel(cur: cur, onChanged: onChanged, onEnded: onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -525,6 +530,204 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
+  // 4b. COLORISTA TAB (Lift / Gamma / Gain / Offset colour wheels + full primary controls)
+  // ---------------------------------------------------------------------------
+  static Widget _miniSlider({
+    required BuildContext context,
+    required String label,
+    required double val,
+    required double min,
+    required double max,
+    required ValueChanged<double> onChanged,
+    VoidCallback? onEnded,
+  }) {
+    final accent = gCustomAccentColor.value;
+    return Row(
+      children: [
+        SizedBox(width: 30, child: Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold))),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2.6,
+              activeTrackColor: accent,
+              inactiveTrackColor: Colors.white12,
+              thumbColor: accent,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+            ),
+            child: Slider(
+              value: val.clamp(min, max).toDouble(),
+              min: min,
+              max: max,
+              onChanged: onChanged,
+              onChangeEnd: (_) => onEnded?.call(),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 38,
+          child: Text(val.toStringAsFixed(2), textAlign: TextAlign.right, style: TextStyle(color: accent, fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+        ),
+      ],
+    );
+  }
+
+  static Widget _wheelCard({
+    required BuildContext context,
+    required String title,
+    required double x,
+    required double y,
+    required double luma,
+    required double lumaMin,
+    required double lumaMax,
+    required void Function(double, double) onWheel,
+    required ValueChanged<double> onLuma,
+    required VoidCallback onEnded,
+  }) {
+    return Container(
+      margin: const EdgeInsets.all(4),
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF14141C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: LayoutBuilder(builder: (context, c) {
+        final size = math.min(c.maxWidth - 8, 150.0);
+        return Column(
+          children: [
+            ColorWheelPicker(label: title, x: x, y: y, size: size, onChanged: onWheel, onEnded: onEnded),
+            const SizedBox(height: 4),
+            _miniSlider(context: context, label: 'Luma', val: luma, min: lumaMin, max: lumaMax, onChanged: onLuma, onEnded: onEnded),
+          ],
+        );
+      }),
+    );
+  }
+
+  static Widget buildColoristaTab({
+    required BuildContext context,
+    required AdjustmentLayer cur,
+    required VoidCallback onChanged,
+    required VoidCallback onEnded,
+  }) {
+    final accent = gCustomAccentColor.value;
+    Widget header(String t) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Text(t, style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        );
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      children: [
+        header('COLORISTA  -  3-WAY COLOUR WHEELS (DRAG THE PUCK, DOUBLE-TAP A WHEEL TO RESET IT)'),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _wheelCard(
+                context: context,
+                title: 'SHADOWS  /  LIFT',
+                x: cur.coloristaLiftX,
+                y: cur.coloristaLiftY,
+                luma: cur.mblColoristaLift,
+                lumaMin: -0.5,
+                lumaMax: 0.5,
+                onWheel: (x, y) { cur.coloristaLiftX = x; cur.coloristaLiftY = y; onChanged(); },
+                onLuma: (v) { cur.mblColoristaLift = v; onChanged(); },
+                onEnded: onEnded,
+              ),
+            ),
+            Expanded(
+              child: _wheelCard(
+                context: context,
+                title: 'MIDTONES  /  GAMMA',
+                x: cur.coloristaGammaX,
+                y: cur.coloristaGammaY,
+                luma: cur.mblColoristaGamma,
+                lumaMin: -0.5,
+                lumaMax: 0.5,
+                onWheel: (x, y) { cur.coloristaGammaX = x; cur.coloristaGammaY = y; onChanged(); },
+                onLuma: (v) { cur.mblColoristaGamma = v; onChanged(); },
+                onEnded: onEnded,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _wheelCard(
+                context: context,
+                title: 'HIGHLIGHTS  /  GAIN',
+                x: cur.coloristaGainX,
+                y: cur.coloristaGainY,
+                luma: cur.mblColoristaGain,
+                lumaMin: -0.5,
+                lumaMax: 0.5,
+                onWheel: (x, y) { cur.coloristaGainX = x; cur.coloristaGainY = y; onChanged(); },
+                onLuma: (v) { cur.mblColoristaGain = v; onChanged(); },
+                onEnded: onEnded,
+              ),
+            ),
+            Expanded(
+              child: _wheelCard(
+                context: context,
+                title: 'MASTER  /  OFFSET',
+                x: cur.coloristaOffsetX,
+                y: cur.coloristaOffsetY,
+                luma: cur.coloristaOffsetLuma,
+                lumaMin: -0.5,
+                lumaMax: 0.5,
+                onWheel: (x, y) { cur.coloristaOffsetX = x; cur.coloristaOffsetY = y; onChanged(); },
+                onLuma: (v) { cur.coloristaOffsetLuma = v; onChanged(); },
+                onEnded: onEnded,
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+        header('SATURATION'),
+        buildSliderRow(context: context, title: 'Colorista Saturation', val: cur.coloristaSaturation, min: 0.0, max: 2.0, onChanged: (v) { cur.coloristaSaturation = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Shadow Saturation', val: cur.coloristaSatShadows, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaSatShadows = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Midtone Saturation', val: cur.coloristaSatMids, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaSatMids = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Highlight Saturation', val: cur.coloristaSatHighs, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaSatHighs = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Shadow Range (where shadows end)', val: cur.coloristaShadowRange, min: 0.05, max: 0.70, onChanged: (v) { cur.coloristaShadowRange = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Highlight Range (where highlights begin)', val: cur.coloristaHighlightRange, min: 0.30, max: 0.95, onChanged: (v) { cur.coloristaHighlightRange = v; onChanged(); }, onEnded: onEnded),
+
+        const SizedBox(height: 10),
+        header('CONTRAST & PIVOT'),
+        buildSliderRow(context: context, title: 'Colorista Contrast', val: cur.coloristaContrast, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaContrast = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Pivot (what stays put)', val: cur.coloristaPivot, min: 0.10, max: 0.90, onChanged: (v) { cur.coloristaPivot = v; onChanged(); }, onEnded: onEnded),
+
+        const SizedBox(height: 10),
+        header('TEMPERATURE & TINT'),
+        buildSliderRow(context: context, title: 'Temperature (Cool to Warm)', val: cur.coloristaTemp, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaTemp = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Tint (Green to Magenta)', val: cur.coloristaTint, min: -1.0, max: 1.0, onChanged: (v) { cur.coloristaTint = v; onChanged(); }, onEnded: onEnded),
+
+        const SizedBox(height: 10),
+        header('OUTPUT'),
+        buildSliderRow(context: context, title: 'Preserve Luminance', val: cur.coloristaPreserveLuma, min: 0.0, max: 1.0, onChanged: (v) { cur.coloristaPreserveLuma = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Colorista Mix', val: cur.coloristaMix, min: 0.0, max: 1.0, onChanged: (v) { cur.coloristaMix = v; onChanged(); }, onEnded: onEnded),
+
+        Center(
+          child: TextButton.icon(
+            onPressed: () {
+              cur.resetColorista();
+              onChanged();
+              onEnded();
+            },
+            icon: Icon(Icons.refresh_rounded, size: 16, color: accent),
+            label: Text('Reset Colorista', style: TextStyle(color: accent, fontSize: 11)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // 5. MAGIC TAB (Split Toning, Magic Bullet Suite & Deep Teal)
   // ---------------------------------------------------------------------------
   static Widget buildMagicTab({
@@ -552,10 +755,11 @@ class EditorViews {
           child: Text('MAGIC BULLET SUITE REPLICATION', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Mojo (Teal & Orange Split)', val: cur.mblMojoTealOrange, min: 0.0, max: 1.5, onChanged: (v) { cur.mblMojoTealOrange = v; onChanged(); }, onEnded: onEnded),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('Colorista Lift / Gamma / Gain now live on the COLORISTA tab (colour wheels).', style: TextStyle(color: Colors.white24, fontSize: 10)),
+        ),
         buildSliderRow(context: context, title: 'Cosmo Clean Highlights (Skin Protection)', val: cur.cosmoCleanHighlight, min: 0.0, max: 1.0, onChanged: (v) { cur.cosmoCleanHighlight = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Colorista Lift (Shadows)', val: cur.mblColoristaLift, min: -0.5, max: 0.5, onChanged: (v) { cur.mblColoristaLift = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Colorista Gamma (Midtones)', val: cur.mblColoristaGamma, min: -0.5, max: 0.5, onChanged: (v) { cur.mblColoristaGamma = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Colorista Gain (Highlights)', val: cur.mblColoristaGain, min: -0.5, max: 0.5, onChanged: (v) { cur.mblColoristaGain = v; onChanged(); }, onEnded: onEnded),
 
         const SizedBox(height: 12),
         const Padding(
@@ -590,9 +794,26 @@ class EditorViews {
           child: Text('COPIED STUFF (AFTER EFFECTS ANIME CC)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'RGB Warp Shift (Directional Edges)', val: cur.copiedChromaShift, min: 0.0, max: 1.0, onChanged: (v) { cur.copiedChromaShift = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Radial Chromatic Aberration (Lens, Corners)', val: cur.radialChroma, min: 0.0, max: 1.0, onChanged: (v) { cur.radialChroma = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Sapphire Edge Detect Glow', val: cur.copiedEdgeRays, min: 0.0, max: 1.5, onChanged: (v) { cur.copiedEdgeRays = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Pro-Mist Halation (Black Line Safe)', val: cur.copiedProMist, min: 0.0, max: 1.0, onChanged: (v) { cur.copiedProMist = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Star Sparkle / Glint Cross', val: cur.copiedStarGlint, min: 0.0, max: 1.5, onChanged: (v) { cur.copiedStarGlint = v; onChanged(); }, onEnded: onEnded),
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('INNER SKIN EDGE BLEED', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        ),
+        buildSliderRow(context: context, title: 'Skin Edge Bleed (Depth)', val: cur.skinEdgeBleed, min: 0.0, max: 1.5, onChanged: (v) { cur.skinEdgeBleed = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Skin Edge Bleed Width', val: cur.skinEdgeWidth, min: 0.0, max: 1.0, onChanged: (v) { cur.skinEdgeWidth = v; onChanged(); }, onEnded: onEnded),
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          child: Text('COLOURED LINE ART', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        ),
+        buildSliderRow(context: context, title: 'Coloured Line Art Amount', val: cur.lineArtStrength, min: 0.0, max: 1.5, onChanged: (v) { cur.lineArtStrength = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Line Art Width', val: cur.lineArtWidth, min: 0.0, max: 1.0, onChanged: (v) { cur.lineArtWidth = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Line Art Placement (All / Lit Areas / Skin)', val: cur.lineArtPlacement, min: 0.0, max: 1.0, onChanged: (v) { cur.lineArtPlacement = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Line Art Colour Richness', val: cur.lineArtSaturation, min: 0.0, max: 1.0, onChanged: (v) { cur.lineArtSaturation = v; onChanged(); }, onEnded: onEnded),
       ],
     );
   }
@@ -748,6 +969,7 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Width / Length', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Softness (Tight Core to Long Fade)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
       ],
     );
   }
@@ -845,6 +1067,8 @@ class EditorViews {
         ),
         buildSliderRow(context: context, title: 'Halation Radius', val: cur.halationRadius, min: 0.0, max: 1.5, onChanged: (v) { cur.halationRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Halation Warmth', val: cur.halationWarmth, min: 0.0, max: 1.5, onChanged: (v) { cur.halationWarmth = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Halation Strength', val: cur.halationStrength, min: 0.0, max: 1.5, onChanged: (v) { cur.halationStrength = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Halation Highlight Threshold', val: cur.halationThreshold, min: 0.25, max: 0.95, onChanged: (v) { cur.halationThreshold = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Film Grain (Midtone Responsive)', val: cur.filmGrain, min: 0.0, max: 1.0, onChanged: (v) { cur.filmGrain = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Denoise Filter (Edge-Aware Bilateral)', val: cur.denoise, min: 0.0, max: 1.0, onChanged: (v) { cur.denoise = v; onChanged(); }, onEnded: onEnded),
       ],
@@ -874,6 +1098,13 @@ class EditorViews {
     } else if (selectedCurveChannel == 3) {
       activeCurve = cur.curveBlue;
       curveColor = Colors.blueAccent;
+    }
+
+    // A point can never cross its neighbours -> the curve is always monotone (no fold-back / inversion).
+    double clampPt(int i, double v) {
+      final lo = i > 0 ? activeCurve[i - 1] : 0.0;
+      final hi = i < activeCurve.length - 1 ? activeCurve[i + 1] : 1.0;
+      return v.clamp(lo, hi).toDouble();
     }
 
     return ListView(
@@ -913,11 +1144,11 @@ class EditorViews {
           },
         ),
         const SizedBox(height: 16),
-        buildSliderRow(context: context, title: 'Black Point (0.00)', val: activeCurve[0], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[0] = v.clamp(0.0, 1.0); onChanged(); }),
-        buildSliderRow(context: context, title: 'Shadow Lift (0.25)', val: activeCurve[1], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[1] = v.clamp(0.0, 1.0); onChanged(); }),
-        buildSliderRow(context: context, title: 'Midtone Gamma (0.50)', val: activeCurve[2], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[2] = v.clamp(0.0, 1.0); onChanged(); }),
-        buildSliderRow(context: context, title: 'Highlight Rolloff (0.75)', val: activeCurve[3], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[3] = v.clamp(0.0, 1.0); onChanged(); }),
-        buildSliderRow(context: context, title: 'White Clip (1.00)', val: activeCurve[4], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[4] = v.clamp(0.0, 1.0); onChanged(); }),
+        buildSliderRow(context: context, title: 'Black Point (0.00)', val: activeCurve[0], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[0] = clampPt(0, v); onChanged(); }),
+        buildSliderRow(context: context, title: 'Shadow Lift (0.25)', val: activeCurve[1], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[1] = clampPt(1, v); onChanged(); }),
+        buildSliderRow(context: context, title: 'Midtone Gamma (0.50)', val: activeCurve[2], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[2] = clampPt(2, v); onChanged(); }),
+        buildSliderRow(context: context, title: 'Highlight Rolloff (0.75)', val: activeCurve[3], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[3] = clampPt(3, v); onChanged(); }),
+        buildSliderRow(context: context, title: 'White Clip (1.00)', val: activeCurve[4], min: 0.0, max: 1.0, onChanged: (v) { activeCurve[4] = clampPt(4, v); onChanged(); }),
         Center(
           child: TextButton.icon(
             onPressed: () {
@@ -2682,6 +2913,168 @@ class _DraggableTextBoundingBoxState extends State<DraggableTextBoundingBox> {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+// =============================================================================
+// HUE vs SATURATION / HUE / LUMINANCE PANEL (lives in the BASIC tab)
+// =============================================================================
+class HueSatPanel extends StatefulWidget {
+  final AdjustmentLayer cur;
+  final VoidCallback onChanged;
+  final VoidCallback onEnded;
+
+  const HueSatPanel({super.key, required this.cur, required this.onChanged, required this.onEnded});
+
+  @override
+  State<HueSatPanel> createState() => _HueSatPanelState();
+}
+
+class _HueSatPanelState extends State<HueSatPanel> {
+  int _mode = 0; // 0 = Hue vs Sat, 1 = Hue vs Hue, 2 = Hue vs Lum
+
+  @override
+  Widget build(BuildContext context) {
+    final cur = widget.cur;
+    final accent = gCustomAccentColor.value;
+    final onChanged = widget.onChanged;
+    final onEnded = widget.onEnded;
+
+    final List<double> vals = _mode == 0 ? cur.hsSat : (_mode == 1 ? cur.hsHue : cur.hsLum);
+    final String modeName = _mode == 0 ? 'Saturation' : (_mode == 1 ? 'Hue Shift' : 'Luminance');
+
+    Widget header(String t) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Text(t, style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+        );
+
+    final tileTheme = Theme.of(context).copyWith(dividerColor: Colors.transparent);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        header('HUE vs SATURATION / HUE / LUMINANCE'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Wrap(
+            spacing: 8,
+            children: [
+              for (final m in const [
+                {'n': 'Hue vs Sat', 'i': 0},
+                {'n': 'Hue vs Hue', 'i': 1},
+                {'n': 'Hue vs Lum', 'i': 2},
+              ])
+                ChoiceChip(
+                  label: Text(m['n'] as String, style: TextStyle(fontSize: 11, color: _mode == m['i'] ? Colors.black : Colors.white70, fontWeight: FontWeight.bold)),
+                  selected: _mode == m['i'],
+                  selectedColor: accent,
+                  backgroundColor: const Color(0xFF14141C),
+                  onSelected: (_) => setState(() => _mode = m['i'] as int),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: HueBandEditor(
+            key: ValueKey('hsEditor$_mode'),
+            values: vals,
+            softness: cur.hsSoftness,
+            accent: accent,
+            onChanged: onChanged,
+            onEnded: onEnded,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
+          child: Text('Drag a point up / down to change $modeName for that colour. Double-tap the graph to reset this curve.',
+              style: const TextStyle(color: Colors.white24, fontSize: 10)),
+        ),
+        EditorViews.buildSliderRow(context: context, title: 'Band Blend Softness', val: cur.hsSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.hsSoftness = v; onChanged(); }, onEnded: onEnded),
+
+        Theme(
+          data: tileTheme,
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+            iconColor: accent,
+            collapsedIconColor: Colors.white38,
+            title: Text('Fine sliders  -  $modeName per colour', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+            children: [
+              for (int i = 0; i < 8; i++)
+                EditorViews.buildSliderRow(
+                  context: context,
+                  title: kHueBandNames[i],
+                  val: vals[i],
+                  min: -1.0,
+                  max: 1.0,
+                  onChanged: (v) { vals[i] = v; onChanged(); },
+                  onEnded: onEnded,
+                ),
+            ],
+          ),
+        ),
+
+        Theme(
+          data: tileTheme,
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+            iconColor: accent,
+            collapsedIconColor: Colors.white38,
+            title: const Text('Custom hue range (pick any colour)', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    height: 16,
+                    child: LayoutBuilder(builder: (context, c) {
+                      final w = c.maxWidth;
+                      final n = 36;
+                      return Stack(
+                        children: [
+                          Row(
+                            children: [
+                              for (int i = 0; i < n; i++) Expanded(child: Container(color: oklchColor(i / n * 360.0))),
+                            ],
+                          ),
+                          Positioned(
+                            left: (cur.hsCustomCenter.clamp(0.0, 1.0) * w - 2).clamp(0.0, w - 4).toDouble(),
+                            top: 0,
+                            bottom: 0,
+                            child: Container(width: 4, decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black, width: 1))),
+                          ),
+                        ],
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              EditorViews.buildSliderRow(context: context, title: 'Range Centre (Hue)', val: cur.hsCustomCenter, min: 0.0, max: 1.0, onChanged: (v) { cur.hsCustomCenter = v; onChanged(); }, onEnded: onEnded),
+              EditorViews.buildSliderRow(context: context, title: 'Range Width', val: cur.hsCustomWidth, min: 0.0, max: 1.0, onChanged: (v) { cur.hsCustomWidth = v; onChanged(); }, onEnded: onEnded),
+              EditorViews.buildSliderRow(context: context, title: 'Range Feather', val: cur.hsCustomSoft, min: 0.0, max: 1.0, onChanged: (v) { cur.hsCustomSoft = v; onChanged(); }, onEnded: onEnded),
+              EditorViews.buildSliderRow(context: context, title: 'Range Saturation', val: cur.hsCustomSat, min: -1.0, max: 1.0, onChanged: (v) { cur.hsCustomSat = v; onChanged(); }, onEnded: onEnded),
+              EditorViews.buildSliderRow(context: context, title: 'Range Hue Shift', val: cur.hsCustomHue, min: -1.0, max: 1.0, onChanged: (v) { cur.hsCustomHue = v; onChanged(); }, onEnded: onEnded),
+              EditorViews.buildSliderRow(context: context, title: 'Range Luminance', val: cur.hsCustomLum, min: -1.0, max: 1.0, onChanged: (v) { cur.hsCustomLum = v; onChanged(); }, onEnded: onEnded),
+            ],
+          ),
+        ),
+
+        Center(
+          child: TextButton.icon(
+            onPressed: () {
+              cur.resetHueSat();
+              onChanged();
+              onEnded();
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white38),
+            label: const Text('Reset Hue vs Sat', style: TextStyle(color: Colors.white38, fontSize: 11)),
+          ),
+        ),
+      ],
     );
   }
 }
