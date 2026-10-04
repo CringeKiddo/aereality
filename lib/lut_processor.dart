@@ -46,6 +46,9 @@ class LutProcessor {
       int size = 0;
       String title = file.uri.pathSegments.last.replaceAll('.cube', '');
       List<double> rawFloats = [];
+      double domMin = 0.0;
+      double domMax = 1.0;
+      bool is1D = false;
 
       for (var rawLine in lines) {
         String line = rawLine.trim();
@@ -61,9 +64,14 @@ class LutProcessor {
           if (parts.length > 1) {
             size = int.tryParse(parts[1]) ?? 0;
           }
-        } else if (line.toUpperCase().startsWith('DOMAIN_MIN') ||
-            line.toUpperCase().startsWith('DOMAIN_MAX')) {
-          continue;
+        } else if (line.toUpperCase().startsWith('LUT_1D_SIZE')) {
+          is1D = true;
+        } else if (line.toUpperCase().startsWith('DOMAIN_MIN')) {
+          final parts = line.split(RegExp(r'\s+'));
+          if (parts.length > 1) domMin = double.tryParse(parts[1]) ?? 0.0;
+        } else if (line.toUpperCase().startsWith('DOMAIN_MAX')) {
+          final parts = line.split(RegExp(r'\s+'));
+          if (parts.length > 1) domMax = double.tryParse(parts[1]) ?? 1.0;
         } else {
           final parts = line.split(RegExp(r'\s+'));
           if (parts.length >= 3) {
@@ -71,12 +79,23 @@ class LutProcessor {
             final g = double.tryParse(parts[1]);
             final b = double.tryParse(parts[2]);
             if (r != null && g != null && b != null) {
-              rawFloats.add(r.clamp(0.0, 1.0));
-              rawFloats.add(g.clamp(0.0, 1.0));
-              rawFloats.add(b.clamp(0.0, 1.0));
+              rawFloats.add(r);
+              rawFloats.add(g);
+              rawFloats.add(b);
             }
           }
         }
+      }
+
+      if (is1D && size <= 0) {
+        debugPrint("1D .cube LUTs are not supported (need LUT_3D_SIZE).");
+        return null;
+      }
+
+      // Honour DOMAIN_MIN / DOMAIN_MAX so the table is always 0..1
+      final span = (domMax - domMin).abs() < 1e-9 ? 1.0 : (domMax - domMin);
+      for (int i = 0; i < rawFloats.length; i++) {
+        rawFloats[i] = ((rawFloats[i] - domMin) / span).clamp(0.0, 1.0);
       }
 
       if (size <= 0) {
@@ -90,6 +109,12 @@ class LutProcessor {
         } else {
           size = 32;
         }
+      }
+
+      // A truncated / mismatched table would silently produce a wrong (flat) look: refuse it instead.
+      if (rawFloats.length < size * size * size * 3) {
+        debugPrint("LUT has ${rawFloats.length ~/ 3} entries, expected ${size * size * size}.");
+        return null;
       }
 
       final targetSize = 32;
