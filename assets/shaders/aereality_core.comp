@@ -516,6 +516,13 @@ float textFillAt(ivec2 p) {
     return smoothstep(gTextThr - 0.14, gTextThr + 0.08, v);
 }
 
+// Same mask, but also returns the linear colour so callers do not fetch the pixel twice (rgb = colour, a = fill)
+vec4 textSampleAt(ivec2 p) {
+    vec3 c = srcLin(p);
+    float v = 0.5 * luma(c) + 0.5 * max(c.r, max(c.g, c.b));
+    return vec4(c, smoothstep(gTextThr - 0.14, gTextThr + 0.08, v));
+}
+
 // Distance (px) from this pixel to the edge of the letter along a direction. Geometric search then
 // 4 bisection steps, so it is sub-pixel smooth (no stepped bands in the chrome).
 float textEdgeDist(ivec2 coord, vec2 dir, float smax) {
@@ -969,6 +976,16 @@ vec3 chromeBands(float v, vec3 skyRef, vec3 gndRef) {
     vec3 col = mix(top, bot, smoothstep(HZ - 0.012, HZ + 0.012, v));
     col += mix(vec3(1.0), skyRef, 0.35) * gaussBand(v - HZ, 0.012) * 1.4;
     return col;
+}
+
+// Light satin-metal tone for the text faces. v: 0 = top of the letter, 1 = bottom.
+// Small brightness multiplier (~0.88 .. 1.12) with one crisp horizon line - it must never flatten the artwork.
+float silkProfile(float v) {
+    float p = mix(1.10, 0.93, smoothstep(0.0, 0.5, v));
+    p += 0.10 * gaussBand(v - 0.52, 0.03);
+    p -= 0.10 * smoothstep(0.60, 0.78, v);
+    p += 0.08 * gaussBand(v - 0.92, 0.05);
+    return p;
 }
 
 // =============================================================================
@@ -2255,168 +2272,133 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, max(layerColor, vec3(0.0)), int(L.blendMode + 0.5), L.opacity, L.blendLinear > 0.5);
     }
 
-    // 28. Metallic neon text suite (v3).
-    //     * No per-pixel random sampling anywhere (that was the grain): every blur is a fixed pattern.
-    //     * Chrome horizon is measured PER LETTER (distance to the glyph's own top / bottom edge), so each
-    //       letter gets its own sky -> horizon -> ground reflection instead of one stripe across the box.
-    //     * Colour is built in Oklab (hue + generous chroma from the text's own colour, gamut-mapped), so the
-    //       glow is saturated neon that rolls off softly instead of clipping to white.
-    //     * Everything outside the letters fades with a smooth box falloff (no more pale rectangles).
+    // 28. Razor-edge text bevel (v5) - the clip itself is NEVER blurred, softened or re-coloured.
+    //     v4 still shaded the letter faces and dropped wide shadow / glow hazes over the box, which read as
+    //     softening. v5 touches only three things, all driven by the text mask and all hard-edged:
+    //       * a 1-2 px lit rim and a thin shaded rim on the letter edges (the razor bevel line)
+    //       * a narrow bevel band just inside the edge (small highlight / small shade, fades in a few px)
+    //       * an outside edge halo: a bright core hugging the edge that falls off quickly (additive only)
+    //     Every sample is taken at fixed integer offsets from the mask; the source pixels are never averaged.
     if (u_textSuiteEnabled > 0.5) {
         vec2 boxMin = vec2(u_textBoxX, u_textBoxY);
         vec2 boxSize = max(vec2(u_textBoxW, u_textBoxH), vec2(1e-3));
-        float tMargin = max(0.06, 0.45 * boxSize.y);
+        float tMargin = max(0.03, 0.22 * boxSize.y);
         vec2 qd = max(abs(uvN - (boxMin + boxSize * 0.5)) - boxSize * 0.5, vec2(0.0));
         float outD = length(qd);
         if (outD < tMargin) {
-            float boxFade = 1.0 - smoothstep(0.0, tMargin, outD);       // glow / shadow fade out smoothly
-            float inBox = 1.0 - smoothstep(0.0, 0.006, outD);            // the metal itself stays in the box
+            float boxFade = 1.0 - smoothstep(0.0, tMargin, outD);       // halo / shadow fade out smoothly
+            float inBox = 1.0 - smoothstep(0.0, 0.004, outD);            // the bevel itself stays in the box
 
             gTextThr = (u_g22 > 0.01) ? clamp(u_g22, 0.15, 0.95) : 0.65;
-            float tDepth = clamp(u_textBevelDepth, 0.0, 4.0);
-            float tChrome = clamp(u_textChromeIntensity, 0.0, 4.0) / 1.2;
-            float tSpec = clamp(u_g20, 0.0, 3.0);
-            float tShadow = clamp(u_g21, 0.0, 1.5);
+            float tDepth = clamp(u_textBevelDepth, 0.0, 3.0);
+            float tChrome = clamp(u_textChromeIntensity, 0.0, 3.0);
+            float tSpec = clamp(u_g20, 0.0, 2.0);
+            float tShadow = clamp(u_g21, 0.0, 1.0);
             float tGlow = clamp(u_g24, 0.0, 2.0);
             float tGlowR = 0.6 + 0.8 * clamp(u_g25, 0.0, 1.5);
             float tpx = max(resScale, 0.5);
             vec2 whPx = vec2(float(width), float(height));
-            vec2 relBox = (uvN - boxMin) / boxSize;
 
-            // ---- ambient scene colour above / inside / below the box (text pixels excluded) ----
-            vec3 skyAcc = vec3(0.0); vec3 midAcc = vec3(0.0); vec3 gndAcc = vec3(0.0);
-            float skyWt = 0.0; float midWt = 0.0; float gndWt = 0.0;
-            for (int ix = 0; ix < 4; ix++) {
-                float bx = boxMin.x + ((float(ix) + 0.5) / 4.0) * boxSize.x;
-                ivec2 pS = ivec2(vec2(bx, boxMin.y - 0.10 * boxSize.y - 0.02) * whPx);
-                ivec2 pM = ivec2(vec2(bx, boxMin.y + 0.50 * boxSize.y) * whPx);
-                ivec2 pG = ivec2(vec2(bx, boxMin.y + 1.10 * boxSize.y + 0.02) * whPx);
-                float wS = 1.02 - textFillAt(pS);
-                float wM = 1.02 - textFillAt(pM);
-                float wG = 1.02 - textFillAt(pG);
-                skyAcc += srcLin(pS) * wS; skyWt += wS;
-                midAcc += srcLin(pM) * wM; midWt += wM;
-                gndAcc += srcLin(pG) * wG; gndWt += wG;
-            }
-            vec3 skyAmb = skyAcc / max(skyWt, 1e-3);
-            vec3 midAmb = midAcc / max(midWt, 1e-3);
-            vec3 gndAmb = gndAcc / max(gndWt, 1e-3);
-
-            // ---- fixed-pattern blurs of the text mask (no random rotation) ----
             float fillC = textFillAt(coord);
             float outside = 1.0 - fillC;
-            vec2 shOff = vec2(2.5, 4.5) * tpx * (0.6 + 0.4 * tDepth);
-            float blurTight = 0.0; float blurNear = 0.0; float blurFar = 0.0; float shadowAcc = 0.0;
-            vec3 ringCol = vec3(0.0); float ringW = 0.0;
-            for (int tk = 0; tk < 8; tk++) {
-                float fr = (float(tk) + 0.5) / 8.0;
-                float ang = float(tk) * 2.39996323;
-                blurTight += textFillAt(coord + ivec2(round(vec2(cos(ang), sin(ang)) * mix(1.2, 3.4, sqrt(fr)) * tpx)));
-            }
-            blurTight /= 8.0;
-            for (int tk = 0; tk < 16; tk++) {
-                float fr = (float(tk) + 0.5) / 16.0;
-                float ang = float(tk) * 2.39996323;
-                vec2 dir = vec2(cos(ang), sin(ang));
-                ivec2 pN = coord + ivec2(round(dir * mix(3.0, 8.0, sqrt(fr)) * tpx));
-                float fN = textFillAt(pN);
-                blurNear += fN;
-                ringCol += srcLin(pN) * fN; ringW += fN;
-                shadowAcc += textFillAt(coord - ivec2(round(shOff)) + ivec2(round(dir * mix(1.0, 6.0, sqrt(fr)) * tpx)));
-            }
-            blurNear /= 16.0; shadowAcc /= 16.0;
-            for (int tk = 0; tk < 28; tk++) {
-                float fr = (float(tk) + 0.5) / 28.0;
-                float ang = float(tk) * 2.39996323 + 0.7;
-                ivec2 pF = coord + ivec2(round(vec2(cos(ang), sin(ang)) * mix(8.0, 26.0, sqrt(fr)) * tpx * tGlowR));
-                blurFar += textFillAt(pF);
-            }
-            blurFar /= 28.0;
-            float smokeAcc = 0.0;
-            for (int sk = 0; sk < 16; sk++) {
-                float fr = (float(sk) + 0.5) / 16.0;
-                float ang = float(sk) * 2.39996323 + 1.9;
-                smokeAcc += textFillAt(coord + ivec2(round(vec2(cos(ang), sin(ang)) * mix(18.0, 62.0, sqrt(fr)) * tpx * tGlowR)));
-            }
-            float smoke = (smokeAcc / 16.0) * outside;
+            float mText = fillC * inBox;
 
-            // ---- the text's own colour -> Oklab hue + generous chroma ----
+            // ---- ring A (r = 1.5 px): thin-stroke direction + rim coverage ----
+            vec2 gA = vec2(0.0); float mA = 0.0;
+            for (int k = 0; k < 8; k++) {
+                float a = (float(k) + 0.5) * 0.78539816;
+                vec2 d = vec2(cos(a), sin(a));
+                float f = textFillAt(coord + ivec2(round(d * 1.5 * tpx)));
+                gA += d * f; mA += f;
+            }
+            gA *= 0.25; mA *= 0.125;
+
+            // ---- ring B (r = 2..5 px by bevel depth): bevel-band coverage + direction + the text's own colour ----
+            float bw = mix(2.0, 5.0, clamp(tDepth * 0.5, 0.0, 1.0));
+            vec2 gB = vec2(0.0); float mB = 0.0;
+            vec3 ringCol = vec3(0.0); float ringW = 0.0;
+            for (int k = 0; k < 8; k++) {
+                float a = (float(k) + 0.1) * 0.78539816;
+                vec2 d = vec2(cos(a), sin(a));
+                vec4 s = textSampleAt(coord + ivec2(round(d * bw * tpx)));
+                gB += d * s.a; mB += s.a;
+                ringCol += s.rgb * s.a; ringW += s.a;
+            }
+            gB *= 0.25; mB *= 0.125;
+
+            // outward edge normal (screen space, y down) and light from the upper left
+            vec2 gDir = gA + gB * 0.7;
+            float gLen = length(gDir);
+            vec2 outN = (gLen > 1e-4) ? -gDir / gLen : vec2(0.0);
+            vec2 L2 = normalize(vec2(-0.55, -0.83));
+            float lit = dot(outN, L2);
+            float hi = smoothstep(0.05, 0.85, lit);
+            float lo = smoothstep(0.05, 0.85, -lit);
+
+            float rimBand = fillC * (1.0 - smoothstep(0.55, 0.95, mA));   // ~1-2 px right on the edge
+            float bandIn  = fillC * (1.0 - smoothstep(0.50, 0.97, mB));   // a few px deep, fades inward
+
+            // ---- the text's own hue (Oklab), used gently ----
             vec3 tcol = (ringW > 0.5) ? ringCol / ringW : vec3(0.0);
             tcol = mix(tcol, srcLin(coord), fillC * 0.30);
             vec3 tLab = linearRgbToOklab(max(tcol, vec3(0.0)));
             float tC = length(tLab.yz);
             vec2 tDir = (tC > 1e-4) ? tLab.yz / tC : vec2(1.0, 0.0);
             float hasHue = smoothstep(0.010, 0.045, tC);
-            float chromaGen = clamp(tC * 1.6 + 0.03, 0.05, 0.30);
-            if (u_g23 > 0.5) {                                   // explicit finish overrides the text colour
+            float chromaGen = clamp(tC * 1.3 + 0.02, 0.04, 0.22);
+            if (u_g23 > 0.5) {                                           // explicit finish overrides the hue
                 float hOver = (u_g23 < 1.5) ? 1.75 : ((u_g23 < 2.5) ? 3.35 : ((u_g23 < 3.5) ? 0.45 : 5.30));
                 tDir = vec2(cos(hOver), sin(hOver));
-                hasHue = 1.0; chromaGen = 0.15;
+                hasHue = 1.0; chromaGen = 0.14;
             }
+            vec3 hiCol = oklabToLinearRgb(vec3(0.97, tDir * chromaGen * 0.20));
+            vec3 tintRaw = oklabToLinearRgb(vec3(0.80, tDir * chromaGen * 0.80));
+            vec3 tintN = tintRaw / max(luma(tintRaw), 1e-3);
 
-            // reference colours for the reflection: scene sky / ground pulled toward the text hue
-            vec3 skyRef = saturateColor(skyAmb * 0.7 + midAmb * 0.3, 1.35) * 1.5 + vec3(0.06);
-            vec3 gndRef = saturateColor(gndAmb * 0.7 + midAmb * 0.3, 1.30) * 1.2 + vec3(0.03);
-            skyRef = mix(skyRef, oklabToLinearRgb(vec3(0.86, tDir * chromaGen * 0.9)) * 1.25, hasHue * 0.70);
-            gndRef = mix(gndRef, oklabToLinearRgb(vec3(0.60, tDir * chromaGen * 1.1)), hasHue * 0.70);
-
-            // ---- bevel normal: 4-scale height gradient of the mask ----
-            vec2 grad = vec2(0.0);
-            for (int bi = 0; bi < 4; bi++) {
-                float br = (bi == 0) ? 1.2 : ((bi == 1) ? 2.6 : ((bi == 2) ? 4.5 : 8.0));
-                float bw = (bi == 0) ? 0.40 : ((bi == 1) ? 0.28 : ((bi == 2) ? 0.20 : 0.12));
-                int bo = int(max(round(br * tpx), 1.0));
-                grad.x += (textFillAt(coord + ivec2(bo, 0)) - textFillAt(coord - ivec2(bo, 0))) * bw;
-                grad.y += (textFillAt(coord + ivec2(0, bo)) - textFillAt(coord - ivec2(0, bo))) * bw;
-            }
-            vec3 tN = normalize(vec3(-grad * (tDepth * 1.6), 1.0));
-            vec3 tLight = normalize(vec3(-0.45, -0.60, 0.65));
-            float rimAmt = clamp(length(grad) * 3.0, 0.0, 1.0);
-            float lambert = clamp(dot(tN, tLight), 0.0, 1.0);
-
-            // ---- per-letter chrome coordinate: 0 = top edge of THIS glyph, 1 = bottom edge ----
-            float vText = 0.5;
-            if (fillC > 0.02) {
+            // ---- 1) the letters: original pixels + bevel lines (nothing is blurred or replaced) ----
+            vec3 orig = currentComposite;
+            vec3 toned = orig;
+            float bevelK = clamp(tDepth, 0.0, 2.0);
+            float metalK = clamp(0.30 * tChrome, 0.0, 0.60);              // very light face tone, Chrome slider
+            if (metalK > 0.01 && fillC > 0.02) {
                 float smax = clamp(0.5 * boxSize.y * whPx.y, 24.0 * tpx, 140.0 * tpx);
                 float dUp = textEdgeDist(coord, vec2(0.0, -1.0), smax);
                 float dDn = textEdgeDist(coord, vec2(0.0, 1.0), smax);
-                vText = clamp(dUp / max(dUp + dDn, 1e-3) + tN.y * 0.04 * tDepth, 0.0, 1.0);
+                float vText = clamp(dUp / max(dUp + dDn, 1e-3), 0.0, 1.0);
+                toned *= mix(1.0, silkProfile(vText), metalK);
             }
-            vec3 chromeCol = chromeBands(vText, skyRef, gndRef) * tChrome;
-            chromeCol *= mix(0.70, 1.25, lambert);
-            // follow the text hue (generously), never a flat grey metal
-            chromeCol = mix(chromeCol, chromeCol * (oklabToLinearRgb(vec3(0.85, tDir * chromaGen)) / 0.85) * 1.15, hasHue * 0.55);
+            toned *= 1.0 - 0.38 * lo * bandIn * min(bevelK, 1.5);                    // shaded bevel face
+            toned += hiCol * hi * bandIn * 0.32 * bevelK;                            // lit bevel face (narrow)
+            toned += hiCol * hi * rimBand * 1.05 * tSpec;                            // razor lit edge line
+            toned += tintN * lo * rimBand * 0.28 * (0.4 + 0.6 * hasHue) * min(bevelK, 1.5); // thin shaded edge line
 
-            // ---- specular: soft broad sheen + a sharp hotspot (smooth, no random sparkle cells) ----
-            vec3 tH = normalize(tLight + vec3(0.0, 0.0, 1.0));
-            float ndh = max(dot(tN, tH), 0.0);
-            vec3 specTint = mix(vec3(1.0), skyRef / max(luma(skyRef), 1e-3), 0.30);
-            float spec = (pow(ndh, 36.0) * 0.9 + pow(ndh, 190.0) * 3.2) * (0.25 + rimAmt) * tSpec;
-            chromeCol += specTint * spec * max(tChrome, 0.25);
+            // ---- 2) around the letters: crisp offset shadow + tight edge halo (additive, no haze) ----
+            vec3 under = orig;
+            ivec2 shOff = ivec2(round(vec2(2.0, 3.0) * tpx * (0.5 + 0.5 * min(tDepth, 1.5))));
+            float shM = 0.5 * textFillAt(coord - shOff)
+                      + 0.25 * textFillAt(coord - shOff + ivec2(1, 0))
+                      + 0.25 * textFillAt(coord - shOff - ivec2(1, 0));
+            under *= 1.0 - clamp(shM * outside * 0.45 * tShadow, 0.0, 0.5) * boxFade;
 
-            // inner rim light: bright on the lit side, hue-coloured on the shadow side
-            float edgeIn = clamp(fillC * (1.0 - blurNear) * 2.2, 0.0, 1.0);
-            float litSide = clamp(dot(normalize(tN.xy + vec2(1e-4)), normalize(tLight.xy)) * 0.5 + 0.5, 0.0, 1.0);
-            vec3 rimLit = oklabToLinearRgb(vec3(0.97, tDir * chromaGen * 0.30));
-            vec3 rimCol = mix(oklabToLinearRgb(vec3(0.80, tDir * chromaGen * 1.1)), rimLit, litSide);
-            chromeCol += rimCol * pow(edgeIn, 1.7) * (0.45 + 0.75 * litSide) * 0.85 * max(tChrome, 0.25);
+            float c0 = 0.0; float c1 = 0.0; float c2 = 0.0; float c3 = 0.0;
+            for (int k = 0; k < 8; k++) {
+                float a = (float(k) + 0.5) * 0.78539816;
+                vec2 d0 = vec2(cos(a), sin(a));
+                vec2 d1 = vec2(cos(a + 0.26), sin(a + 0.26));
+                c0 += textFillAt(coord + ivec2(round(d0 * 1.6 * tpx * tGlowR)));
+                c1 += textFillAt(coord + ivec2(round(d1 * 3.6 * tpx * tGlowR)));
+                c2 += textFillAt(coord + ivec2(round(d0 * 7.0 * tpx * tGlowR)));
+                c3 += textFillAt(coord + ivec2(round(d1 * 12.0 * tpx * tGlowR)));
+            }
+            c0 *= 0.125; c1 *= 0.125; c2 *= 0.125; c3 *= 0.125;
+            float haloAmt = (c0 * 1.0 + c1 * 0.65 + c2 * 0.35 + c3 * 0.16) * outside * tGlow * boxFade;
+            float haloCore = smoothstep(0.20, 0.60, c0) * outside * tGlow * boxFade;   // bright line hugging the edge
+            vec3 neon = mix(vec3(0.85), oklabToLinearRgb(vec3(0.84, tDir * max(chromaGen, 0.07))), hasHue);
+            vec3 halo = neon * ((1.0 - exp(-haloAmt * 1.3)) * 0.80 + haloCore * 0.40);
+            under += halo * (1.0 - 0.5 * clamp(luma(under), 0.0, 1.0));
 
-            // ---- darkening behind the letters: smoky halo + contact shadow (tinted by the scene) ----
-            float contact = shadowAcc * outside;
-            float soft = blurFar * outside * 0.35;
-            vec3 shadowTint = mix(vec3(0.015), midAmb * 0.10, 0.5);
-            float darkAmt = clamp(contact * 0.78 * tShadow + soft * 0.45 * tShadow + smoke * 0.50, 0.0, 0.90) * boxFade;
-            currentComposite = mix(currentComposite, shadowTint, darkAmt);
-
-            // ---- neon contour glow: text hue, soft-saturating so it never blows out to white ----
-            vec3 glowBand = saturateColor(chromeBands(clamp(relBox.y, 0.0, 1.0), skyRef, gndRef), 1.4);
-            vec3 neon = mix(glowBand, oklabToLinearRgb(vec3(0.80, tDir * max(chromaGen, 0.06) * 1.15)), hasHue);
-            float glowAmt = (blurTight * 1.0 + blurNear * 0.8 + blurFar * 1.0) * outside * tGlow * boxFade;
-            vec3 contourGlow = neon * (1.0 - exp(-glowAmt * 1.7)) * 1.15 * max(tChrome, 0.2);
-            currentComposite += contourGlow * (1.0 - 0.35 * clamp(luma(currentComposite), 0.0, 1.0));
-
-            // ---- finally the metal itself (only inside the box, anti-aliased by fillC) ----
-            currentComposite = mix(currentComposite, max(chromeCol, vec3(0.0)), smoothstep(0.0, 1.0, fillC) * 0.97 * inBox);
+            // ---- 3) letters keep their own detail; the surroundings only get halo + shadow ----
+            currentComposite = mix(under, max(toned, vec3(0.0)), mText);
         }
     }
 
