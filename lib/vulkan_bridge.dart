@@ -25,6 +25,9 @@ typedef _InitVulkanDart = int Function(
   int precisionBits,
 );
 
+typedef _GetStatusC = ffi.Int32 Function();
+typedef _GetStatusDart = int Function();
+
 typedef _ProcessImage8C = ffi.Void Function(
   ffi.Pointer<ffi.Uint8> inBytes,
   ffi.Int32 inW,
@@ -86,6 +89,7 @@ class VulkanBridge {
   static _InitVulkanDart? _initVulkanFn;
   static _ProcessImage8Dart? _processImage8Fn;
   static _ProcessImage16Dart? _processImage16Fn;
+  static _GetStatusDart? _getStatusFn;
 
   static bool _isVulkanInitialized = false;
 
@@ -105,6 +109,11 @@ class VulkanBridge {
           _initVulkanFn = _lib!.lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan');
           _processImage8Fn = _lib!.lookupFunction<_ProcessImage8C, _ProcessImage8Dart>('process_image');
           _processImage16Fn = _lib!.lookupFunction<_ProcessImage16C, _ProcessImage16Dart>('process_image_16');
+          try {
+            _getStatusFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('get_last_render_status');
+          } catch (_) {
+            _getStatusFn = null; // older native lib without status reporting
+          }
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
         }
@@ -157,6 +166,13 @@ class VulkanBridge {
 // ==========================================
 // TOP-LEVEL VULKAN GRADING FUNCTIONS
 // ==========================================
+
+/// 0 = last GPU render OK, 1 = GPU error (CPU fallback used), 2 = device lost, 3 = GPU timeout.
+/// Call right after processImage / processImage16 to detect a bad render.
+int vulkanLastRenderStatus() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._getStatusFn?.call() ?? 0;
+}
 
 void initVulkan(Uint8List shaderBytes, int precisionBits) {
   VulkanBridge._ensureLibraryLoaded();
