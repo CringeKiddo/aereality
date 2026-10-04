@@ -912,7 +912,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
-    _tabController = TabController(length: 10, vsync: this);
+    _tabController = TabController(length: 11, vsync: this);
     _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
@@ -1317,7 +1317,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ===========================================================================
-  // UNIFORM BUFFER ENGINE (128-Float Stride per Layer, 2048 Floats Capacity)
+  // UNIFORM BUFFER ENGINE (192-Float Stride per Layer, 2048 Floats Capacity)
   // Perfectly synchronised with aereality_core.comp layout
   // ===========================================================================
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
@@ -1352,10 +1352,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     uniforms[28] = 0.0; // Bit depth preview mode
 
-    // 10 Layers with 128-float stride (offsets 32 + l * 128)
+    // 10 Layers with 192-float stride (offsets 32 + l * 192) - must match LayerData in the shader / C++
     for (int l = 0; l < math.min(_project.layers.length, 10); l++) {
       final layer = _project.layers[l];
-      final offset = 32 + (l * 128);
+      final offset = 32 + (l * 192);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1482,6 +1482,75 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 101] = layer.horizontalRamp;
       uniforms[offset + 102] = layer.edgeHaloRadius;
       uniforms[offset + 103] = layer.chromaContrast;
+
+      // ---- v2.3: curves (all 5 points of R / G / B, sanitised so a curve can never invert) ----
+      final cM = AdjustmentLayer.sanitizeCurve(layer.curveMaster);
+      final cR = AdjustmentLayer.sanitizeCurve(layer.curveRed);
+      final cG = AdjustmentLayer.sanitizeCurve(layer.curveGreen);
+      final cB = AdjustmentLayer.sanitizeCurve(layer.curveBlue);
+      for (int k = 0; k < 5; k++) {
+        uniforms[offset + 38 + k] = cM[k];
+        uniforms[offset + 43 + k] = cR[k];
+      }
+      uniforms[offset + 48] = cG[2];
+      uniforms[offset + 49] = cB[2];
+      uniforms[offset + 104] = cG[0];
+      uniforms[offset + 105] = cG[1];
+      uniforms[offset + 106] = cG[3];
+      uniforms[offset + 107] = cG[4];
+      uniforms[offset + 108] = cB[0];
+      uniforms[offset + 109] = cB[1];
+      uniforms[offset + 110] = cB[3];
+      uniforms[offset + 111] = cB[4];
+
+      // ---- v2.3: Hue vs Sat / Hue / Lum ----
+      for (int b = 0; b < 8; b++) {
+        uniforms[offset + 112 + b] = layer.hsSat[b];
+        uniforms[offset + 120 + b] = layer.hsHue[b];
+        uniforms[offset + 128 + b] = layer.hsLum[b];
+      }
+      uniforms[offset + 136] = layer.hsSoftness;
+      uniforms[offset + 137] = layer.hsCustomCenter;
+      uniforms[offset + 138] = layer.hsCustomWidth;
+      uniforms[offset + 139] = layer.hsCustomSoft;
+      uniforms[offset + 140] = layer.hsCustomSat;
+      uniforms[offset + 141] = layer.hsCustomHue;
+      uniforms[offset + 142] = layer.hsCustomLum;
+
+      // ---- v2.3: Colorista ----
+      uniforms[offset + 143] = layer.coloristaLiftX;
+      uniforms[offset + 144] = layer.coloristaLiftY;
+      uniforms[offset + 145] = layer.coloristaGammaX;
+      uniforms[offset + 146] = layer.coloristaGammaY;
+      uniforms[offset + 147] = layer.coloristaGainX;
+      uniforms[offset + 148] = layer.coloristaGainY;
+      uniforms[offset + 149] = layer.coloristaOffsetX;
+      uniforms[offset + 150] = layer.coloristaOffsetY;
+      uniforms[offset + 151] = layer.coloristaOffsetLuma;
+      uniforms[offset + 152] = layer.coloristaSaturation;
+      uniforms[offset + 153] = layer.coloristaSatShadows;
+      uniforms[offset + 154] = layer.coloristaSatMids;
+      uniforms[offset + 155] = layer.coloristaSatHighs;
+      uniforms[offset + 156] = layer.coloristaContrast;
+      uniforms[offset + 157] = layer.coloristaPivot;
+      uniforms[offset + 158] = layer.coloristaTemp;
+      uniforms[offset + 159] = layer.coloristaTint;
+      uniforms[offset + 160] = layer.coloristaShadowRange;
+      uniforms[offset + 161] = layer.coloristaHighlightRange;
+      uniforms[offset + 162] = layer.coloristaMix;
+      uniforms[offset + 163] = layer.coloristaPreserveLuma;
+      uniforms[offset + 164] = layer.thinStreakSoftness;
+      uniforms[offset + 165] = layer.lineArtStrength;
+      uniforms[offset + 166] = layer.lineArtWidth;
+      uniforms[offset + 167] = layer.lineArtPlacement;
+      uniforms[offset + 168] = layer.lineArtSaturation;
+      uniforms[offset + 169] = layer.radialChroma;
+      uniforms[offset + 170] = layer.clarity;
+      uniforms[offset + 171] = layer.clarityRadius;
+      uniforms[offset + 172] = layer.skinEdgeBleed;
+      uniforms[offset + 173] = layer.skinEdgeWidth;
+      uniforms[offset + 174] = layer.halationStrength;
+      uniforms[offset + 175] = layer.halationThreshold;
     }
 
     return uniforms;
@@ -2009,6 +2078,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     Tab(text: 'TONEMAPPERS'),
                     Tab(text: 'LUT'),
                     Tab(text: 'BASIC'),
+                    Tab(text: 'COLORISTA'),
                     Tab(text: 'MAGIC'),
                     Tab(text: 'COPIED STUFF'),
                     Tab(text: 'GLOW / FLARE'),
@@ -2112,6 +2182,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         },
                       ),
                       EditorViews.buildBasicGradingTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      EditorViews.buildColoristaTab(
                         context: context,
                         cur: _cur,
                         onChanged: () {
