@@ -13,7 +13,7 @@ dependencies:
     sdk: flutter
 
   # Modern FFmpeg Kit Extended
-  ffmpeg_kit_extended_flutter: ^0.6.2
+  ffmpeg_kit_extended_flutter: 0.6.2   # pinned: ^ let CI silently pull a newer native build (x265 crash appeared after a rebuild)
 
   # Media playback & file picking
   video_player: ^2.8.2
