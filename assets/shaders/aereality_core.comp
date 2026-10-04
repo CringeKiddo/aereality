@@ -73,6 +73,7 @@ layout(push_constant) uniform PushConsts {
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
+    int u_bandY;       // row offset for banded dispatch (keeps each GPU submit short)
 };
 
 // =============================================================================
@@ -1325,7 +1326,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
 // MAIN
 // =============================================================================
 void main() {
-    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_bandY);
     int width = u_passWidth;
     int height = u_passHeight;
 
