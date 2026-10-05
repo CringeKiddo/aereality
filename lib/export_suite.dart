@@ -1236,7 +1236,7 @@ class ExportSuite {
       // Crash-safe x265 profile for Android: no worker thread pools (the pool / thread-affinity setup is what
       // brings the encoder down on mobile CPUs as soon as the lookahead window fills), a single frame thread,
       // and a lookahead that is always larger than the B-frame count. Slower than a threaded encode, but stable.
-      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20';
+      codecExtra = '-x265-params log-level=error:pools=1:frame-threads=1:bframes=3:rc-lookahead=20';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 6';
