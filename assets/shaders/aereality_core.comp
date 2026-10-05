@@ -1325,33 +1325,60 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
         // peak-normalised kernel (core keeps the highlight's brightness), and the pyramid level follows
         // the tap spacing: texel size >= spacing, so even a stretched / very long flare is a bilinear read
         // of a genuinely blurred image = one smooth smear, never repeated copies.
+        // ---- 5. Anamorphic streak (flare): AE-style separated beams with soft body ----
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.30;     // fraction of frame width, each side
-            const int SN = 40;
-            float tapPx = max(2.0 * halfLen * float(width) / float(2 * SN), 1.0);
-            float lvlF = clamp(log2(tapPx * 0.5), 1.0, 4.0);               // texel(level k) = 2^(k+1) px
+            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.35; // horizontal reach
+            const int SN = 36;
             float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
-            float decay = mix(4.5, 1.2, soft);                              // 0 = tight core, 1 = long slow fade
-            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;         // hides any residual tap lattice
+            
+            // Softness slider controls horizontal decay: 0 = tight beam, 1 = creamy slow fade
+            float decay = mix(5.5, 1.8, soft);
+            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;
+            
+            int w0 = max(width / 2, 1);
+            int h0 = max(height / 2, 1);
+            int w1 = max(width / 4, 1);
+            int h1 = max(height / 4, 1);
+            
+            // AE-style highlight isolation: only true highlights generate flares (mids & darks excluded)
+            const float flareThreshold = 0.55;
+            
             vec3 sSum = vec3(0.0);
             for (int s = -SN; s <= SN; s++) {
                 float t = (float(s) + jit) / float(SN);
                 float at = abs(t);
                 float sx = uv.x + t * halfLen;
-                float inside = step(0.0, sx) * step(sx, 1.0);               // no smear of the border column
-                float wgt = exp(-at * decay) * (1.0 - smoothstep(0.75, 1.0, at)) * inside;
-                vec3 sm = sampleBloomLevelF(lvlF, vec2(clamp(sx, 0.0, 1.0), uv.y), width, height);
-                sm *= smoothstep(0.0, 0.06, luma(sm));                      // noise-floor gate only
-                vec3 spectral = mix(vec3(0.80, 1.00, 1.30), vec3(1.25, 0.85, 0.55), at);
-                sSum += sm * wgt * mix(vec3(1.0), spectral, 0.30);
+                float inside = step(0.0, sx) * step(sx, 1.0);
+                float wgt = exp(-at * decay) * (1.0 - smoothstep(0.82, 1.0, at)) * inside;
+                
+                vec2 tapUv = vec2(clamp(sx, 0.0, 1.0), uv.y);
+                
+                // Blend Level 0 (crisp core) with Level 1 (soft vertical body ~20-30px):
+                // This gives the exact plush vertical thickness from your reference images
+                // without ballooning into the coarse full-screen levels.
+                vec3 sCore = sampleBloom(0, tapUv, w0, h0).rgb;
+                vec3 sBody = sampleBloom(1, tapUv, w1, h1).rgb;
+                vec3 sm = mix(sCore, sBody, 0.40 + 0.45 * soft);
+                
+                // Gate: only highlights above threshold emit streaks
+                float sl = luma(sm);
+                float gate = smoothstep(flareThreshold, flareThreshold + 0.18, sl);
+                sm *= gate;
+                
+                // Spectral dispersion (subtle chromatic split across the streak)
+                vec3 spectral = mix(vec3(0.75, 0.95, 1.30), vec3(1.30, 0.85, 0.50), at);
+                sSum += sm * wgt * mix(vec3(1.0), spectral, 0.32);
             }
-            float refPx = 0.035 * float(max(width, height));                // a typical highlight blob
-            vec3 streak = sSum * (tapPx / refPx) * 1.8;
-            streak = colorizeGlow(streak, ambientCol, 0.70);
-            streak = saturateColor(streak, 1.25) * mix(vec3(1.0), glowTint, 0.60);
-            streak = vec3(1.0) - exp(-streak);                              // soft shoulder, never hard-clips
-            streak *= 1.0 - 0.30 * clamp(luma(linearBase), 0.0, 1.0);
-            linearBase += streak * L.thinStreakIntensity * 1.5 * L.thinStreakOpacity * op;
+            
+            float tapPx = max(2.0 * halfLen * float(width) / float(2 * SN), 1.0);
+            float refPx = 0.028 * float(max(width, height));
+            vec3 streak = sSum * (tapPx / refPx) * 2.2;
+            
+            streak = colorizeGlow(streak, ambientCol, 0.75);
+            streak = saturateColor(streak, 1.25) * mix(vec3(1.0), glowTint, 0.65);
+            streak = vec3(1.0) - exp(-streak); // filmic shoulder
+            
+            linearBase += streak * L.thinStreakIntensity * 1.6 * L.thinStreakOpacity * op;
         }
 
         // ---- 6a. Pro-Mist: soft diffusion veil. Colour of the scene is kept (no tint), highlights bleed softly into
