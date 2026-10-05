@@ -1360,8 +1360,7 @@ class ExportSuite {
     // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no worker thread pools, one frame thread,
     // lookahead always larger than the B-frame count.
     final video = '-c:v libx265${isMp4Family ? ' -tag:v hvc1' : ''} -preset veryfast '
-        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
-
+    '-x265-params log-level=error:pools=1:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
     final fastStart = isMp4Family ? '-movflags +faststart' : '';
     final hasAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
     final audioIn = hasAudio ? '-i "$audioSourcePath" ' : '';
