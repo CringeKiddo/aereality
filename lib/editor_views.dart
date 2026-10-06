@@ -230,7 +230,7 @@ class EditorViews {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. TONEMAPPERS TAB (Real AgX Anime Punch & Khronos PBR Neutral+)
+  // 2. TONEMAPPERS TAB (Linear, AgX, Khronos Neutral+, Aurora Depth, Sakura Silk, Prism Blend, Obsidian Cel)
   // ---------------------------------------------------------------------------
   static Widget buildTonemappersTab({
     required BuildContext context,
@@ -254,6 +254,26 @@ class EditorViews {
         'mode': 2.0,
         'title': 'Shaderly Tonemapper 2 (Khronos PBR Neutral+)',
         'desc': 'Official Khronos 3D Commerce standard with black-level offset and smooth highlight desaturation, preserving anime linework and preventing blown highlights.',
+      },
+      {
+        'mode': 3.0,
+        'title': 'Aurora Depth',
+        'desc': 'Perceptual (Oklab) lightness S-curve. Deeper toe and midtone separation without touching hue, so frames gain depth instead of going flat. Skin keeps softer gradations.',
+      },
+      {
+        'mode': 4.0,
+        'title': 'Sakura Silk',
+        'desc': 'Skin-first, hue-preserving roll-off. Faces and warm tones compress softly instead of clipping to flat pink, keep their warmth, and get a gentle depth curve. Best for character close-ups.',
+      },
+      {
+        'mode': 5.0,
+        'title': 'Prism Blend',
+        'desc': 'Colour-blending tonemapper. Highlights drift into lighter tints of their own colour (orange to gold, cyan to ice) and Oklab chroma recovery keeps shadows and mids from under-saturating. Great for glows and light edges.',
+      },
+      {
+        'mode': 6.0,
+        'title': 'Obsidian Cel',
+        'desc': 'Cel-shaded depth. Deeper, richer jewel-toned shadows with midtones and highlights left where the artist put them. Ideal for dark, moody scenes without crushing detail.',
       },
     ];
 
@@ -964,12 +984,20 @@ class EditorViews {
         const SizedBox(height: 12),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Text('1D ANAMORPHIC FLARES (EXPONENTIAL SPECTRAL DIFFUSION)', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          child: Text('ANAMORPHIC FLARES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Width / Length', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Softness (Tight Core to Long Fade)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
+        SwitchListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+          title: const Text('Flare Starts From Frame Edge', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+          subtitle: Text(cur.thinStreakFromEdge ? 'Beams enter from the side edge of the frame' : 'Beams start at each highlight', style: const TextStyle(color: Colors.white38, fontSize: 10)),
+          value: cur.thinStreakFromEdge,
+          onChanged: (val) { cur.thinStreakFromEdge = val; onChanged(); onEnded(); },
+        ),
       ],
     );
   }
@@ -1171,744 +1199,134 @@ class EditorViews {
   // =============================================================================
 
   // ---------------------------------------------------------------------------
-  // FULL PRESET ENGINE (WIS 2026 & YOUTUBE SHORTS GRADE REVAMPS)
+  // PRESET ENGINE (Frieren v3 + Frieren Upd, extracted from the .json presets)
   // ---------------------------------------------------------------------------
   static void applyPresetLogic(ProjectData project, String name) {
     project.layers.clear();
 
     switch (name.toLowerCase()) {
-      // 1. YAMATO (Adevob / Sule Ice Cyan Contrast)
-      case 'yamato':
-        project.tonemapMode = 1.0; // AgX Anime Punch
-        project.deepTeal = 0.38;
-        project.magicCurves = 0.45;
+      // 1. FRIEREN V3
+      case 'frieren v3':
+        project.tonemapMode = 2.0;
+        project.deepTeal = 0.15;
+        project.magicCurves = 0.0;
         project.layers.add(AdjustmentLayer(
-          id: 'yamato_base',
-          name: 'Ice Contrast Base',
-          opacity: 1.0,
-          contrast: 1.32,
-          saturation: 0.88,
-          brightness: -0.02,
-          temperature: 7800.0,
-          sharpness: 0.55,
-          shadows: -0.15,
-          highlights: 0.10,
-          blackCrush: 0.03,
-          darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          bilateralIntensity: 0.40,
-          bilateralRadius: 2.5,
-          splitToneShadowHue: 0.56,
-          splitToneShadowSat: 0.22,
-          splitToneHighHue: 0.12,
-          splitToneHighSat: 0.12,
-          splitToneBalance: -0.05,
-          cosmoCleanHighlight: 0.50,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.49, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'yamato_bloom',
-          name: 'Creamy Cyan Ambient Glow',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.68,
-          shaderlyGlowIntensity: 0.45,
-          shaderlyGlowRadius: 0.48,
-          shaderlyGlowThreshold: 0.50,
-          edgeHaloRadius: 0.38,
-          deepGlowIntensity: 0.22,
-          deepGlowRadius: 0.38,
-          deepGlowThreshold: 0.58,
-          edgeGlowTint: 2.0, // Cyan / Teal
-        ));
-        break;
-
-      // 2. OKKOTSU (Silver Blade & Cursed Clean Specular)
-      case 'okkotsu':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.25;
-        project.magicCurves = 0.35;
-        project.layers.add(AdjustmentLayer(
-          id: 'okkotsu_base',
+          id: 'default',
           name: 'Base Grade',
-          opacity: 1.0,
-          contrast: 1.28,
-          saturation: 0.80,
-          brightness: -0.01,
-          temperature: 7100.0,
-          sharpness: 0.48,
-          shadows: -0.12,
-          highlights: 0.08,
-          blackCrush: 0.02,
-          darkOutlines: 0.30,
-          sLiningOpacity: 0.60,
-          bilateralIntensity: 0.35,
-          vignette: 0.04,
-          cosmoCleanHighlight: 0.45,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.19, 0.50, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'okkotsu_rim',
-          name: 'Specular Rim & Glint',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.60,
-          deepGlowIntensity: 0.24,
-          deepGlowRadius: 0.36,
-          deepGlowThreshold: 0.56,
-          thinStreakIntensity: 0.15,
-          thinStreakWidth: 0.45,
-          thinStreakOpacity: 0.70,
-          copiedStarGlint: 0.35,
-          edgeGlowTint: 0.0,
-        ));
-        break;
-
-      // 3. HOME-MADE SAUCE (Sunset Amber Diffusion)
-      case 'home-made sauce':
-        project.tonemapMode = 1.0;
-        project.layers.add(AdjustmentLayer(
-          id: 'hms_base',
-          name: 'Base Grade',
-          opacity: 1.0,
-          contrast: 1.24,
-          saturation: 1.08,
-          brightness: -0.02,
-          temperature: 5600.0,
-          sharpness: 0.45,
-          shadows: -0.08,
-          highlights: 0.06,
-          vignette: 0.06,
-          darkOutlines: 0.25,
-          sLiningOpacity: 0.50,
-          cosmoCleanHighlight: 0.50,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.21, 0.51, 0.82, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'hms_amber_haze',
-          name: 'Sunset Amber Diffusion',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.62,
-          deepGlowIntensity: 0.28,
-          deepGlowRadius: 0.42,
-          deepGlowThreshold: 0.54,
-          edgeGlowTint: 3.0, // Amber Sun
-          bslaBloomHaze: 0.28,
-        ));
-        break;
-
-      // 4. ARKNIGHTS (Conquestor Gold & Noir Ambient Shadow)
-      case 'arknights':
-        project.tonemapMode = 2.0; // Khronos PBR Neutral+
-        project.deepTeal = 0.25;
-        project.magicCurves = 0.38;
-        project.layers.add(AdjustmentLayer(
-          id: 'arknights_base',
-          name: 'Arknights Cinema Core',
-          opacity: 1.0,
-          contrast: 1.34,
-          saturation: 0.82,
-          brightness: -0.03,
-          temperature: 6100.0,
-          sharpness: 0.58,
-          shadows: -0.18,
-          highlights: 0.08,
-          blackCrush: 0.04,
-          darkOutlines: 0.40,
-          sLiningOpacity: 0.70,
-          splitToneShadowHue: 0.58,
-          splitToneShadowSat: 0.24,
-          splitToneHighHue: 0.12,
-          splitToneHighSat: 0.26,
-          splitToneBalance: 0.06,
-          cosmoCleanHighlight: 0.55,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.17, 0.49, 0.83, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'arknights_amber_halo',
-          name: 'Noble Amber Edge Glow',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.58,
-          shaderlyGlowIntensity: 0.35,
-          shaderlyGlowRadius: 0.40,
-          shaderlyGlowThreshold: 0.56,
-          sapphireGlowWidth: 0.32,
-          sapphireGlowThreshold: 0.60,
-          edgeGlowTint: 1.0, // Noble Gold
-        ));
-        break;
-
-      // 5. ADEVOB SLOP (Modeled on Maki/Rika & Yamato: Metallic Steel & Soft Edge Glow)
-      case 'adevob slop':
-        project.tonemapMode = 1.0; // AgX Punch
-        project.deepTeal = 0.48;
-        project.magicCurves = 0.55;
-        project.layers.add(AdjustmentLayer(
-          id: 'adevob_base',
-          name: 'Adevob Steel Lines',
-          opacity: 1.0,
-          contrast: 1.40,
-          saturation: 0.72,
-          brightness: -0.03,
-          temperature: 7300.0,
-          sharpness: 0.65,
-          shadows: -0.20,
-          highlights: 0.08,
-          blackCrush: 0.05,
-          darkOutlines: 0.45,
-          sLiningOpacity: 0.75,
-          bilateralIntensity: 0.45,
-          bilateralRadius: 2.8,
-          mblMojoTealOrange: 0.35,
-          cosmoCleanHighlight: 0.52,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.15, 0.48, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'adevob_halo',
-          name: 'Adevob Soft Edge Halo',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.52,
-          edgeHaloRadius: 0.42,
-          sapphireGlowWidth: 0.38,
-          sapphireGlowThreshold: 0.62,
-          edgeGlowTint: 2.0, // Cyan
-          shaderlyGlowIntensity: 0.32,
-          shaderlyGlowRadius: 0.34,
-          shaderlyGlowThreshold: 0.60,
-          lightWrapIntensity: 0.30,
-          lightWrapWidth: 0.35,
-        ));
-        break;
-
-      // 6. YUTA (Silver Mist & Cursed Energy)
-      case 'yuta':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.28;
-        project.magicCurves = 0.35;
-        project.layers.add(AdjustmentLayer(
-          id: 'yuta_base',
-          name: 'Yuta Silver Blade',
-          opacity: 1.0,
-          contrast: 1.28,
-          saturation: 0.75,
-          brightness: -0.02,
-          temperature: 6900.0,
-          sharpness: 0.52,
-          shadows: -0.14,
-          highlights: 0.08,
-          blackCrush: 0.03,
-          darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          splitToneShadowHue: 0.62,
-          splitToneShadowSat: 0.18,
-          splitToneHighHue: 0.08,
-          splitToneHighSat: 0.15,
-          cosmoCleanHighlight: 0.50,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'yuta_specular',
-          name: 'Silver Mist Glow',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.55,
-          shaderlyGlowIntensity: 0.38,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.54,
-          edgeGlowTint: 0.0,
-        ));
-        break;
-
-      // 7. MALENIA (Scarlet Rot & Warm Crimson Bloom)
-      case 'malenia':
-        project.tonemapMode = 1.0;
-        project.layers.add(AdjustmentLayer(
-          id: 'malenia_base',
-          name: 'Malenia Rot Base',
-          opacity: 1.0,
-          contrast: 1.28,
-          saturation: 0.95,
-          brightness: -0.02,
-          temperature: 5800.0,
-          sharpness: 0.52,
-          shadows: -0.14,
-          highlights: 0.06,
-          darkOutlines: 0.30,
-          sLiningOpacity: 0.60,
-          splitToneShadowHue: 0.98,
-          splitToneShadowSat: 0.25,
-          splitToneHighHue: 0.10,
-          splitToneHighSat: 0.22,
-          splitToneBalance: 0.05,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.19, 0.50, 0.82, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'malenia_bloom',
-          name: 'Scarlet Aeonia Core',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.58,
-          deepGlowIntensity: 0.28,
-          deepGlowRadius: 0.42,
-          deepGlowThreshold: 0.50,
-          edgeGlowTint: 4.0, // Blood Crimson
-        ));
-        break;
-
-      // 8. DEKU (One For All Emerald Radiance)
-      case 'deku':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.22;
-        project.magicCurves = 0.42;
-        project.layers.add(AdjustmentLayer(
-          id: 'deku_base',
-          name: 'One For All Energy',
-          opacity: 1.0,
-          contrast: 1.32,
-          saturation: 1.15,
-          brightness: -0.01,
-          temperature: 6400.0,
-          sharpness: 0.56,
-          shadows: -0.14,
-          highlights: 0.08,
-          darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          splitToneShadowHue: 0.58,
+          saturation: 0.85,
+          splitToneShadowHue: 0.54,
           splitToneShadowSat: 0.22,
-          splitToneHighHue: 0.36,
-          splitToneHighSat: 0.28,
-          cosmoCleanHighlight: 0.48,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'deku_halo',
-          name: 'Emerald Discharge Halo',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.58,
-          shaderlyGlowIntensity: 0.42,
-          shaderlyGlowRadius: 0.40,
-          shaderlyGlowThreshold: 0.50,
-          edgeHaloRadius: 0.35,
-          edgeGlowTint: 2.0,
-        ));
-        break;
-
-      // 9. JJK (Cursed Violet / Deep Charcoal Contrast)
-      case 'jjk':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.32;
-        project.magicCurves = 0.52;
-        project.layers.add(AdjustmentLayer(
-          id: 'jjk_base',
-          name: 'Jujutsu Cursed Contrast',
-          opacity: 1.0,
-          contrast: 1.36,
-          saturation: 0.92,
-          brightness: -0.03,
-          temperature: 6800.0,
-          sharpness: 0.58,
-          shadows: -0.20,
-          blackCrush: 0.05,
-          darkOutlines: 0.42,
-          sLiningOpacity: 0.70,
-          splitToneShadowHue: 0.74,
-          splitToneShadowSat: 0.26,
           splitToneHighHue: 0.52,
-          splitToneHighSat: 0.22,
-          splitToneBalance: -0.08,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.16, 0.48, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'jjk_curse_halo',
-          name: 'Electro Violet Aura',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.56,
-          shaderlyGlowIntensity: 0.40,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.52,
-          edgeGlowTint: 5.0, // Electro Violet
-          sapphireGlowWidth: 0.35,
-          sapphireGlowThreshold: 0.56,
-        ));
-        break;
-
-      // 10. MAHITO (Desaturated Frost Cream & Film Haze)
-      case 'mahito':
-        project.tonemapMode = 2.0;
-        project.deepTeal = 0.40;
-        project.magicCurves = 0.38;
-        project.layers.add(AdjustmentLayer(
-          id: 'mahito_base',
-          name: 'Soul Metamorphosis Tone',
-          opacity: 1.0,
-          contrast: 1.26,
-          saturation: 0.76,
-          brightness: -0.01,
-          temperature: 7500.0,
-          sharpness: 0.54,
-          shadows: -0.15,
-          highlights: 0.08,
-          darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          cosmoCleanHighlight: 0.58,
-          splitToneShadowHue: 0.56,
-          splitToneShadowSat: 0.22,
-          splitToneHighHue: 0.06,
           splitToneHighSat: 0.14,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.83, 1.0],
+          curveMaster: [0.0, 0.14, 0.42, 0.81, 1.0],
+          curveRed: [0.0, 0.235, 0.47, 0.745, 1.0],
+          curveBlue: [0.0, 0.245, 0.49, 0.77, 1.0],
+          cosmoCleanHighlight: 0.2,
+          deepTeal: 0.2,
+          hsSat: [0.08, 0.0, -0.15, -0.25, 0.15, -0.35, -0.45, -0.4],
+          hsHue: [0.04, 0.0, 0.0, 0.0, 0.0, -0.1, -0.1, -0.05],
+          hsLum: [0.0, 0.0, 0.0, 0.0, 0.05, -0.15, -0.15, -0.2],
+          hsSoftness: 0.8,
+          coloristaSatShadows: -0.2,
+          coloristaSatMids: 0.2,
+          coloristaSatHighs: 0.1,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'mahito_soft_bloom',
-          name: 'Creamy Cyan Frost Bloom',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.52,
-          shaderlyGlowIntensity: 0.38,
-          shaderlyGlowRadius: 0.42,
-          shaderlyGlowThreshold: 0.54,
-          edgeGlowTint: 2.0,
-        ));
-        break;
-
-      // 11. GOJO (Six Eyes Radiance / Punchy Infinity Bloom)
-      case 'gojo':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.52;
-        project.magicCurves = 0.48;
-        project.layers.add(AdjustmentLayer(
-          id: 'gojo_base',
-          name: 'Six Eyes Radiance',
-          opacity: 1.0,
-          contrast: 1.34,
-          saturation: 0.96,
-          brightness: -0.01,
-          temperature: 7600.0,
-          sharpness: 0.60,
-          shadows: -0.18,
-          highlights: 0.10,
-          blackCrush: 0.03,
-          darkOutlines: 0.38,
-          sLiningOpacity: 0.70,
-          mblMojoTealOrange: 0.36,
-          cosmoCleanHighlight: 0.50,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.17, 0.49, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'gojo_infinity_halo',
-          name: 'Infinity Cyan Radiant Edge',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.62,
-          shaderlyGlowIntensity: 0.46,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.48,
-          edgeHaloRadius: 0.40,
-          edgeGlowTint: 2.0,
-        ));
-        break;
-
-      // 12. TOJI (Heavy Charcoal Manga Silhouette)
-      case 'toji':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.20;
-        project.magicCurves = 0.52;
-        project.layers.add(AdjustmentLayer(
-          id: 'toji_base',
-          name: 'Steel Charcoal Inks',
-          opacity: 1.0,
-          contrast: 1.44,
-          saturation: 0.62,
-          brightness: -0.04,
-          temperature: 6900.0,
-          sharpness: 0.68,
-          shadows: -0.24,
-          blackCrush: 0.07,
-          edgeDarken: 0.20,
-          darkOutlines: 0.50,
-          sLiningOpacity: 0.80,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.13, 0.46, 0.85, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'toji_edge_spec',
-          name: 'Manga Specular Contour',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.46,
-          shaderlyGlowIntensity: 0.25,
-          shaderlyGlowRadius: 0.28,
-          shaderlyGlowThreshold: 0.65,
-          edgeHaloRadius: 0.25,
-          edgeGlowTint: 0.0,
-        ));
-        break;
-
-      // 13. MAKI (Zenin Cursed Steel)
-      case 'maki':
-        project.tonemapMode = 2.0;
-        project.deepTeal = 0.22;
-        project.magicCurves = 0.32;
-        project.layers.add(AdjustmentLayer(
-          id: 'maki_base',
-          name: 'Zenin Cursed Steel',
-          opacity: 1.0,
-          contrast: 1.26,
-          saturation: 0.90,
-          brightness: -0.02,
-          temperature: 6300.0,
-          sharpness: 0.52,
-          shadows: -0.14,
-          highlights: 0.06,
+          id: 'layer_line_art',
+          name: 'Line Art Definition',
           darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          splitToneShadowHue: 0.60,
-          splitToneShadowSat: 0.18,
-          splitToneHighHue: 0.12,
-          splitToneHighSat: 0.20,
-          cosmoCleanHighlight: 0.52,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.19, 0.50, 0.83, 1.0],
+          sLiningOpacity: 0.15,
+          edgeDarken: 0.1,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'maki_glow',
-          name: 'Creamy Golden Bloom',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.52,
-          shaderlyGlowIntensity: 0.34,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.54,
-          edgeGlowTint: 1.0,
+          id: 'layer_edge_halo',
+          name: 'Edge Halo',
+          opacity: 0.6,
+          edgeGlowTint: 0.2,
+          edgeHaloRadius: 0.06,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'layer_bloom',
+          name: 'Soft Bloom',
+          opacity: 0.5,
+          deepGlowIntensity: 0.07,
+          deepGlowRadius: 0.45,
+          deepGlowThreshold: 0.85,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'layer_finish',
+          name: 'Finish + Anti-Band',
+          vignette: 0.1,
+          bilateralIntensity: 0.1,
+          bilateralRange: 0.1,
+          debandRadius: 3.0,
+          filmGrain: 0.015,
+          radialChroma: 0.05,
+          clarity: 0.05,
+          unsharpRadius: 1.2,
+          unsharpAmount: 0.15,
         ));
         break;
 
-      // 14. GIORNO (Gold Experience Luster)
-      case 'giorno':
+      // 2. FRIEREN UPD
+      case 'frieren upd':
         project.tonemapMode = 1.0;
-        project.deepTeal = 0.16;
-        project.magicCurves = 0.42;
+        project.deepTeal = 0.15;
+        project.magicCurves = 0.0;
         project.layers.add(AdjustmentLayer(
-          id: 'giorno_base',
-          name: 'Gold Experience Core',
-          opacity: 1.0,
-          contrast: 1.30,
-          saturation: 1.12,
-          brightness: -0.01,
-          temperature: 6000.0,
-          sharpness: 0.54,
-          shadows: -0.14,
-          highlights: 0.08,
+          id: 'layer_line_art',
+          name: 'Line Art Definition',
+          saturation: 0.7699839497366111,
           darkOutlines: 0.35,
-          sLiningOpacity: 0.65,
-          splitToneShadowHue: 0.65,
-          splitToneShadowSat: 0.20,
-          splitToneHighHue: 0.14,
-          splitToneHighSat: 0.30,
-          splitToneBalance: 0.10,
-          cosmoCleanHighlight: 0.48,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.18, 0.50, 0.84, 1.0],
+          sLiningOpacity: 0.15,
+          edgeDarken: 0.1,
+          skinEdgeBleed: 1.4746308096466199,
+          skinEdgeWidth: 0.9901006228050921,
+          deepTeal: 0.7460543102502194,
+          magicCurves: 0.6040223400460931,
         ));
         project.layers.add(AdjustmentLayer(
-          id: 'giorno_gold_bloom',
-          name: 'Requiem Golden Aura',
+          id: 'layer_edge_halo',
+          name: 'Edge Halo',
+          opacity: 0.7110938850086407,
+          contrast: 1.025339867756804,
+          saturation: 0.607783691834943,
+          debandRadius: 1.0227961753731343,
+          edgeGlowTint: 0.1,
+          shaderlyGlowIntensity: 0.2758073145302897,
+          clarity: -0.09994718503072875,
+          clarityRadius: 0.4465179845258999,
+          skinEdgeBleed: 1.4483279260864794,
+          skinEdgeWidth: 0.9673061622036874,
+          copiedProMist: 0.9076869787093942,
+          hsSat: [0.0, 0.0, 0.0, 0.0, 0.8368219549127344, -0.19110959270631311, 0.0, 0.0],
+          coloristaLiftX: 0.020848214285714258,
+          coloristaLiftY: -0.10042410714286688,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'layer_1791189154471',
+          name: 'Layer 4',
           blendMode: LayerBlendMode.softLight,
-          opacity: 0.60,
-          shaderlyGlowIntensity: 0.44,
-          shaderlyGlowRadius: 0.42,
-          shaderlyGlowThreshold: 0.48,
-          edgeGlowTint: 1.0,
+          edgeHaloRadius: 0.033260569852941166,
+        ));
+        project.layers.add(AdjustmentLayer(
+          id: 'layer_finish',
+          name: 'Finish + Anti-Band',
+          vignette: 0.1,
+          bilateralIntensity: 0.1,
+          bilateralRange: 0.1,
+          debandRadius: 3.0,
+          filmGrain: 0.015,
+          radialChroma: 0.05,
+          clarity: 0.05,
+          unsharpRadius: 1.2,
+          unsharpAmount: 0.15,
         ));
         break;
 
-      // 15. HOLLAND (Hollywood Blockbuster Teal & Orange)
-      case 'holland':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.46;
-        project.magicCurves = 0.44;
-        project.layers.add(AdjustmentLayer(
-          id: 'holland_base',
-          name: 'Hollywood Blockbuster',
-          opacity: 1.0,
-          contrast: 1.30,
-          saturation: 1.04,
-          brightness: -0.02,
-          temperature: 6500.0,
-          sharpness: 0.52,
-          shadows: -0.15,
-          highlights: 0.06,
-          darkOutlines: 0.30,
-          sLiningOpacity: 0.60,
-          mblMojoTealOrange: 0.40,
-          cosmoCleanHighlight: 0.52,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.19, 0.50, 0.84, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'holland_rim',
-          name: 'Soft Oceanic Bloom',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.52,
-          shaderlyGlowIntensity: 0.36,
-          shaderlyGlowRadius: 0.38,
-          shaderlyGlowThreshold: 0.52,
-          edgeGlowTint: 2.0,
-        ));
-        break;
-
-      // 16. RUDEUS (Fantasy Dawn Amber)
-      case 'ruedeus':
-      case 'rudeus':
-        project.tonemapMode = 2.0;
-        project.deepTeal = 0.16;
-        project.magicCurves = 0.32;
-        project.layers.add(AdjustmentLayer(
-          id: 'rudeus_base',
-          name: 'Fantasy Dawn Core',
-          opacity: 1.0,
-          contrast: 1.24,
-          saturation: 0.98,
-          brightness: -0.01,
-          temperature: 5500.0,
-          sharpness: 0.48,
-          shadows: -0.10,
-          highlights: 0.06,
-          darkOutlines: 0.30,
-          sLiningOpacity: 0.55,
-          splitToneShadowHue: 0.56,
-          splitToneShadowSat: 0.15,
-          splitToneHighHue: 0.10,
-          splitToneHighSat: 0.24,
-          cosmoCleanHighlight: 0.54,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.01, 0.20, 0.51, 0.83, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'rudeus_sun',
-          name: 'Dawn Creamy Glow',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.54,
-          shaderlyGlowIntensity: 0.38,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.52,
-          edgeGlowTint: 3.0,
-        ));
-        break;
-
-      // 17. DENJI (Chainsaw Crimson Blood Bloom)
-      case 'denji':
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.22;
-        project.magicCurves = 0.48;
-        project.layers.add(AdjustmentLayer(
-          id: 'denji_base',
-          name: 'Chainsaw Devil Core',
-          opacity: 1.0,
-          contrast: 1.36,
-          saturation: 1.14,
-          brightness: -0.03,
-          temperature: 6200.0,
-          sharpness: 0.60,
-          shadows: -0.18,
-          highlights: 0.08,
-          blackCrush: 0.05,
-          darkOutlines: 0.40,
-          sLiningOpacity: 0.70,
-          splitToneShadowHue: 0.0,
-          splitToneShadowSat: 0.28,
-          splitToneHighHue: 0.08,
-          splitToneHighSat: 0.30,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.17, 0.49, 0.85, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'denji_blood_bloom',
-          name: 'Crimson Radiant Halo',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.58,
-          shaderlyGlowIntensity: 0.40,
-          shaderlyGlowRadius: 0.40,
-          shaderlyGlowThreshold: 0.50,
-          edgeGlowTint: 4.0, // Crimson
-        ));
-        break;
-
-      // 18. RIKO / MAI (Pastel Dream / Celebellyy Style Soft Warmth)
-      case 'riko':
-        project.tonemapMode = 2.0;
-        project.deepTeal = 0.12;
-        project.magicCurves = 0.28;
-        project.layers.add(AdjustmentLayer(
-          id: 'riko_base',
-          name: 'Pastel Innocence',
-          opacity: 1.0,
-          contrast: 1.20,
-          saturation: 1.04,
-          brightness: 0.0,
-          temperature: 6200.0,
-          sharpness: 0.44,
-          shadows: -0.08,
-          highlights: 0.06,
-          darkOutlines: 0.25,
-          sLiningOpacity: 0.50,
-          bilateralIntensity: 0.45,
-          bilateralRadius: 3.0,
-          cosmoCleanHighlight: 0.62,
-          splitToneShadowHue: 0.60,
-          splitToneShadowSat: 0.12,
-          splitToneHighHue: 0.02,
-          splitToneHighSat: 0.20,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.02, 0.21, 0.51, 0.83, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'riko_peach_bloom',
-          name: 'Creamy Peach Bloom',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.55,
-          shaderlyGlowIntensity: 0.40,
-          shaderlyGlowRadius: 0.44,
-          shaderlyGlowThreshold: 0.50,
-          edgeGlowTint: 6.0, // Anime Pink
-        ));
-        break;
-
-      // 19. TOJI (GRIT / RAW - Maximum Desaturated Charcoal Contrast)
-      case 'toji (grit / raw)':
       default:
-        project.tonemapMode = 1.0;
-        project.deepTeal = 0.10;
-        project.magicCurves = 0.60;
-        project.layers.add(AdjustmentLayer(
-          id: 'toji_raw_base',
-          name: 'Charcoal Grime & Grit',
-          opacity: 1.0,
-          contrast: 1.48,
-          saturation: 0.28,
-          brightness: -0.04,
-          sharpness: 0.72,
-          shadows: -0.25,
-          blackCrush: 0.08,
-          vignette: 0.10,
-          darkOutlines: 0.50,
-          sLiningOpacity: 0.85,
-          blendMode: LayerBlendMode.normal,
-          curveMaster: [0.0, 0.11, 0.45, 0.86, 1.0],
-        ));
-        project.layers.add(AdjustmentLayer(
-          id: 'toji_raw_halo',
-          name: 'Manga Monochrome Halo',
-          blendMode: LayerBlendMode.softLight,
-          opacity: 0.46,
-          shaderlyGlowIntensity: 0.24,
-          shaderlyGlowRadius: 0.26,
-          shaderlyGlowThreshold: 0.65,
-          edgeHaloRadius: 0.25,
-          edgeGlowTint: 0.0,
-        ));
+        // Unknown name -> neutral base layer
+        project.layers.add(AdjustmentLayer(id: 'neutral_base', name: 'Base Grade'));
         break;
     }
 
