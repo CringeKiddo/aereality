@@ -12,6 +12,8 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'gradient_map.dart';
+import 'gradient_maps_view.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -47,6 +49,7 @@ Future<void> main() async {
     debugPrint('FFmpeg initialization error: $e');
   }
 
+  Music.init(); // bundled music only (never touches the export pipeline)
   runApp(const ShaderlyApp());
   CrashLog.scheduleReport();
 }
@@ -326,6 +329,61 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _soundRow(
+    String label,
+    bool enabled,
+    double value,
+    Color accent,
+    StateSetter setModal,
+    void Function(bool) setEnabled,
+    void Function(double) setValue, {
+    String? note,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              SizedBox(
+                width: 28,
+                child: Checkbox(
+                  value: enabled,
+                  activeColor: accent,
+                  visualDensity: VisualDensity.compact,
+                  onChanged: (v) {
+                    setModal(() => setEnabled(v ?? false));
+                    Music.apply();
+                    Music.save();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600))),
+              Text('${(value * 100).round()}%', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+            ],
+          ),
+          Slider(
+            value: value.clamp(0.0, 1.0).toDouble(),
+            min: 0.0,
+            max: 1.0,
+            activeColor: accent,
+            inactiveColor: Colors.white12,
+            onChanged: enabled
+                ? (v) {
+                    setModal(() => setValue(v));
+                    Music.apply();
+                  }
+                : null,
+            onChangeEnd: (_) => Music.save(),
+          ),
+          if (note != null) Padding(padding: const EdgeInsets.only(left: 36, bottom: 4), child: Text(note, style: const TextStyle(color: Colors.white38, fontSize: 10))),
+        ],
+      ),
+    );
+  }
+
   void _showSettingsDialog() {
     showDialog(
       context: context,
@@ -435,6 +493,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       setState(() {});
                     },
                   ),
+
+                  const SizedBox(height: 20),
+                  const Text('MUSIC', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  _soundRow('Music', Music.enabled, Music.volume, accent, setModal,
+                      (v) => Music.enabled = v, (v) => Music.volume = v,
+                      note: Music.trackCount == 0
+                          ? 'No tracks found in assets/music/'
+                          : '${Music.trackCount} tracks, shuffled. Plays only while the timeline is paused.'),
 
                   const SizedBox(height: 20),
                   const Text('CREATOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
@@ -919,7 +986,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
-    _tabController = TabController(length: 11, vsync: this);
+    _tabController = TabController(length: 12, vsync: this);
     _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
@@ -1068,6 +1135,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
 
     _playbackTimer?.cancel();
+    Music.onVideoPause();
     if (_controller != null) {
       await _controller!.pause();
       await _controller!.dispose();
@@ -1222,6 +1290,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     _controller?.pause();
     _isPlaying = false;
+    Music.setExporting(true); // music steps aside during export (nothing is ever mixed into the video)
 
     final size = _exportSize();
     ExportSuite.showExportSheet(
@@ -1284,9 +1353,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return out;
   }
 
+  /// The LUT is GLOBAL (the shader applies it once, after all layers). It lives on whichever layer holds it,
+  /// regardless of which layer is currently selected - so editing a glow on another layer never drops it.
+  AdjustmentLayer get _lutLayer {
+    for (final l in _project.layers) {
+      if (l.activeLutId != null && _activeLuts.any((x) => x.id == l.activeLutId)) return l;
+    }
+    return _cur;
+  }
+
+  /// Keeps exactly one layer holding the LUT (legacy projects / presets could have several).
+  void _syncGlobalLut() {
+    final owner = _lutLayer;
+    for (final l in _project.layers) {
+      if (!identical(l, owner)) l.activeLutId = null;
+    }
+  }
+
   Float32List? _getActiveLutTable() {
-    if (_cur.activeLutId == null) return null;
-    final match = _activeLuts.where((l) => l.id == _cur.activeLutId);
+    final id = _lutLayer.activeLutId;
+    if (id == null) return null;
+    final match = _activeLuts.where((l) => l.id == id);
     if (match.isEmpty) return null;
     return match.first.table;
   }
@@ -1327,11 +1414,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ===========================================================================
-  // UNIFORM BUFFER ENGINE (192-Float Stride per Layer, 2048 Floats Capacity)
+  // UNIFORM BUFFER ENGINE (192-Float Stride per Layer + 48-Float Gradient Map per Layer, 4096 Floats Capacity)
   // Perfectly synchronised with aereality_core.comp layout
   // ===========================================================================
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
-    final uniforms = Float32List(2048);
+    final uniforms = Float32List(4096);
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
@@ -1341,8 +1428,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[2] = _project.tonemapMode;
     uniforms[3] = imgW;
     uniforms[4] = imgH;
-    uniforms[5] = _cur.activeLutId != null ? 1.0 : 0.0;
-    uniforms[6] = _cur.lutOpacity;
+    uniforms[5] = _getActiveLutTable() != null ? 1.0 : 0.0;
+    uniforms[6] = _lutLayer.lutOpacity;
     uniforms[12] = _project.ditherStrength;
 
     // Offsets 13..25: Isolated Metallic Text Suite
@@ -1366,6 +1453,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     for (int l = 0; l < math.min(_project.layers.length, 10); l++) {
       final layer = _project.layers[l];
       final offset = 32 + (l * 192);
+      layer.gradientMap.packInto(uniforms, GradientMapSettings.kBaseOffset + l * GradientMapSettings.kFloatsPerLayer);
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1561,6 +1649,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 173] = layer.skinEdgeWidth;
       uniforms[offset + 174] = layer.halationStrength;
       uniforms[offset + 175] = layer.halationThreshold;
+      uniforms[offset + 176] = layer.thinStreakFromEdge ? 1.0 : 0.0;
     }
 
     return uniforms;
@@ -1835,10 +1924,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 if (_controller!.value.isPlaying) {
                   _controller!.pause();
                   _isPlaying = false;
+                  Music.onVideoPause(); // music fades back in ~7 s after pausing
                   _applyGrade(forceExtract: true);
                 } else {
                   _controller!.play();
                   _isPlaying = true;
+                  Music.onVideoPlay(); // music fades out so the video's audio is clean
                 }
               });
             },
@@ -2086,6 +2177,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   tabs: const [
                     Tab(text: 'PRESETS'),
                     Tab(text: 'TONEMAPPERS'),
+                    Tab(text: 'GRADIENT MAP'),
                     Tab(text: 'LUT'),
                     Tab(text: 'BASIC'),
                     Tab(text: 'COLORISTA'),
@@ -2129,7 +2221,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               EditorViews.clearPresetToNeutral(_project);
                             } else {
                               _selectedPresetName = presetName;
-                              EditorViews.applyPresetLogic(_project, presetName);
+                              final customMatch = _customPresets.where((p) => p.name == presetName);
+                              if (customMatch.isNotEmpty) {
+                                final cp = customMatch.first;
+                                _project.layers
+                                  ..clear()
+                                  ..addAll(cp.layers.map((l) => l.clone()));
+                                _project.tonemapMode = cp.tonemapMode;
+                                _project.activeLayerIndex = 0;
+                              } else {
+                                EditorViews.applyPresetLogic(_project, presetName);
+                              }
                               if (_isBslOverlayActive) {
                                 EditorViews.applyBslOverlay(project: _project, active: true);
                               }
@@ -2164,18 +2266,32 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _autoSaveProject();
                         },
                       ),
+                      GradientMapsTab(
+                        cur: _cur,
+                        onChanged: () {
+                          setState(() {});
+                          _applyGrade();
+                        },
+                        onEnded: () {
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
                       EditorViews.buildLutsTab(
                         context: context,
-                        cur: _cur,
+                        cur: _lutLayer,
                         activeLuts: _activeLuts,
                         onLutUpdated: () {
+                          _syncGlobalLut();
                           _pushUndoSnapshot();
                           setState(() {});
                           _applyGrade();
                           _autoSaveProject();
                         },
                         onPickLut: () async {
-                          await EditorViews.pickAndImportCubeLut(context, _cur, _activeLuts);
+                          await EditorViews.pickAndImportCubeLut(context, _lutLayer, _activeLuts);
+                          _syncGlobalLut();
                           _pushUndoSnapshot();
                           setState(() {});
                           _applyGrade();
@@ -2184,7 +2300,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         onDeleteLut: (idx) async {
                           setState(() {
                             final rem = _activeLuts.removeAt(idx);
-                            if (_cur.activeLutId == rem.id) _cur.activeLutId = null;
+                            for (final l in _project.layers) {
+                              if (l.activeLutId == rem.id) l.activeLutId = null;
+                            }
                           });
                           await ProjectManager.saveLuts(_activeLuts);
                           _applyGrade();
