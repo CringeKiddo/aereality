@@ -261,8 +261,8 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     cleanupBuffers();
 
     VkDeviceSize pixelBufferSize = requiredPixels * 8; // 64bpp for up to 16-bit
-    // 2048 floats capacity (10 layers x 192 floats + 32 header = 1952, fits without overflow)
-    VkDeviceSize uboBufferSize = 2048 * sizeof(float);
+    // 4096 floats capacity: 32 header + 10 x 192 layer floats = 1952, then 10 x 48 gradient-map floats (1952..2431)
+    VkDeviceSize uboBufferSize = 4096 * sizeof(float);
     VkDeviceSize lutStagingSize = 32 * 32 * 32 * 4 * sizeof(float);
 
     // Bloom pyramid buffers stored as fp16 RGBA (2 uint32s = 8 bytes per texel)
@@ -410,7 +410,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     vkUpdateDescriptorSets(gVk.device, 10, descriptorWrites, 0, nullptr);
 
     gVk.allocatedPixelCapacity = requiredPixels;
-    LOGI("Configured Vulkan Samplers, 3D LUT Image, and Buffers for %zu pixels (UBO 2048 floats).", requiredPixels);
+    LOGI("Configured Vulkan Samplers, 3D LUT Image, and Buffers for %zu pixels (UBO 4096 floats).", requiredPixels);
     return true;
 }
 
@@ -905,9 +905,9 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // 2. Upload Uniforms (Up to 2048 floats capacity for 10 layers with 192 stride)
+    // 2. Upload Uniforms (Up to 4096 floats capacity (layers + gradient maps))
     void* mappedUbo = nullptr;
-    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(2048 * sizeof(float)));
+    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(4096 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
     std::memcpy(mappedUbo, uniforms, uboCopyBytes);
     VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
@@ -959,9 +959,9 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
     vkUnmapMemory(gVk.device, gVk.inMemory);
 
-    // 2. Upload Uniforms (Up to 2048 floats capacity)
+    // 2. Upload Uniforms (Up to 4096 floats capacity)
     void* mappedUbo = nullptr;
-    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(2048 * sizeof(float)));
+    size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(4096 * sizeof(float)));
     vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
     std::memcpy(mappedUbo, uniforms, uboCopyBytes);
     VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
