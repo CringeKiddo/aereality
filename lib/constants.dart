@@ -82,27 +82,10 @@ class PresetStyle {
   });
 }
 
-// Comprehensive Anime Presets Definition Map (Clean Title Only)
+// Built-in presets (names must match the cases in EditorViews.applyPresetLogic)
 const List<PresetStyle> kAnimePresetStyles = [
-  PresetStyle(name: 'Yamato', accent: AnimePalette.yamatoIce),
-  PresetStyle(name: 'Okkotsu', accent: AnimePalette.silverWhite),
-  PresetStyle(name: 'Home-Made Sauce', accent: Color(0xFFFF6F61)),
-  PresetStyle(name: 'Arknights', accent: AnimePalette.arknightsAmber),
-  PresetStyle(name: 'Adevob Slop', accent: AnimePalette.tojiSteel),
-  PresetStyle(name: 'Yuta', accent: AnimePalette.silverWhite),
-  PresetStyle(name: 'Malenia', accent: AnimePalette.maleniaRot),
-  PresetStyle(name: 'Deku', accent: AnimePalette.dekuGreen),
-  PresetStyle(name: 'JJK', accent: AnimePalette.cursedViolet),
-  PresetStyle(name: 'Mahito', accent: AnimePalette.yamatoIce),
-  PresetStyle(name: 'Gojo', accent: AnimePalette.gojoCyan),
-  PresetStyle(name: 'Toji', accent: AnimePalette.tojiSteel),
-  PresetStyle(name: 'Maki', accent: AnimePalette.dekuGreen),
-  PresetStyle(name: 'Giorno', accent: AnimePalette.giornoGold),
-  PresetStyle(name: 'Holland', accent: AnimePalette.gojoCyan),
-  PresetStyle(name: 'Rudeus', accent: AnimePalette.arknightsAmber),
-  PresetStyle(name: 'Denji', accent: AnimePalette.chainsawBlood),
-  PresetStyle(name: 'Riko', accent: AnimePalette.makimaPeach),
-  PresetStyle(name: 'Toji (Grit / Raw)', accent: AnimePalette.deepCharcoal),
+  PresetStyle(name: 'Frieren v3', accent: AnimePalette.yamatoIce),
+  PresetStyle(name: 'Frieren Upd', accent: AnimePalette.silverWhite),
 ];
 
 // -----------------------------------------------------------------------------
