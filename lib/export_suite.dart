@@ -212,7 +212,10 @@ class ExportSuite {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white54),
-                      onPressed: isExporting ? null : () => Navigator.pop(context),
+                      onPressed: isExporting ? null : () {
+                        Music.setExporting(false);
+                        Navigator.pop(context);
+                      },
                     ),
                   ],
                 ),
@@ -330,6 +333,7 @@ class ExportSuite {
                               isExporting = false;
                               statusText = 'Failed: $e';
                             });
+                            Music.setExporting(false);
                           }
                         },
                   child: const Text('Export Image', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
@@ -406,7 +410,10 @@ class ExportSuite {
                       ),
                       IconButton(
                         icon: const Icon(Icons.close, color: Colors.white54),
-                        onPressed: isExporting ? null : () => Navigator.pop(context),
+                        onPressed: isExporting ? null : () {
+                        Music.setExporting(false);
+                        Navigator.pop(context);
+                      },
                       ),
                     ],
                   ),
@@ -698,6 +705,7 @@ class ExportSuite {
                                 isExporting = false;
                                 statusText = 'Export error: $e';
                               });
+                              Music.setExporting(false);
                             }
                           },
                     child: const Text('Render & Export Master Video', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
@@ -1233,9 +1241,10 @@ class ExportSuite {
       cOption = '-c:v libx265$hvcTag';
       speed = '-preset veryfast';
       rate = '-crf 20';
-      // Crash-safe x265 profile for Android: no-asm=1 prevents SIGILL (illegal instruction opcodes) on ARMv8.0,
-      // pools=1 avoids NULL worker pool crashes on lookahead flush at EOF, and single frame-thread caps memory.
-      codecExtra = '-x265-params log-level=error:no-asm=1:pools=1:frame-threads=1:bframes=3:rc-lookahead=20';
+      // Crash-safe x265 profile for Android: no worker thread pools (the pool / thread-affinity setup is what
+      // brings the encoder down on mobile CPUs as soon as the lookahead window fills), a single frame thread,
+      // and a lookahead that is always larger than the B-frame count. Slower than a threaded encode, but stable.
+      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 6';
@@ -1284,7 +1293,7 @@ class ExportSuite {
     final scaleFilter = 'scale=$outW:$outH:flags=lanczos+accurate_rnd:out_color_matrix=$matrix:out_range=tv,'
         'format=$pixName$extraFilters';
 
-    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x${inH} -framerate $fps '
+    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
         '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $codecExtra $pixFmt $colorMetadata $rate "$outputFile"';
   }
 
@@ -1302,7 +1311,7 @@ class ExportSuite {
     required int outW,
     required int outH,
   }) {
-    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x${inH} -framerate $fps '
+    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
         '-i "$inputFile" -vf "scale=$outW:$outH:flags=lanczos,format=bgr0" '
         '-c:v ffv1 -level 3 -g 1 -slicecrc 0 -an "$outputFile"';
   }
@@ -1356,10 +1365,10 @@ class ExportSuite {
       rate = '-crf 20';
     }
 
-    // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no-asm=1 prevents SIGILL (illegal instruction opcodes)
-    // on ARMv8.0, pools=1 avoids NULL worker pool crashes on lookahead flush at EOF, and single frame-thread caps memory.
+    // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no worker thread pools, one frame thread,
+    // lookahead always larger than the B-frame count.
     final video = '-c:v libx265${isMp4Family ? ' -tag:v hvc1' : ''} -preset veryfast '
-        '-x265-params log-level=error:no-asm=1:pools=1:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
+        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
 
     final fastStart = isMp4Family ? '-movflags +faststart' : '';
     final hasAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
@@ -1371,7 +1380,7 @@ class ExportSuite {
     // RGB -> YUV with the SAME matrix that the file is tagged with (the old default was BT.601 while the
     // tags said BT.709, which shifted colours in players).
     return '-y -f concat -safe 0 -i "$concatList" $audioIn'
-        '-vf "scale=iw:ih:flags=accurate_rnd:out_color_matrix=$matrix:out_range=tv,format=$pixFmt" '
+        '-vf "scale=out_color_matrix=$matrix:out_range=tv:flags=accurate_rnd,format=$pixFmt" '
         '$video $colorMetadata $audioOpts $fastStart "$outFile"';
   }
 
