@@ -52,4 +52,4 @@ flutter:
 
   assets:
     - assets/shaders/
-    - assets/music/
+    - assets/shaders/music/
