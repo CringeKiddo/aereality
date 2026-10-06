@@ -55,6 +55,9 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 //  * Text bevel: rounder 4-scale height, glow + metal follow the text's own colour, inner rim light, smoky halo
 //  * Linear tonemap mode now has a hue-preserving soft shoulder (identity below 0.92) instead of hard clipping
 // -----------------------------------------------------------------------------
+// v2.4 changes
+//  * NEW tonemappers (modes 3-6): Aurora Depth, Sakura Silk, Prism Blend, Obsidian Cel. Modes 0-2 untouched.
+// -----------------------------------------------------------------------------
 // =============================================================================
 
 // STORAGE BUFFERS
@@ -242,7 +245,7 @@ struct LayerData {
     float skinEdgeWidth;  // 173  skin edge bleed width
     float halationStrength;  // 174  halation strength
     float halationThreshold;  // 175  halation highlight threshold
-    float pad176;
+    float thinStreakEdgeMode;  // 176  0 = flares grow out of the highlight, 1 = flares enter from the frame edge
     float pad177;
     float pad178;
     float pad179;
@@ -260,10 +263,37 @@ struct LayerData {
     float pad191;
 };
 
+
+// =============================================================================
+// GRADIENT MAP (per layer, 48 floats, stored AFTER the 10 LayerData blocks: float index 1952 + l * 48)
+// Runs inside the layer loop, so the layer's blend mode / opacity apply to it, and it always happens before the LUT.
+// =============================================================================
+struct GMapData {
+    float enabled;      // 0
+    float type;         // 1  see gradientMapField()
+    float strength;     // 2  0..0.65 (hard capped in the shader)
+    float angle;        // 3  radians
+    float scale;        // 4
+    float centerX;      // 5
+    float centerY;      // 6
+    float invert;       // 7
+    float stopCount;    // 8  2..6
+    float bands;        // 9  posterize steps
+    float patternSize;  // 10 0..1 -> 4..64 px cells
+    float edgeWidth;    // 11 edge width / split softness
+    float lumaKeep;     // 12 0..1 keeps the original luminance (prevents flat / over-contrasty looks)
+    float curve;        // 13 exponent on t
+    float rangeLo;      // 14
+    float rangeHi;      // 15
+    float stopCol[6];   // 16..21 packed 0xRRGGBB (sRGB)
+    float stopPos[6];   // 22..27
+    float pad[20];      // 28..47
+};
+
 layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_time;                  // 0
     float u_layerCount;            // 1
-    float u_tonemapMode;           // 2: 0 Linear, 1 AgX, 2 Khronos Neutral+
+    float u_tonemapMode;           // 2: 0 Linear, 1 AgX, 2 Khronos Neutral+, 3 Aurora Depth, 4 Sakura Silk, 5 Prism Blend, 6 Obsidian Cel
     float u_imgWidth;              // 3
     float u_imgHeight;             // 4
     float u_hasLut;                // 5
@@ -286,6 +316,7 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_bitDepthMode;          // 28: 0 = 8-bit, 1 = 10-bit, 2 = 16-bit
     float u_g29; float u_g30; float u_g31;                // 29..31 (legacy, now per-layer)
     LayerData layers[10];          // 32 + l * 192
+    GMapData gmaps[10];            // 1952 + l * 48
 };
 
 // Per-dispatch globals
@@ -717,7 +748,178 @@ vec3 tonemapLinearSoft(vec3 c) {
     return clamp(mix(c, vec3(newPeak), g), 0.0, 1.0);
 }
 
+
+// =============================================================================
+// NEW ANIME TONEMAPPERS (modes 3..6)  - depth-preserving, hue-safe, skin-protected
+// -----------------------------------------------------------------------------
+// Shared design rules for all four:
+//   * Everything the SDR frame already contains below the knee is left alone (no flattening, no grey-out).
+//   * Compression only ever happens at the TOP (exponential shoulder, C1, asymptote 1.0, never a hard clip).
+//   * Depth comes from a perceptual (Oklab lightness) curve, and chroma FOLLOWS lightness, so colours get
+//     deeper instead of greyer / neon.
+//   * Skin hues (Oklab mask) get an earlier, softer shoulder and a weaker highlight lift -> faces never blow out.
+//   * Anything still > 1.0 is brought into gamut by moving toward its OWN luma (hue-preserving), never per-channel clip.
+// =============================================================================
+float tmMax3(vec3 c) { return max(c.r, max(c.g, c.b)); }
+
+// C1-continuous exponential shoulder: identity below k, slope 1 at k, asymptotically approaches 1.0.
+float tmShoulder(float x, float k) {
+    if (x <= k) return x;
+    float d = 1.0 - k;
+    return k + d * (1.0 - exp(-(x - k) / d));
+}
+
+// Pull a colour that exceeds 1.0 toward its own luma until the brightest channel fits (keeps hue).
+vec3 tmFitToGamut(vec3 c) {
+    c = max(c, vec3(0.0));
+    float pk = tmMax3(c);
+    if (pk <= 1.0) return c;
+    float l = min(luma(c), 0.9999);
+    float t = (1.0 - l) / max(pk - l, 1e-5);
+    return clamp(mix(vec3(l), c, t), 0.0, 1.0);
+}
+
+// Oklab skin mask (same hue / chroma / lightness window the anime skin smoother uses).
+float tmSkinMask(vec3 lab) {
+    float ch = length(lab.yz);
+    float h = atan(lab.z, lab.y);
+    return smoothstep(0.30, 0.55, h) * (1.0 - smoothstep(1.20, 1.50, h))
+         * smoothstep(0.015, 0.040, ch) * (1.0 - smoothstep(0.13, 0.19, ch))
+         * smoothstep(0.42, 0.62, lab.x);
+}
+
+// Perceptual depth curve on Oklab L (0 and 1 are fixed points, curve is smooth and monotone for amt <= ~0.5).
+// Below the pivot it deepens, above it adds separation. The highlight lift is reduced on skin.
+float tmDepthCurve(float L, float amt, float pivot, float skin) {
+    float x = clamp(L, 0.0, 1.0);
+    float p = x * (1.0 - x) * (x - pivot) * 2.4;
+    if (p > 0.0) p *= (1.0 - 0.85 * skin);
+    return L + amt * p;
+}
+
+// Rebuild a colour from Oklab with a new lightness. Chroma follows lightness (constant *saturation*, so darker
+// stays rich and lighter does not grey out); chromaMul adds or removes richness on top. Gamut-mapped by chroma reduction.
+vec3 tmRebuild(vec3 lab, float Lnew, float chromaMul) {
+    float r = clamp(Lnew / max(lab.x, 1e-4), 0.0, 1.25);
+    float cm = mix(1.0, r, 0.85) * chromaMul;
+    return oklabToLinearRgb(vec3(Lnew, lab.yz * cm));
+}
+
+// The lightness-curve modes cannot carry colour above white (L > 1 has no chroma), so once a pixel is over-driven
+// (glow cores, pushed exposure) they hand over smoothly to a hue-preserving shoulder + light desaturation. Over-driven
+// orange stays a hot orange-gold instead of snapping to flat white.
+vec3 tmHdrBlend(vec3 labPath, vec3 c) {
+    float pk = tmMax3(c);
+    float w = smoothstep(0.85, 1.25, pk);
+    if (w <= 0.0) return labPath;
+    float fp = tmShoulder(pk, 0.95);
+    vec3 H = c * (fp / max(pk, 1e-5));
+    float g = 1.0 - 1.0 / (0.35 * max(pk - fp, 0.0) + 1.0);
+    H = tmFitToGamut(mix(H, vec3(luma(H)), g));
+    return mix(labPath, H, w);
+}
+
+// ---- 3: AURORA DEPTH -------------------------------------------------------
+// Pure lightness tonemapper: the S-curve lives in Oklab L, colour direction is never touched, so nothing shifts
+// hue and nothing flattens. Deeper toe, midtone separation, smooth top shoulder, tiny richness lift in the mids.
+vec3 tonemapAuroraDepth(vec3 c) {
+    c = max(c, vec3(0.0));
+    vec3 lab = linearRgbToOklab(c);
+    float L = lab.x;
+    float skin = tmSkinMask(lab);
+
+    float Ld = tmDepthCurve(L, mix(0.20, 0.12, skin), 0.60, skin);
+    float Lo = tmShoulder(Ld, mix(0.985, 0.90, skin));
+
+    // richness only goes to colours that are not already vivid (no gamut-edge neon), never to skin
+    float midBand = smoothstep(0.08, 0.35, L) * (1.0 - smoothstep(0.55, 0.95, L));
+    float notVivid = 1.0 - smoothstep(0.10, 0.24, length(lab.yz));
+    float rich = 1.0 + 0.10 * midBand * notVivid * (1.0 - 0.70 * skin);
+
+    return tmHdrBlend(tmFitToGamut(tmRebuild(lab, Lo, rich)), c);
+}
+
+// ---- 4: SAKURA SILK --------------------------------------------------------
+// Skin-first, hue-preserving RGB tonemapper. Scales the whole RGB triplet by the shoulder ratio (so hue and
+// saturation of the frame are untouched), starts the shoulder much earlier on skin so faces roll off softly
+// instead of clipping to flat pink/white, keeps warmth in the roll-off, then adds a soft depth curve.
+vec3 tonemapSakuraSilk(vec3 c) {
+    c = max(c, vec3(0.0));
+    vec3 lab = linearRgbToOklab(c);
+    float skin = tmSkinMask(lab);
+
+    float n = mix(tmMax3(c), luma(c), 0.30);        // vivid colours are not over-compressed (no dulling)
+    float k = mix(0.95, 0.76, skin);
+    float fn = tmShoulder(n, k);
+    vec3 o = c * (fn / max(n, 1e-5));
+
+    // desaturate only the genuinely over-driven part, and much less on skin (skin must not go chalky)
+    float over = max(n - fn, 0.0);
+    float g = (1.0 - 1.0 / (0.35 * over + 1.0)) * (1.0 - 0.60 * skin);
+    o = mix(o, vec3(luma(o)), g);
+    o = tmFitToGamut(o);
+
+    vec3 lab2 = linearRgbToOklab(o);
+    float Ld = tmDepthCurve(lab2.x, mix(0.16, 0.08, skin), 0.62, skin);
+    return tmFitToGamut(tmRebuild(lab2, Ld, 1.0 + 0.05 * skin));
+}
+
+// ---- 5: PRISM BLEND --------------------------------------------------------
+// Colour-blending tonemapper. Two roll-offs are mixed: a hue-preserving one and a per-channel "dye" one.
+// In the highlights the per-channel path lets saturated colours drift toward lighter tints of themselves
+// (orange -> warm gold -> cream, cyan -> ice, magenta -> pearl) instead of clipping, which is what makes
+// glows and light edges blend beautifully. An Oklab chroma-recovery stage then gives back any colour that the
+// blend took away in the shadows/mids, so the picture neither under- nor over-saturates.
+vec3 tonemapPrismBlend(vec3 c) {
+    c = max(c, vec3(0.0));
+    vec3 labIn = linearRgbToOklab(c);
+    float skin = tmSkinMask(labIn);
+    float pk = tmMax3(c);
+
+    float fA = tmShoulder(pk, 0.93);
+    vec3 A = c * (fA / max(pk, 1e-5));                                    // hue-preserving path
+    vec3 B = vec3(tmShoulder(c.r, 0.90), tmShoulder(c.g, 0.90), tmShoulder(c.b, 0.90));   // dye path
+    float w = 0.55 * smoothstep(0.55, 1.10, pk) * (1.0 - 0.50 * skin);
+    vec3 o = mix(A, B, w);
+
+    vec3 labO = linearRgbToOklab(o);
+    float Cin = length(labIn.yz);
+    float Co = length(labO.yz);
+    float lr = clamp(labO.x / max(labIn.x, 1e-4), 0.0, 1.20);
+    float target = Cin * lr;                                              // same saturation at the new lightness
+    float keep = 0.70 * (1.0 - smoothstep(0.80, 1.30, pk));               // fades out in the highlights so they can blend
+    float Cn = mix(Co, max(Co, target), keep);
+    labO.yz *= Cn / max(Co, 1e-5);
+
+    float Ld = tmDepthCurve(labO.x, 0.14, 0.60, skin);
+    return tmFitToGamut(tmRebuild(labO, Ld, 1.0));
+}
+
+// ---- 6: OBSIDIAN CEL -------------------------------------------------------
+// Cel-shaded depth: pushes the shadows deeper and richer (jewel-toned, never grey or crushed flat), leaves the
+// midtones and highlights where the artist put them, and rolls off only at the very top.
+vec3 tonemapObsidianCel(vec3 c) {
+    c = max(c, vec3(0.0));
+    vec3 lab = linearRgbToOklab(c);
+    float L = lab.x;
+    float skin = tmSkinMask(lab);
+
+    float toe = 1.0 - smoothstep(0.0, 0.62, L);
+    float Ld = L - mix(0.22, 0.10, skin) * toe * min(L, 1.0);
+    float Lo = tmShoulder(Ld, mix(0.985, 0.90, skin));
+
+    float shadowBand = smoothstep(0.02, 0.14, L) * (1.0 - smoothstep(0.15, 0.60, L));
+    float notVivid = 1.0 - smoothstep(0.10, 0.24, length(lab.yz));
+    float rich = 1.0 + 0.18 * shadowBand * (0.4 + 0.6 * notVivid) * (1.0 - 0.50 * skin);
+
+    return tmHdrBlend(tmFitToGamut(tmRebuild(lab, Lo, rich)), c);
+}
+
 vec3 applyToneMapping(vec3 linearCol, float mode) {
+    if (mode > 5.5) return tonemapObsidianCel(linearCol);
+    if (mode > 4.5) return tonemapPrismBlend(linearCol);
+    if (mode > 3.5) return tonemapSakuraSilk(linearCol);
+    if (mode > 2.5) return tonemapAuroraDepth(linearCol);
     if (mode > 1.5) return tonemapNeutralPlus(linearCol);
     if (mode > 0.5) return tonemapAgx(linearCol);
     return tonemapLinearSoft(linearCol);
@@ -805,7 +1007,7 @@ float glowExtractThreshold() {
         if (L.diffuseSpGlowIntensity > 0.01) { t = min(t, L.diffuseSpGlowThreshold); any_ = true; }
         if (L.shaderlyGlowIntensity > 0.01)  { t = min(t, L.shaderlyGlowThreshold);  any_ = true; }
         if (L.lightWrapIntensity > 0.01 && L.lightWrapWidth > 0.01) { t = min(t, L.lightWrapThreshold); any_ = true; }
-        if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.32); any_ = true; }
+        if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.20); any_ = true; }
         if (L.halationRadius > 0.01 && L.halationStrength > 0.01) { t = min(t, clamp(L.halationThreshold, 0.25, 0.95)); any_ = true; }
         if (L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
     }
@@ -957,6 +1159,12 @@ vec3 colorizeGlow(vec3 g, vec3 ambient, float amount) {
     hue = saturateColor(hue, 1.5);
     hue /= max(luma(hue), 1e-4);
     return mix(g, hue * lg, clamp(whiteness * amount, 0.0, 1.0));
+}
+
+// Flare beam profile along the streak. at = 0 at the source, 1 at the end of the reach.
+// pw/pk come from the softness slider: low = peaked spike, high = flat plateau with a soft shoulder.
+float flareProfile(float at, float pk, float pw) {
+    return exp(-pk * pow(clamp(at, 0.0, 1.0), pw)) * (1.0 - smoothstep(0.80, 1.0, at));
 }
 
 float gaussBand(float x, float w) {
@@ -1319,66 +1527,80 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             linearBase += haloCol * eH * sideGate * L.edgeHaloRadius * 0.60 * (1.0 - lineEdge * 0.30) * op;
         }
 
-        // ---- 5. Anamorphic streak (flare): continuous, energy-preserving, scene-coloured ----
-        // v2.3: the old kernel AVERAGED a thin line (a small highlight became a few % of its own value)
-        // and then gated it again, so flares were nearly invisible. Now the line SUMS the highlight with a
-        // peak-normalised kernel (core keeps the highlight's brightness), and the pyramid level follows
-        // the tap spacing: texel size >= spacing, so even a stretched / very long flare is a bilinear read
-        // of a genuinely blurred image = one smooth smear, never repeated copies.
-        // ---- 5. Anamorphic streak (flare): AE-style separated beams with soft body ----
+        // ---- 5. Anamorphic streak (flare) v3: separated beams, relative highlight detection ----
+        // * Sources are LOCAL PEAKS (highlight minus its wider surroundings), not "everything above 0.55":
+        //   small sources flare in dark scenes, and broad bright areas no longer flood the frame or merge beams.
+        // * Pyramid level follows the tap spacing and a resolution-relative minimum thickness, so a stretched
+        //   flare is one smooth band (no dotted copies) and a short one is never razor thin.
+        // * Softness: 0 = peaked spike, 1 = flat plateau with a soft shoulder (and a plusher body).
+        // * Colour comes from the highlight itself, only whitish flares borrow a hint of the scene colour.
+        // * Length: slider max reaches a full frame width each way, taps are clipped to the visible frame.
+        // * Edge mode: the beam is anchored on the left / right frame edge on the highlight's row.
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            float halfLen = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.35; // horizontal reach
-            const int SN = 36;
+            const int NT = 73;
+            bool fromEdge = L.thinStreakEdgeMode > 0.5;
             float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
-            
-            // Softness slider controls horizontal decay: 0 = tight beam, 1 = creamy slow fade
-            float decay = mix(5.5, 1.8, soft);
-            float jit = hashInt12(coord * 3 + ivec2(17, 91)) - 0.5;
-            
-            int w0 = max(width / 2, 1);
-            int h0 = max(height / 2, 1);
-            int w1 = max(width / 4, 1);
-            int h1 = max(height / 4, 1);
-            
-            // AE-style highlight isolation: only true highlights generate flares (mids & darks excluded)
-            const float flareThreshold = 0.55;
-            
+            float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;      // frame widths per side
+            float pw = mix(1.0, 3.6, soft);
+            float pk = mix(5.0, 2.2, soft);
+
+            float sxA = fromEdge ? 0.0 : max(uv.x - reach, 0.0);
+            float sxB = fromEdge ? 1.0 : min(uv.x + reach, 1.0);
+            float spacingPx = max((sxB - sxA) * float(width) / float(NT), 1.0);
+
+            float lvlSp = clamp(log2(max(spacingPx, 2.0) / 2.0), 0.0, 3.2);
+            float bodyPx = max(float(height) * mix(0.0035, 0.010, soft), 2.0);
+            float lvlBody = clamp(log2(bodyPx / 2.0), 0.0, 3.0);
+            float lvl = max(lvlSp, lvlBody);
+            float texPx = 2.0 * exp2(lvl);
+            float normK = min(spacingPx / texPx, 1.0);
+            float boost = pow(texPx * 0.5, 0.75);               // blurred sources keep their punch
+            int bgLevel = (lvl > 2.4) ? 4 : 3;
+            int bgW = max(width >> (bgLevel + 1), 1);
+            int bgH = max(height >> (bgLevel + 1), 1);
+
             vec3 sSum = vec3(0.0);
-            for (int s = -SN; s <= SN; s++) {
-                float t = (float(s) + jit) / float(SN);
-                float at = abs(t);
-                float sx = uv.x + t * halfLen;
-                float inside = step(0.0, sx) * step(sx, 1.0);
-                float wgt = exp(-at * decay) * (1.0 - smoothstep(0.82, 1.0, at)) * inside;
-                
-                vec2 tapUv = vec2(clamp(sx, 0.0, 1.0), uv.y);
-                
-                // Blend Level 0 (crisp core) with Level 1 (soft vertical body ~20-30px):
-                // This gives the exact plush vertical thickness from your reference images
-                // without ballooning into the coarse full-screen levels.
-                vec3 sCore = sampleBloom(0, tapUv, w0, h0).rgb;
-                vec3 sBody = sampleBloom(1, tapUv, w1, h1).rgb;
-                vec3 sm = mix(sCore, sBody, 0.40 + 0.45 * soft);
-                
-                // Gate: only highlights above threshold emit streaks
+            vec3 sMax = vec3(0.0);
+            for (int k = 0; k < NT; k++) {
+                float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
+                float at = fromEdge ? 0.0 : abs(sx - uv.x) / reach;
+                float wgt = fromEdge ? 1.0 : flareProfile(at, pk, pw);
+                if (wgt < 0.003) continue;
+
+                vec2 tapUv = vec2(sx, uv.y);
+                vec3 sm = sampleBloomLevelF(lvl, tapUv, width, height);
                 float sl = luma(sm);
-                float gate = smoothstep(flareThreshold, flareThreshold + 0.18, sl);
-                sm *= gate;
-                
-                // Spectral dispersion (subtle chromatic split across the streak)
-                vec3 spectral = mix(vec3(0.75, 0.95, 1.30), vec3(1.30, 0.85, 0.50), at);
-                sSum += sm * wgt * mix(vec3(1.0), spectral, 0.32);
+                if (sl < 0.004) continue;
+
+                float bg = luma(sampleBloom(bgLevel, tapUv, bgW, bgH).rgb);
+                float peak = smoothstep(0.002, 0.03, sl - 0.92 * bg);   // local peak, not a broad bright area
+                vec3 c = sm * (peak * wgt);
+
+                vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
+                c *= mix(vec3(1.0), spectral, 0.20);
+                sSum += c;
+                sMax = max(sMax, c);
             }
-            
-            float tapPx = max(2.0 * halfLen * float(width) / float(2 * SN), 1.0);
-            float refPx = 0.028 * float(max(width, height));
-            vec3 streak = sSum * (tapPx / refPx) * 2.2;
-            
-            streak = colorizeGlow(streak, ambientCol, 0.75);
-            streak = saturateColor(streak, 1.25) * mix(vec3(1.0), glowTint, 0.65);
-            streak = vec3(1.0) - exp(-streak); // filmic shoulder
-            
-            linearBase += streak * L.thinStreakIntensity * 1.6 * L.thinStreakOpacity * op;
+
+            // Sum keeps energy, max keeps neighbouring beams from welding into one bar.
+            vec3 beam = mix(sSum * normK, sMax, fromEdge ? 0.70 : 0.40) * boost;
+            if (fromEdge) {
+                float dE = min(uv.x, 1.0 - uv.x) / reach;
+                beam *= flareProfile(dE, pk, pw);
+            }
+
+            vec3 st = colorizeGlow(beam, ambientCol, 0.50);
+            st = saturateColor(st, 1.15);
+            float lst = luma(st);
+            if (lst > 1e-6) {
+                vec3 ah = clamp(ambientNear / max(luma(ambientNear), 1e-4), vec3(0.35), vec3(3.0));
+                ah /= max(luma(ah), 1e-4);
+                st = mix(st, ah * lst, 0.14);                  // slight scene colour
+            }
+            st *= mix(vec3(1.0), glowTint, 0.65);
+            st = vec3(1.0) - exp(-st);                          // filmic shoulder
+
+            linearBase += st * L.thinStreakIntensity * 1.6 * L.thinStreakOpacity * op;
         }
 
         // ---- 6a. Pro-Mist: soft diffusion veil. Colour of the scene is kept (no tint), highlights bleed softly into
@@ -1506,6 +1728,111 @@ float skinMaskOf(vec3 lin) {
 // =============================================================================
 // MAIN
 // =============================================================================
+
+// =============================================================================
+// GRADIENT MAP FUNCTIONS
+// =============================================================================
+vec3 gmapUnpack(float f) {
+    uint v = uint(f + 0.5);
+    return vec3(float((v >> 16u) & 255u), float((v >> 8u) & 255u), float(v & 255u)) / 255.0;
+}
+
+vec3 gmapRamp(GMapData G, float t) {
+    int n = int(clamp(G.stopCount + 0.5, 2.0, 6.0));
+    t = clamp(t, 0.0, 1.0);
+    vec3 c = gmapUnpack(G.stopCol[0]);
+    if (t <= G.stopPos[0]) return c;
+    for (int k = 1; k < 6; k++) {
+        if (k >= n) break;
+        float p0 = G.stopPos[k - 1];
+        float p1 = G.stopPos[k];
+        vec3 c1 = gmapUnpack(G.stopCol[k]);
+        if (t <= p1) {
+            vec3 c0 = gmapUnpack(G.stopCol[k - 1]);
+            return mix(c0, c1, clamp((t - p0) / max(p1 - p0, 1e-4), 0.0, 1.0));
+        }
+        c = c1;
+    }
+    return c;
+}
+
+float gmapLumaAt(ivec2 c) {
+    return linearToSrgb(luma(srcLin(c)));
+}
+
+// Types: 0 Luma, 1 Linear, 2 Corner (top-right -> bottom-left), 3 Radial, 4 Angular, 5 Edge, 6 Split Tone,
+//        7 Posterized, 8 Checker, 9 Stripes, 10 Halftone, 11 Noise, 12 Luma + Linear
+float gradientMapField(GMapData G, ivec2 coord, vec2 uvN, int width, int height, float lumaG) {
+    int type = int(G.type + 0.5);
+    float aspect = float(width) / float(max(height, 1));
+    vec2 p = uvN - 0.5;
+    float cellPx = max(2.0, mix(4.0, 64.0, clamp(G.patternSize, 0.0, 1.0)) * max(gRes, 1.0));
+    float t = lumaG;
+
+    if (type == 1 || type == 2 || type == 12) {
+        float a = (type == 2) ? 2.3561945 : G.angle;
+        vec2 dir = vec2(cos(a), sin(a));
+        float lin = dot(p, dir) / max(abs(dir.x) + abs(dir.y), 1e-4) * G.scale + 0.5;
+        t = (type == 12) ? (lumaG * 0.5 + clamp(lin, 0.0, 1.0) * 0.5) : lin;
+    } else if (type == 3) {
+        vec2 dd = uvN - vec2(G.centerX, G.centerY);
+        dd.x *= aspect;
+        t = length(dd) * G.scale * 1.4;
+    } else if (type == 4) {
+        vec2 dd = uvN - vec2(G.centerX, G.centerY);
+        dd.x *= aspect;
+        t = fract(atan(dd.y, dd.x) / 6.2831853 + 0.5 + G.angle / 6.2831853);
+    } else if (type == 5) {
+        int st = max(1, int(round(mix(1.0, 4.0, clamp(G.edgeWidth, 0.0, 1.0)) * gRes)));
+        float gx = gmapLumaAt(coord + ivec2(st, 0)) - gmapLumaAt(coord - ivec2(st, 0));
+        float gy = gmapLumaAt(coord + ivec2(0, st)) - gmapLumaAt(coord - ivec2(0, st));
+        t = clamp(length(vec2(gx, gy)) * 3.0 * G.scale, 0.0, 1.0);
+    } else if (type == 6) {
+        float soft = mix(0.03, 0.5, clamp(G.edgeWidth, 0.0, 1.0));
+        t = smoothstep(0.5 - soft, 0.5 + soft, lumaG);
+    } else if (type == 7) {
+        float nb = max(G.bands, 2.0);
+        t = floor(clamp(lumaG, 0.0, 0.999) * nb) / (nb - 1.0);
+    } else if (type == 8) {
+        vec2 cell = floor(vec2(coord) / cellPx);
+        float chk = mod(cell.x + cell.y, 2.0);
+        t = clamp(lumaG * 0.7 + chk * 0.3, 0.0, 1.0);
+    } else if (type == 9) {
+        vec2 dir = vec2(cos(G.angle), sin(G.angle));
+        float proj = dot(vec2(coord), dir) / cellPx;
+        float tri = abs(fract(proj) * 2.0 - 1.0);
+        t = clamp(lumaG * 0.7 + tri * 0.3, 0.0, 1.0);
+    } else if (type == 10) {
+        vec2 f = fract(vec2(coord) / cellPx) - 0.5;
+        float d = length(f) * 2.0;
+        float dotv = smoothstep(0.12, -0.12, d - sqrt(clamp(lumaG, 0.0, 1.0)) * 1.15);
+        t = mix(lumaG, dotv, 0.6);
+    } else if (type == 11) {
+        vec2 q = vec2(coord) / cellPx;
+        vec2 i = floor(q);
+        vec2 f = fract(q);
+        f = f * f * (3.0 - 2.0 * f);
+        float n = mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), f.x),
+                      mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), f.x), f.y);
+        t = clamp(lumaG * 0.6 + n * 0.4, 0.0, 1.0);
+    }
+
+    if (G.invert > 0.5) t = 1.0 - t;
+    t = pow(clamp(t, 0.0, 1.0), max(G.curve, 0.05));
+    t = clamp((t - G.rangeLo) / max(G.rangeHi - G.rangeLo, 1e-3), 0.0, 1.0);
+    return t;
+}
+
+vec3 gradientMapApply(vec3 col, GMapData G, ivec2 coord, vec2 uvN, int width, int height) {
+    float lumaG = linearToSrgb(luma(col));
+    float t = gradientMapField(G, coord, uvN, width, height, lumaG);
+    vec3 mapped = srgbToLinear(gmapRamp(G, t));
+    float lm = max(luma(mapped), 1e-4);
+    vec3 keep = mapped * clamp(luma(col) / lm, 0.0, 4.0);
+    mapped = mix(mapped, keep, clamp(G.lumaKeep, 0.0, 1.0));
+    return mix(col, mapped, clamp(G.strength, 0.0, 0.65));
+}
+
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_bandY);
     int width = u_passWidth;
@@ -2293,6 +2620,11 @@ void main() {
         }
         if (L.horizontalRamp > 0.01) {
             layerColor *= (1.0 + smoothstep(0.35, 0.65, uvN.y) * L.horizontalRamp * 0.30);
+        }
+
+        // 27. Gradient Map (before the blend, so the layer's blend mode shapes it; always upstream of the LUT)
+        if (gmaps[i].enabled > 0.5) {
+            layerColor = gradientMapApply(layerColor, gmaps[i], coord, uvN, width, height);
         }
 
         // Composite this layer (gamma-space blending by default = AE)
