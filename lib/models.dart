@@ -6,9 +6,164 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'gradient_map.dart';
+
+// =============================================================================
+// MUSIC ONLY (sound effects were removed). Plays shuffled tracks from assets/music/
+// while the timeline is paused. Never touches the export pipeline.
+// =============================================================================
+class _MusicLifecycle with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    Music._background = state != AppLifecycleState.resumed;
+    Music._sync();
+  }
+}
+
+class Music {
+  Music._();
+
+  static bool enabled = true;
+  static double volume = 0.6;
+  static int trackCount = 0;
+
+  static final List<String> _tracks = [];
+  static AudioPlayer? _player;
+  static int _idx = 0;
+  static bool _videoPlaying = false;
+  static bool _exporting = false;
+  static bool _background = false;
+  static bool _holdOff = false;
+  static bool _started = false;
+  static double _fade = 0.0;
+  static Timer? _holdTimer;
+  static Timer? _fadeTimer;
+
+  static bool get _want => enabled && _tracks.isNotEmpty && !_videoPlaying && !_exporting && !_background && !_holdOff;
+
+  static Future<void> init() async {
+    try {
+      await _loadSettings();
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final re = RegExp(r'\.(mp3|ogg|m4a|aac|wav|flac)$', caseSensitive: false);
+      _tracks
+        ..clear()
+        ..addAll(manifest.listAssets().where((a) => a.startsWith('assets/music/') && re.hasMatch(a)));
+      _tracks.shuffle();
+      trackCount = _tracks.length;
+      if (_tracks.isEmpty) return;
+      final p = AudioPlayer();
+      await p.setReleaseMode(ReleaseMode.stop);
+      p.onPlayerComplete.listen((_) => _next());
+      _player = p;
+      WidgetsBinding.instance.addObserver(_MusicLifecycle());
+      _sync();
+    } catch (e) {
+      debugPrint('Music init error: $e');
+    }
+  }
+
+  static void onVideoPlay() {
+    _holdTimer?.cancel();
+    _holdOff = false;
+    _videoPlaying = true;
+    _sync();
+  }
+
+  /// Music fades back in ~7 s after the video pauses.
+  static void onVideoPause() {
+    final was = _videoPlaying;
+    _videoPlaying = false;
+    if (!was) return;
+    _holdOff = true;
+    _holdTimer?.cancel();
+    _holdTimer = Timer(const Duration(seconds: 7), () {
+      _holdOff = false;
+      _sync();
+    });
+  }
+
+  static void setExporting(bool v) {
+    _exporting = v;
+    _sync();
+  }
+
+  /// Call after changing [enabled] / [volume].
+  static void apply() => _sync();
+
+  static Future<void> _next() async {
+    if (_tracks.isEmpty) return;
+    _idx = (_idx + 1) % _tracks.length;
+    _started = false;
+    if (_want) await _begin();
+  }
+
+  static Future<void> _begin() async {
+    final p = _player;
+    if (p == null) return;
+    try {
+      await p.setVolume(0);
+      await p.play(AssetSource(_tracks[_idx].replaceFirst('assets/', '')));
+      _started = true;
+    } catch (e) {
+      debugPrint('Music play error: $e');
+    }
+  }
+
+  static void _sync() {
+    final p = _player;
+    if (p == null) return;
+    final target = _want ? 1.0 : 0.0;
+    _fadeTimer?.cancel();
+    if (target > 0 && !_started) {
+      _begin();
+    } else if (target > 0) {
+      p.resume();
+    }
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 50), (t) async {
+      final step = target > _fade ? 0.04 : 0.06;
+      if ((target - _fade).abs() <= step) {
+        _fade = target;
+        t.cancel();
+        if (target == 0.0) {
+          try { await p.pause(); } catch (_) {}
+        }
+      } else {
+        _fade += target > _fade ? step : -step;
+      }
+      try { await p.setVolume((_fade * volume).clamp(0.0, 1.0)); } catch (_) {}
+    });
+  }
+
+  static Future<File> _settingsFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/music_settings.json');
+  }
+
+  static Future<void> _loadSettings() async {
+    try {
+      final f = await _settingsFile();
+      if (await f.exists()) {
+        final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+        enabled = j['on'] as bool? ?? true;
+        volume = ((j['vol'] as num?) ?? 0.6).toDouble().clamp(0.0, 1.0);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> save() async {
+    try {
+      final f = await _settingsFile();
+      await f.writeAsString(jsonEncode({'on': enabled, 'vol': volume}));
+    } catch (_) {}
+  }
+}
 
 enum LayerBlendMode {
   normal,
@@ -95,6 +250,7 @@ class AdjustmentLayer {
   double opacity;
   LayerBlendMode blendMode;
   bool blendLinear; // false = AE Gamma space, true = Physical Linear
+  GradientMapSettings gradientMap; // per-layer gradient map (runs before the LUT)
 
   // Basic Grading
   double brightness;
@@ -190,6 +346,7 @@ class AdjustmentLayer {
   double thinStreakWidth;
   double thinStreakOpacity;
   double thinStreakSoftness;
+  bool thinStreakFromEdge; // false = streak starts at the highlight, true = starts at the frame edge
   double lineArtStrength;
   double lineArtWidth;
   double lineArtPlacement;
@@ -354,6 +511,7 @@ class AdjustmentLayer {
     this.thinStreakWidth = 0.50,
     this.thinStreakOpacity = 0.80,
     this.thinStreakSoftness = 0.50,
+    this.thinStreakFromEdge = false,
     this.lineArtStrength = 0.0,
     this.lineArtWidth = 0.50,
     this.lineArtPlacement = 0.0,
@@ -365,6 +523,7 @@ class AdjustmentLayer {
     this.skinEdgeWidth = 0.50,
     this.halationStrength = 1.0,
     this.halationThreshold = 0.60,
+    GradientMapSettings? gradientMap,
     this.lineChromaStrength = 0.0,
     this.centerAura = 0.0,
     this.horizontalRamp = 0.0,
@@ -435,7 +594,8 @@ class AdjustmentLayer {
     this.coloristaHighlightRange = 0.6,
     this.coloristaMix = 1.0,
     this.coloristaPreserveLuma = 0.0,
-  })  : curveMaster = sanitizeCurve(curveMaster),
+  })  : gradientMap = gradientMap ?? GradientMapSettings(),
+        curveMaster = sanitizeCurve(curveMaster),
         curveRed = sanitizeCurve(curveRed),
         curveGreen = sanitizeCurve(curveGreen),
         curveBlue = sanitizeCurve(curveBlue),
@@ -590,6 +750,7 @@ class AdjustmentLayer {
       thinStreakWidth: thinStreakWidth,
       thinStreakOpacity: thinStreakOpacity,
       thinStreakSoftness: thinStreakSoftness,
+      thinStreakFromEdge: thinStreakFromEdge,
       lineArtStrength: lineArtStrength,
       lineArtWidth: lineArtWidth,
       lineArtPlacement: lineArtPlacement,
@@ -601,6 +762,7 @@ class AdjustmentLayer {
       skinEdgeWidth: skinEdgeWidth,
       halationStrength: halationStrength,
       halationThreshold: halationThreshold,
+      gradientMap: gradientMap.clone(),
       lineChromaStrength: lineChromaStrength,
       centerAura: centerAura,
       horizontalRamp: horizontalRamp,
@@ -739,6 +901,7 @@ class AdjustmentLayer {
       'thinStreakWidth': thinStreakWidth,
       'thinStreakOpacity': thinStreakOpacity,
       'thinStreakSoftness': thinStreakSoftness,
+      'thinStreakFromEdge': thinStreakFromEdge,
       'lineArtStrength': lineArtStrength,
       'lineArtWidth': lineArtWidth,
       'lineArtPlacement': lineArtPlacement,
@@ -750,6 +913,7 @@ class AdjustmentLayer {
       'skinEdgeWidth': skinEdgeWidth,
       'halationStrength': halationStrength,
       'halationThreshold': halationThreshold,
+      'gradientMap': gradientMap.toJson(),
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
       'horizontalRamp': horizontalRamp,
@@ -893,6 +1057,7 @@ class AdjustmentLayer {
       thinStreakWidth: (json['thinStreakWidth'] as num?)?.toDouble() ?? 0.50,
       thinStreakOpacity: (json['thinStreakOpacity'] as num?)?.toDouble() ?? 0.80,
       thinStreakSoftness: (json['thinStreakSoftness'] as num?)?.toDouble() ?? 0.50,
+      thinStreakFromEdge: json['thinStreakFromEdge'] == true,
       lineArtStrength: (json['lineArtStrength'] as num?)?.toDouble() ?? 0.0,
       lineArtWidth: (json['lineArtWidth'] as num?)?.toDouble() ?? 0.50,
       lineArtPlacement: (json['lineArtPlacement'] as num?)?.toDouble() ?? 0.0,
@@ -904,6 +1069,7 @@ class AdjustmentLayer {
       skinEdgeWidth: (json['skinEdgeWidth'] as num?)?.toDouble() ?? 0.50,
       halationStrength: (json['halationStrength'] as num?)?.toDouble() ?? 1.0,
       halationThreshold: (json['halationThreshold'] as num?)?.toDouble() ?? 0.60,
+      gradientMap: GradientMapSettings.fromJson(json['gradientMap'] is Map ? Map<String, dynamic>.from(json['gradientMap'] as Map) : null),
       lineChromaStrength: (json['lineChromaStrength'] as num?)?.toDouble() ?? 0.0,
       centerAura: (json['centerAura'] as num?)?.toDouble() ?? 0.0,
       horizontalRamp: (json['horizontalRamp'] as num?)?.toDouble() ?? 0.0,
