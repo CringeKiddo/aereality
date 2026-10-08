@@ -542,6 +542,7 @@ class EditorViews {
           child: Text('CEL SHADING & VIGNETTES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Edge Darken', val: cur.edgeDarken, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarken = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Edge Darken Inner Blur (Spread)', val: cur.edgeDarkenBlur, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarkenBlur = v; onChanged(); }, onEnded: onEnded),
         // Tuned to 0.70 max so it doesn't aggressively black out borders
         buildSliderRow(context: context, title: 'Radial Vignette', val: cur.vignette, min: 0.0, max: 0.70, onChanged: (v) { cur.vignette = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Boxed Vignette', val: cur.vignetteBoxed, min: 0.0, max: 0.70, onChanged: (v) { cur.vignetteBoxed = v; onChanged(); }, onEnded: onEnded),
@@ -989,15 +990,14 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Width / Length', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Flare Softness (Tight Core to Long Fade)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
-        SwitchListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-          title: const Text('Flare Starts From Frame Edge', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-          subtitle: Text(cur.thinStreakFromEdge ? 'Beams enter from the side edge of the frame' : 'Beams start at each highlight', style: const TextStyle(color: Colors.white38, fontSize: 10)),
-          value: cur.thinStreakFromEdge,
-          onChanged: (val) { cur.thinStreakFromEdge = val; onChanged(); onEnded(); },
-        ),
+        buildSliderRow(context: context, title: 'Flare Softness (Hard Flat Edge to Soft Blurred Edge)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Origin (0 Highlight / 1 Frame Edges Inward)', val: cur.flareOrigin, min: 0.0, max: 1.0, onChanged: (v) { cur.flareOrigin = v; cur.thinStreakFromEdge = false; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Source Threshold (Higher = Fewer Flares)', val: cur.flareThreshold, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThreshold = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Spacing (Min Distance Between Flares)', val: cur.flareSpacing, min: 0.0, max: 0.5, onChanged: (v) { cur.flareSpacing = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Thickness', val: cur.flareThickness, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThickness = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Falloff (Long Fade to Short)', val: cur.flareFalloff, min: 0.0, max: 1.0, onChanged: (v) { cur.flareFalloff = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Scene Colour (0 Source / 1 Scene)', val: cur.flareSceneTint, min: 0.0, max: 1.0, onChanged: (v) { cur.flareSceneTint = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare White Core', val: cur.flareCoreWhite, min: 0.0, max: 1.0, onChanged: (v) { cur.flareCoreWhite = v; onChanged(); }, onEnded: onEnded),
       ],
     );
   }
@@ -1237,6 +1237,7 @@ class EditorViews {
           darkOutlines: 0.35,
           sLiningOpacity: 0.15,
           edgeDarken: 0.1,
+          edgeDarkenBlur: 0.35,
         ));
         project.layers.add(AdjustmentLayer(
           id: 'layer_edge_halo',
@@ -1280,6 +1281,7 @@ class EditorViews {
           darkOutlines: 0.35,
           sLiningOpacity: 0.15,
           edgeDarken: 0.1,
+          edgeDarkenBlur: 0.35,
           skinEdgeBleed: 1.4746308096466199,
           skinEdgeWidth: 0.9901006228050921,
           deepTeal: 0.7460543102502194,
@@ -1810,7 +1812,7 @@ class EditorViews {
               spacing: 8,
               runSpacing: 8,
               children: [
-                {'id': 0.0, 'name': 'Platinum Steel'},
+                {'id': 0.0, 'name': 'Text Colour (Auto)'},
                 {'id': 1.0, 'name': 'Gold Ingot'},
                 {'id': 2.0, 'name': 'Cyan Steel'},
                 {'id': 3.0, 'name': 'Crimson Alloy'},
@@ -2069,15 +2071,15 @@ class EditorViews {
           if (decoded.containsKey('text_suite') && decoded['text_suite'] is Map<String, dynamic>) {
             final ts = decoded['text_suite'] as Map<String, dynamic>;
             project.textSuiteEnabled = ts['enabled'] == true;
-            project.textBoxX = (ts['box_x'] as num?)?.toDouble() ?? 0.15;
-            project.textBoxY = (ts['box_y'] as num?)?.toDouble() ?? 0.40;
-            project.textBoxW = (ts['box_w'] as num?)?.toDouble() ?? 0.70;
-            project.textBoxH = (ts['box_h'] as num?)?.toDouble() ?? 0.20;
+            project.textBoxX = (ts['box_x'] as num?)?.toDouble() ?? 0.07;
+            project.textBoxY = (ts['box_y'] as num?)?.toDouble() ?? 0.415;
+            project.textBoxW = (ts['box_w'] as num?)?.toDouble() ?? 0.88;
+            project.textBoxH = (ts['box_h'] as num?)?.toDouble() ?? 0.10;
             project.textBevelDepth = (ts['bevel_depth'] as num?)?.toDouble() ?? 1.0;
-            project.textChromeIntensity = (ts['chrome_intensity'] as num?)?.toDouble() ?? 1.2;
-            project.textSpecularGlint = (ts['specular_glint'] as num?)?.toDouble() ?? 1.0;
-            project.textContactShadow = (ts['contact_shadow'] as num?)?.toDouble() ?? 0.8;
-            project.textLumaThreshold = (ts['luma_threshold'] as num?)?.toDouble() ?? 0.65;
+            project.textChromeIntensity = (ts['chrome_intensity'] as num?)?.toDouble() ?? 1.8;
+            project.textSpecularGlint = (ts['specular_glint'] as num?)?.toDouble() ?? 1.2;
+            project.textContactShadow = (ts['contact_shadow'] as num?)?.toDouble() ?? 0.6;
+            project.textLumaThreshold = (ts['luma_threshold'] as num?)?.toDouble() ?? 0.40;
             project.textMetallicTint = (ts['metallic_tint'] as num?)?.toDouble() ?? 0.0;
           }
           project.activeLayerIndex = 0;
