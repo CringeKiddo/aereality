@@ -1649,7 +1649,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 173] = layer.skinEdgeWidth;
       uniforms[offset + 174] = layer.halationStrength;
       uniforms[offset + 175] = layer.halationThreshold;
-      uniforms[offset + 176] = layer.thinStreakFromEdge ? 1.0 : 0.0;
+      uniforms[offset + 176] = layer.thinStreakFromEdge ? 1.0 : layer.flareOrigin;
+      uniforms[offset + 177] = layer.edgeDarkenBlur;
+      uniforms[offset + 178] = layer.flareThreshold;
+      uniforms[offset + 179] = layer.flareSpacing;
+      uniforms[offset + 180] = layer.flareThickness;
+      uniforms[offset + 181] = layer.flareFalloff;
+      uniforms[offset + 182] = layer.flareSceneTint;
+      uniforms[offset + 183] = layer.flareCoreWhite;
     }
 
     return uniforms;
