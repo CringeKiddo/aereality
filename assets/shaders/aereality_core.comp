@@ -58,6 +58,23 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 // v2.4 changes
 //  * NEW tonemappers (modes 3-6): Aurora Depth, Sakura Silk, Prism Blend, Obsidian Cel. Modes 0-2 untouched.
 // -----------------------------------------------------------------------------
+// v2.5 changes
+//  * AgX: the old white-lift ended in a hard per-channel clip at input 1.0 (no roll-off for glows / pushed
+//    exposure, and skin drifted ~29 degrees toward yellow). It now lifts SDR white to 0.965, then rolls the peak
+//    off with a hue-preserving shoulder (4.0 -> 0.99, never a clip) and gamut-fits instead of clipping.
+//  * Khronos Neutral+: the shoulder had a slope kink at its start (slope 1.0 -> 1.13, i.e. it briefly EXPANDED
+//    just above the knee). It is now C1 (slope 1 at the knee, same exp shoulder), starts at 0.72 and maps SDR white
+//    to ~0.91 instead of ~0.88.
+//  * Anime skin smoothing (Bilateral): rebuilt. The old version shielded every colour step (cel-shadow edges)
+//    as if it were ink, and used a tiny kernel, so it smoothed nothing. Now: 40-tap skin-constrained bilateral
+//    (taps must be skin, ink never contributes), only real ink lines are protected (cel-shadow steps are smoothed), wider reach, and the
+//    intensity curve is front-loaded so low slider values are visible.
+//  * v2.6: Sapphire edge glow no longer lights the line art itself (glow now comes FROM the edges, never ON them);
+//    Skin Edge Bleed rebuilt (visible inward gradient); Anamorphic flares rebuilt (strict sources, spacing, thickness,
+//    hard/soft = edge profile only, true frame-edge entry, scene colour). New slots 178-183.
+//  * Edge Darken: rebuilt. Darkens the line art core slightly, plus an INNER soft spread on the fill beside every
+//    line (blur + gentle darkening that fades inward). New slider edgeDarkenBlur (slot 177) = strength AND reach.
+// -----------------------------------------------------------------------------
 // =============================================================================
 
 // STORAGE BUFFERS
@@ -245,14 +262,14 @@ struct LayerData {
     float skinEdgeWidth;  // 173  skin edge bleed width
     float halationStrength;  // 174  halation strength
     float halationThreshold;  // 175  halation highlight threshold
-    float thinStreakEdgeMode;  // 176  0 = flares grow out of the highlight, 1 = flares enter from the frame edge
-    float pad177;
-    float pad178;
-    float pad179;
-    float pad180;
-    float pad181;
-    float pad182;
-    float pad183;
+    float thinStreakEdgeMode;  // 176  Flare origin 0..1: 0 = flares grow out of the highlight, 1 = flares enter from the frame edges and run inward
+    float edgeDarkenBlur;  // 177  Edge Darken inner blur / spread (0..1)
+    float flareThreshold;   // 178  flare source threshold 0..1 (higher = only the brightest highlights flare)
+    float flareSpacing;     // 179  minimum vertical distance between flares (fraction of frame height, 0 = off)
+    float flareThickness;   // 180  band thickness 0..1
+    float flareFalloff;     // 181  how fast the flare fades along its length 0..1
+    float flareSceneTint;   // 182  0 = source colour, 1 = fully tinted by the scene colour
+    float flareCoreWhite;   // 183  hot white core in the brightest part of the band 0..1
     float pad184;
     float pad185;
     float pad186;
@@ -688,33 +705,21 @@ vec3 agxCore(vec3 c, float sat) {
     return max(c, vec3(0.0));
 }
 
-// AgX for display-referred video: neutral stays neutral, mids stay close to the source,
-// and SDR white is lifted back to 1.0 (raw AgX tops out at ~0.79 = the muddy grey look).
-vec3 tonemapAgx(vec3 c) {
-    const float AGX_SAT = 1.20;
-    vec3 raw = agxCore(c, AGX_SAT);
-    float whiteEnc = linearToSrgb(luma(agxCore(vec3(1.0), AGX_SAT)));
-    vec3 e = linearToSrgb(raw);
-    float ye = luma(e);
-    float lift = 1.0 + (1.0 / whiteEnc - 1.0) * smoothstep(0.42, whiteEnc, ye);
-    if (ye >= whiteEnc) lift = 1.0 / whiteEnc;
-    e = min(e * lift, vec3(1.0));
-    return srgbToLinear(e);
-}
-
 // Khronos PBR Neutral, retuned for video: no black-level subtraction (that was the "brightness
 // drop"), a real shoulder that maps SDR white back to ~white, hue-preserving peak compression,
 // highlight desaturation, and a very light display-space contrast curve.
 vec3 tonemapNeutralPlus(vec3 color) {
     color = max(color, vec3(0.0));
-    const float startCompression = 0.55;
+    const float startCompression = 0.72;
     const float desaturation = 0.25;
-    const float whitePoint = 1.35;
-    const float kShoulder = 1.6;
+    const float kShoulder = 2.0;
+    // Shoulder is C1: slope exactly 1.0 at the knee (no kink, no expansion above it). The input that reaches 1.0
+    // follows from the slope condition: whitePoint = start + d * k / (1 - exp(-k)).
+    float d = 1.0 - startCompression;
+    float whitePoint = startCompression + d * kShoulder / (1.0 - exp(-kShoulder));
 
     float peak = max(color.r, max(color.g, color.b));
     if (peak > startCompression) {
-        float d = 1.0 - startCompression;
         float t = (peak - startCompression) / (whitePoint - startCompression);
         float newPeak = startCompression + d * (1.0 - exp(-kShoulder * t)) / (1.0 - exp(-kShoulder));
         newPeak = min(newPeak, 1.0);
@@ -777,6 +782,26 @@ vec3 tmFitToGamut(vec3 c) {
     float l = min(luma(c), 0.9999);
     float t = (1.0 - l) / max(pk - l, 1e-5);
     return clamp(mix(vec3(l), c, t), 0.0, 1.0);
+}
+
+// ---- 1: AgX (display-referred) ---------------------------------------------
+// agxCore() is the real AgX transform (inset -> log2 -> 6th-order sigmoid -> outset). Raw AgX tops out near 0.59 for
+// SDR white, so the result is lifted so that input 1.0 lands at 0.965. Everything ABOVE white is then rolled off with
+// the same hue-preserving shoulder the other tonemappers use, and gamut-fitted - the old version clipped every channel
+// at 1.0, which flattened glows / pushed exposure and swung skin toward yellow.
+vec3 tonemapAgx(vec3 c) {
+    const float AGX_SAT = 1.20;
+    const float WHITE_OUT = 0.965;
+    vec3 raw = agxCore(c, AGX_SAT);
+    float whiteEnc = linearToSrgb(luma(agxCore(vec3(1.0), AGX_SAT)));
+    float gain = WHITE_OUT / whiteEnc;
+    vec3 e = linearToSrgb(raw);
+    float ye = luma(e);
+    float lift = (ye >= whiteEnc) ? gain : 1.0 + (gain - 1.0) * smoothstep(0.42, whiteEnc, ye);
+    e *= lift;
+    float pk = tmMax3(e);
+    if (pk > 0.93) e *= tmShoulder(pk, 0.93) / pk;
+    return srgbToLinear(tmFitToGamut(e));
 }
 
 // Oklab skin mask (same hue / chroma / lightness window the anime skin smoother uses).
@@ -1455,10 +1480,11 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             linearBase += g * (L.diffuseSpGlowIntensity * 1.5) * gain * receiveD * (1.0 - lineEdge * 0.25) * op;
         }
 
-        // ---- 4a. Sapphire edge glow: a crisp, bright CONTOUR that hugs the edges ----
-        // Full-res Sobel gives the contour itself; a tight blurred copy of the edge mask gives the short
-        // falloff next to it. Colour comes from the BRIGHT side of the edge, so it reads as the edge
-        // lighting up (Sapphire-style), not as a flat white line.
+        // ---- 4a. Sapphire edge glow: glow that comes FROM the detected edges ----
+        // v2.6: the old version lit the contour itself (= the line art turned into a bright line). Now the edge mask
+        // is blurred (tight -> mid -> wide with the width slider) and the line art itself is masked OUT, so the
+        // light spills from the edges into the surroundings while the drawn lines stay exactly as they were.
+        // Colour comes from the bright side of the edge.
         {
             float sapInt = 0.0;
             if (L.copiedEdgeRays > 0.01) sapInt = L.copiedEdgeRays;
@@ -1467,9 +1493,8 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
                 float widthN = clamp(L.sapphireGlowWidth * 0.5, 0.0, 1.0);          // 0..1 (slider is 0..2)
                 float sens = clamp(L.sapphireGlowThreshold, 0.1, 0.99);
                 float lo = sens * 0.30;
-                float crisp = smoothstep(lo, lo + 0.18, lineEdge);
-                // brightest neighbour across the edge = the lit side
-                int ss = max(2, edgeStep * 2);
+                float crisp = smoothstep(lo, lo + 0.18, lineEdge);                   // = the line art / contour itself
+                int ss = max(3, edgeStep * 3);
                 vec3 n0 = compAt(coord + ivec2( ss, 0), width, height);
                 vec3 n1 = compAt(coord + ivec2(-ss, 0), width, height);
                 vec3 n2 = compAt(coord + ivec2(0,  ss), width, height);
@@ -1484,9 +1509,11 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
                 float lvl = clamp(ll * 1.5 + 0.25, 0.30, 1.60);
                 vec3 edgeCol = hueL * lvl + ambientNear * 0.15;
                 edgeCol = mix(edgeCol, edgeCol * glowTint + glowTint * 0.10 * luma(edgeCol), step(0.5, L.edgeGlowTint) * 0.65);
-                // short falloff just outside the contour (tight -> mid with the width slider)
-                float eBlur = mix(tightS.a, midS.a, widthN) * (1.2 + widthN * 1.2);
-                float field = clamp(crisp * 1.00 + eBlur * (1.0 - crisp * 0.5) * 0.85, 0.0, 1.6);
+                // blurred edge mask: tight (slider low) -> mid -> wide (slider high)
+                float eBlur = mix(mix(tightS.a, midS.a, clamp(widthN * 2.0, 0.0, 1.0)), wideS.a, clamp(widthN * 2.0 - 1.0, 0.0, 1.0));
+                eBlur = smoothstep(0.02, 0.45, eBlur);
+                float offLine = 1.0 - crisp * 0.92;                                  // never brighten the line art itself
+                float field = eBlur * offLine * (1.15 + widthN * 0.9);
                 linearBase += edgeCol * field * sapInt * 0.85 * op;
             }
         }
@@ -1527,80 +1554,135 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             linearBase += haloCol * eH * sideGate * L.edgeHaloRadius * 0.60 * (1.0 - lineEdge * 0.30) * op;
         }
 
-        // ---- 5. Anamorphic streak (flare) v3: separated beams, relative highlight detection ----
-        // * Sources are LOCAL PEAKS (highlight minus its wider surroundings), not "everything above 0.55":
-        //   small sources flare in dark scenes, and broad bright areas no longer flood the frame or merge beams.
-        // * Pyramid level follows the tap spacing and a resolution-relative minimum thickness, so a stretched
-        //   flare is one smooth band (no dotted copies) and a short one is never razor thin.
-        // * Softness: 0 = peaked spike, 1 = flat plateau with a soft shoulder (and a plusher body).
-        // * Colour comes from the highlight itself, only whitish flares borrow a hint of the scene colour.
-        // * Length: slider max reaches a full frame width each way, taps are clipped to the visible frame.
-        // * Edge mode: the beam is anchored on the left / right frame edge on the highlight's row.
+        // ---- 5. Anamorphic flare v4 ----
+        // The old flare treated almost the whole image as a source (the shared bloom extraction threshold for flares is
+        // 0.20), so most rows lit up and the beams merged into full-width white bars, and "from edge" just multiplied
+        // that by a left/right fade. Now:
+        // * Sources are only strong LOCAL PEAKS above a Threshold slider.
+        // * Spacing: a source only flares if it is the strongest one within +-Spacing of its row (vertical non-maximum
+        //   suppression), so flares are separate bands, not a wall.
+        // * Thickness sets the band height. Softness ONLY changes the edge of the band: low = flat-topped with a crisp
+        //   edge, high = blurred and spread out.
+        // * Origin: 0 = beam grows out of each highlight, 1 = beam enters from the left / right frame edge on the
+        //   source's row and runs inward (Length = how far in). In-between mixes both.
+        // * Colour: source colour, blended toward the scene colour, with an optional hot white core.
         if (L.thinStreakIntensity > 0.01 && L.thinStreakOpacity > 0.01) {
-            const int NT = 73;
-            bool fromEdge = L.thinStreakEdgeMode > 0.5;
+            const int NT = 56;
+            float origin = clamp(L.thinStreakEdgeMode, 0.0, 1.0);
             float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
-            float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;      // frame widths per side
-            float pw = mix(1.0, 3.6, soft);
-            float pk = mix(5.0, 2.2, soft);
+            float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;         // frame widths per side / inward from the edge
+            float thrV = mix(0.01, 0.20, clamp(L.flareThreshold, 0.0, 1.0));
+            float spaceN = clamp(L.flareSpacing, 0.0, 0.5);
+            float thick = clamp(L.flareThickness, 0.0, 1.0);
+            float fall = clamp(L.flareFalloff, 0.0, 1.0);
+            float pk = mix(2.2, 6.5, fall);
+            const float pw = 1.25;
+            bool needEdge = origin > 0.02;
+            bool needLocal = origin < 0.98;
 
-            float sxA = fromEdge ? 0.0 : max(uv.x - reach, 0.0);
-            float sxB = fromEdge ? 1.0 : min(uv.x + reach, 1.0);
+            float sxA = needEdge ? 0.0 : max(uv.x - reach, 0.0);
+            float sxB = needEdge ? 1.0 : min(uv.x + reach, 1.0);
             float spacingPx = max((sxB - sxA) * float(width) / float(NT), 1.0);
-
-            float lvlSp = clamp(log2(max(spacingPx, 2.0) / 2.0), 0.0, 3.2);
-            float bodyPx = max(float(height) * mix(0.0035, 0.010, soft), 2.0);
-            float lvlBody = clamp(log2(bodyPx / 2.0), 0.0, 3.0);
+            float bodyPx = max(float(height) * mix(0.004, 0.032, thick), 2.0);
+            float lvlSp = clamp(log2(max(spacingPx, 2.0) / 2.0) + 0.6, 0.0, 4.0);   // blur >= 1.5x tap spacing: no beads
+            float lvlBody = clamp(log2(bodyPx / 2.0), 0.0, 4.0);
             float lvl = max(lvlSp, lvlBody);
             float texPx = 2.0 * exp2(lvl);
             float normK = min(spacingPx / texPx, 1.0);
-            float boost = pow(texPx * 0.5, 0.75);               // blurred sources keep their punch
-            int bgLevel = (lvl > 2.4) ? 4 : 3;
-            int bgW = max(width >> (bgLevel + 1), 1);
-            int bgH = max(height >> (bgLevel + 1), 1);
+            // Source strength is normalised for the blur level (a small bright point keeps the same strength at any
+            // thickness), thrV is the minimum strength a source needs to flare.
+            float boost = pow(texPx * 0.125, 1.85);
+            float bodyUv = bodyPx / float(height);
+            float edgeW = mix(0.04, 0.38, soft);                             // hard: crisp edge, soft: wide blurred edge
+            int l2W = max(width >> 3, 1);
+            int l2H = max(height >> 3, 1);
+            int l4W = max(width >> 5, 1);
+            int l4H = max(height >> 5, 1);
 
-            vec3 sSum = vec3(0.0);
-            vec3 sMax = vec3(0.0);
+            vec3 lSum = vec3(0.0);
+            vec3 lMax = vec3(0.0);
+            vec3 eSum = vec3(0.0);
+            vec3 eMax = vec3(0.0);
             for (int k = 0; k < NT; k++) {
                 float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
-                float at = fromEdge ? 0.0 : abs(sx - uv.x) / reach;
-                float wgt = fromEdge ? 1.0 : flareProfile(at, pk, pw);
-                if (wgt < 0.003) continue;
+                float at = abs(sx - uv.x) / reach;
+                float wLocal = needLocal ? flareProfile(at, pk, pw) : 0.0;
+                if (!needEdge && wLocal < 0.003) continue;
 
                 vec2 tapUv = vec2(sx, uv.y);
                 vec3 sm = sampleBloomLevelF(lvl, tapUv, width, height);
                 float sl = luma(sm);
-                if (sl < 0.004) continue;
+                float sN = sl * boost;
+                if (sN < thrV * 0.35) continue;
 
-                float bg = luma(sampleBloom(bgLevel, tapUv, bgW, bgH).rgb);
-                float peak = smoothstep(0.002, 0.03, sl - 0.92 * bg);   // local peak, not a broad bright area
-                vec3 c = sm * (peak * wgt);
+                // compact sources only: a big bright area (hair, sky, a lit wall) is NOT a flare source
+                float f2 = luma(sampleBloom(2, tapUv, l2W, l2H).rgb);
+                float f4 = luma(sampleBloom(4, tapUv, l4W, l4H).rgb);
+                float compact = smoothstep(0.45, 0.80, 1.0 - f4 / max(f2, 1e-5));
+                if (compact < 0.01) continue;
 
+                // local peak of this source's vertical profile -> band edge is placed relative to it
+                float pr = sN;
+                for (int j = 1; j <= 2; j++) {
+                    float o = bodyUv * 0.75 * float(j);
+                    pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
+                    pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
+                }
+                if (pr < thrV) continue;
+                float v = sN / pr;
+                float s = smoothstep(0.45 - edgeW, 0.45 + edgeW, v) * smoothstep(thrV, thrV * 1.8, pr) * compact;
+                if (s < 0.004) continue;
+
+                if (spaceN > 0.02) {
+                    // strongest source within +-Spacing of this row? (soft non-maximum suppression)
+                    float nb = 0.0;
+                    for (int j = 1; j <= 3; j++) {
+                        float o = spaceN * float(j) * 0.3333;
+                        nb = max(nb, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
+                        nb = max(nb, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
+                    }
+                    s *= smoothstep(0.55, 0.85, pr / max(pr, nb));
+                    if (s < 0.004) continue;
+                }
+
+                vec3 hueC = sm / max(sl, 1e-4);                                // colour direction of the source
+                float level = mix(1.0, clamp(pr / (thrV * 2.5), 0.6, 1.8), 0.25 + 0.5 * soft);
+                vec3 c = hueC * (level * s);
                 vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
-                c *= mix(vec3(1.0), spectral, 0.20);
-                sSum += c;
-                sMax = max(sMax, c);
+                if (needLocal) {
+                    vec3 cl = c * mix(vec3(1.0), spectral, 0.20) * wLocal;
+                    lSum += cl;
+                    lMax = max(lMax, cl);
+                }
+                if (needEdge) {
+                    eSum += c;
+                    eMax = max(eMax, c);
+                }
             }
 
-            // Sum keeps energy, max keeps neighbouring beams from welding into one bar.
-            vec3 beam = mix(sSum * normK, sMax, fromEdge ? 0.70 : 0.40) * boost;
-            if (fromEdge) {
-                float dE = min(uv.x, 1.0 - uv.x) / reach;
-                beam *= flareProfile(dE, pk, pw);
-            }
+            vec3 beamL = mix(lSum * normK, lMax, 0.50);
+            float dE = min(uv.x, 1.0 - uv.x) / reach;
+            vec3 beamE = mix(eSum * normK * 0.5, eMax, 0.75) * flareProfile(dE, pk, pw);
+            vec3 beam = beamL;
+            if (needEdge) beam = needLocal ? mix(beamL, beamE, origin) : beamE;
 
-            vec3 st = colorizeGlow(beam, ambientCol, 0.50);
-            st = saturateColor(st, 1.15);
+            vec3 st = beam;
             float lst = luma(st);
-            if (lst > 1e-6) {
-                vec3 ah = clamp(ambientNear / max(luma(ambientNear), 1e-4), vec3(0.35), vec3(3.0));
+            if (lst > 1e-5) {
+                float scn = clamp(L.flareSceneTint, 0.0, 1.0);
+                st = colorizeGlow(st, ambientCol, 0.35 + 0.65 * scn);
+                vec3 ah = clamp(ambientNear / max(luma(ambientNear), 1e-4), vec3(0.30), vec3(3.0));
+                ah = saturateColor(ah, 1.35);
                 ah /= max(luma(ah), 1e-4);
-                st = mix(st, ah * lst, 0.14);                  // slight scene colour
+                st = mix(st, ah * lst, scn * 0.45);
+                st = saturateColor(st, 1.10);
+                float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.50, 1.40, lst);
+                st = mix(st, vec3(lst), core * 0.75);
             }
             st *= mix(vec3(1.0), glowTint, 0.65);
-            st = vec3(1.0) - exp(-st);                          // filmic shoulder
+            st = vec3(1.0) - exp(-st);                                         // filmic shoulder
 
-            linearBase += st * L.thinStreakIntensity * 1.6 * L.thinStreakOpacity * op;
+            linearBase += st * L.thinStreakIntensity * 1.1 * L.thinStreakOpacity * op;
         }
 
         // ---- 6a. Pro-Mist: soft diffusion veil. Colour of the scene is kept (no tint), highlights bleed softly into
@@ -2049,45 +2131,52 @@ void main() {
         }
 
         // 5. Anime skin smoothing: Oklab skin-tone mask + ink-line shielding.
-        //    Only skin-toned areas are smoothed; ink lines never bleed into the skin.
+        //    v2.5: the old version protected every colour step (cel-shadow edges) as if it were ink and used a tiny
+        //    kernel, so on flat cel skin it changed nothing. Now: a 40-tap bilateral whose taps must THEMSELVES be skin
+        //    (hair / eyes / clothes / ink can never bleed in, so the reach can be much wider), only real ink lines
+        //    are shielded, and the slider curve is front-loaded so low values are visible.
         if (L.bilateralIntensity > 0.01) {
             vec3 lab0 = linearRgbToOklab(src0);
             float chroma0 = length(lab0.yz);
             float hue0 = atan(lab0.z, lab0.y);
             float skin = smoothstep(0.30, 0.55, hue0) * (1.0 - smoothstep(1.20, 1.50, hue0))
-                       * smoothstep(0.015, 0.040, chroma0) * (1.0 - smoothstep(0.13, 0.19, chroma0))
-                       * smoothstep(0.42, 0.62, lab0.x);
-            // ink shielding: own gradient + dark-line proximity (centre and 4 neighbours)
+                       * smoothstep(0.010, 0.035, chroma0) * (1.0 - smoothstep(0.13, 0.19, chroma0))
+                       * smoothstep(0.30, 0.50, lab0.x);
+            // ink shielding: dark-line proximity (centre and 4 neighbours) + only STRONG luminance edges
             float inkMax = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
             int inkR = max(2, edgeStep * 2);
             inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord + ivec2(inkR, 0)))));
             inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord - ivec2(inkR, 0)))));
             inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord + ivec2(0, inkR)))));
             inkMax = max(inkMax, 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord - ivec2(0, inkR)))));
-            float prot = (1.0 - smoothstep(0.08, 0.30, lineEdge)) * (1.0 - inkMax);
+            // Colour steps (cel-shadow edges) are exactly what this should soften, so only real ink protects.
+            float prot = 1.0 - inkMax;
             if (skin > 0.01 && prot > 0.01) {
-                float rad = clamp(L.bilateralRadius * resScale * 0.7, 1.0, 6.0);
-                int bRad = int(ceil(rad));
-                int stp = (bRad > 3) ? 2 : 1;
-                float sigS = max(1.0, rad * 0.65);
-                float sigR = max(L.bilateralRange, 0.03) * 0.6;
+                float rad = clamp((1.0 + L.bilateralRadius * 2.2) * resScale, 1.5, 14.0);
+                float sigS = max(1.0, rad * 0.55);
+                // Range: how big a tonal step still counts as "the same surface" (small = keep shading edges).
+                float sigR = 0.05 + clamp(L.bilateralRange, 0.0, 1.0) * 0.55;
                 vec3 pc = sqrt(src0);
                 vec3 acc = src0;
                 float wsum = 1.0;
-                for (int dy = -bRad; dy <= bRad; dy += stp) {
-                    for (int dx = -bRad; dx <= bRad; dx += stp) {
-                        if (dx == 0 && dy == 0) continue;
-                        vec3 s = srcLin(coord + ivec2(dx, dy));
-                        vec3 dc = pc - sqrt(s);
-                        float inkTap = smoothstep(0.012, 0.060, luma(s));   // near-black ink never contributes
-                        float w = exp(-float(dx * dx + dy * dy) / (2.0 * sigS * sigS)) * exp(-dot(dc, dc) / (2.0 * sigR * sigR)) * inkTap;
-                        acc += s * w;
-                        wsum += w;
-                    }
+                const int SK_TAPS = 40;
+                for (int k = 0; k < SK_TAPS; k++) {
+                    float fr = (float(k) + 0.5) / float(SK_TAPS);
+                    float rr = rad * sqrt(fr);                       // uniform disc density
+                    float ang = float(k) * 2.39996323;
+                    vec2 off = vec2(cos(ang), sin(ang)) * rr;
+                    vec3 s = srcLin(coord + ivec2(round(off)));
+                    vec3 dc = pc - sqrt(s);
+                    float inkTap = smoothstep(0.012, 0.060, luma(s));          // near-black ink never contributes
+                    float skinTap = smoothstep(0.25, 0.75, skinMaskOf(s));     // only skin blends into skin
+                    float w = exp(-(rr * rr) / (2.0 * sigS * sigS)) * exp(-dot(dc, dc) / (2.0 * sigR * sigR)) * inkTap * skinTap;
+                    acc += s * w;
+                    wsum += w;
                 }
                 vec3 smoothC = acc / wsum;
-                layerColor += (smoothC - src0) * clamp(L.bilateralIntensity, 0.0, 1.0) * skin * prot;
-                layerColor *= 1.0 + skin * prot * L.bilateralIntensity * 0.035;
+                float amt = 1.0 - pow(1.0 - clamp(L.bilateralIntensity, 0.0, 1.0), 2.2);   // 0.1 -> 0.21, 0.5 -> 0.78
+                layerColor += (smoothC - src0) * amt * skin * prot;
+                layerColor *= 1.0 + skin * prot * amt * 0.03;
             }
         }
 
@@ -2207,46 +2296,96 @@ void main() {
             }
         }
 
-        // 8c. SKIN EDGE BLEED: a thin band on the INSIDE of the skin edge picks up colour from both sides of the
-        //     edge (the neighbour outside + the deep skin tone inside), which gives the skin depth.
+        // 8c. SKIN EDGE BLEED (v2.6): the inner rim of the skin picks up depth. The old version only nudged the
+        //     saturation of a 16-tap neighbourhood at constant brightness, which on flat cel skin changed nothing.
+        //     Now rays look for the nearest non-skin pixel (ink, hair, clothes, background); inside that reach the skin
+        //     is pulled toward a deeper, warmer, slightly darker tone, mixed with the colour of whatever it borders,
+        //     fading smoothly inward. Depth = strength, Width = how far the rim reaches.
         if (L.skinEdgeBleed > 0.01) {
             float skinC = skinMaskOf(src0);
             float inkC = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
-            if (skinC > 0.05 && inkC < 0.6) {
-                float sbW = (1.5 + L.skinEdgeWidth * 5.5) * resScale;
+            if (skinC > 0.05 && inkC < 0.7) {
+                float reach = (3.0 + L.skinEdgeWidth * 18.0) * resScale;
                 vec3 outAcc = vec3(0.0);
                 float outW = 0.0;
-                vec3 inAcc = vec3(0.0);
-                float inW = 0.0;
-                float nonSkin = 0.0;
-                const int SB_TAPS = 16;
-                for (int k = 0; k < SB_TAPS; k++) {
-                    float fr = (float(k) + 0.5) / float(SB_TAPS);
-                    float rr = (0.30 + 0.70 * fr) * sbW;
-                    float ang = float(k) * 2.39996323;
-                    vec3 s = srcLin(coord + ivec2(round(vec2(cos(ang), sin(ang)) * rr)));
-                    float sk = skinMaskOf(s);
-                    float ink = 1.0 - smoothstep(0.006, 0.06, luma(s));
-                    float isOut = (1.0 - sk) * (1.0 - ink);
-                    outAcc += s * isOut;
-                    outW += isOut;
-                    inAcc += s * sk;
-                    inW += sk;
-                    nonSkin += 1.0 - sk;
+                vec3 inAcc = src0 * skinC;
+                float inW = skinC;
+                float prox = 0.0;
+                for (int rI = 0; rI < 6; rI++) {
+                    float ang = (float(rI) + 0.5) * 1.04719755;                 // 60 degree spacing
+                    vec2 dir = vec2(cos(ang), sin(ang));
+                    for (int sI = 1; sI <= 4; sI++) {
+                        float fr = float(sI) * 0.25;
+                        vec3 s = srcLin(coord + ivec2(round(dir * (reach * fr))));
+                        float sk = skinMaskOf(s);
+                        float notSkin = 1.0 - smoothstep(0.25, 0.75, sk);
+                        float wd = 1.0 - 0.85 * (fr - 0.25);                      // 1.0 near .. 0.36 far
+                        prox = max(prox, notSkin * wd);
+                        float ink = 1.0 - smoothstep(0.006, 0.06, luma(s));
+                        float isOut = notSkin * (1.0 - ink) * wd;
+                        outAcc += s * isOut;
+                        outW += isOut;
+                        inAcc += s * sk;
+                        inW += sk;
+                    }
                 }
-                float band = smoothstep(0.08, 0.50, nonSkin / float(SB_TAPS));
-                vec3 outsideCol = (outW > 0.25) ? outAcc / outW : src0;
-                vec3 insideCol = (inW > 0.25) ? inAcc / inW : src0;
-                vec3 deep = saturateColor(insideCol, 1.55) * 0.82;
-                vec3 bleed = mix(deep, outsideCol, 0.40);
-                bleed *= (0.90 * luma(layerColor)) / max(luma(bleed), 1e-4);   // colour change, not a brightness jump
-                layerColor = mix(layerColor, bleed, clamp(skinC * band * (1.0 - inkC) * L.skinEdgeBleed * 0.85, 0.0, 0.90));
+                float band = smoothstep(0.0, 0.85, prox);
+                vec3 insideCol = inAcc / max(inW, 1e-4);
+                vec3 outsideCol = (outW > 0.2) ? outAcc / outW : insideCol;
+                vec3 deep = saturateColor(insideCol, 1.80) * vec3(1.00, 0.80, 0.74) * 0.86;   // deeper, warmer, a little darker
+                vec3 bleed = mix(deep, outsideCol, 0.30);
+                bleed *= (0.90 * luma(layerColor)) / max(luma(bleed), 1e-4);
+                layerColor = mix(layerColor, bleed, clamp(skinC * band * (1.0 - inkC) * L.skinEdgeBleed * 0.90, 0.0, 0.95));
             }
         }
 
-        if (L.edgeDarken > 0.01) {
+        // 8d. EDGE DARKEN (v2.5)
+        //     (1) line art: the ink core and its anti-aliased edge get a slight darkening (edgeDarken).
+        //     (2) inner spread: the FILL beside every line gets a soft blur that reaches inward from the line
+        //         (edgeDarkenBlur = strength and reach). It is a blur of the source around the pixel, so the dark of the
+        //         line bleeds a little way into the fill and any shading detail next to the line is softened;
+        //         the line itself stays crisp, and a gentle extra darkening fades inward with the same reach.
+        //         Applied as a DELTA so earlier grades survive.
+        if (L.edgeDarken > 0.01 || L.edgeDarkenBlur > 0.01) {
+            float ed = clamp(L.edgeDarken, 0.0, 1.0);
+            float eb = clamp(L.edgeDarkenBlur, 0.0, 1.0);
+            float selfInk = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
             float innerEdge = smoothstep(0.10, 0.45, lineEdge);
-            layerColor *= (1.0 - innerEdge * L.edgeDarken * 0.40);
+
+            // (1) line core + AA edge
+            layerColor *= 1.0 - max(innerEdge, selfInk * 0.8) * ed * 0.40;
+
+            // (2) inner spread. 12 rays x 5 steps looking for ink; reach grows with the slider.
+            if (selfInk < 0.85 && (eb > 0.01 || ed > 0.30)) {
+                float reach = (2.5 + 11.0 * max(eb, 0.25 * ed)) * resScale;
+                vec3 accAll = src0;
+                float wAll = 1.0;
+                vec3 accFill = src0;
+                float wFill = 1.0;
+                float prox = 0.0;                                   // 0 = no ink in reach, 1 = ink right next to us
+                for (int rI = 0; rI < 12; rI++) {
+                    float ang = (float(rI) + 0.5) * 0.52359878;      // 30 degree spacing, offset so axes are not special
+                    vec2 dir = vec2(cos(ang), sin(ang));
+                    for (int sI = 0; sI < 5; sI++) {
+                        float fr = float(sI + 1) / 5.0;
+                        vec3 sS = srcSrgb(coord + ivec2(round(dir * (reach * fr))));
+                        vec3 sL = srgbToLinear(sS);
+                        float ink = 1.0 - smoothstep(0.08, 0.28, luma(sS));
+                        float wd = 1.0 - 0.55 * fr;                  // nearer taps count more
+                        accAll += sL * wd;
+                        wAll += wd;
+                        accFill += sL * wd * (1.0 - ink);
+                        wFill += wd * (1.0 - ink);
+                        prox = max(prox, ink * (1.0 - 0.8 * (fr - 0.2)));   // max, not mean: a thin line still counts fully
+                    }
+                }
+                vec3 blurAll = accAll / wAll;
+                vec3 blurFill = accFill / wFill;
+                vec3 soft = mix(blurFill, blurAll, 0.60);            // 40% pure fill softening, 60% line darkness bleeding in
+                float band = smoothstep(0.0, 0.55, prox) * (1.0 - selfInk) * (1.0 - innerEdge * 0.35);
+                layerColor += (soft - src0) * band * eb * 0.90;
+                layerColor *= 1.0 - band * band * ed * 0.18;         // gentle inward darkening that fades with distance
+            }
         }
 
         // 9. Colour temperature
@@ -2631,7 +2770,7 @@ void main() {
         currentComposite = applyBlendMode(currentComposite, max(layerColor, vec3(0.0)), int(L.blendMode + 0.5), L.opacity, L.blendLinear > 0.5);
     }
 
-    // 28. Razor-edge text bevel (v5) - the clip itself is NEVER blurred, softened or re-coloured.
+    // 28. Razor-edge text bevel (v5, metal face restored in v6) - the clip itself is NEVER blurred, softened or re-coloured.
     //     v4 still shaded the letter faces and dropped wide shadow / glow hazes over the box, which read as
     //     softening. v5 touches only three things, all driven by the text mask and all hard-edged:
     //       * a 1-2 px lit rim and a thin shaded rim on the letter edges (the razor bevel line)
@@ -2718,16 +2857,43 @@ void main() {
             vec3 orig = currentComposite;
             vec3 toned = orig;
             float bevelK = clamp(tDepth, 0.0, 2.0);
-            float metalK = clamp(0.30 * tChrome, 0.0, 0.60);              // very light face tone, Chrome slider
-            if (metalK > 0.01 && fillC > 0.02) {
+            // v6 METAL FACE: v5 only multiplied the face by a +-12% silk tone, which is why it stopped looking metallic.
+            // The face is now a real reflective surface: a multi-band horizon reflection (bright sky -> dark band ->
+            // thin horizon line -> dark ground -> lit lower band) whose sky / ground colours are SAMPLED from the scene
+            // above and below the text box (so it reflects what is around it), tinted by the text's own hue (white text =
+            // neutral chrome that picks up the scene, gold text = gold metal, ...), plus a diagonal gloss sweep.
+            // Chrome slider = how metal the face is (1.2 default = slightly metallic, 2+ = full chrome).
+            float metalAmt = clamp(tChrome * 0.42, 0.0, 0.92) * smoothstep(0.02, 0.50, fillC);
+            if (metalAmt > 0.01) {
                 float smax = clamp(0.5 * boxSize.y * whPx.y, 24.0 * tpx, 140.0 * tpx);
                 float dUp = textEdgeDist(coord, vec2(0.0, -1.0), smax);
                 float dDn = textEdgeDist(coord, vec2(0.0, 1.0), smax);
                 float vText = clamp(dUp / max(dUp + dDn, 1e-3), 0.0, 1.0);
-                toned *= mix(1.0, silkProfile(vText), metalK);
+                // what the metal "sees": scene colour just above and below the box
+                vec3 skyAcc = vec3(0.0);
+                vec3 gndAcc = vec3(0.0);
+                ivec2 lim = ivec2(width - 1, height - 1);
+                for (int q = 0; q < 4; q++) {
+                    float fx = (float(q) + 0.5) * 0.25;
+                    vec2 pu = vec2(boxMin.x + boxSize.x * fx, boxMin.y - 0.035);
+                    vec2 pg = vec2(boxMin.x + boxSize.x * fx, boxMin.y + boxSize.y + 0.035);
+                    skyAcc += srcLin(clamp(ivec2(pu * whPx), ivec2(0), lim));
+                    gndAcc += srcLin(clamp(ivec2(pg * whPx), ivec2(0), lim));
+                }
+                skyAcc *= 0.25;
+                gndAcc *= 0.25;
+                vec3 skyRef = mix(vec3(0.60), skyAcc * 1.5 + 0.06, 0.65);
+                vec3 gndRef = mix(vec3(0.35), gndAcc * 1.5 + 0.04, 0.65);
+                vec3 metal = chromeBands(vText, skyRef, gndRef);
+                metal *= mix(vec3(1.0), tintN, hasHue * 0.85);                   // the text's own colour tints the metal
+                // diagonal gloss sweep (follows the box, slides down the letter), driven by the Specular slider
+                float ux = clamp((uvN.x - boxMin.x) / boxSize.x, 0.0, 1.0);
+                float sheen = gaussBand(ux - (0.28 + 0.38 * vText), 0.07) + 0.35 * gaussBand(ux - (0.72 + 0.20 * vText), 0.04);
+                metal += mix(vec3(1.0), hiCol, hasHue) * sheen * 0.50 * clamp(tSpec, 0.0, 1.5);
+                toned = mix(orig, metal, metalAmt);
             }
             toned *= 1.0 - 0.38 * lo * bandIn * min(bevelK, 1.5);                    // shaded bevel face
-            toned += hiCol * hi * bandIn * 0.32 * bevelK;                            // lit bevel face (narrow)
+            toned += hiCol * hi * bandIn * (0.32 + 0.20 * metalAmt) * bevelK;        // lit bevel face (narrow), brighter on metal
             toned += hiCol * hi * rimBand * 1.05 * tSpec;                            // razor lit edge line
             toned += tintN * lo * rimBand * 0.28 * (0.4 + 0.6 * hasHue) * min(bevelK, 1.5); // thin shaded edge line
 
