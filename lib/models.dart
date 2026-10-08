@@ -277,6 +277,7 @@ class AdjustmentLayer {
   double darkOutlines;    // S_lining Slider 1: Intensity / Radius
   double sLiningOpacity;  // S_lining Slider 2: Opacity
   double edgeDarken;
+  double edgeDarkenBlur;  // inner blur / spread beside line art (0..1), shader slot 177
   double lineThinning;
   double lineThinningThreshold;
   double vignette;
@@ -346,7 +347,14 @@ class AdjustmentLayer {
   double thinStreakWidth;
   double thinStreakOpacity;
   double thinStreakSoftness;
-  bool thinStreakFromEdge; // false = streak starts at the highlight, true = starts at the frame edge
+  bool thinStreakFromEdge; // legacy flag: true is read as flareOrigin = 1.0
+  double flareOrigin;     // 0 = flares grow out of the highlight .. 1 = flares enter from the frame edges and run inward
+  double flareThreshold;  // 0..1 how bright / compact a source must be (higher = fewer flares)
+  double flareSpacing;    // minimum vertical distance between flares, fraction of frame height (0 = off)
+  double flareThickness;  // 0..1 band thickness
+  double flareFalloff;    // 0..1 how fast the flare fades along its length
+  double flareSceneTint;  // 0 = source colour .. 1 = scene colour
+  double flareCoreWhite;  // 0..1 hot white core
   double lineArtStrength;
   double lineArtWidth;
   double lineArtPlacement;
@@ -472,6 +480,7 @@ class AdjustmentLayer {
     this.darkOutlines = 0.0,
     this.sLiningOpacity = 0.0,
     this.edgeDarken = 0.0,
+    this.edgeDarkenBlur = 0.0,
     this.lineThinning = 0.0,
     this.lineThinningThreshold = 0.05,
     this.vignette = 0.0,
@@ -512,6 +521,13 @@ class AdjustmentLayer {
     this.thinStreakOpacity = 0.80,
     this.thinStreakSoftness = 0.50,
     this.thinStreakFromEdge = false,
+    this.flareOrigin = 0.0,
+    this.flareThreshold = 0.25,
+    this.flareSpacing = 0.18,
+    this.flareThickness = 0.35,
+    this.flareFalloff = 0.50,
+    this.flareSceneTint = 0.55,
+    this.flareCoreWhite = 0.35,
     this.lineArtStrength = 0.0,
     this.lineArtWidth = 0.50,
     this.lineArtPlacement = 0.0,
@@ -711,6 +727,7 @@ class AdjustmentLayer {
       darkOutlines: darkOutlines,
       sLiningOpacity: sLiningOpacity,
       edgeDarken: edgeDarken,
+      edgeDarkenBlur: edgeDarkenBlur,
       lineThinning: lineThinning,
       lineThinningThreshold: lineThinningThreshold,
       vignette: vignette,
@@ -751,6 +768,13 @@ class AdjustmentLayer {
       thinStreakOpacity: thinStreakOpacity,
       thinStreakSoftness: thinStreakSoftness,
       thinStreakFromEdge: thinStreakFromEdge,
+      flareOrigin: flareOrigin,
+      flareThreshold: flareThreshold,
+      flareSpacing: flareSpacing,
+      flareThickness: flareThickness,
+      flareFalloff: flareFalloff,
+      flareSceneTint: flareSceneTint,
+      flareCoreWhite: flareCoreWhite,
       lineArtStrength: lineArtStrength,
       lineArtWidth: lineArtWidth,
       lineArtPlacement: lineArtPlacement,
@@ -862,6 +886,7 @@ class AdjustmentLayer {
       'darkOutlines': darkOutlines,
       'sLiningOpacity': sLiningOpacity,
       'edgeDarken': edgeDarken,
+      'edgeDarkenBlur': edgeDarkenBlur,
       'lineThinning': lineThinning,
       'lineThinningThreshold': lineThinningThreshold,
       'vignette': vignette,
@@ -902,6 +927,13 @@ class AdjustmentLayer {
       'thinStreakOpacity': thinStreakOpacity,
       'thinStreakSoftness': thinStreakSoftness,
       'thinStreakFromEdge': thinStreakFromEdge,
+      'flareOrigin': flareOrigin,
+      'flareThreshold': flareThreshold,
+      'flareSpacing': flareSpacing,
+      'flareThickness': flareThickness,
+      'flareFalloff': flareFalloff,
+      'flareSceneTint': flareSceneTint,
+      'flareCoreWhite': flareCoreWhite,
       'lineArtStrength': lineArtStrength,
       'lineArtWidth': lineArtWidth,
       'lineArtPlacement': lineArtPlacement,
@@ -1018,6 +1050,7 @@ class AdjustmentLayer {
       darkOutlines: (json['darkOutlines'] as num?)?.toDouble() ?? 0.0,
       sLiningOpacity: (json['sLiningOpacity'] as num?)?.toDouble() ?? 0.0,
       edgeDarken: (json['edgeDarken'] as num?)?.toDouble() ?? 0.0,
+      edgeDarkenBlur: (json['edgeDarkenBlur'] as num?)?.toDouble() ?? 0.0,
       lineThinning: (json['lineThinning'] as num?)?.toDouble() ?? 0.0,
       lineThinningThreshold: (json['lineThinningThreshold'] as num?)?.toDouble() ?? 0.05,
       vignette: (json['vignette'] as num?)?.toDouble() ?? 0.0,
@@ -1058,6 +1091,13 @@ class AdjustmentLayer {
       thinStreakOpacity: (json['thinStreakOpacity'] as num?)?.toDouble() ?? 0.80,
       thinStreakSoftness: (json['thinStreakSoftness'] as num?)?.toDouble() ?? 0.50,
       thinStreakFromEdge: json['thinStreakFromEdge'] == true,
+      flareOrigin: (json['flareOrigin'] as num?)?.toDouble() ?? (json['thinStreakFromEdge'] == true ? 1.0 : 0.0),
+      flareThreshold: (json['flareThreshold'] as num?)?.toDouble() ?? 0.25,
+      flareSpacing: (json['flareSpacing'] as num?)?.toDouble() ?? 0.18,
+      flareThickness: (json['flareThickness'] as num?)?.toDouble() ?? 0.35,
+      flareFalloff: (json['flareFalloff'] as num?)?.toDouble() ?? 0.50,
+      flareSceneTint: (json['flareSceneTint'] as num?)?.toDouble() ?? 0.55,
+      flareCoreWhite: (json['flareCoreWhite'] as num?)?.toDouble() ?? 0.35,
       lineArtStrength: (json['lineArtStrength'] as num?)?.toDouble() ?? 0.0,
       lineArtWidth: (json['lineArtWidth'] as num?)?.toDouble() ?? 0.50,
       lineArtPlacement: (json['lineArtPlacement'] as num?)?.toDouble() ?? 0.0,
@@ -1180,15 +1220,15 @@ class ProjectData {
     this.activeLayerIndex = 0,
     this.tonemapMode = 0.0,
     this.textSuiteEnabled = false,
-    this.textBoxX = 0.15,
-    this.textBoxY = 0.40,
-    this.textBoxW = 0.70,
-    this.textBoxH = 0.20,
+    this.textBoxX = 0.07,
+    this.textBoxY = 0.415,
+    this.textBoxW = 0.88,
+    this.textBoxH = 0.10,
     this.textBevelDepth = 1.0,
-    this.textChromeIntensity = 1.2,
-    this.textSpecularGlint = 1.0,
-    this.textContactShadow = 0.8,
-    this.textLumaThreshold = 0.65,
+    this.textChromeIntensity = 1.8,
+    this.textSpecularGlint = 1.2,
+    this.textContactShadow = 0.6,
+    this.textLumaThreshold = 0.40,
     this.textMetallicTint = 0.0,
     this.enableTimelineSegments = false,
     List<TimelineClipSegment>? timelineSegments,
@@ -1278,15 +1318,15 @@ class ProjectData {
       activeLayerIndex: json['activeLayerIndex'] ?? 0,
       tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
       textSuiteEnabled: json['textSuiteEnabled'] ?? false,
-      textBoxX: (json['textBoxX'] as num?)?.toDouble() ?? 0.15,
-      textBoxY: (json['textBoxY'] as num?)?.toDouble() ?? 0.40,
-      textBoxW: (json['textBoxW'] as num?)?.toDouble() ?? 0.70,
-      textBoxH: (json['textBoxH'] as num?)?.toDouble() ?? 0.20,
+      textBoxX: (json['textBoxX'] as num?)?.toDouble() ?? 0.07,
+      textBoxY: (json['textBoxY'] as num?)?.toDouble() ?? 0.415,
+      textBoxW: (json['textBoxW'] as num?)?.toDouble() ?? 0.88,
+      textBoxH: (json['textBoxH'] as num?)?.toDouble() ?? 0.10,
       textBevelDepth: (json['textBevelDepth'] as num?)?.toDouble() ?? 1.0,
-      textChromeIntensity: (json['textChromeIntensity'] as num?)?.toDouble() ?? 1.2,
-      textSpecularGlint: (json['textSpecularGlint'] as num?)?.toDouble() ?? 1.0,
-      textContactShadow: (json['textContactShadow'] as num?)?.toDouble() ?? 0.8,
-      textLumaThreshold: (json['textLumaThreshold'] as num?)?.toDouble() ?? 0.65,
+      textChromeIntensity: (json['textChromeIntensity'] as num?)?.toDouble() ?? 1.8,
+      textSpecularGlint: (json['textSpecularGlint'] as num?)?.toDouble() ?? 1.2,
+      textContactShadow: (json['textContactShadow'] as num?)?.toDouble() ?? 0.6,
+      textLumaThreshold: (json['textLumaThreshold'] as num?)?.toDouble() ?? 0.40,
       textMetallicTint: (json['textMetallicTint'] as num?)?.toDouble() ?? 0.0,
       enableTimelineSegments: json['enableTimelineSegments'] ?? false,
       timelineSegments: (json['timelineSegments'] as List<dynamic>?)
