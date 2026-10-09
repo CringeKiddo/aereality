@@ -39,6 +39,12 @@ class CrashLog {
   /// Report built during init() when the previous session ended badly. Null = nothing to show.
   static String? pendingReport;
 
+  /// Filled by init() for CpuSafe: the previous session died of SIGILL (illegal instruction) while an operation was running,
+  /// plus that operation's name and its full step trail (the trail file is overwritten by the next begin()).
+  static bool lastCrashWasSigill = false;
+  static String lastInterruptedOp = '';
+  static String lastInterruptedTrail = '';
+
   static File get _trail => File('${_dir!.path}/trail.txt');
   static File get _marker => File('${_dir!.path}/running.marker');
   static File get _seen => File('${_dir!.path}/last_seen_exit.txt');
@@ -190,6 +196,10 @@ class CrashLog {
       _seen.writeAsStringSync('$newest', flush: true);
     } catch (_) {}
 
+    lastInterruptedOp = interruptedOp;
+    lastInterruptedTrail = trailText;
+    lastCrashWasSigill = interrupted && fresh.any((e) => ((e['reason'] as num?) ?? -1).toInt() == 5 && ((e['status'] as num?) ?? 0).toInt() == 4);
+
     bool worthShowing = interrupted;
     for (final e in fresh) {
       final reason = ((e['reason'] as num?) ?? -1).toInt();
@@ -229,7 +239,8 @@ class CrashLog {
         }
       }
       b.writeln();
-      b.writeln('Hints: status 11 = SIGSEGV (bad memory access), 6 = SIGABRT (assert / abort),');
+      b.writeln('Hints: status 4 = SIGILL (illegal instruction: an encoder used a CPU instruction this phone lacks),');
+      b.writeln('       status 11 = SIGSEGV (bad memory access), 6 = SIGABRT (assert / abort),');
       b.writeln('       9 = SIGKILL (killed - usually out of memory). LOW_MEMORY or a high rss near the end');
       b.writeln('       of the steps below means the phone ran out of RAM.');
       b.writeln();
