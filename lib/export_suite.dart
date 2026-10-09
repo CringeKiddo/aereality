@@ -14,6 +14,7 @@ import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
 import 'models.dart';
 import 'crash_log.dart';
+import 'cpu_safe.dart';
 import 'export_matrix.dart';
 import 'constants.dart' hide ExportMatrix;
 
@@ -990,6 +991,16 @@ class ExportSuite {
       if (!ExportMatrix.isBitDepthValid(_matrixKey(container), codec, bitDepth)) {
         throw Exception('$bitDepth is not valid for $codec in $container.');
       }
+      // CPU-safety probe: a ~1 s test encode with the real encoder settings BEFORE the long render, so an encoder that
+      // executes an instruction this phone lacks (SIGILL) fails in a second, and the next launch steps it down.
+      await CpuSafe.ensureLoaded();
+      final String? guardedEncoder = CpuSafe.encoderForCodec(codec);
+      final bool probeTenBit = bitDepth.startsWith('10') || bitDepth.startsWith('16');
+      onProgress(0.01, 'Checking encoder compatibility...');
+      await CpuSafe.verifyConversion(tenBit: probeTenBit);   // FFmpeg's own colour conversion (every codec incl. ProRes)
+      if (guardedEncoder != null) {
+        await CpuSafe.verifyEncoder(guardedEncoder, tenBit: probeTenBit);
+      }
       final expectedBytes = videoWidth * videoHeight * 4;
 
       final targetDims = _calculateDimensions(resolution, videoWidth, videoHeight);
@@ -1244,7 +1255,7 @@ class ExportSuite {
       // Crash-safe x265 profile for Android: no worker thread pools (the pool / thread-affinity setup is what
       // brings the encoder down on mobile CPUs as soon as the lookahead window fills), a single frame thread,
       // and a lookahead that is always larger than the B-frame count. Slower than a threaded encode, but stable.
-      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20';
+      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()}';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 6';
@@ -1257,6 +1268,7 @@ class ExportSuite {
     } else {
       cOption = '-c:v libx264';
       speed = '-preset fast';
+      codecExtra = CpuSafe.x264Args();
       rate = '-crf 18';
     }
 
@@ -1293,7 +1305,7 @@ class ExportSuite {
     final scaleFilter = 'scale=$outW:$outH:flags=lanczos+accurate_rnd:out_color_matrix=$matrix:out_range=tv,'
         'format=$pixName$extraFilters';
 
-    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
+    return '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
         '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $codecExtra $pixFmt $colorMetadata $rate "$outputFile"';
   }
 
@@ -1311,7 +1323,7 @@ class ExportSuite {
     required int outW,
     required int outH,
   }) {
-    return '-y -f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
+    return '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
         '-i "$inputFile" -vf "scale=$outW:$outH:flags=lanczos,format=bgr0" '
         '-c:v ffv1 -level 3 -g 1 -slicecrc 0 -an "$outputFile"';
   }
@@ -1368,7 +1380,7 @@ class ExportSuite {
     // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no worker thread pools, one frame thread,
     // lookahead always larger than the B-frame count.
     final video = '-c:v libx265${isMp4Family ? ' -tag:v hvc1' : ''} -preset veryfast '
-        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20 $rate';
+        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()} $rate';
 
     final fastStart = isMp4Family ? '-movflags +faststart' : '';
     final hasAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
@@ -1379,7 +1391,7 @@ class ExportSuite {
 
     // RGB -> YUV with the SAME matrix that the file is tagged with (the old default was BT.601 while the
     // tags said BT.709, which shifted colours in players).
-    return '-y -f concat -safe 0 -i "$concatList" $audioIn'
+    return '-y ${CpuSafe.ffArgs()}-f concat -safe 0 -i "$concatList" $audioIn'
         '-vf "scale=out_color_matrix=$matrix:out_range=tv:flags=accurate_rnd,format=$pixFmt" '
         '$video $colorMetadata $audioOpts $fastStart "$outFile"';
   }
