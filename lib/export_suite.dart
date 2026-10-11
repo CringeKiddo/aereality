@@ -104,6 +104,7 @@ class ExportSuite {
     dynamic bridge,
     dynamic onExportComplete,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
+    Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
     double? videoDurationMs,
     double? videoFps,
     int? videoWidth,
@@ -149,6 +150,7 @@ class ExportSuite {
         lutTextureId: lutTextureId,
         lutSize: lutSize,
         renderFrameToRgba: renderFrameToRgba,
+        prepareFrames: prepareFrames,
         videoDurationMs: videoDurationMs,
         videoFps: videoFps ?? 30.0,
         videoWidth: videoWidth,
@@ -359,6 +361,7 @@ class ExportSuite {
     dynamic lutTextureId,
     dynamic lutSize,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
+    Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
     required double videoDurationMs,
     required double videoFps,
     required int videoWidth,
@@ -683,6 +686,7 @@ class ExportSuite {
                                 packUniforms: packUniforms,
                                 getActiveLut: getActiveLut,
                                 renderFrameToRgba: renderFrameToRgba,
+                                prepareFrames: prepareFrames,
                                 videoDurationMs: videoDurationMs,
                                 videoFps: selectedFps,
                                 videoWidth: videoWidth,
@@ -951,6 +955,7 @@ class ExportSuite {
     dynamic packUniforms,
     dynamic getActiveLut,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
+    Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
     required double videoDurationMs,
     required double videoFps,
     required int videoWidth,
@@ -967,6 +972,7 @@ class ExportSuite {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     try {
+      StageTimer.reset();
       CrashLog.begin('Video export', {
         'codec': codec,
         'container': container,
@@ -1027,6 +1033,14 @@ class ExportSuite {
         final endFrame = (startFrame + batchSize).clamp(0, totalFrames);
         final currentBatchCount = endFrame - startFrame;
 
+        // Decode this whole batch of source frames in ONE ffmpeg call (instead of one ffmpeg process per frame).
+        final prep = prepareFrames;
+        if (prep != null) {
+          CrashLog.note('batch $b source decode START ($currentBatchCount frames)');
+          await StageTimer.time('batch: decode source', () => prep(startFrame * frameIntervalMs, currentBatchCount, videoFps));
+          CrashLog.note('batch $b source decode DONE');
+        }
+
         final rawFile = File('${sessionTempDir.path}/batch_$b.rgba');
         final raf = await rawFile.open(mode: FileMode.write);
         try {
@@ -1042,7 +1056,7 @@ class ExportSuite {
                 '(${videoWidth}x$videoHeight RGBA8).',
               );
             }
-            await raf.writeFrom(bytes);
+            await StageTimer.time('frame: write raw to disk', () => raf.writeFrom(bytes));
             CrashLog.note('frame ${globalFrameIdx + 1}/$totalFrames written');
 
             final progressRatio = (globalFrameIdx / totalFrames) * 0.70;
@@ -1085,7 +1099,7 @@ class ExportSuite {
         );
 
         CrashLog.note('batch $b encode START: ffmpeg $ffmpegBatchCmd');
-        final session = await FFmpegKit.execute(ffmpegBatchCmd);
+        final session = await StageTimer.time('batch: encode', () => FFmpegKit.execute(ffmpegBatchCmd));
         final rc = await session.getReturnCode();
 
         CrashLog.note('batch $b encode RETURNED rc=$rc');
@@ -1138,7 +1152,7 @@ class ExportSuite {
         );
       } else {
         CrashLog.note('concat START: ffmpeg $concatCmd');
-        final concatSession = await FFmpegKit.execute(concatCmd);
+        final concatSession = await StageTimer.time('final: concat + audio', () => FFmpegKit.execute(concatCmd));
         final concatRc = await concatSession.getReturnCode();
 
         if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
@@ -1163,13 +1177,15 @@ class ExportSuite {
                   ? 'video/x-matroska'
                   : 'video/mp4';
 
-      final finalUri = await saveToMovies(
+      final finalUri = await StageTimer.time('save to Movies', () => saveToMovies(
         sourcePath: tempFinalFile.path,
         fileName: fileName,
         mimeType: mimeType,
-      );
+      ));
 
       CrashLog.note('saved to MediaStore: $finalUri');
+      final timingReport = StageTimer.summary();
+      CrashLog.note(timingReport);
       CrashLog.end('video export finished');
       onProgress(1.0, 'Export complete!');
 
@@ -1181,10 +1197,17 @@ class ExportSuite {
           ),
         );
       }
+      if (kShowExportTiming && context.mounted) {
+        await StageTimer.showReport(context, timingReport);
+      }
     } catch (e) {
       CrashLog.end('FAILED with a Dart exception: $e');
       rethrow;
     } finally {
+      // Release the decoded source batch (it can be hundreds of MB on disk)
+      try {
+        await prepareFrames?.call(0, 0, videoFps);
+      } catch (_) {}
       // Purge session scratch directory
       try {
         if (sessionTempDir != null && sessionTempDir.existsSync()) {
@@ -1417,7 +1440,7 @@ class ExportSuite {
 
     // If the app dies inside this call, the crash report shown on the next launch ends with these lines.
     CrashLog.note('HEVC final encode START: ffmpeg $cmd');
-    final session = await FFmpegKit.execute(cmd);
+    final session = await StageTimer.time('final: HEVC encode', () => FFmpegKit.execute(cmd));
     final rc = await session.getReturnCode();
     CrashLog.note('HEVC final encode RETURNED rc=$rc size=${outFile.existsSync() ? outFile.lengthSync() : -1}');
 
