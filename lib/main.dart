@@ -1464,7 +1464,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<void> _manualSaveProject() async {
-    if (_project.mediaPath.isEmpty) return;
+    if (_project.mediaPath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to save yet: load a video or image first.'), duration: Duration(milliseconds: 1200)),
+      );
+      return;
+    }
     setState(() => _isSavingProject = true);
     final proj = StoredProject(
       id: _activeSessionId,
@@ -1473,14 +1478,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       data: _project,
       lastOpened: DateTime.now(),
     );
-    await ProjectManager.saveProject(proj);
+    final saved = await ProjectManager.saveProject(proj);
     if (mounted) {
       setState(() => _isSavingProject = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Project saved to Home!'),
-          backgroundColor: Colors.teal,
-          duration: Duration(milliseconds: 900),
+        SnackBar(
+          content: Text(saved
+              ? 'Project saved to Home!'
+              : 'Save failed: ${ProjectManager.lastSaveError ?? 'unknown error'}'),
+          backgroundColor: saved ? Colors.teal : Colors.redAccent,
+          duration: Duration(milliseconds: saved ? 900 : 2500),
         ),
       );
     }
@@ -2146,14 +2153,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   },
                 ),
                 IconButton(
-                  icon: const Icon(Icons.undo_rounded, color: Colors.white70),
-                  tooltip: 'Undo',
-                  onPressed: _performUndo,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.redo_rounded, color: Colors.white70),
-                  tooltip: 'Redo',
-                  onPressed: _performRedo,
+                  icon: _isSavingProject
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : Icon(Icons.save_rounded, color: accent),
+                  tooltip: 'Save Project',
+                  onPressed: _isSavingProject ? null : _manualSaveProject,
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
