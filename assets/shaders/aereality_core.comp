@@ -957,7 +957,7 @@ vec3 sample3DLutDisplay(vec3 srgb, float opacity) {
     if (opacity <= 0.001) return srgb;
     vec3 c = clamp(srgb, 0.0, 1.0);
     vec3 lutCoord = (c * 31.0 + 0.5) / 32.0;
-    vec3 graded = texture(u_lutTexture, lutCoord).rgb;
+    vec3 graded = textureLod(u_lutTexture, lutCoord, 0.0).rgb;   // compute shader: no implicit derivatives, so sample LOD 0 explicitly
     return mix(srgb, clamp(graded, 0.0, 1.0), clamp(opacity, 0.0, 1.0));
 }
 
@@ -1561,8 +1561,8 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
         // * Sources are only strong LOCAL PEAKS above a Threshold slider.
         // * Spacing: a source only flares if it is the strongest one within +-Spacing of its row (vertical non-maximum
         //   suppression), so flares are separate bands, not a wall.
-        // * Thickness sets the band height. Softness ONLY changes the edge of the band: low = flat-topped with a crisp
-        //   edge, high = blurred and spread out.
+        // * Thickness sets the band height. Softness: low = flat-topped with a crisp edge, high = the beam is smeared
+        //   vertically (up to ~8% of the frame height each way) into a wide, feathered glow that fades out gradually.
         // * Origin: 0 = beam grows out of each highlight, 1 = beam enters from the left / right frame edge on the
         //   source's row and runs inward (Length = how far in). In-between mixes both.
         // * Colour: source colour, blended toward the scene colour, with an optional hot white core.
@@ -1594,6 +1594,12 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
             float boost = pow(texPx * 0.125, 1.85);
             float bodyUv = bodyPx / float(height);
             float edgeW = mix(0.04, 0.38, soft);                             // hard: crisp edge, soft: wide blurred edge
+            // Soft mode: each tap also looks softO above and below its row, so the beam really spreads out vertically.
+            const float softMaxSpread = 0.08;                                // fraction of frame height at softness 1
+            float softO = soft * softMaxSpread;
+            bool useSoft = soft > 0.02;
+            float softMixK = smoothstep(0.05, 0.75, soft);                   // crisp -> feathered shape blend
+            float prStep = bodyUv * 0.75 + softO * 0.6;                      // local-peak search step (wider when soft)
             int l2W = max(width >> 3, 1);
             int l2H = max(height >> 3, 1);
             int l4W = max(width >> 5, 1);
@@ -1613,24 +1619,49 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
                 vec3 sm = sampleBloomLevelF(lvl, tapUv, width, height);
                 float sl = luma(sm);
                 float sN = sl * boost;
-                if (sN < thrV * 0.35) continue;
+                vec3 smH = sm;          // colour used for the hue direction
+                float sNw = sN;         // vertically smeared strength (soft mode only)
+                if (useSoft) {
+                    vec3 smU = sampleBloomLevelF(lvl, vec2(sx, uv.y + softO), width, height);
+                    vec3 smD = sampleBloomLevelF(lvl, vec2(sx, uv.y - softO), width, height);
+                    vec3 smW = sm * 0.5 + (smU + smD) * 0.25;
+                    sNw = luma(smW) * boost;
+                    smH = mix(sm, smW, soft);
+                }
+                if (max(sN, sNw) < thrV * 0.35) continue;
 
                 // compact sources only: a big bright area (hair, sky, a lit wall) is NOT a flare source
                 float f2 = luma(sampleBloom(2, tapUv, l2W, l2H).rgb);
                 float f4 = luma(sampleBloom(4, tapUv, l4W, l4H).rgb);
                 float compact = smoothstep(0.45, 0.80, 1.0 - f4 / max(f2, 1e-5));
+                if (useSoft) {
+                    // rows in the soft skirt are not on the source itself: accept the compactness of the rows around them
+                    for (int q = 0; q < 2; q++) {
+                        float oq = (q == 0) ? softO : -softO;
+                        vec2 tq = vec2(sx, uv.y + oq);
+                        float g2 = luma(sampleBloom(2, tq, l2W, l2H).rgb);
+                        float g4 = luma(sampleBloom(4, tq, l4W, l4H).rgb);
+                        compact = max(compact, smoothstep(0.45, 0.80, 1.0 - g4 / max(g2, 1e-5)));
+                    }
+                }
                 if (compact < 0.01) continue;
 
                 // local peak of this source's vertical profile -> band edge is placed relative to it
                 float pr = sN;
                 for (int j = 1; j <= 2; j++) {
-                    float o = bodyUv * 0.75 * float(j);
+                    float o = prStep * float(j);
                     pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
                     pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
                 }
                 if (pr < thrV) continue;
                 float v = sN / pr;
                 float s = smoothstep(0.45 - edgeW, 0.45 + edgeW, v) * smoothstep(thrV, thrV * 1.8, pr) * compact;
+                if (useSoft) {
+                    // Feathered shape: strength follows the smeared profile relative to the local peak, so it fades out
+                    // gradually over the whole spread instead of being cut at a threshold edge.
+                    float sSoft = smoothstep(0.02, 0.65, sNw / max(pr, 1e-5)) * smoothstep(thrV, thrV * 1.8, pr) * compact;
+                    s = mix(s, sSoft, softMixK);
+                }
                 if (s < 0.004) continue;
 
                 if (spaceN > 0.02) {
@@ -1645,7 +1676,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
                     if (s < 0.004) continue;
                 }
 
-                vec3 hueC = sm / max(sl, 1e-4);                                // colour direction of the source
+                vec3 hueC = smH / max(luma(smH), 1e-4);                        // colour direction of the source
                 float level = mix(1.0, clamp(pr / (thrV * 2.5), 0.6, 1.8), 0.25 + 0.5 * soft);
                 vec3 c = hueC * (level * s);
                 vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
