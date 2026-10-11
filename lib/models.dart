@@ -1454,30 +1454,88 @@ class ProjectManager {
   }
 
   static Future<List<StoredProject>> loadProjects() async {
+    File? file;
     try {
-      final file = await _getFile('saved_projects.json');
+      file = await _getFile('saved_projects.json');
       if (!await file.exists()) return [];
       final content = await file.readAsString();
       final List<dynamic> list = jsonDecode(content);
-      return list.map((item) => StoredProject.fromJson(item)).toList();
+      // Parse every project on its own: one unreadable entry must not make ALL projects disappear.
+      final out = <StoredProject>[];
+      bool skippedAny = false;
+      for (final item in list) {
+        try {
+          out.add(StoredProject.fromJson(item));
+        } catch (_) {
+          skippedAny = true;
+        }
+      }
+      if (skippedAny) await _backupCorruptFile(file);
+      return out;
     } catch (_) {
+      // Unreadable file: keep a copy instead of silently overwriting it with an almost empty list on the next save.
+      if (file != null) await _backupCorruptFile(file);
       return [];
     }
   }
 
-  static Future<void> saveProject(StoredProject project) async {
-    final list = await loadProjects();
-    list.removeWhere((p) => p.id == project.id || p.name == project.name);
-    list.insert(0, project);
-    await saveProjects(list);
+  static Future<void> _backupCorruptFile(File file) async {
+    try {
+      if (await file.exists()) await file.copy('${file.path}.corrupt');
+    } catch (_) {}
+  }
+
+  // Every write goes through this queue, one at a time. Before, several auto-saves could run their load -> modify ->
+  // write cycles at the same moment and overwrite each other (or leave a half-written file).
+  static Future<void> _saveQueue = Future<void>.value();
+
+  /// Why the last save failed (null when the last save worked).
+  static String? lastSaveError;
+
+  /// Saves (or updates) one project. Never throws: returns false and fills [lastSaveError] when it fails.
+  static Future<bool> saveProject(StoredProject project) {
+    final result = _saveQueue.then<bool>((_) async {
+      try {
+        final list = await loadProjects();
+        list.removeWhere((p) => p.id == project.id || p.name == project.name);
+        list.insert(0, project);
+        return await _writeProjects(list);
+      } catch (e) {
+        lastSaveError = '$e';
+        return false;
+      }
+    });
+    _saveQueue = result.then<void>((_) {}, onError: (_) {});
+    return result;
   }
 
   static Future<void> saveProjects(List<StoredProject> list) async {
+    final result = _saveQueue.then<bool>((_) => _writeProjects(list));
+    _saveQueue = result.then<void>((_) {}, onError: (_) {});
+    await result;
+  }
+
+  // NaN / Infinity are not valid JSON and make jsonEncode throw (which used to be swallowed = project silently not
+  // saved). They are written as 0 instead.
+  static Object? _encodeSafe(Object? o) {
+    if (o is double) return o.isFinite ? o : 0.0;
+    return (o as dynamic).toJson();
+  }
+
+  // Writes to a temp file first and renames it over the real one, so a crash mid-write cannot corrupt the project list.
+  static Future<bool> _writeProjects(List<StoredProject> list) async {
     try {
       final file = await _getFile('saved_projects.json');
-      final content = jsonEncode(list.map((p) => p.toJson()).toList());
-      await file.writeAsString(content, flush: true);
-    } catch (_) {}
+      final tmp = File('${file.path}.tmp');
+      final content = jsonEncode(list.map((p) => p.toJson()).toList(), toEncodable: _encodeSafe);
+      await tmp.writeAsString(content, flush: true);
+      await tmp.rename(file.path);
+      lastSaveError = null;
+      return true;
+    } catch (e) {
+      lastSaveError = '$e';
+      return false;
+    }
   }
 
   static Future<List<CustomPresetItem>> loadCustomPresets() async {
