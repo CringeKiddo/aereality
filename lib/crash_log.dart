@@ -335,3 +335,89 @@ class CrashLog {
     );
   }
 }
+
+
+// =============================================================================
+// EXPORT STAGE TIMER
+// Adds up how long each stage of an export takes (source decode, grading, writing, encoding ...) so a slow export
+// shows WHICH stage is slow instead of guessing. The summary is written into the crash trail and, while
+// kShowExportTiming is true, shown in a dialog (with a Copy button) when the export finishes.
+// Set kShowExportTiming to false for the release build.
+// =============================================================================
+const bool kShowExportTiming = true;
+
+class StageTimer {
+  static final Map<String, int> _us = {};
+  static final Map<String, int> _count = {};
+  static final Stopwatch _wall = Stopwatch();
+
+  static void reset() {
+    _us.clear();
+    _count.clear();
+    _wall
+      ..reset()
+      ..start();
+  }
+
+  static void add(String stage, int micros) {
+    _us[stage] = (_us[stage] ?? 0) + micros;
+    _count[stage] = (_count[stage] ?? 0) + 1;
+  }
+
+  static Future<T> time<T>(String stage, FutureOr<T> Function() fn) async {
+    final sw = Stopwatch()..start();
+    try {
+      return await fn();
+    } finally {
+      add(stage, sw.elapsedMicroseconds);
+    }
+  }
+
+  static String summary() {
+    final wallUs = _wall.elapsedMicroseconds;
+    final total = wallUs <= 0 ? 1 : wallUs;
+    final entries = _us.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final b = StringBuffer()..writeln('EXPORT TIMING  (total ${(wallUs / 1e6).toStringAsFixed(1)} s)');
+    int sum = 0;
+    for (final e in entries) {
+      sum += e.value;
+      final n = _count[e.key] ?? 1;
+      final secs = (e.value / 1e6).toStringAsFixed(1).padLeft(7);
+      final pct = (e.value * 100 / total).toStringAsFixed(0).padLeft(3);
+      final avgMs = (e.value / 1000 / n).toStringAsFixed(n > 1 ? 1 : 0);
+      b.writeln('  ${e.key.padRight(34)} $secs s $pct %   ($n x, avg $avgMs ms)');
+    }
+    final other = total - sum;
+    if (other > 0) {
+      b.writeln('  ${'other (Dart copies, UI, waits)'.padRight(34)} ${(other / 1e6).toStringAsFixed(1).padLeft(7)} s ${(other * 100 / total).toStringAsFixed(0).padLeft(3)} %');
+    }
+    return b.toString();
+  }
+
+  static Future<void> showReport(BuildContext context, String report) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        backgroundColor: kCardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Export timing', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            report,
+            style: const TextStyle(color: Colors.white70, fontSize: 10.5, height: 1.35, fontFamily: 'monospace'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: report)),
+            child: const Text('Copy', style: TextStyle(color: kCyanAccent, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dCtx).pop(),
+            child: const Text('Close', style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+}
