@@ -31,6 +31,7 @@ import 'touch_particles.dart';
 import 'editor_views.dart';
 import 'export_suite.dart';
 import 'crash_log.dart';
+import 'cpu_safe.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1300,6 +1301,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       packUniforms: _packMultiLayerUniforms,
       getActiveLut: _getActiveLutTable,
       renderFrameToRgba: _renderFrameForExport,
+      prepareFrames: _prepareExportFrames,
       videoDurationMs: _videoDurationSeconds * 1000.0,
       videoFps: 30.0,
       videoWidth: size[0],
@@ -1310,6 +1312,76 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Uint8List? _lastExportSource;
 
+  // ---------------------------------------------------------------------------------------------------
+  // BATCH SOURCE DECODE FOR EXPORT
+  // The export asks for one batch (e.g. 30 frames) at a time. ONE ffmpeg call decodes that whole batch into a raw
+  // RGBA file (fps filter = exactly the chosen frame rate, scale = export size); frames are then read from the file
+  // one at a time, so memory stays at a single frame. frameCount == 0 releases the batch file.
+  // ---------------------------------------------------------------------------------------------------
+  File? _batchFile;
+  RandomAccessFile? _batchRaf;
+  double _batchStartMs = 0;
+  double _batchFps = 30;
+  int _batchRequested = 0; // frames the export asked for
+  int _batchFrames = 0; // frames actually present in the file
+  int _batchFrameBytes = 0;
+
+  Future<void> _releaseExportBatch() async {
+    try { await _batchRaf?.close(); } catch (_) {}
+    _batchRaf = null;
+    try { if (_batchFile != null && _batchFile!.existsSync()) _batchFile!.deleteSync(); } catch (_) {}
+    _batchFile = null;
+    _batchRequested = 0;
+    _batchFrames = 0;
+  }
+
+  Future<void> _prepareExportFrames(double startMs, int frameCount, double fps) async {
+    await _releaseExportBatch();
+    if (frameCount <= 0 || _project.isImage) return;
+
+    final size = _exportSize();
+    final w = size[0];
+    final h = size[1];
+    final tempDir = await getTemporaryDirectory();
+    final file = File('${tempDir.path}/export_src_batch.rgba');
+    final startSec = (startMs / 1000.0).toStringAsFixed(4);
+
+    CrashLog.note('  decode batch: $frameCount frames from ${startSec}s @ ${fps}fps, ${w}x$h');
+    await FFmpegKit.execute(
+      '-hide_banner -y ${CpuSafe.ffArgs()}-ss $startSec -i "${_project.mediaPath}" -an -sn -dn '
+      '-vf "fps=$fps,scale=$w:$h" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"',
+    );
+
+    final frameBytes = w * h * 4;
+    if (!file.existsSync() || file.lengthSync() < frameBytes) {
+      CrashLog.note('  decode batch produced no frames, per-frame fallback will be used');
+      try { if (file.existsSync()) file.deleteSync(); } catch (_) {}
+      return;
+    }
+    _batchFile = file;
+    _batchFrameBytes = frameBytes;
+    _batchFrames = file.lengthSync() ~/ frameBytes;
+    _batchRequested = frameCount;
+    _batchStartMs = startMs;
+    _batchFps = fps;
+    _batchRaf = await file.open(mode: FileMode.read);
+    if (_batchFrames < frameCount) {
+      CrashLog.note('  decode batch gave $_batchFrames of $frameCount frames (clip end): last frame is repeated');
+    }
+  }
+
+  /// One frame from the prepared batch, or null when this timestamp is not inside it.
+  Future<Uint8List?> _readBatchFrame(double timestampMs, int expectedBytes) async {
+    final raf = _batchRaf;
+    if (raf == null || _batchFrames <= 0 || _batchFrameBytes != expectedBytes) return null;
+    int idx = ((timestampMs - _batchStartMs) * _batchFps / 1000.0).round();
+    if (idx < 0 || idx >= _batchRequested) return null;
+    if (idx >= _batchFrames) idx = _batchFrames - 1; // source ended early: hold the last frame
+    await raf.setPosition(idx * _batchFrameBytes);
+    final bytes = await raf.read(_batchFrameBytes);
+    return bytes.length == _batchFrameBytes ? bytes : null;
+  }
+
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
     final size = _exportSize();
     final w = size[0];
@@ -1319,24 +1391,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_project.isImage) {
       raw = _cachedRawImage!.getBytes(order: img.ChannelOrder.rgba);
     } else {
-      final tempDir = await getTemporaryDirectory();
-      final rawFile = File('${tempDir.path}/export_src_frame.rgba');
-      if (rawFile.existsSync()) rawFile.deleteSync();
-
-      final t = (timestampMs / 1000.0).toStringAsFixed(3);
-      CrashLog.note('  decode source frame (ffmpeg -ss $t)');
-      await FFmpegKit.execute(
-        '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
-        '-vf scale=$w:$h -f rawvideo -pix_fmt rgba "${rawFile.path}"',
-      );
-
-      if (rawFile.existsSync() && rawFile.lengthSync() == w * h * 4) {
-        raw = await rawFile.readAsBytes();
+      // Fast path: the frame is cut out of the batch that _prepareExportFrames decoded in ONE ffmpeg call.
+      final readWatch = Stopwatch()..start();
+      raw = await _readBatchFrame(timestampMs, w * h * 4);
+      if (raw != null) {
+        StageTimer.add('frame: read from batch', readWatch.elapsedMicroseconds);
         _lastExportSource = raw;
       } else {
-        raw = _lastExportSource;
+        // Fallback (no batch available): the old one-ffmpeg-call-per-frame decode. Slow, but always works.
+        final slowWatch = Stopwatch()..start();
+        final tempDir = await getTemporaryDirectory();
+        final rawFile = File('${tempDir.path}/export_src_frame.rgba');
+        if (rawFile.existsSync()) rawFile.deleteSync();
+
+        final t = (timestampMs / 1000.0).toStringAsFixed(3);
+        CrashLog.note('  decode source frame (ffmpeg -ss $t) [slow path]');
+        await FFmpegKit.execute(
+          '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
+          '-vf scale=$w:$h -f rawvideo -pix_fmt rgba "${rawFile.path}"',
+        );
+
+        if (rawFile.existsSync() && rawFile.lengthSync() == w * h * 4) {
+          raw = await rawFile.readAsBytes();
+          _lastExportSource = raw;
+        } else {
+          raw = _lastExportSource;
+        }
+        try { if (rawFile.existsSync()) rawFile.deleteSync(); } catch (_) {}
+        StageTimer.add('frame: decode per-frame (slow path)', slowWatch.elapsedMicroseconds);
       }
-      try { if (rawFile.existsSync()) rawFile.deleteSync(); } catch (_) {}
     }
 
     if (raw == null || raw.length != w * h * 4) {
@@ -1346,7 +1429,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
     uniforms[0] = timestampMs / 1000.0;
     CrashLog.note('  vulkan processImage ${w}x$h');
+    final gradeWatch = Stopwatch()..start();
     final out = processImage(raw, w, h, w, h, uniforms, lutTable: _getActiveLutTable());
+    StageTimer.add('frame: grade (Vulkan, incl. copies)', gradeWatch.elapsedMicroseconds);
     CrashLog.note('  vulkan done, gpu status=${vulkanLastRenderStatus()} (0 = ok)');
 
     await Future<void>.delayed(Duration.zero);
