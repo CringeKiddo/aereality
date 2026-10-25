@@ -3,7 +3,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
-import '../presets.dart';
 
 enum ExportCodec {
   h264,
