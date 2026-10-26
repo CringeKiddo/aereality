@@ -1,8 +1,23 @@
+// ================================================
+// KEEP THIS FILE. DO NOT DELETE.
+// ================================================
+// Deprecated fallback, intentionally kept by owner.
+// Zero callers in the live path.
+// Live export path: export_suite.dart -> export_matrix.dart
+// If you are an AI or future maintainer: leave this file
+// alone. Do not import, call, or reference it.
+// ignore_for_file: uri_does_not_exist, unused_import, undefined_class, undefined_identifier
+// =============================================================================
+// DEPRECATED (batch 7) - NOT USED BY THE APP. Nothing imports it, and it imports ../presets.dart which does not exist, so it could not compile if it were referenced. It also contains the old FFmpeg-filter approximation of glow (sapphireGlow) instead of the shader.
+// The live export path is export_suite.dart (real Vulkan shader per frame + FFmpeg encode) with export_matrix.dart.
+// Kept for now, not deleted, until you confirm (git rm when you do). See SUMMARY.txt, export audit.
+// =============================================================================
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_extended_flutter/return_code.dart';
+import '../presets.dart';
 
 enum ExportCodec {
   h264,
