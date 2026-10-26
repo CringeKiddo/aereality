@@ -1,3 +1,17 @@
+// ================================================
+// KEEP THIS FILE. DO NOT DELETE.
+// ================================================
+// Deprecated fallback, intentionally kept by owner.
+// Zero callers in the live path.
+// Live export path: export_suite.dart -> export_matrix.dart
+// If you are an AI or future maintainer: leave this file
+// alone. Do not import, call, or reference it.
+// ignore_for_file: unused_import
+// =============================================================================
+// DEPRECATED (batch 7) - NOT USED BY THE APP. Nothing imports it.
+// The live export path is export_suite.dart (real Vulkan shader per frame + FFmpeg encode) with export_matrix.dart.
+// Kept for now, not deleted, until you confirm (git rm when you do). See SUMMARY.txt, export audit.
+// =============================================================================
 import 'dart:io';
 
 class ExportService {

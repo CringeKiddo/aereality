@@ -121,7 +121,7 @@ class CpuSafe {
   /// If the previous session died of SIGILL inside an encoder, step that encoder down one level.
   static void _absorbLastCrash() {
     if (!CrashLog.lastCrashWasSigill) return;
-    if (!CrashLog.lastInterruptedOp.contains('Video export')) return;
+    if (!CrashLog.lastInterruptedOp.contains('Video export') && !CrashLog.lastInterruptedOp.contains('Motion S process')) return;
     final enc = _encoderInTrail(CrashLog.lastInterruptedTrail);
     CrashLog.lastCrashWasSigill = false; // consume
     if (enc == null) return;
@@ -144,7 +144,7 @@ class CpuSafe {
         if (l.contains('libx264')) return 'x264';
         if (l.contains('libsvtav1')) return 'svtav1';
         if (l.contains('libvpx')) return 'vpx';
-        return null;
+        continue; // other START lines (frame renders while an overlapped encode runs) say nothing about the encoder
       }
     }
     return null;
@@ -205,18 +205,7 @@ class CpuSafe {
   // ---------------------------------------------------------------------------
   /// Runs a ~1 s probe of the encoder with the settings the export will use. A SIGILL kills the app right here (and the
   /// next launch steps the encoder down); a normal failure is ignored. Throws only when the encoder is blocked.
-  static Future<void> verifyEncoder(String enc, {required bool tenBit}) async {
-    await ensureLoaded();
-    await verifyConversion(tenBit: tenBit);
-    final lv = level(enc);
-    if (lv >= 3) {
-      throw Exception('${_name(enc)} crashes on this phone\'s CPU even in compatibility mode, so it is disabled. '
-          'Export with ${enc == 'x265' ? 'H.264 or AV1' : (enc == 'x264' ? 'HEVC' : 'HEVC or H.264')} instead.');
-    }
-    final key = '$enc|$lv|${tenBit ? 10 : 8}';
-    if (_verified.contains(key)) return;
-
-    final pix = tenBit ? 'yuv420p10le' : 'yuv420p';
+  static Future<bool> _probe(String enc, int lv, String pix) async {
     String codecArgs;
     switch (enc) {
       case 'x265':
@@ -233,18 +222,42 @@ class CpuSafe {
         codecArgs = '-c:v libvpx-vp9 -deadline good -cpu-used 4 -row-mt 1 -b:v 8M';
     }
     final cmd = '-y ${ffArgs()}-f lavfi -i testsrc2=size=1280x720:rate=25 -frames:v 14 -vf format=$pix $codecArgs -f null -';
-    CrashLog.note('probe START (${_name(enc)}, level $lv): ffmpeg $cmd');
+    CrashLog.note('probe START (${_name(enc)}, level $lv, $pix): ffmpeg $cmd');
     try {
       final session = await FFmpegKit.execute(cmd);
       final rc = await session.getReturnCode();
       CrashLog.note('probe RETURNED rc=$rc');
-      if (ReturnCode.isSuccess(rc)) {
-        _verified.add(key);
-        _save();
-      }
-      // A non-zero return code here (e.g. no lavfi in this build, or no 10-bit x264) is not a crash: carry on.
+      return ReturnCode.isSuccess(rc);
     } catch (e) {
       CrashLog.note('probe RETURNED with Dart exception: $e');
+      return false;
     }
+  }
+
+  /// Runs a ~1 s probe of the encoder with the settings the export will use. A SIGILL kills the app right here (and the
+  /// next launch steps the encoder down). Throws only when the encoder is blocked.
+  /// Returns false ONLY when the 10-bit / 4:4:4 probe failed while the same encoder works at 8-bit (= this phone's
+  /// build cannot do that bit depth); true in every other case.
+  static Future<bool> verifyEncoder(String enc, {required bool tenBit, bool chroma444 = false}) async {
+    await ensureLoaded();
+    await verifyConversion(tenBit: tenBit);
+    final lv = level(enc);
+    if (lv >= 3) {
+      throw Exception('${_name(enc)} crashes on this phone\'s CPU even in compatibility mode, so it is disabled. '
+          'Export with ${enc == 'x265' ? 'H.264 or AV1' : (enc == 'x264' ? 'HEVC' : 'HEVC or H.264')} instead.');
+    }
+    final key = '$enc|$lv|${tenBit ? (chroma444 ? 16 : 10) : 8}';
+    if (_verified.contains(key)) return true;
+
+    final pix = tenBit ? (chroma444 ? 'yuv444p10le' : 'yuv420p10le') : 'yuv420p';
+    if (await _probe(enc, lv, pix)) {
+      _verified.add(key);
+      _save();
+      return true;
+    }
+    if (tenBit && await _probe(enc, lv, 'yuv420p')) {
+      return false; // encoder is fine, the high bit depth is not available here
+    }
+    return true; // no clear verdict (e.g. no lavfi in this build): carry on
   }
 }

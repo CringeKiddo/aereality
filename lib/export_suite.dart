@@ -15,8 +15,9 @@ import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'models.dart';
 import 'crash_log.dart';
 import 'cpu_safe.dart';
+import 'vulkan_bridge.dart';
 import 'export_matrix.dart';
-import 'constants.dart' hide ExportMatrix;
+import 'export_clock.dart';
 
 class ExportSuite {
   static const MethodChannel _mediaChannel = MethodChannel('com.aereality/media');
@@ -222,6 +223,7 @@ class ExportSuite {
                     ),
                   ],
                 ),
+                if (!isExporting) ...[
                 const SizedBox(height: 16),
                 const Text('Format', style: TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
@@ -277,19 +279,10 @@ class ExportSuite {
                     );
                   }).toList(),
                 ),
+                ],
                 const SizedBox(height: 24),
                 if (isExporting) ...[
-                  LinearProgressIndicator(
-                    value: exportProgress > 0.0 ? exportProgress : null,
-                    backgroundColor: Colors.white10,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00E5FF)),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    statusText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  ),
+                  ExportClockPanel(progress: exportProgress, status: statusText),
                   const SizedBox(height: 16),
                 ] else if (statusText.startsWith('Failed')) ...[
                   SelectableText(
@@ -310,7 +303,7 @@ class ExportSuite {
                       : () async {
                           setSheetState(() {
                             isExporting = true;
-                            statusText = 'Rendering 32-bit linear surface...';
+                            statusText = 'Rendering image...';
                             exportProgress = 0.2;
                           });
 
@@ -330,6 +323,13 @@ class ExportSuite {
                                 });
                               },
                             );
+                            if (context.mounted) {
+                              setSheetState(() {
+                                exportProgress = 1.0;
+                                statusText = 'Export complete!';
+                              });
+                              await ExportClockPanel.holdFinished();
+                            }
                             if (context.mounted) Navigator.pop(context);
                           } catch (e) {
                             setSheetState(() {
@@ -423,6 +423,7 @@ class ExportSuite {
                   ),
                   const SizedBox(height: 14),
 
+                  if (!isExporting) ...[
                   // 1. Resolution
                   const Text('Resolution', style: TextStyle(color: Colors.white70, fontSize: 13)),
                   const SizedBox(height: 6),
@@ -558,11 +559,11 @@ class ExportSuite {
                   const SizedBox(height: 14),
 
                   // 4. Bit Depth & Color Gamut
-                  const Text('Bit Depth & Color Gamut', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const Text('Bit Depth', style: TextStyle(color: Colors.white70, fontSize: 13)),
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      _buildDepthOption('8-bit', 'SDR (Rec.709)', selectedBitDepth, isExporting, (d) {
+                      _buildDepthOption('8-bit', 'Rec.709', selectedBitDepth, isExporting, (d) {
                         setSheetState(() {
                           final r = _reconcile(
                             container: selectedContainer,
@@ -575,7 +576,7 @@ class ExportSuite {
                           selectedBitDepth = r[2];
                         });
                       }),
-                      _buildDepthOption('10-bit', 'HDR (BT.2020)', selectedBitDepth, isExporting, (d) {
+                      _buildDepthOption('10-bit', 'Rec.709', selectedBitDepth, isExporting, (d) {
                         setSheetState(() {
                           final r = _reconcile(
                             container: selectedContainer,
@@ -588,7 +589,7 @@ class ExportSuite {
                           selectedBitDepth = r[2];
                         });
                       }),
-                      _buildDepthOption('16-bit', 'Master (4:4:4)', selectedBitDepth, isExporting, (d) {
+                      _buildDepthOption('16-bit', '4:4:4', selectedBitDepth, isExporting, (d) {
                         setSheetState(() {
                           final r = _reconcile(
                             container: selectedContainer,
@@ -636,23 +637,10 @@ class ExportSuite {
                     }).toList(),
                   ),
                   const SizedBox(height: 20),
+                  ],
 
                   if (isExporting) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                        value: exportProgress > 0.0 ? exportProgress : null,
-                        minHeight: 6,
-                        backgroundColor: Colors.white10,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00E5FF)),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      statusText,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white60, fontSize: 12),
-                    ),
+                    ExportClockPanel(progress: exportProgress, status: statusText),
                     const SizedBox(height: 16),
                   ] else if (statusText.startsWith('Export error')) ...[
                     SelectableText(
@@ -674,7 +662,7 @@ class ExportSuite {
                         : () async {
                             setSheetState(() {
                               isExporting = true;
-                              statusText = 'Preparing pipeline & frame stream...';
+                              statusText = 'Preparing export...';
                               exportProgress = 0.02;
                             });
 
@@ -704,6 +692,13 @@ class ExportSuite {
                                   });
                                 },
                               );
+                              if (context.mounted) {
+                                setSheetState(() {
+                                  exportProgress = 1.0;
+                                  statusText = 'Export complete!';
+                                });
+                                await ExportClockPanel.holdFinished();
+                              }
                               if (context.mounted) Navigator.pop(context);
                             } catch (e) {
                               setSheetState(() {
@@ -713,7 +708,7 @@ class ExportSuite {
                               Music.setExporting(false);
                             }
                           },
-                    child: const Text('Render & Export Master Video', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                    child: const Text('Export Video', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                   ),
                 ],
               ),
@@ -893,7 +888,7 @@ class ExportSuite {
 
     try {
       CrashLog.begin('Image export', {'format': format, 'resolution': resolution, 'source': '${srcW}x$srcH'});
-      onProgress(0.3, 'Rasterizing 32-bit linear texture...');
+      onProgress(0.3, 'Rendering image...');
       if (renderFrameToRgba == null) {
         throw Exception('No frame renderer connected (renderFrameToRgba is null).');
       }
@@ -973,6 +968,7 @@ class ExportSuite {
 
     try {
       StageTimer.reset();
+      vulkanSetBandBudgetMs(150); // export: bigger GPU submits (less overhead); the phone UI is not being used
       CrashLog.begin('Video export', {
         'codec': codec,
         'container': container,
@@ -1004,8 +1000,17 @@ class ExportSuite {
       final bool probeTenBit = bitDepth.startsWith('10') || bitDepth.startsWith('16');
       onProgress(0.01, 'Checking encoder compatibility...');
       await CpuSafe.verifyConversion(tenBit: probeTenBit);   // FFmpeg's own colour conversion (every codec incl. ProRes)
+      String depth = bitDepth;
       if (guardedEncoder != null) {
-        await CpuSafe.verifyEncoder(guardedEncoder, tenBit: probeTenBit);
+        final depthOk = await CpuSafe.verifyEncoder(guardedEncoder, tenBit: probeTenBit, chroma444: bitDepth.startsWith('16'));
+        if (!depthOk && ExportMatrix.isBitDepthValid(_matrixKey(container), codec, '8-bit')) {
+          depth = '8-bit';
+          final note = 'This phone cannot encode $bitDepth with $codec. Exporting 8-bit instead.';
+          onProgress(0.02, note);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note), duration: const Duration(seconds: 5)));
+          }
+        }
       }
       final expectedBytes = videoWidth * videoHeight * 4;
 
@@ -1023,6 +1028,7 @@ class ExportSuite {
       const batchSize = 30;
       final totalBatches = (totalFrames / batchSize).ceil();
       final List<String> partVideoPaths = [];
+      Future<void>? pendingEncode; // encode of the previous batch, running while the next batch is decoded + rendered
 
       // Pass 1: Rolling 30-frame GPU scratch rendering.
       // Each batch is written to ONE raw file. The rawvideo demuxer does not expand
@@ -1093,32 +1099,46 @@ class ExportSuite {
           outW: outW,
           outH: outH,
           codec: codec,
-          bitDepth: bitDepth,
+          bitDepth: depth,
           bitrateProfile: bitrateProfile,
           container: container,
         );
 
-        CrashLog.note('batch $b encode START: ffmpeg $ffmpegBatchCmd');
-        final session = await StageTimer.time('batch: encode', () => FFmpegKit.execute(ffmpegBatchCmd));
-        final rc = await session.getReturnCode();
-
-        CrashLog.note('batch $b encode RETURNED rc=$rc');
-        if (!ReturnCode.isSuccess(rc) || !partFile.existsSync() || partFile.lengthSync() == 0) {
-          final logTail = await _sessionLogTail(session);
-          debugPrint('FFmpeg cmd: $ffmpegBatchCmd\n$logTail');
-          throw Exception('FFmpeg batch $b failed (rc: $rc)\n$logTail');
+        // At most ONE encode in flight: wait for the previous batch's encode, then start this one WITHOUT waiting, so the
+        // GPU (next batch) and the CPU encoder work at the same time instead of taking turns.
+        if (pendingEncode != null) {
+          await pendingEncode;
+          pendingEncode = null;
         }
-
         partVideoPaths.add(partFile.path);
+        final String encCmd = ffmpegBatchCmd;
+        final int bIdx = b;
+        final File rawRef = rawFile;
+        final File partRef = partFile;
+        pendingEncode = () async {
+          CrashLog.note('batch $bIdx encode START: ffmpeg $encCmd');
+          final session = await StageTimer.time('batch: encode', () => FFmpegKit.execute(encCmd));
+          final rc = await session.getReturnCode();
+          CrashLog.note('batch $bIdx encode RETURNED rc=$rc');
+          if (!ReturnCode.isSuccess(rc) || !partRef.existsSync() || partRef.lengthSync() == 0) {
+            final logTail = await _sessionLogTail(session);
+            debugPrint('FFmpeg cmd: $encCmd\n$logTail');
+            throw Exception('FFmpeg batch $bIdx failed (rc: $rc)\n$logTail');
+          }
+          try {
+            rawRef.deleteSync(); // immediate disk cleanup of the raw RGBA batch
+          } catch (_) {}
+        }();
+        pendingEncode.ignore(); // an error is still thrown by the await above / below; this only silences "unhandled"
+      }
 
-        // Immediate disk cleanup: purge the raw RGBA batch
-        try {
-          rawFile.deleteSync();
-        } catch (_) {}
+      if (pendingEncode != null) {
+        await pendingEncode; // last batch must be finished before the parts are joined
+        pendingEncode = null;
       }
 
       // Pass 2: Concatenate parts & remux original audio
-      onProgress(0.75, 'Concatenating video stream & remuxing audio...');
+      onProgress(0.75, 'Joining parts...');
       final concatListFile = File('${sessionTempDir.path}/concat_list.txt');
       final concatContent = partVideoPaths.map((p) => "file '$p'").join('\n');
       await concatListFile.writeAsString(concatContent, flush: true);
@@ -1146,7 +1166,7 @@ class ExportSuite {
           audioSourcePath: audioSourcePath,
           outFile: tempFinalFile,
           container: container,
-          bitDepth: bitDepth,
+          bitDepth: depth,
           bitrateProfile: bitrateProfile,
           onProgress: onProgress,
         );
@@ -1163,9 +1183,9 @@ class ExportSuite {
       }
 
       // Pass 3: save to Movies/Shaderly
-      onProgress(0.92, 'Registering video with Android MediaStore...');
+      onProgress(0.92, 'Saving video...');
       final cleanCodec = codec.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
-      final cleanBitDepth = bitDepth.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
+      final cleanBitDepth = depth.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
       final fileName = 'Shaderly_${resolution}_${cleanCodec}_${cleanBitDepth}_$timestamp.$ext';
 
       // MIME must match the extension or MediaStore may rename/reject the file.
@@ -1204,6 +1224,7 @@ class ExportSuite {
       CrashLog.end('FAILED with a Dart exception: $e');
       rethrow;
     } finally {
+      vulkanSetBandBudgetMs(40);
       // Release the decoded source batch (it can be hundreds of MB on disk)
       try {
         await prepareFrames?.call(0, 0, videoFps);
@@ -1244,16 +1265,16 @@ class ExportSuite {
     // 1. Bit depth & colour metadata
     String pixFmt;
     String colorMetadata;
+    const sdrTags = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
     if (is10Bit) {
       pixFmt = '-pix_fmt yuv420p10le';
-      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
     } else if (is16Bit) {
-      pixFmt = '-pix_fmt yuv444p10le';
-      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
+      // SVT-AV1 has no 4:4:4: AV1 stays 4:2:0 10-bit.
+      pixFmt = isAv1 ? '-pix_fmt yuv420p10le' : '-pix_fmt yuv444p10le';
     } else {
       pixFmt = '-pix_fmt yuv420p';
-      colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
     }
+    colorMetadata = sdrTags;
 
     // 2. Codec, speed preset and default quality
     String cOption;
@@ -1324,7 +1345,7 @@ class ExportSuite {
     // RGB -> YUV with the matrix the file is tagged with (default swscale uses BT.601 even when the tags say 709).
     // 'format=' right after the scale makes the conversion happen HERE, before unsharp (which cannot run on RGB).
     final String pixName = pixFmt.replaceFirst('-pix_fmt ', '');
-    final String matrix = (is10Bit || is16Bit) ? 'bt2020' : 'bt709';
+    const String matrix = 'bt709';
     final scaleFilter = 'scale=$outW:$outH:flags=lanczos+accurate_rnd:out_color_matrix=$matrix:out_range=tv,'
         'format=$pixName$extraFilters';
 
@@ -1377,19 +1398,9 @@ class ExportSuite {
     String pixFmt;
     String colorMetadata;
     String matrix;
-    if (is10) {
-      pixFmt = 'yuv420p10le';
-      matrix = 'bt2020';
-      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc arib-std-b67';
-    } else if (is16) {
-      pixFmt = 'yuv444p10le';
-      matrix = 'bt2020';
-      colorMetadata = '-color_range tv -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084';
-    } else {
-      pixFmt = 'yuv420p';
-      matrix = 'bt709';
-      colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
-    }
+    matrix = 'bt709';
+    colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
+    pixFmt = is10 ? 'yuv420p10le' : (is16 ? 'yuv444p10le' : 'yuv420p');
 
     String rate;
     if (lossless) {

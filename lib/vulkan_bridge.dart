@@ -28,6 +28,13 @@ typedef _InitVulkanDart = int Function(
 typedef _GetStatusC = ffi.Int32 Function();
 typedef _GetStatusDart = int Function();
 
+typedef _SetBandBudgetC = ffi.Void Function(ffi.Int32 ms);
+typedef _SetBandBudgetDart = void Function(int ms);
+typedef _GetLastRenderUsC = ffi.Int64 Function();
+typedef _GetLastRenderUsDart = int Function();
+typedef _SetFlareHalfC = ffi.Void Function(ffi.Int32 on);
+typedef _SetFlareHalfDart = void Function(int on);
+
 typedef _ProcessImage8C = ffi.Void Function(
   ffi.Pointer<ffi.Uint8> inBytes,
   ffi.Int32 inW,
@@ -52,6 +59,71 @@ typedef _ProcessImage8Dart = void Function(
   ffi.Pointer<ffi.Float> lutTable,
   int lutSize,
 );
+
+typedef _ProcessMotionC = ffi.Void Function(
+  ffi.Pointer<ffi.Uint8> frames,
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Int32 frameCount,
+  ffi.Int32 centerIdx,
+  ffi.Pointer<ffi.Uint8> outBytes,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+);
+typedef _ProcessMotionDart = void Function(
+  ffi.Pointer<ffi.Uint8> frames,
+  int w,
+  int h,
+  int frameCount,
+  int centerIdx,
+  ffi.Pointer<ffi.Uint8> outBytes,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+);
+
+// Batch 12 step C1: Time Slice (ring ingest + emit)
+typedef _TsIngestC = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  ffi.Int32 lutSize,
+  ffi.Int32 slot,
+  ffi.Int32 ringSlots,
+);
+typedef _TsIngestDart = int Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  int w,
+  int h,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  int lutSize,
+  int slot,
+  int ringSlots,
+);
+typedef _TsEmitC = ffi.Int32 Function(
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Pointer<ffi.Uint8> outBytes,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+);
+typedef _TsEmitDart = int Function(
+  int w,
+  int h,
+  ffi.Pointer<ffi.Uint8> outBytes,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+);
+
+// Batch 12 step C2: ring release + pass 23 debug counter
+typedef _TsReleaseC = ffi.Int32 Function();
+typedef _TsReleaseDart = int Function();
+typedef _P23CountC = ffi.Int32 Function();
+typedef _P23CountDart = int Function();
 
 typedef _ProcessImage16C = ffi.Void Function(
   ffi.Pointer<ffi.Uint16> inBytes,
@@ -90,6 +162,14 @@ class VulkanBridge {
   static _ProcessImage8Dart? _processImage8Fn;
   static _ProcessImage16Dart? _processImage16Fn;
   static _GetStatusDart? _getStatusFn;
+  static _SetBandBudgetDart? _setBandBudgetFn;
+  static _GetLastRenderUsDart? _getLastRenderUsFn;
+  static _SetFlareHalfDart? _setFlareHalfFn;
+  static _ProcessMotionDart? _processMotionFn; // batch 9 (Motion S)
+  static _TsIngestDart? _tsIngestFn; // batch 12 step C1 (Time Slice)
+  static _TsEmitDart? _tsEmitFn;
+  static _TsReleaseDart? _tsReleaseFn; // batch 12 step C2
+  static _P23CountDart? _p23CountFn;
 
   static bool _isVulkanInitialized = false;
 
@@ -113,6 +193,34 @@ class VulkanBridge {
             _getStatusFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('get_last_render_status');
           } catch (_) {
             _getStatusFn = null; // older native lib without status reporting
+          }
+          try {
+            _setBandBudgetFn = _lib!.lookupFunction<_SetBandBudgetC, _SetBandBudgetDart>('set_band_budget_ms');
+            _getLastRenderUsFn = _lib!.lookupFunction<_GetLastRenderUsC, _GetLastRenderUsDart>('get_last_render_us');
+            _setFlareHalfFn = _lib!.lookupFunction<_SetFlareHalfC, _SetFlareHalfDart>('set_flare_half_res');
+          } catch (_) {
+            _setBandBudgetFn = null; // older native lib
+            _getLastRenderUsFn = null;
+            _setFlareHalfFn = null;
+          }
+          try {
+            _processMotionFn = _lib!.lookupFunction<_ProcessMotionC, _ProcessMotionDart>('process_motion');
+          } catch (_) {
+            _processMotionFn = null; // older native lib without Motion S
+          }
+          try {
+            _tsIngestFn = _lib!.lookupFunction<_TsIngestC, _TsIngestDart>('process_timeslice_ingest');
+            _tsEmitFn = _lib!.lookupFunction<_TsEmitC, _TsEmitDart>('process_timeslice_emit');
+          } catch (_) {
+            _tsIngestFn = null; // older native lib without Time Slice
+            _tsEmitFn = null;
+          }
+          try {
+            _tsReleaseFn = _lib!.lookupFunction<_TsReleaseC, _TsReleaseDart>('process_timeslice_release');
+            _p23CountFn = _lib!.lookupFunction<_P23CountC, _P23CountDart>('get_pass23_count');
+          } catch (_) {
+            _tsReleaseFn = null; // C1 native lib: no release / counter
+            _p23CountFn = null;
           }
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
@@ -172,6 +280,24 @@ class VulkanBridge {
 int vulkanLastRenderStatus() {
   VulkanBridge._ensureLibraryLoaded();
   return VulkanBridge._getStatusFn?.call() ?? 0;
+}
+
+/// Target wall time of one GPU submit in ms (4..500). Small = phone UI stays fluid, large = less submit overhead.
+void vulkanSetBandBudgetMs(int ms) {
+  VulkanBridge._ensureLibraryLoaded();
+  VulkanBridge._setBandBudgetFn?.call(ms);
+}
+
+/// Wall time of the last native GPU pipeline run in microseconds (0 if the native lib is too old).
+int vulkanLastRenderMicros() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._getLastRenderUsFn?.call() ?? 0;
+}
+
+/// true = flare beam is pre-computed at half resolution (native pass 10). Native state is process-wide.
+void vulkanSetFlareHalfRes(bool on) {
+  VulkanBridge._ensureLibraryLoaded();
+  VulkanBridge._setFlareHalfFn?.call(on ? 1 : 0);
 }
 
 void initVulkan(Uint8List shaderBytes, int precisionBits) {
@@ -336,4 +462,128 @@ Uint8List _cpuFallbackGrade(Uint8List inBytes, int w, int h, Float32List uniform
     out[i + 2] = bCol.clamp(0.0, 255.0).toInt();
   }
   return out;
+}
+
+// ==========================================
+// MOTION S (batch 9)
+// ==========================================
+
+/// True when the native library has the Motion S entry point.
+bool vulkanMotionAvailable() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._processMotionFn != null;
+}
+
+/// One Motion S output frame. [frames] holds [frameCount] packed 8-bit RGBA frames (w * h * 4 bytes each, back to back),
+/// [centerIdx] is the frame being rendered, [uniforms] MUST be the full uniform buffer (Vfx.uboFloats floats).
+/// If the native side cannot do it, the centre frame comes back unchanged (check vulkanLastRenderStatus()).
+Uint8List processMotion(Uint8List frames, int w, int h, int frameCount, int centerIdx, Float32List uniforms) {
+  VulkanBridge._ensureLibraryLoaded();
+  final frameBytes = w * h * 4;
+  final out = Uint8List(frameBytes);
+  final fn = VulkanBridge._processMotionFn;
+  if (fn != null && frames.length >= frameBytes * frameCount && centerIdx >= 0 && centerIdx < frameCount) {
+    final inPtr = calloc<ffi.Uint8>(frames.length);
+    final outPtr = calloc<ffi.Uint8>(frameBytes);
+    final uPtr = calloc<ffi.Float>(uniforms.length);
+    try {
+      inPtr.asTypedList(frames.length).setAll(0, frames);
+      uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+      fn(inPtr, w, h, frameCount, centerIdx, outPtr, uPtr, uniforms.length);
+      out.setAll(0, outPtr.asTypedList(frameBytes));
+      return out;
+    } catch (e) {
+      debugPrint('processMotion error: $e');
+    } finally {
+      calloc.free(inPtr);
+      calloc.free(outPtr);
+      calloc.free(uPtr);
+    }
+  }
+  if (centerIdx >= 0 && (centerIdx + 1) * frameBytes <= frames.length) {
+    out.setAll(0, Uint8List.sublistView(frames, centerIdx * frameBytes, (centerIdx + 1) * frameBytes));
+  }
+  return out;
+}
+
+
+// ==========================================
+// TIME SLICE (batch 12 step C1)
+// ==========================================
+
+/// True when the native library has the Time Slice entry points.
+bool vulkanTimeSliceAvailable() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._tsIngestFn != null && VulkanBridge._tsEmitFn != null;
+}
+
+/// Grades ONE 8-bit RGBA frame (full grade, NO dither) and stores the finished look in ring slot [slot] (0 .. ringSlots-1).
+/// Returns false when the native side could not do it (then the caller grades normally). Blocking FFI call: run it in a worker (step C2).
+bool timeSliceIngest(Uint8List rgba, int w, int h, Float32List uniforms, int slot, int ringSlots, {Float32List? lutTable}) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._tsIngestFn;
+  if (fn == null || rgba.length < w * h * 4) return false;
+  final inPtr = calloc<ffi.Uint8>(w * h * 4);
+  final uPtr = calloc<ffi.Float>(uniforms.length);
+  ffi.Pointer<ffi.Float>? lutPtr;
+  try {
+    inPtr.asTypedList(w * h * 4).setAll(0, Uint8List.sublistView(rgba, 0, w * h * 4));
+    uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    int lutSize = 0;
+    if (lutTable != null && lutTable.isNotEmpty) {
+      lutPtr = calloc<ffi.Float>(lutTable.length);
+      lutPtr.asTypedList(lutTable.length).setAll(0, lutTable);
+      lutSize = lutTable.length;
+    }
+    return fn(inPtr, w, h, uPtr, uniforms.length, lutPtr ?? ffi.Pointer.fromAddress(0), lutSize, slot, ringSlots) == 0;
+  } catch (e) {
+    debugPrint('timeSliceIngest error: $e');
+    return false;
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(uPtr);
+    if (lutPtr != null) calloc.free(lutPtr);
+  }
+}
+
+/// Runs pass 22 (Time Slice) + pass 23 (dither + quantise) on the ring filled by [timeSliceIngest] and returns the 8-bit RGBA frame,
+/// or null when the ring is not valid / the GPU failed. [uniforms] = the full buffer incl. the Time Slice block and the per-frame state.
+Uint8List? timeSliceEmit(int w, int h, Float32List uniforms) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._tsEmitFn;
+  if (fn == null) return null;
+  final outLen = w * h * 4;
+  final outPtr = calloc<ffi.Uint8>(outLen);
+  final uPtr = calloc<ffi.Float>(uniforms.length);
+  try {
+    uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    if (fn(w, h, outPtr, uPtr, uniforms.length) != 0) return null;
+    return Uint8List.fromList(outPtr.asTypedList(outLen));
+  } catch (e) {
+    debugPrint('timeSliceEmit error: $e');
+    return null;
+  } finally {
+    calloc.free(outPtr);
+    calloc.free(uPtr);
+  }
+}
+
+/// Batch 12 step C2: gives the Time Slice ring memory back (the display buffer is one frame long again). Safe to call when no ring exists.
+void timeSliceRelease() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    VulkanBridge._tsReleaseFn?.call();
+  } catch (e) {
+    debugPrint('timeSliceRelease error: $e');
+  }
+}
+
+/// Batch 12 step C2 debug: complete pass 23 (dither) runs since start, or -1 when the native lib has no counter. Grows by exactly 1 per frame.
+int vulkanPass23Count() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return VulkanBridge._p23CountFn?.call() ?? -1;
+  } catch (_) {
+    return -1;
+  }
 }

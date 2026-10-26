@@ -57,7 +57,7 @@ const Map<GradientMapType, String> kGradientTypeHints = {
 };
 
 /// Hard ceiling for the mix so a LUT applied afterwards never over-contrasts.
-const double kGradientMaxStrength = 0.60;
+const double kGradientMaxStrength = 1.00;   // batch 4: full range (was 0.60). The map is a real overlay now; 1.0 = the gradient fully replaces the colour.
 
 class GradientStop {
   Color color;
@@ -94,7 +94,7 @@ class GradientMapSettings {
   GradientMapSettings({
     this.enabled = false,
     this.type = GradientMapType.luma,
-    this.strength = 0.30,
+    this.strength = 0.80,
     this.angle = 45.0,
     this.scale = 1.0,
     this.centerX = 0.5,
@@ -103,7 +103,7 @@ class GradientMapSettings {
     this.bands = 5,
     this.patternSize = 0.40,
     this.edgeWidth = 0.40,
-    this.lumaKeep = 0.60,
+    this.lumaKeep = 0.40,
     this.curve = 1.0,
     this.rangeLo = 0.0,
     this.rangeHi = 1.0,
@@ -355,7 +355,7 @@ class GradientPreset {
   final double strength;
   final double lumaKeep;
   final double angle;
-  const GradientPreset(this.name, this.type, this.stops, {this.strength = 0.30, this.lumaKeep = 0.60, this.angle = 45});
+  const GradientPreset(this.name, this.type, this.stops, {this.strength = 0.75, this.lumaKeep = 0.45, this.angle = 45});
 
   void applyTo(GradientMapSettings g) {
     g.enabled = true;

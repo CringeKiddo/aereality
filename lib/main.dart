@@ -24,14 +24,21 @@ import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
-import 'lut_processor.dart';
-import 'components/curve_editor.dart';
 import 'vulkan_bridge.dart';
 import 'touch_particles.dart';
 import 'editor_views.dart';
+import 'vfx_slots.dart';
+import 'vfx_suite.dart';
 import 'export_suite.dart';
 import 'crash_log.dart';
 import 'cpu_safe.dart';
+import 'grade_worker.dart';
+import 'accent_state.dart';
+import 'ui_kit.dart';
+import 'star_field.dart';
+import 'motion_s_screen.dart'; // batch 9: Motion S (full screen, opened from the main menu)
+import 'time_slice_slots.dart'; // batch 12 step C2: wipe scheduler + packing
+import 'cut_detector.dart'; // batch 12: CutDetector (cut scan + detection for the Time Slice wipe scheduler)
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +57,7 @@ Future<void> main() async {
     debugPrint('FFmpeg initialization error: $e');
   }
 
+  await AccentStore.load(); // saved accent colour / gradient blend / colour off (batch 7)
   Music.init(); // bundled music only (never touches the export pipeline)
   runApp(const ShaderlyApp());
   CrashLog.scheduleReport();
@@ -60,9 +68,10 @@ class ShaderlyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<Color>(
-      valueListenable: gCustomAccentColor,
-      builder: (context, accentColor, _) {
+    return AnimatedBuilder(
+      animation: gAccentListenable,
+      builder: (context, _) {
+        final accentColor = gCustomAccentColor.value;
         return MaterialApp(
           navigatorKey: CrashLog.navigatorKey,
           title: 'Shaderly',
@@ -104,6 +113,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  List<StoredProject> _all = [];
   List<StoredProject> _recent = [];
   final Map<String, Uint8List?> _thumbnails = {};
 
@@ -117,9 +127,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final projs = await ProjectManager.loadProjects();
     if (mounted) {
       setState(() {
+        _all = projs;
         _recent = projs.take(5).toList();
       });
-      _generateThumbnails(_recent);
+      _generateThumbnails(_all);
     }
   }
 
@@ -201,10 +212,11 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () async {
               Navigator.pop(ctx);
               setState(() {
-                _recent.removeAt(index);
+                _all.removeWhere((x) => x.id == proj.id);
+                _recent = _all.take(5).toList();
                 _thumbnails.remove(proj.id);
               });
-              await ProjectManager.saveProjects(_recent);
+              await ProjectManager.saveProjects(_all);
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project deleted.')));
               }
@@ -217,113 +229,153 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showColorPickerModal() {
-    final List<Map<String, dynamic>> palette = [
-      {'name': 'Aquamarine', 'color': const Color(0xFF7FFFD4)},
-      {'name': 'Soft Cream', 'color': const Color(0xFFFFFDD0)},
-      {'name': 'Matcha Green', 'color': const Color(0xFFB7D5AC)},
-      {'name': 'Lavender Mist', 'color': const Color(0xFFE6E6FA)},
-      {'name': 'Muted Rose', 'color': const Color(0xFFDDA7A5)},
-      {'name': 'Peach Puff', 'color': const Color(0xFFFFDAB9)},
-      {'name': 'Pistachio', 'color': const Color(0xFF93C572)},
-      {'name': 'Mint Cream', 'color': const Color(0xFFF5FFFA)},
-      {'name': 'Pale Canary', 'color': const Color(0xFFFFFF99)},
-      {'name': 'Blush Pink', 'color': const Color(0xFFFFD1DC)},
-      {'name': 'Soft Lilac', 'color': const Color(0xFFC8A2C8)},
-      {'name': 'Baby Blue', 'color': const Color(0xFF89CFF0)},
-      {'name': 'Periwinkle', 'color': const Color(0xFFCCCCFF)},
-      {'name': 'Sage Gray', 'color': const Color(0xFF9EA99C)},
-      {'name': 'Almond Silk', 'color': const Color(0xFFEFDECD)},
-      {'name': 'Vanilla Custard', 'color': const Color(0xFFF3E5AB)},
-      {'name': 'Seafoam Frost', 'color': const Color(0xFF9FE2BF)},
-      {'name': 'Celadon', 'color': const Color(0xFFACE1AF)},
-      {'name': 'Muted Apricot', 'color': const Color(0xFFFBCEB1)},
-      {'name': 'Mauve Taupe', 'color': const Color(0xFFB784A7)},
-      {'name': 'Desert Sand', 'color': const Color(0xFFEDC9AF)},
-      {'name': 'Pure White', 'color': const Color(0xFFFFFFFF)},
-      {'name': 'Platinum Ice', 'color': const Color(0xFFE5E4E2)},
-      {'name': 'Ghost Slate', 'color': const Color(0xFFD8D8E0)},
-      {'name': 'Quincy Cyan', 'color': const Color(0xFF00E5FF)},
-      {'name': 'Electric Gold', 'color': const Color(0xFFFFD700)},
-      {'name': 'Neon Mint', 'color': const Color(0xFF00FF9D)},
-      {'name': 'Vibrant Violet', 'color': const Color(0xFF7C4DFF)},
-      {'name': 'Shogun Crimson', 'color': const Color(0xFFFF3366)},
-      {'name': 'Solar Amber', 'color': const Color(0xFFFF9100)},
-      {'name': 'Laser Lemon', 'color': const Color(0xFFF9E858)},
-      {'name': 'Spring Meadow', 'color': const Color(0xFF69F0AE)},
-      {'name': 'Hot Coral', 'color': const Color(0xFFFF6F61)},
-      {'name': 'Cyber Purple', 'color': const Color(0xFFB388FF)},
-      {'name': 'Deep Magenta', 'color': const Color(0xFFFF4081)},
-      {'name': 'Arctic Teal', 'color': const Color(0xFF1DE9B6)},
-      {'name': 'Imperial Ruby', 'color': const Color(0xFFFF1744)},
-      {'name': 'Cobalt Neon', 'color': const Color(0xFF2979FF)},
-      {'name': 'Sunburst Glow', 'color': const Color(0xFFFFAB00)},
-      {'name': 'Emerald Glow', 'color': const Color(0xFF00E676)},
-      {'name': 'Flamingo', 'color': const Color(0xFFFC8EAC)},
-      {'name': 'Steel Cyan', 'color': const Color(0xFF64FFDA)},
-    ];
-
-    Color selectedTemp = gCustomAccentColor.value;
+    // Batch 7: grouped palette (the original 42 colours first, then new groups), a gradient-blend mini button on every colour,
+    // and an independent "Colour off" switch. Nothing is applied until APPLY.
+    Color selectedTemp = gChosenAccent.value;
+    final Set<int> gradTemp = Set<int>.of(gGradientColours.value);
+    bool offTemp = gColourOff.value;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModal) {
-          return AlertDialog(
-            backgroundColor: const Color(0xFF121218),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-            title: const Row(
-              children: [
-                Icon(Icons.palette_rounded, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Text('Accent Color', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 380,
-              child: GridView.builder(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 6,
-                  mainAxisSpacing: 10,
-                  crossAxisSpacing: 10,
-                ),
-                itemCount: palette.length,
-                itemBuilder: (context, i) {
-                  final col = palette[i]['color'] as Color;
-                  final isSel = selectedTemp.value == col.value;
-                  return GestureDetector(
-                    onTap: () => setModal(() => selectedTemp = col),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: col,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isSel ? Colors.white : Colors.white10,
-                          width: isSel ? 3.5 : 1.0,
+          final size = MediaQuery.of(context).size;
+          final bool gradOn = gradTemp.contains(selectedTemp.value);
+          final Color shown = offTemp ? kNeutralAccent : selectedTemp;
+          final Color shownEnd = (!offTemp && gradOn) ? accentPartner(selectedTemp) : shown;
+
+          Widget swatch(AccentSwatch sw) {
+            final bool isSel = selectedTemp.value == sw.color.value;
+            final bool hasGrad = gradTemp.contains(sw.color.value);
+            return SizedBox(
+              width: 48,
+              height: 52,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    child: GestureDetector(
+                      onTap: () => setModal(() => selectedTemp = sw.color),
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: hasGrad ? null : sw.color,
+                          gradient: hasGrad
+                              ? LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [sw.color, accentPartner(sw.color)])
+                              : null,
+                          border: Border.all(color: isSel ? Colors.white : Colors.white10, width: isSel ? 3.0 : 1.0),
+                          boxShadow: isSel ? [BoxShadow(color: sw.color.withOpacity(0.5), blurRadius: 8, spreadRadius: 1)] : null,
                         ),
-                        boxShadow: isSel ? [BoxShadow(color: col.withOpacity(0.5), blurRadius: 8, spreadRadius: 1)] : null,
+                        child: isSel ? const Icon(Icons.check_rounded, color: Colors.black, size: 16) : null,
                       ),
-                      child: isSel ? const Icon(Icons.check_rounded, color: Colors.black, size: 16) : null,
                     ),
-                  );
-                },
+                  ),
+                  // gradient blend mini button
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: GestureDetector(
+                      onTap: () => setModal(() {
+                        selectedTemp = sw.color;
+                        if (hasGrad) {
+                          gradTemp.remove(sw.color.value);
+                        } else {
+                          gradTemp.add(sw.color.value);
+                        }
+                      }),
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: ShapeDecoration(
+                          color: hasGrad ? Colors.white : const Color(0xFF1B1B24),
+                          shape: shelfShape(cut: 5, edge: hasGrad ? sw.color : Colors.white30),
+                        ),
+                        child: Icon(Icons.gradient_rounded, size: 13, color: hasGrad ? Colors.black : Colors.white60),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 24),
+            child: ShelfPanel(
+              title: 'ACCENT COLOUR',
+              icon: Icons.palette_rounded,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    height: 14,
+                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(7), gradient: LinearGradient(colors: [shown, shownEnd])),
+                  ),
+                  const SizedBox(height: 4),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: offTemp,
+                    activeColor: shown,
+                    title: const Text('Colour off', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                    subtitle: const Text('Neutral grey accent', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                    onChanged: (v) => setModal(() => offTemp = v),
+                  ),
+                  const SizedBox(height: 4),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: size.height * 0.46),
+                    child: Opacity(
+                      opacity: offTemp ? 0.55 : 1.0,
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final g in kAccentGroups) ...[
+                              ShelfHeader(g.name),
+                              Wrap(spacing: 8, runSpacing: 8, children: g.swatches.map(swatch).toList()),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: shown,
+                            foregroundColor: Colors.black,
+                            shape: shelfShape(cut: 8, edge: Colors.transparent),
+                          ),
+                          onPressed: () {
+                            gChosenAccent.value = selectedTemp;
+                            gGradientColours.value = gradTemp;
+                            gColourOff.value = offTemp;
+                            applyAccent();
+                            AccentStore.save();
+                            setState(() {});
+                            Navigator.pop(ctx);
+                          },
+                          child: const Text('APPLY', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: selectedTemp,
-                  foregroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: () {
-                  setState(() => gCustomAccentColor.value = selectedTemp);
-                  Navigator.pop(ctx);
-                },
-                child: const Text('APPLY COLOR', style: TextStyle(fontWeight: FontWeight.bold)),
-              ),
-            ],
           );
         },
       ),
@@ -391,147 +443,174 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModal) {
           final accent = gCustomAccentColor.value;
-          return AlertDialog(
-            backgroundColor: kCardDark,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: [
-                Icon(Icons.tune_rounded, color: accent, size: 20),
-                const SizedBox(width: 8),
-                const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: SingleChildScrollView(
+          final h = MediaQuery.of(context).size.height;
+
+          Widget shelf(int i, String title, IconData icon, List<Widget> kids) => ShelfPanel(
+                enterIndex: i,
+                title: title,
+                icon: icon,
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: kids),
+              );
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: h * 0.86),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('ACCENT COLOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _showColorPickerModal();
-                    },
-                    icon: Icon(Icons.color_lens_rounded, color: accent, size: 18),
-                    label: const Text('Pick Color', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1B1B24),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          shelf(0, 'ACCENT COLOUR', Icons.palette_rounded, [
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showColorPickerModal();
+                              },
+                              icon: Icon(Icons.color_lens_rounded, color: accent, size: 18),
+                              label: const Text('Pick Colour', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1B1B24),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                shape: shelfShape(cut: 8, edge: Colors.white12),
+                              ),
+                            ),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              title: const Text('Colour off', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                              value: gColourOff.value,
+                              activeColor: accent,
+                              onChanged: (val) {
+                                gColourOff.value = val;
+                                applyAccent();
+                                AccentStore.save();
+                                setModal(() {});
+                                setState(() {});
+                              },
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
+                          shelf(1, 'PROCESSING PRECISION', Icons.memory_rounded, [
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: ShapeDecoration(
+                                color: const Color(0xFF1E1E28),
+                                shape: shelfShape(cut: 7, edge: accent.withOpacity(0.3)),
+                              ),
+                              child: Text(
+                                '32-Bit Floating Point (Locked Native)',
+                                style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
+                          shelf(2, 'PREVIEW', Icons.visibility_rounded, [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                ChoiceChip(
+                                  label: const Text('25% Draft'),
+                                  selected: gPreviewScale == 0.25,
+                                  selectedColor: accent,
+                                  onSelected: (_) {
+                                    setModal(() => gPreviewScale = 0.25);
+                                    setState(() {});
+                                    Navigator.pop(ctx);
+                                  },
+                                ),
+                                ChoiceChip(
+                                  label: const Text('50% Smooth'),
+                                  selected: gPreviewScale == 0.50,
+                                  selectedColor: accent,
+                                  onSelected: (_) {
+                                    setModal(() => gPreviewScale = 0.50);
+                                    setState(() {});
+                                    Navigator.pop(ctx);
+                                  },
+                                ),
+                                ChoiceChip(
+                                  label: const Text('100% Native'),
+                                  selected: gPreviewScale == 1.0,
+                                  selectedColor: accent,
+                                  onSelected: (_) {
+                                    setModal(() => gPreviewScale = 1.0);
+                                    setState(() {});
+                                    Navigator.pop(ctx);
+                                  },
+                                ),
+                              ],
+                            ),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Grade paused frame only', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                              value: gGradeActiveFrameOnly,
+                              activeColor: accent,
+                              onChanged: (val) {
+                                setModal(() => gGradeActiveFrameOnly = val);
+                                setState(() {});
+                              },
+                            ),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Fast flares (half-res beam)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                              value: gFlareHalfRes,
+                              activeColor: accent,
+                              onChanged: (val) {
+                                setModal(() => gFlareHalfRes = val);
+                                vulkanSetFlareHalfRes(val);
+                                setState(() {});
+                              },
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
+                          shelf(3, 'MUSIC', Icons.music_note_rounded, [
+                            _soundRow('Music', Music.enabled, Music.volume, accent, setModal,
+                                (v) => Music.enabled = v, (v) => Music.volume = v,
+                                note: Music.trackCount == 0
+                                    ? 'No tracks found in assets/music/'
+                                    : '${Music.trackCount} tracks, shuffled.'),
+                          ]),
+                          const SizedBox(height: 10),
+                          shelf(4, 'CREATOR', Icons.person_rounded, [
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('YouTube channel link copied'), backgroundColor: Colors.redAccent),
+                                );
+                              },
+                              icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
+                              label: const Text('YouTube (@cringekiddo)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1E1418),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                shape: shelfShape(cut: 8, edge: Colors.white12),
+                              ),
+                            ),
+                          ]),
+                        ],
+                      ),
                     ),
                   ),
-
-                  const SizedBox(height: 20),
-                  const Text('PROCESSING PRECISION', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E28),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: accent.withOpacity(0.3)),
-                    ),
-                    child: Text(
-                      '32-Bit Floating Point (Locked Native)',
-                      style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 12),
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Text('PREVIEW QUALITY (2K / 4K SHIELD)', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('25% Draft'),
-                        selected: gPreviewScale == 0.25,
-                        selectedColor: accent,
-                        onSelected: (_) {
-                          setModal(() => gPreviewScale = 0.25);
-                          setState(() {});
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('50% Smooth'),
-                        selected: gPreviewScale == 0.50,
-                        selectedColor: accent,
-                        onSelected: (_) {
-                          setModal(() => gPreviewScale = 0.50);
-                          setState(() {});
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('100% Native'),
-                        selected: gPreviewScale == 1.0,
-                        selectedColor: accent,
-                        onSelected: (_) {
-                          setModal(() => gPreviewScale = 1.0);
-                          setState(() {});
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Text('TIMELINE CC PREVIEW MODE', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Grade Active Frame on Pause Only', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                    subtitle: const Text('Saves GPU heat and battery when scrubbing long videos', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                    value: gGradeActiveFrameOnly,
-                    activeColor: accent,
-                    onChanged: (val) {
-                      setModal(() => gGradeActiveFrameOnly = val);
-                      setState(() {});
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-                  const Text('MUSIC', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
-                  _soundRow('Music', Music.enabled, Music.volume, accent, setModal,
-                      (v) => Music.enabled = v, (v) => Music.volume = v,
-                      note: Music.trackCount == 0
-                          ? 'No tracks found in assets/music/'
-                          : '${Music.trackCount} tracks, shuffled. Plays only while the timeline is paused.'),
-
-                  const SizedBox(height: 20),
-                  const Text('CREATOR', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('YouTube channel link copied'), backgroundColor: Colors.redAccent),
-                      );
-                    },
-                    icon: const Icon(Icons.smart_display_rounded, color: Colors.redAccent, size: 18),
-                    label: const Text('YouTube (@cringekiddo)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1E1418),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text('Close', style: TextStyle(color: accent, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text('Close', style: TextStyle(color: accent, fontWeight: FontWeight.bold)),
-              ),
-            ],
           );
         },
       ),
@@ -541,17 +620,22 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final accent = gCustomAccentColor.value;
+    final double top = MediaQuery.of(context).padding.top + kToolbarHeight;
 
     return Scaffold(
+      backgroundColor: kBackgroundDark,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: Row(
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
+              decoration: ShapeDecoration(
                 color: accent.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: accent.withOpacity(0.3)),
+                shape: shelfShape(cut: 5, edge: accent.withOpacity(0.4)),
               ),
               child: Text('SH', style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 13)),
             ),
@@ -572,105 +656,294 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Shaderly', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
-
-            // BUTTON 1: NEW PROJECT
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: accent.withOpacity(0.40),
-                    blurRadius: 14,
-                    spreadRadius: 1.5,
-                  ),
-                ],
-              ),
-              child: ElevatedButton.icon(
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
-                icon: const Icon(Icons.add_rounded, color: Colors.black, size: 22),
-                label: const Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: accent,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: accent, width: 2.0),
+      body: PixelStarField(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, top + 6, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SlideInTilt(
+                index: 0,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 14),
+                  child: Row(
+                    children: [
+                      DiamondDot(size: 9, color: accent),
+                      const SizedBox(width: 10),
+                      const Text('SHADERLY', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 4)),
+                    ],
                   ),
                 ),
               ),
-            ),
 
-            const SizedBox(height: 14),
-
-            // BUTTON 2: OPEN RECENT PROJECT
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  if (_recent.isNotEmpty) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ProjectScreen(
-                          initialProject: _recent.first.data,
-                          projectName: _recent.first.name,
-                          projectId: _recent.first.id,
+              // SHELF 1: start
+              ShelfPanel(
+                enterIndex: 1,
+                title: 'START',
+                icon: Icons.play_arrow_rounded,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // BUTTON 1: NEW PROJECT
+                    Container(
+                      decoration: ShapeDecoration(
+                        gradient: accentGradient(),
+                        shape: shelfShape(cut: 11, edge: Colors.white.withOpacity(0.35)),
+                        shadows: [BoxShadow(color: accent.withOpacity(0.40), blurRadius: 14, spreadRadius: 1.0)],
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          customBorder: shelfShape(cut: 11),
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProjectSetupScreen())).then((_) => _load()),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.add_rounded, color: Colors.black, size: 22),
+                                SizedBox(width: 8),
+                                Text('NEW PROJECT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ).then((_) => _load());
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No saved projects yet.')));
-                  }
-                },
-                icon: Icon(Icons.bookmarks_rounded, color: accent, size: 18),
-                label: Text('OPEN RECENT PROJECT', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: accent.withOpacity(0.4), width: 1.0),
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-            const Text('SAVED PROJECTS (UP TO 5 SLOTS)', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            if (_recent.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(28),
-                decoration: BoxDecoration(
-                  color: kSurfaceDark,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
-                ),
-                child: const Column(
-                  children: [
-                    Icon(Icons.layers_clear_outlined, color: Colors.white24, size: 36),
-                    SizedBox(height: 10),
-                    Text('No saved projects found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
-                    SizedBox(height: 4),
-                    Text('Tap "NEW PROJECT" to start.', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                    ),
+                    const SizedBox(height: 12),
+                    // BUTTON 2: PROJECTS
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        customBorder: shelfShape(cut: 9),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => ProjectsScreen(thumbnails: _thumbnails)),
+                        ).then((_) => _load()),
+                        child: Ink(
+                          decoration: ShapeDecoration(shape: shelfShape(cut: 9, edge: accent.withOpacity(0.45))),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.bookmarks_rounded, color: accent, size: 18),
+                              const SizedBox(width: 8),
+                              Text('PROJECTS', style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 12, letterSpacing: 0.6)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              )
-            else
+              ),
+
+              const SizedBox(height: 14),
+
+              // MOTION S (batch 9): big shelf plate, accent / gradient / colour-off aware. Not a panel, so the stars stay visible around it.
+              SlideInTilt(
+                index: 2,
+                child: Builder(builder: (context) {
+                  final cols = accentColors();
+                  return Container(
+                    decoration: ShapeDecoration(
+                      gradient: LinearGradient(colors: [cols.first.withOpacity(0.26), cols.last.withOpacity(0.08)]),
+                      shape: shelfShape(cut: 16, edge: cols.first.withOpacity(0.75), width: 1.4),
+                      shadows: [BoxShadow(color: cols.first.withOpacity(0.22), blurRadius: 18)],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        customBorder: shelfShape(cut: 16),
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MotionSScreen())),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+                          child: Row(
+                            children: [
+                              DiamondDot(size: 9, color: cols.first),
+                              const SizedBox(width: 14),
+                              Icon(Icons.motion_photos_on_rounded, color: cols.first, size: 30),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('MOTION S', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w900, letterSpacing: 3)),
+                                    const SizedBox(height: 3),
+                                    Text('SMEAR  /  MAIN  /  DUPLICATE', style: TextStyle(color: cols.first.withOpacity(0.9), fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 1.4)),
+                                  ],
+                                ),
+                              ),
+                              Icon(Icons.arrow_forward_ios_rounded, color: cols.first, size: 16),
+                              const SizedBox(width: 6),
+                              DiamondDot(size: 9, color: cols.last),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+
+              const SizedBox(height: 14),
+
+              // SHELF 2: recent
               Expanded(
-                child: ListView.separated(
-                  itemCount: _recent.length,
+                child: ShelfPanel(
+                  enterIndex: 3,
+                  title: 'RECENT',
+                  icon: Icons.history_rounded,
+                  fill: true,
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  child: _recent.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.layers_clear_outlined, color: Colors.white24, size: 36),
+                              SizedBox(height: 10),
+                              Text('No saved projects found.', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600)),
+                              SizedBox(height: 4),
+                              Text('Tap "NEW PROJECT" to start.', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: EdgeInsets.zero,
+                          itemCount: _recent.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, i) {
+                            final p = _recent[i];
+                            final thumbBytes = _thumbnails[p.id];
+
+                            return SlideInTilt(
+                              index: i,
+                              child: Container(
+                                decoration: ShapeDecoration(
+                                  color: kCardDark,
+                                  shape: shelfShape(cut: 9, edge: Colors.white.withOpacity(0.06)),
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  leading: ClipRRect(
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Container(
+                                      width: 50,
+                                      height: 50,
+                                      color: Colors.black45,
+                                      child: thumbBytes != null
+                                          ? Image.memory(thumbBytes, fit: BoxFit.cover)
+                                          : Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: accent),
+                                    ),
+                                  ),
+                                  title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                                  subtitle: Text('${p.mediaPath.split('/').last}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+                                        tooltip: 'Delete Project',
+                                        onPressed: () => _deleteProject(i),
+                                      ),
+                                      Icon(Icons.arrow_forward_ios_rounded, color: accent, size: 14),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ProjectScreen(
+                                          initialProject: p.data,
+                                          projectName: p.name,
+                                          projectId: p.id,
+                                        ),
+                                      ),
+                                    ).then((_) => _load());
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ProjectsScreen extends StatefulWidget {
+  final Map<String, Uint8List?> thumbnails;
+  const ProjectsScreen({super.key, required this.thumbnails});
+
+  @override
+  State<ProjectsScreen> createState() => _ProjectsScreenState();
+}
+
+class _ProjectsScreenState extends State<ProjectsScreen> {
+  List<StoredProject> _all = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final l = await ProjectManager.loadProjects();
+    if (!mounted) return;
+    setState(() {
+      _all = l;
+      _loading = false;
+    });
+  }
+
+  Future<void> _delete(StoredProject p) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kCardDark,
+        title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text('Delete "${p.name}"?', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _all.removeWhere((x) => x.id == p.id));
+    await ProjectManager.saveProjects(_all);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = gCustomAccentColor.value;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Projects')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _all.isEmpty
+              ? const Center(child: Text('No saved projects.', style: TextStyle(color: Colors.white54)))
+              : ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _all.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (context, i) {
-                    final p = _recent[i];
-                    final thumbBytes = _thumbnails[p.id];
-
+                    final p = _all[i];
+                    final thumb = widget.thumbnails[p.id];
                     return Container(
                       decoration: BoxDecoration(
                         color: kCardDark,
@@ -685,44 +958,32 @@ class _HomeScreenState extends State<HomeScreen> {
                             width: 50,
                             height: 50,
                             color: Colors.black45,
-                            child: thumbBytes != null
-                                ? Image.memory(thumbBytes, fit: BoxFit.cover)
+                            child: thumb != null
+                                ? Image.memory(thumb, fit: BoxFit.cover)
                                 : Icon(p.data.isImage ? Icons.image_rounded : Icons.movie_creation_rounded, color: accent),
                           ),
                         ),
                         title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                        subtitle: Text('${p.mediaPath.split('/').last}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
-                              tooltip: 'Delete Project',
-                              onPressed: () => _deleteProject(i),
-                            ),
-                            Icon(Icons.arrow_forward_ios_rounded, color: accent, size: 14),
-                          ],
+                        subtitle: Text('${p.data.aspectRatio}  ·  ${p.lastOpened.toString().substring(0, 16)}',
+                            style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 20),
+                          tooltip: 'Delete',
+                          onPressed: () => _delete(p),
                         ),
-                        onTap: () {
-                          Navigator.push(
+                        onTap: () async {
+                          await Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => ProjectScreen(
-                                initialProject: p.data,
-                                projectName: p.name,
-                                projectId: p.id,
-                              ),
+                              builder: (_) => ProjectScreen(initialProject: p.data, projectName: p.name, projectId: p.id),
                             ),
-                          ).then((_) => _load());
+                          );
+                          _load();
                         },
                       ),
                     );
                   },
                 ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -801,7 +1062,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
     final accent = gCustomAccentColor.value;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create New Session')),
+      appBar: AppBar(title: const Text('New Project')),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
@@ -820,7 +1081,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               controller: TextEditingController(text: _projectName),
             ),
             const SizedBox(height: 20),
-            const Text('OUTPUT ASPECT RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Wrap(
               spacing: 10,
@@ -828,7 +1089,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               children: _aspectRatios.map((ratio) => _buildProportionalRatioBox(ratio, _selectedAspect == ratio, accent)).toList(),
             ),
             const SizedBox(height: 24),
-            const Text('SOURCE FOOTAGE OR ART', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+            const Text('MEDIA', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             GestureDetector(
               onTap: () async {
@@ -863,13 +1124,13 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      _selectedFile == null ? 'Browse video file or image' : _selectedFile!.path.split('/').last,
+                      _selectedFile == null ? 'Choose video or image' : _selectedFile!.path.split('/').last,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _selectedFile == null ? 'Supports true 2K, 4K, 1080p, 720p' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
+                      _selectedFile == null ? 'Video or image' : '${(_selectedFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB',
                       style: const TextStyle(color: Colors.white38, fontSize: 12),
                     ),
                   ],
@@ -918,7 +1179,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-                child: const Text('OPEN STUDIO EDITOR', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                child: const Text('OPEN EDITOR', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5)),
               ),
             ),
           ],
@@ -966,6 +1227,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   ui.Image? _processedStaticImage;
   int _renderWidth = 720;
   int _renderHeight = 900;
+  int _srcW = 0;
+  int _srcH = 0;
+  bool _pendingExtract = false;
 
   String? _selectedPresetName;
   bool _isBslOverlayActive = false;
@@ -979,6 +1243,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   bool _isVulkanProcessing = false;
   bool _needsReprocess = false;
+
+  // --- preview engine (B5) -------------------------------------------------------------------------------------
+  // Quality while playing / scrubbing: preview size is multiplied by this (effect radii scale with resolution in the
+  // shader, so the look stays comparable). Paused = full preview quality again. [ASSUMED floor, tune on the N20]
+  static const double kInteractiveScale = 0.5;
+  static const int kInteractiveMinLongEdge = 480;
+  bool _scrubbing = false;
+  Uint8List? _videoFrameRgba; // last decoded preview frame of the video (raw RGBA, _videoFrameW x _videoFrameH)
+  int _videoFrameW = 0;
+  int _videoFrameH = 0;
+  Uint8List? _imgFrameRgba; // cropped + resized still image (cached so slider drags do not redo it)
+  String _imgFrameKey = '';
+  String _lastGradeSig = '';
+  final ValueNotifier<int> _previewTick = ValueNotifier<int>(0); // repaints ONLY the graded preview layer
+  bool _liveReady = false; // true once a live-graded frame is on screen during playback
+
+  // continuous graded playback ("Grade paused frame only" OFF): 2 s chunks decoded by ONE ffmpeg call each
+  Timer? _pbTimer;
+  static const double _pbFps = 24.0;
+  static const int _pbChunkFrames = 48;
+  Uint8List? _pbBuf;
+  double _pbStart = 0;
+  int _pbCount = 0;
+  int _pbW = 0;
+  int _pbH = 0;
+  Uint8List? _pbNextBuf;
+  double _pbNextStart = -1;
+  int _pbNextCount = 0;
+  bool _pbDecoding = false;
+  int _pbGen = 0;
   bool _isSavingProject = false;
 
   AdjustmentLayer get _cur => _project.currentLayer;
@@ -987,7 +1281,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
-    _tabController = TabController(length: 12, vsync: this);
+    _tabController = TabController(length: 15, vsync: this); // 15 since batch 12 C3 (index 14 = TIME SLICE)
     _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
@@ -1001,11 +1295,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void dispose() {
     _playbackTimer?.cancel();
+    _pbTimer?.cancel();
+    _rebuildThrottle?.cancel();
+    _previewTick.dispose();
     _tabController.dispose();
     _controller?.pause();
     _controller?.dispose();
     _controller = null;
     _processedStaticImage?.dispose();
+    _tsReleaseRing(); // batch 12 C2: give the Time Slice ring memory back
     super.dispose();
   }
 
@@ -1019,11 +1317,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _performUndo() {
     if (_undoHistory.length > 1) {
+      final oldView = _viewKey();
       setState(() {
         _redoHistory.add(_undoHistory.removeLast());
         _project = _undoHistory.last.clone();
       });
-      _applyGrade();
+      _resyncPreview(oldView);
       _autoSaveProject();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Reverted latest change'), duration: Duration(milliseconds: 600)),
@@ -1037,12 +1336,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _performRedo() {
     if (_redoHistory.isNotEmpty) {
+      final oldView = _viewKey();
       setState(() {
         final nextState = _redoHistory.removeLast();
         _undoHistory.add(nextState);
         _project = nextState.clone();
       });
-      _applyGrade();
+      _resyncPreview(oldView);
       _autoSaveProject();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Redone change'), duration: Duration(milliseconds: 600)),
@@ -1064,6 +1364,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (mounted) setState(() => _activeLuts = list);
   }
 
+  // ignore: unused_element
   Map<String, int> _calculateTargetDimensions(String resolutionName, String ratioStr, [double scale = 1.0]) {
     int baseSize;
     switch (resolutionName) {
@@ -1092,10 +1393,115 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return {'width': targetW, 'height': targetH};
   }
 
+  /// Largest crop of the source with aspect [r] (fill, no stretch), placed by the pan offset. [x, y, w, h], even numbers.
+  List<int> _cropRect(int srcW, int srcH, double r) {
+    int cw, ch;
+    if (srcW / srcH > r) {
+      ch = srcH;
+      cw = (srcH * r).round();
+    } else {
+      cw = srcW;
+      ch = (srcW / r).round();
+    }
+    cw = math.max(2, math.min(srcW, cw) & ~1);
+    ch = math.max(2, math.min(srcH, ch) & ~1);
+    final x = ((srcW - cw) * (_project.panX + 1) / 2).round().clamp(0, srcW - cw).toInt();
+    final y = ((srcH - ch) * (_project.panY + 1) / 2).round().clamp(0, srcH - ch).toInt();
+    return [x, y, cw, ch];
+  }
+
+  // Preview size follows the imported media: native resolution (times the preview scale), long edge capped at 2560.
   void _updateDimensions(int srcW, int srcH) {
-    final dims = _calculateTargetDimensions('720p', _project.aspectRatio, gPreviewScale);
-    _renderWidth = math.min(1080, dims['width']!);
-    _renderHeight = math.min(1920, dims['height']!);
+    _srcW = srcW;
+    _srcH = srcH;
+    final c = _cropRect(srcW, srcH, _getAspectRatioValue(_project.aspectRatio));
+    double sc = gPreviewScale;
+    final longEdge = math.max(c[2], c[3]);
+    if (_isPlaying || _scrubbing) {
+      // dynamic quality: smoother while moving, never below ~480 px on the long edge
+      sc = math.max(sc * kInteractiveScale, math.min(sc, kInteractiveMinLongEdge / longEdge));
+    }
+    if (longEdge * sc > 2560) sc = 2560 / longEdge;
+    _renderWidth = math.max(16, ((c[2] * sc + 8) ~/ 16) * 16);
+    _renderHeight = math.max(16, ((c[3] * sc + 8) ~/ 16) * 16);
+  }
+
+  List<int> _previewCrop() => _cropRect(_srcW, _srcH, _renderWidth / _renderHeight);
+
+  String _previewVf(int w, int h) {
+    if (_srcW <= 0 || _srcH <= 0) return 'scale=$w:$h';
+    final c = _previewCrop();
+    return 'crop=${c[2]}:${c[3]}:${c[0]}:${c[1]},scale=$w:$h';
+  }
+
+  String _viewKey() => '${_project.aspectRatio}|${_project.panX}|${_project.panY}';
+
+  void _resyncPreview(String oldView) {
+    final changed = oldView != _viewKey();
+    if (changed && _srcW > 0) _updateDimensions(_srcW, _srcH);
+    _applyGrade(forceExtract: changed && !_project.isImage);
+  }
+
+  void _setRatio(String r) {
+    if (r == _project.aspectRatio) return;
+    _pushUndoSnapshot();
+    setState(() {
+      _project.aspectRatio = r;
+      _project.panX = 0.0;
+      _project.panY = 0.0;
+    });
+    if (_srcW > 0) _updateDimensions(_srcW, _srcH);
+    _applyGrade(forceExtract: !_project.isImage);
+    _autoSaveProject();
+  }
+
+  void _showRatioChanger() {
+    const ratios = ['16:9', '9:16', '4:5', '1:1', '3:4', '21:9'];
+    final accent = gCustomAccentColor.value;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: kCardDark,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('RATIO', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: ratios
+                    .map((r) => ChoiceChip(
+                          label: Text(r),
+                          selected: _project.aspectRatio == r,
+                          selectedColor: accent,
+                          onSelected: (_) {
+                            Navigator.pop(ctx);
+                            _setRatio(r);
+                          },
+                        ))
+                    .toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _panPreview(DragUpdateDetails d, Size box) {
+    if (_srcW <= 0 || _srcH <= 0 || box.width <= 0 || box.height <= 0) return;
+    final sc = math.max(box.width / _srcW, box.height / _srcH);
+    final exX = _srcW * sc - box.width;
+    final exY = _srcH * sc - box.height;
+    setState(() {
+      if (exX > 1) _project.panX = (_project.panX - d.delta.dx * 2 / exX).clamp(-1.0, 1.0).toDouble();
+      if (exY > 1) _project.panY = (_project.panY - d.delta.dy * 2 / exY).clamp(-1.0, 1.0).toDouble();
+    });
+    _applyGrade(forceExtract: !_project.isImage);
   }
 
   Future<void> _loadShader() async {
@@ -1115,6 +1521,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     if (shaderBytes != null) {
       initVulkan(shaderBytes, gEnginePrecision);
+      vulkanSetFlareHalfRes(gFlareHalfRes);
     }
   }
 
@@ -1125,6 +1532,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final ext = p.split('.').last.toLowerCase();
       final validExts = ['mp4', 'mov', 'mkv', 'webm', 'png', 'jpg', 'jpeg', 'webp'];
       if (validExts.contains(ext)) {
+        _project.panX = 0.0;
+        _project.panY = 0.0;
         await _loadMedia(p);
       }
     }
@@ -1136,6 +1545,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
 
     _playbackTimer?.cancel();
+    _pbTimer?.cancel();
+    _pbGen++;
+    _pbBuf = null;
+    _pbNextBuf = null;
+    _videoFrameRgba = null;
+    _imgFrameKey = '';
+    _lastGradeSig = '';
     Music.onVideoPause();
     if (_controller != null) {
       await _controller!.pause();
@@ -1157,6 +1573,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final decoded = img.decodeImage(fileBytes);
       if (decoded != null) {
         _cachedRawImage = decoded;
+        _imgFrameKey = '';
         _updateDimensions(decoded.width, decoded.height);
         _applyGrade();
       }
@@ -1188,9 +1605,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 _currentTimelinePosition = newPos;
               });
 
-              if (!gGradeActiveFrameOnly) {
-                _applyGrade(forceExtract: true);
-              }
             }
           });
         });
@@ -1199,82 +1613,273 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _autoSaveProject();
   }
 
+  Future<ui.Image> _rgbaToImage(Uint8List px, int w, int h) {
+    final c = Completer<ui.Image>();
+    ui.decodeImageFromPixels(px, w, h, ui.PixelFormat.rgba8888, c.complete);
+    return c.future;
+  }
+
+  /// One raw RGBA preview frame via ONE ffmpeg call (no PNG encode / decode in between).
+  Future<Uint8List?> _extractPreviewFrameRgba(int w, int h) async {
+    final tempDir = await getTemporaryDirectory();
+    final out = File('${tempDir.path}/tl_frame_preview.rgba');
+    try {
+      if (out.existsSync()) out.deleteSync();
+    } catch (_) {}
+    await FFmpegKit.execute(
+      '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -frames:v 1 '
+      '-vf "${_previewVf(w, h)}" -f rawvideo -pix_fmt rgba "${out.path}"',
+    );
+    if (!out.existsSync()) return null;
+    final bytes = await out.readAsBytes();
+    try {
+      out.deleteSync();
+    } catch (_) {}
+    return bytes.length == w * h * 4 ? bytes : null;
+  }
+
   Future<void> _applyGrade({bool forceExtract = false}) async {
+    // While playing, the picture is either the raw video (grade-paused-only mode) or the live loop below.
+    if (_isPlaying) return;
     if (_isVulkanProcessing) {
       _needsReprocess = true;
+      if (forceExtract) _pendingExtract = true;
       return;
     }
     _isVulkanProcessing = true;
     _needsReprocess = false;
 
     try {
-      int w = _renderWidth;
-      int h = _renderHeight;
+      if (_srcW > 0) _updateDimensions(_srcW, _srcH); // paused = full quality, scrubbing = interactive quality
+      final int w = _renderWidth;
+      final int h = _renderHeight;
       Uint8List? rawBytes;
 
       if (_project.isImage && _cachedRawImage != null) {
-        final resized = img.copyResize(_cachedRawImage!, width: w, height: h);
-        rawBytes = resized.getBytes(order: img.ChannelOrder.rgba);
-      } else if (!_project.isImage && _project.mediaPath.isNotEmpty) {
-        if (forceExtract || _cachedRawImage == null) {
-          final tempDir = await getTemporaryDirectory();
-          final framePath = '${tempDir.path}/tl_frame_preview.png';
-
-          await FFmpegKit.execute(
-            '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -vframes 1 -s ${w}x${h} "$framePath"',
-          );
-
-          final frameFile = File(framePath);
-          if (await frameFile.exists()) {
-            final fBytes = await frameFile.readAsBytes();
-            final decoded = img.decodePng(fBytes);
-            if (decoded != null) {
-              _cachedRawImage = decoded;
-              rawBytes = decoded.getBytes(order: img.ChannelOrder.rgba);
-            }
-            try { await frameFile.delete(); } catch (_) {}
-          }
-        } else if (_cachedRawImage != null) {
-          rawBytes = _cachedRawImage!.getBytes(order: img.ChannelOrder.rgba);
+        final key = '${w}x$h|${_viewKey()}';
+        if (_imgFrameRgba == null || _imgFrameKey != key) {
+          final pc = _previewCrop();
+          final cropped = img.copyCrop(_cachedRawImage!, x: pc[0], y: pc[1], width: pc[2], height: pc[3]);
+          final resized = img.copyResize(cropped, width: w, height: h);
+          _imgFrameRgba = resized.getBytes(order: img.ChannelOrder.rgba);
+          _imgFrameKey = key;
         }
+        rawBytes = _imgFrameRgba;
+      } else if (!_project.isImage && _project.mediaPath.isNotEmpty) {
+        if (forceExtract || _videoFrameRgba == null || _videoFrameW != w || _videoFrameH != h) {
+          final f = await _extractPreviewFrameRgba(w, h);
+          if (f != null) {
+            _videoFrameRgba = f;
+            _videoFrameW = w;
+            _videoFrameH = h;
+          }
+        }
+        rawBytes = _videoFrameRgba;
+        if (rawBytes != null && rawBytes.length != w * h * 4) rawBytes = null;
       }
 
       if (rawBytes != null) {
         final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
         final lutTable = _getActiveLutTable();
 
-        final outBytes = processImage(rawBytes, w, h, w, h, uniforms, lutTable: lutTable);
+        // Nothing changed since the picture on screen (same frame, same settings): skip the GPU completely.
+        final sig = '${identityHashCode(rawBytes)}|$w|$h|${Object.hashAll(uniforms)}|${lutTable == null ? 0 : identityHashCode(lutTable)}';
+        if (sig == _lastGradeSig && _processedStaticImage != null) return;
 
-        final completer = Completer<ui.Image>();
-        ui.decodeImageFromPixels(outBytes, w, h, ui.PixelFormat.rgba8888, (im) => completer.complete(im));
-        final res = await completer.future;
+        // The GPU work runs in the worker isolate: the UI isolate stays free (sliders, taps, animations).
+        final res = await GradeWorker.instance.grade(rgba: rawBytes, w: w, h: h, uniforms: uniforms, lut: lutTable);
+        final im = await _rgbaToImage(res.rgba, w, h);
 
         if (mounted) {
-          setState(() {
-            _processedStaticImage?.dispose();
-            _processedStaticImage = res;
-          });
+          _processedStaticImage?.dispose();
+          _processedStaticImage = im;
+          _lastGradeSig = sig;
+          _previewTick.value++;
+        } else {
+          im.dispose();
         }
       }
     } catch (_) {
     } finally {
       _isVulkanProcessing = false;
       if (_needsReprocess && mounted) {
-        _applyGrade();
+        final fe = _pendingExtract;
+        _pendingExtract = false;
+        _applyGrade(forceExtract: fe);
       }
     }
   }
 
-  List<int> _exportSize() {
-    if (_project.isImage && _cachedRawImage != null) {
-      return [_cachedRawImage!.width, _cachedRawImage!.height];
+  // Slider / curve / wheel callbacks. The grade is requested immediately (latest wins, runs in the worker). The whole-screen
+  // rebuild that used to happen on EVERY drag event (~60-120 per second) is now throttled to ~16 per second: SmoothSliderRow
+  // moves its own handle instantly, and the other controls (wheels, switches, curves) still refresh.
+  Timer? _rebuildThrottle;
+  void _onSliderChanged() {
+    _applyGrade();
+    if (_rebuildThrottle?.isActive ?? false) return;
+    _rebuildThrottle = Timer(const Duration(milliseconds: 60), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  // ---------------------------------------------------------------------------------------------------
+  // CONTINUOUS GRADED PLAYBACK  (settings: "Grade paused frame only" = OFF)
+  // The video plays normally (it is the clock and the sound). Every ~40 ms the frame for the current play position is
+  // cut from a 2-second chunk (ONE ffmpeg call per chunk, decoded at the lower play quality), graded in the worker
+  // isolate and shown over the video. If the GPU is still busy the tick is skipped = frames are DROPPED, the UI never
+  // waits. Until the first graded frame is ready the raw video stays visible.
+  // ---------------------------------------------------------------------------------------------------
+  void _startLivePlayback() {
+    _pbTimer?.cancel();
+    _pbGen++;
+    _pbBuf = null;
+    _pbNextBuf = null;
+    _liveReady = false;
+    _previewTick.value++;
+    if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already true -> lower quality
+    vulkanSetBandBudgetMs(12);
+    if (!gGradeActiveFrameOnly && !_project.isImage) {
+      _pbTimer = Timer.periodic(const Duration(milliseconds: 40), (_) => _playbackGradeTick());
     }
-    final s = _controller!.value.size;
-    int w = s.width.toInt();
-    int h = s.height.toInt();
-    if (w.isOdd) w -= 1;
-    if (h.isOdd) h -= 1;
-    return [w, h];
+  }
+
+  void _stopLivePlayback() {
+    _pbTimer?.cancel();
+    _pbTimer = null;
+    _pbGen++;
+    _pbBuf = null;
+    _pbNextBuf = null;
+    _liveReady = false;
+    vulkanSetBandBudgetMs(40);
+    if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already false -> full quality
+    _previewTick.value++;
+  }
+
+  Future<Uint8List?> _decodeChunk(double startSec, int w, int h) async {
+    final dir = await getTemporaryDirectory();
+    final f = File('${dir.path}/pb_chunk.rgba');
+    try {
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {}
+    await FFmpegKit.execute(
+      '-hide_banner -y -ss ${startSec.toStringAsFixed(3)} -i "${_project.mediaPath}" -an -sn -dn '
+      '-vf "fps=$_pbFps,${_previewVf(w, h)}" -frames:v $_pbChunkFrames -f rawvideo -pix_fmt rgba "${f.path}"',
+    );
+    if (!f.existsSync()) return null;
+    final b = await f.readAsBytes();
+    try {
+      f.deleteSync();
+    } catch (_) {}
+    return b.length >= w * h * 4 ? b : null;
+  }
+
+  Future<void> _pbRequest(double startSec, int w, int h, {required bool asNext}) async {
+    if (_pbDecoding) return;
+    _pbDecoding = true;
+    final gen = _pbGen;
+    try {
+      final b = await _decodeChunk(startSec, w, h);
+      if (b == null || gen != _pbGen || !mounted) return;
+      final n = b.length ~/ (w * h * 4);
+      if (asNext) {
+        _pbNextBuf = b;
+        _pbNextStart = startSec;
+        _pbNextCount = n;
+      } else {
+        _pbBuf = b;
+        _pbStart = startSec;
+        _pbCount = n;
+        _pbW = w;
+        _pbH = h;
+      }
+    } catch (_) {
+    } finally {
+      _pbDecoding = false;
+    }
+  }
+
+  void _playbackGradeTick() {
+    final c = _controller;
+    if (!mounted || c == null || !c.value.isInitialized || !c.value.isPlaying || _srcW <= 0) return;
+    final pos = c.value.position.inMilliseconds / 1000.0;
+    final w = _renderWidth;
+    final h = _renderHeight;
+    final fb = w * h * 4;
+
+    if (_pbBuf != null && (_pbW != w || _pbH != h)) {
+      _pbBuf = null;
+      _pbNextBuf = null;
+    }
+    bool inCur = _pbBuf != null && _pbCount > 0 && pos >= _pbStart && pos < _pbStart + _pbCount / _pbFps;
+    if (!inCur) {
+      if (_pbNextBuf != null && pos >= _pbNextStart && pos < _pbNextStart + _pbNextCount / _pbFps) {
+        _pbBuf = _pbNextBuf;
+        _pbStart = _pbNextStart;
+        _pbCount = _pbNextCount;
+        _pbW = w;
+        _pbH = h;
+        _pbNextBuf = null;
+        inCur = true;
+      } else {
+        _pbRequest(pos, w, h, asNext: false); // not ready yet: the raw video keeps showing
+        return;
+      }
+    }
+    if (_pbNextBuf == null && pos > _pbStart + (_pbChunkFrames / _pbFps) * 0.5) {
+      _pbRequest(_pbStart + _pbCount / _pbFps, w, h, asNext: true); // prefetch the next 2 s
+    }
+    if (_isVulkanProcessing) return; // GPU busy: drop this frame
+    int idx = ((pos - _pbStart) * _pbFps).floor();
+    idx = idx.clamp(0, _pbCount - 1).toInt();
+    if (_tsPreviewTick(pos, w, h)) return; // batch 12 C2: inside a Time Slice wipe the ring emit replaces the plain grade of this frame
+    _gradeLive(Uint8List.sublistView(_pbBuf!, idx * fb, (idx + 1) * fb), w, h);
+  }
+
+  Future<void> _gradeLive(Uint8List frame, int w, int h) async {
+    if (_isVulkanProcessing) return;
+    _isVulkanProcessing = true;
+    try {
+      final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+      final res = await GradeWorker.instance.grade(rgba: frame, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+      final im = await _rgbaToImage(res.rgba, w, h);
+      if (!mounted || !(_controller?.value.isPlaying ?? false)) {
+        im.dispose();
+        return;
+      }
+      _processedStaticImage?.dispose();
+      _processedStaticImage = im;
+      _renderWidth = w;
+      _renderHeight = h;
+      _liveReady = true;
+      _previewTick.value++;
+    } catch (_) {
+    } finally {
+      _isVulkanProcessing = false;
+      _needsReprocess = false;
+    }
+  }
+
+  List<int> _exportCrop() {
+    int sw, sh;
+    if (_project.isImage && _cachedRawImage != null) {
+      sw = _cachedRawImage!.width;
+      sh = _cachedRawImage!.height;
+    } else {
+      final sz = _controller!.value.size;
+      sw = sz.width.toInt();
+      sh = sz.height.toInt();
+    }
+    return _cropRect(sw, sh, _getAspectRatioValue(_project.aspectRatio));
+  }
+
+  List<int> _exportSize() {
+    final c = _exportCrop();
+    return [c[2], c[3]];
+  }
+
+  String _exportCropFilter() {
+    final c = _exportCrop();
+    return 'crop=${c[2]}:${c[3]}:${c[0]}:${c[1]},';
   }
 
   void _openExportSheet() {
@@ -1337,6 +1942,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Future<void> _prepareExportFrames(double startMs, int frameCount, double fps) async {
     await _releaseExportBatch();
+    if (frameCount <= 0) {
+      _tsExportBroken = false;
+      _tsReleaseRing(); // batch 12 C2: the export is over, free the ring
+    }
     if (frameCount <= 0 || _project.isImage) return;
 
     final size = _exportSize();
@@ -1349,7 +1958,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     CrashLog.note('  decode batch: $frameCount frames from ${startSec}s @ ${fps}fps, ${w}x$h');
     await FFmpegKit.execute(
       '-hide_banner -y ${CpuSafe.ffArgs()}-ss $startSec -i "${_project.mediaPath}" -an -sn -dn '
-      '-vf "fps=$fps,scale=$w:$h" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"',
+      '-vf "fps=$fps,${_exportCropFilter()}scale=$w:$h" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"',
     );
 
     final frameBytes = w * h * 4;
@@ -1382,14 +1991,261 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return bytes.length == _batchFrameBytes ? bytes : null;
   }
 
+  // ---------------------------------------------------------------------------------------------------
+  // TIME SLICE (batch 12 step C2)
+  // The wipe schedule (TimeSliceScheduler) says which output frames are inside a wipe. The 23 frames around a cut (cutFrame - 11 .. + 11 = TimeSlice.ringSlots; C3: was 9) are graded ONCE
+  // each into the native ring (pre-dither), then every wipe frame is emitted from the ring (pass 22 + the one dither of pass 23).
+  // PREVIEW: only while PLAYING (paused = plain grade). The ring for the next cut is filled up to 2 s before its wipe starts; if it is not ready in time
+  // the plain frame is shown (never black, never half sliced). EXPORT: the ring is filled when the first frame of a wipe is rendered; no look-ahead needed.
+  // Effect OFF / no cuts / no native support: none of this runs, nothing is allocated, the normal path is untouched.
+  // ---------------------------------------------------------------------------------------------------
+  List<double>? _tsCutsCache;
+  String _tsCutsKey = '';
+  TimeSliceScheduler? _tsSched;
+  String _tsSchedKey = '';
+  bool _tsSchedBuilding = false;
+  String _tsRingKey = ''; // which ring is in native memory ('' = none / invalid)
+  int _tsRingSig = 0; // grade signature the preview ring was filled with (a changed grade makes the ring stale)
+  bool _tsPrepping = false;
+  bool _tsExportBroken = false; // the ring failed during this export: plain frames for the rest (no retry loop)
+
+  /// Index of the first layer with Time Slice on, or -1 (also -1 for images / without native support).
+  int _tsLayer() {
+    if (_project.isImage || !vulkanTimeSliceAvailable()) return -1;
+    for (int i = 0; i < _project.layers.length && i < 10; i++) {
+      final s = _project.layers[i].timeSlice;
+      if (TimeSlice.isOn(s)) return i; // C3: no continuous mode (owner decision), so the effect is always one wipe per cut; the old autoTrigger slot (10) is ignored
+    }
+    return -1;
+  }
+
+  // C3: the ring holds graded frames around ONE cut frame, so its identity is the cut FRAME (+ size / fps), not the schedule: dragging Wipe Duration / Overlap / Cut lands at
+  // no longer throws the ring away and regrades 23 frames on every slider tick (the old key contained the schedule key).
+  String _tsKeyOf(String tag, int cutFrame, int w, int h, double fps) => '$tag|$cutFrame|$w|$h|$fps';
+
+  /// Hash of the grade part of the uniform buffer (float 1..6399; not the time, not the Time Slice block): changes when the look changes.
+  int _tsSig(Float32List u) {
+    final b = u.buffer.asUint32List(u.offsetInBytes, 6400);
+    int h = 0x811C9DC5;
+    for (int i = 1; i < 6400; i++) {
+      h ^= b[i];
+      h = (h * 0x01000193) & 0xFFFFFFFF;
+    }
+    return h;
+  }
+
+  String _tsDetKey(List<double> s) => '${_project.mediaPath}|${s[TimeSlice.cutThreshold]}|${s[TimeSlice.cutMinGap]}|${s[TimeSlice.cutFlashReject]}|${s[TimeSlice.cutFlashWindow]}';
+  String _tsSchedKeyFor(List<double> s, double fps) => '${_tsDetKey(s)}|$fps|${s[TimeSlice.wipeDuration]}|${s[TimeSlice.cutPoint]}|${s[TimeSlice.overlap]}';
+
+  Future<TimeSliceScheduler> _tsScheduler(List<double> s, double fps) async {
+    final detKey = _tsDetKey(s);
+    final key = _tsSchedKeyFor(s, fps);
+    if (_tsSched != null && _tsSchedKey == key) return _tsSched!;
+    if (_tsCutsCache == null || _tsCutsKey != detKey) {
+      final scan = await CutDetector.scan(_project.mediaPath, _videoDurationSeconds); // cached per video on disk
+      _tsCutsCache = scan == null ? <double>[] : CutDetector.detect(scan, s);
+      _tsCutsKey = detKey;
+    }
+    final sched = TimeSliceScheduler.build(cuts: _tsCutsCache!, fps: fps, settings: s);
+    _tsSched = sched;
+    _tsSchedKey = key;
+    return sched;
+  }
+
+  void _tsReleaseRing() {
+    final had = _tsRingKey.isNotEmpty;
+    _tsRingKey = '';
+    if (had) unawaited(TimeSliceWorker.instance.release());
+  }
+
+  /// Decodes the source frames cutFrame - R .. cutFrame + R (R = TimeSlice.ringHalf, 23 frames; clamped to the clip: frames before the start repeat the first frame,
+  /// after the end the last). C3: returns the decoded bytes as they are plus the mapping; the old version copied them into a second 23-frame buffer, which would
+  /// have doubled the Dart memory (2 x 340 MB at 2K) now that the ring is 23 frames. The caller reads each slot straight out of [_TsDecoded.bytes].
+  Future<_TsDecoded?> _tsDecodeRing(int cutFrame, int w, int h, double fps, bool preview) async {
+    final fb = w * h * 4;
+    const slots = TimeSlice.ringSlots;
+    final lead = math.max(0, TimeSlice.ringHalf - cutFrame); // slots before frame 0
+    final need = slots - lead;
+    final dir = await getTemporaryDirectory();
+    final f = File('${dir.path}/ts_ring.rgba');
+    try { if (f.existsSync()) f.deleteSync(); } catch (_) {}
+    final start = math.max(0.0, (cutFrame - TimeSlice.ringHalf) / fps);
+    final vf = preview ? _previewVf(w, h) : '${_exportCropFilter()}scale=$w:$h';
+    await FFmpegKit.execute('-hide_banner -y ${CpuSafe.ffArgs()}-ss ${start.toStringAsFixed(4)} -i "${_project.mediaPath}" -an -sn -dn '
+        '-vf "fps=$fps,$vf" -frames:v $need -f rawvideo -pix_fmt rgba "${f.path}"');
+    if (!f.existsSync()) return null;
+    final b = await f.readAsBytes();
+    try { f.deleteSync(); } catch (_) {}
+    final have = b.length ~/ fb;
+    if (have < 1) return null;
+    return _TsDecoded(b, lead, have);
+  }
+
+  /// Fills the native ring for one cut (23 ingests, each frame graded once). Returns false when it could not.
+  Future<bool> _tsPrepareRing(TimeSliceWipe wipe, int w, int h, double fps, String key, {required bool preview}) async {
+    if (_tsPrepping) return false;
+    _tsPrepping = true;
+    final gen = _pbGen;
+    try {
+      _tsRingKey = ''; // the ring is being overwritten
+      final raw = await _tsDecodeRing(wipe.cutFrame, w, h, fps, preview);
+      if (raw == null) return false;
+      final fb = w * h * 4;
+      final lut = _getActiveLutTable();
+      int sig = 0;
+      for (int j = 0; j < TimeSlice.ringSlots; j++) {
+        if (preview && (gen != _pbGen || !mounted)) return false;
+        final u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+        if (j == 0) sig = _tsSig(u);
+        u[0] = math.max(0, wipe.cutFrame + j - TimeSlice.ringHalf) / fps; // each frame is graded at its own time (grain / flicker)
+        final ok = await TimeSliceWorker.instance.ingest(
+            rgba: raw.frame(j, fb), w: w, h: h, uniforms: u, slot: j, ringSlots: TimeSlice.ringSlots, lut: lut);
+        if (!ok) return false;
+      }
+      _tsRingKey = key;
+      _tsRingSig = sig;
+      return true;
+    } catch (e) {
+      debugPrint('Time Slice ring: $e');
+      return false;
+    } finally {
+      _tsPrepping = false;
+    }
+  }
+
+  Future<void> _tsPrepSchedule(List<double> s, double fps) async {
+    if (_tsSchedBuilding) return;
+    _tsSchedBuilding = true;
+    try {
+      await _tsScheduler(s, fps);
+    } catch (e) {
+      debugPrint('Time Slice schedule: $e');
+    } finally {
+      _tsSchedBuilding = false;
+    }
+  }
+
+  /// Called once per playback tick (GPU idle). Returns true when this tick started a ring emit (the plain grade is then skipped).
+  bool _tsPreviewTick(double pos, int w, int h) {
+    final lay = _tsLayer();
+    if (lay < 0) {
+      if (_tsRingKey.isNotEmpty) _tsReleaseRing();
+      return false;
+    }
+    final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
+    final sched = _tsSched;
+    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) {
+      _tsPrepSchedule(s, _pbFps); // cut scan (cached) + schedule, in the background; plain frames meanwhile
+      return false;
+    }
+    final frame = (pos * _pbFps).round();
+    final cur = sched.at(frame);
+    if (cur == null) {
+      final up = sched.upcoming(frame, (_pbFps * 2.0).round()); // C3: 2 s of look-ahead at ANY frame rate (was a fixed 36 frames = 0.6 s at 60 fps; the ring is now 23 frames)
+      if (up != null && !_tsPrepping) {
+        final k = _tsKeyOf('pv', up.cutFrame, w, h, _pbFps);
+        if (k != _tsRingKey) _tsPrepareRing(up, w, h, _pbFps, k, preview: true);
+      }
+      return false;
+    }
+    final key = _tsKeyOf('pv', cur.cutFrame, w, h, _pbFps);
+    if (key != _tsRingKey) {
+      if (!_tsPrepping) {
+        final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
+        _tsPrepareRing(wipe, w, h, _pbFps, key, preview: true);
+      }
+      return false; // not ready: plain frame
+    }
+    _tsEmitLive(cur, s, lay, w, h, pos);
+    return true;
+  }
+
+  Future<void> _tsEmitLive(TimeSliceFrame cur, List<double> s, int lay, int w, int h, double pos) async {
+    if (_isVulkanProcessing) return;
+    _isVulkanProcessing = true;
+    try {
+      final u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+      if (_tsSig(u) != _tsRingSig) {
+        _tsRingKey = ''; // the grade changed since the ring was filled: plain frames until it is refilled
+        return;
+      }
+      u[0] = pos;
+      TimeSlice.packFrameState(u, p: cur.p, n: cur.n, cutPointValue: s[TimeSlice.cutPoint], layer: lay);
+      final out = await TimeSliceWorker.instance.emit(w: w, h: h, uniforms: u);
+      if (out == null) {
+        _tsRingKey = ''; // ring gone (buffers were resized) or GPU error: plain frames, ring is refilled on the next tick
+        return;
+      }
+      final im = await _rgbaToImage(out, w, h);
+      if (!mounted || !(_controller?.value.isPlaying ?? false)) {
+        im.dispose();
+        return;
+      }
+      _processedStaticImage?.dispose();
+      _processedStaticImage = im;
+      _renderWidth = w;
+      _renderHeight = h;
+      _liveReady = true;
+      _previewTick.value++;
+    } catch (_) {
+    } finally {
+      _isVulkanProcessing = false;
+      _needsReprocess = false;
+    }
+  }
+
+  /// Export: the finished frame when [timestampMs] is inside a wipe, else null (normal path). The export frame rate is the one the batch was decoded with.
+  Future<Uint8List?> _tsExportFrame(double timestampMs, int w, int h) async {
+    if (_tsExportBroken) return null;
+    final lay = _tsLayer();
+    if (lay < 0) return null;
+    try {
+      final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
+      final fps = _batchFps;
+      final sched = await _tsScheduler(s, fps);
+      final frame = (timestampMs / 1000.0 * fps).round();
+      final cur = sched.at(frame);
+      if (cur == null) return null;
+      final key = _tsKeyOf('ex', cur.cutFrame, w, h, fps);
+      if (key != _tsRingKey) {
+        final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
+        if (!await _tsPrepareRing(wipe, w, h, fps, key, preview: false)) {
+          _tsExportBroken = true;
+          return null;
+        }
+      }
+      final u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+      u[0] = timestampMs / 1000.0;
+      TimeSlice.packFrameState(u, p: cur.p, n: cur.n, cutPointValue: s[TimeSlice.cutPoint], layer: lay);
+      final out = await TimeSliceWorker.instance.emit(w: w, h: h, uniforms: u);
+      if (out == null) {
+        _tsRingKey = '';
+        _tsExportBroken = true;
+        return null;
+      }
+      return out;
+    } catch (e) {
+      debugPrint('Time Slice export frame: $e');
+      _tsExportBroken = true;
+      return null;
+    }
+  }
+
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
     final size = _exportSize();
     final w = size[0];
     final h = size[1];
     Uint8List? raw;
 
+    if (!_project.isImage) {
+      // batch 12 C2: a frame inside a Time Slice wipe comes from the ring (pass 22 + the single dither of pass 23); every other frame takes the normal path below
+      final tsOut = await _tsExportFrame(timestampMs, w, h);
+      if (tsOut != null) return tsOut;
+    }
+
     if (_project.isImage) {
-      raw = _cachedRawImage!.getBytes(order: img.ChannelOrder.rgba);
+      final ec = _exportCrop();
+      raw = img.copyCrop(_cachedRawImage!, x: ec[0], y: ec[1], width: ec[2], height: ec[3]).getBytes(order: img.ChannelOrder.rgba);
     } else {
       // Fast path: the frame is cut out of the batch that _prepareExportFrames decoded in ONE ffmpeg call.
       final readWatch = Stopwatch()..start();
@@ -1408,7 +2264,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         CrashLog.note('  decode source frame (ffmpeg -ss $t) [slow path]');
         await FFmpegKit.execute(
           '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
-          '-vf scale=$w:$h -f rawvideo -pix_fmt rgba "${rawFile.path}"',
+          '-vf "${_exportCropFilter()}scale=$w:$h" -f rawvideo -pix_fmt rgba "${rawFile.path}"',
         );
 
         if (rawFile.existsSync() && rawFile.lengthSync() == w * h * 4) {
@@ -1430,12 +2286,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[0] = timestampMs / 1000.0;
     CrashLog.note('  vulkan processImage ${w}x$h');
     final gradeWatch = Stopwatch()..start();
-    final out = processImage(raw, w, h, w, h, uniforms, lutTable: _getActiveLutTable());
+    // Worker isolate: the UI isolate keeps running during the GPU work (no freeze, no "not responding").
+    final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
     StageTimer.add('frame: grade (Vulkan, incl. copies)', gradeWatch.elapsedMicroseconds);
-    CrashLog.note('  vulkan done, gpu status=${vulkanLastRenderStatus()} (0 = ok)');
-
-    await Future<void>.delayed(Duration.zero);
-    return out;
+    CrashLog.note('  vulkan done, gpu status=${res.gpuStatus} (0 = ok), native ${res.micros ~/ 1000} ms');
+    return res.rgba;
   }
 
   /// The LUT is GLOBAL (the shader applies it once, after all layers). It lives on whichever layer holds it,
@@ -1506,11 +2361,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ===========================================================================
-  // UNIFORM BUFFER ENGINE (192-Float Stride per Layer + 48-Float Gradient Map per Layer, 4096 Floats Capacity)
+  // UNIFORM BUFFER ENGINE (192-Float Stride per Layer + 48-Float Gradient Map per Layer, 6144 Floats Capacity: text owns 3872..4095, VFX 4096..4735, Sapphire 4736..5375, 5376..6143 reserved headroom)
   // Perfectly synchronised with aereality_core.comp layout
   // ===========================================================================
   Float32List _packMultiLayerUniforms(double imgW, double imgH) {
-    final uniforms = Float32List(4096);
+    final uniforms = Float32List(Vfx.uboFloats); // 6144 (batch 7): 4096 as before + VFX + Sapphire blocks (batch 6) + 768 reserved headroom floats
     final timeSeconds = (_controller != null && _controller!.value.isInitialized)
         ? _controller!.value.position.inMilliseconds / 1000.0
         : 0.0;
@@ -1537,7 +2392,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[22] = _project.textLumaThreshold;
     uniforms[23] = _project.textMetallicTint;
     uniforms[24] = 0.40; // Default Text Glow
-    uniforms[25] = 0.50; // Text Glow Radius
+    uniforms[25] = 0.50; // legacy text glow radius (glow now comes from the personal block)
+    _project.text.packInto(uniforms); // text suite personal block + vector points (floats 3872..4095)
 
     uniforms[28] = 0.0; // Bit depth preview mode
 
@@ -1546,6 +2402,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       final layer = _project.layers[l];
       final offset = 32 + (l * 192);
       layer.gradientMap.packInto(uniforms, GradientMapSettings.kBaseOffset + l * GradientMapSettings.kFloatsPerLayer);
+      layer.packFxInto(uniforms, l);
+      layer.packVfxInto(uniforms, l); // batch 6: floats 4096.. (VFX) and 4736.. (Sapphire)
+      uniforms[32 + (l * 192) + 184] = layer.fx[Fx.dofPreview];
 
       uniforms[offset + 0] = layer.isEnabled ? 1.0 : 0.0;
       uniforms[offset + 1] = layer.opacity;
@@ -1751,6 +2610,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 183] = layer.flareCoreWhite;
     }
 
+    TimeSlice.packLayers(uniforms, [for (final l in _project.layers) l.timeSlice]); // batch 12 C2: Time Slice settings 6400..7039 (mirror in project_uniforms.dart)
+    MathOps.packLayers(uniforms, [for (final l in _project.layers) l.mathOps]); // batch 14: MathOps settings 7584..7743 (mirror in project_uniforms.dart)
+    Gradient4Way.packLayers(uniforms, [for (final l in _project.layers) l.grad4]); // batch 14: 4-Way Gradient settings 7744..7903 (mirror in project_uniforms.dart)
+    Bevel.packLayers(uniforms, [for (final l in _project.layers) l.bevel]); // batch 13: Metallic Bevel settings 7424..7583 (mirror in project_uniforms.dart)
     return uniforms;
   }
 
@@ -1966,7 +2829,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               DropdownMenuItem(value: LayerBlendMode.softLight, child: Text('Soft Light')),
               DropdownMenuItem(value: LayerBlendMode.multiply, child: Text('Multiply')),
               DropdownMenuItem(value: LayerBlendMode.add, child: Text('Add')),
-              DropdownMenuItem(value: LayerBlendMode.linearDodge, child: Text('Linear Dodge')),
+              DropdownMenuItem(value: LayerBlendMode.linearDodge, child: Text('Linear Dodge (= Linear Add)')),
+              DropdownMenuItem(value: LayerBlendMode.darken, child: Text('Darken')),
+              DropdownMenuItem(value: LayerBlendMode.lighten, child: Text('Lighten')),
+              DropdownMenuItem(value: LayerBlendMode.colorDodge, child: Text('Color Dodge')),
+              DropdownMenuItem(value: LayerBlendMode.colorBurn, child: Text('Color Burn')),
+              DropdownMenuItem(value: LayerBlendMode.hardLight, child: Text('Hard Light')),
+              DropdownMenuItem(value: LayerBlendMode.linearBurn, child: Text('Linear Burn')),
+              DropdownMenuItem(value: LayerBlendMode.difference, child: Text('Difference')),
+              DropdownMenuItem(value: LayerBlendMode.exclusion, child: Text('Exclusion')),
+              DropdownMenuItem(value: LayerBlendMode.subtract, child: Text('Subtract')),
+              DropdownMenuItem(value: LayerBlendMode.hue, child: Text('Hue')),
+              DropdownMenuItem(value: LayerBlendMode.saturationBlend, child: Text('Saturation')),
+              DropdownMenuItem(value: LayerBlendMode.colorBlend, child: Text('Color')),
+              DropdownMenuItem(value: LayerBlendMode.luminosity, child: Text('Luminosity')),
             ],
             onChanged: (mode) {
               if (mode != null) {
@@ -2024,11 +2900,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   _controller!.pause();
                   _isPlaying = false;
                   Music.onVideoPause(); // music fades back in ~7 s after pausing
+                  _stopLivePlayback(); // sharpen: back to full preview quality
                   _applyGrade(forceExtract: true);
                 } else {
                   _controller!.play();
                   _isPlaying = true;
                   Music.onVideoPlay(); // music fades out so the video's audio is clean
+                  _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
                 }
               });
             },
@@ -2052,6 +2930,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 value: _currentTimelinePosition.clamp(0.0, _videoDurationSeconds),
                 min: 0.0,
                 max: _videoDurationSeconds,
+                onChangeStart: (_) => _scrubbing = true,
                 onChanged: (val) {
                   setState(() {
                     _currentTimelinePosition = val;
@@ -2062,6 +2941,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   }
                 },
                 onChangeEnd: (val) {
+                  _scrubbing = false; // sharpen after the scrub
                   _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
                     _applyGrade(forceExtract: true);
                   });
@@ -2085,6 +2965,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       project: _project,
       containerSize: Size(constraints.maxWidth, constraints.maxHeight),
       onUpdated: () => _applyGrade(),
+      onEnded: () {
+        _pushUndoSnapshot();
+        _autoSaveProject();
+      },
     );
   }
 
@@ -2116,7 +3000,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
                         : Icon(Icons.home_outlined, color: accent, size: 24),
-                    tooltip: 'Save Project to Home',
+                    tooltip: 'Save',
                     onPressed: _isSavingProject ? null : _manualSaveProject,
                   ),
                   const SizedBox(width: 4),
@@ -2144,24 +3028,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                     Icons.title_rounded,
                     color: _project.textSuiteEnabled ? accent : Colors.white70,
                   ),
-                  tooltip: 'Text Suite Chrome Box',
+                  tooltip: 'Text Suite',
                   onPressed: () {
                     _pushUndoSnapshot();
                     setState(() => _project.textSuiteEnabled = !_project.textSuiteEnabled);
+                    if (_project.textSuiteEnabled) _tabController.animateTo(11); // opens the TEXT settings tab
                     _applyGrade();
                     _autoSaveProject();
                   },
                 ),
                 IconButton(
-                  icon: _isSavingProject
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : Icon(Icons.save_rounded, color: accent),
-                  tooltip: 'Save Project',
-                  onPressed: _isSavingProject ? null : _manualSaveProject,
+                  icon: Icon(Icons.aspect_ratio_rounded, color: accent),
+                  tooltip: 'Change Ratio',
+                  onPressed: _showRatioChanger,
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
@@ -2178,7 +3057,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 ),
                 IconButton(
                   icon: const Icon(Icons.file_upload_outlined, color: Colors.white),
-                  tooltip: 'Render Master Video / Art',
+                  tooltip: 'Export',
                   onPressed: _openExportSheet,
                 ),
               ],
@@ -2194,17 +3073,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   Container(
                     color: Colors.black,
                     child: Center(
-                      child: AspectRatio(
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: GlowFrame(child: AspectRatio(
                         aspectRatio: _getAspectRatioValue(_project.aspectRatio),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            return ClipRect(
+                            return GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onPanStart: _project.textSuiteEnabled ? null : (_) => _pushUndoSnapshot(),
+                              onPanUpdate: _project.textSuiteEnabled ? null : (d) => _panPreview(d, Size(constraints.maxWidth, constraints.maxHeight)),
+                              onPanEnd: _project.textSuiteEnabled ? null : (_) => _autoSaveProject(),
+                              child: ClipRect(
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
                                   if (!_project.isImage && _controller != null && _controller!.value.isInitialized)
                                     FittedBox(
                                       fit: BoxFit.cover,
+                                      alignment: Alignment(_project.panX, _project.panY),
                                       child: SizedBox(
                                         width: _controller!.value.size.width,
                                         height: _controller!.value.size.height,
@@ -2212,26 +3099,36 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                       ),
                                     ),
 
-                                  if (hasMedia && (gGradeActiveFrameOnly ? !_isPlaying : true))
-                                    FittedBox(
-                                      fit: BoxFit.cover,
-                                      child: SizedBox(
-                                        width: _renderWidth.toDouble(),
-                                        height: _renderHeight.toDouble(),
-                                        child: RawImage(image: _processedStaticImage),
-                                      ),
-                                    )
-                                  else if (!_isPlaying && !hasMedia)
-                                    const Center(
-                                      child: CircularProgressIndicator(color: Colors.white38),
-                                    ),
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: _previewTick,
+                                    builder: (context, _, __) {
+                                      final has = _processedStaticImage != null;
+                                      final show = has && (gGradeActiveFrameOnly ? !_isPlaying : (!_isPlaying || _liveReady));
+                                      if (show) {
+                                        return FittedBox(
+                                          fit: BoxFit.cover,
+                                          child: SizedBox(
+                                            width: _renderWidth.toDouble(),
+                                            height: _renderHeight.toDouble(),
+                                            child: RawImage(image: _processedStaticImage),
+                                          ),
+                                        );
+                                      }
+                                      if (!_isPlaying && !has) {
+                                        return const Center(child: CircularProgressIndicator(color: Colors.white38));
+                                      }
+                                      return const SizedBox.shrink();
+                                    },
+                                  ),
 
                                   _buildTextSuiteBoundingBoxOverlay(constraints),
                                 ],
                               ),
+                              ),
                             );
                           },
                         ),
+                      )),
                       ),
                     ),
                   ),
@@ -2265,31 +3162,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               _buildAdjustmentLayerBar(),
               _buildLayerSettingsHeader(),
 
-              Container(
-                color: const Color(0xFF0F0F14),
-                child: TabBar(
-                  controller: _tabController,
-                  isScrollable: true,
-                  indicatorColor: accent,
-                  labelColor: accent,
-                  unselectedLabelColor: Colors.white38,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-                  tabs: const [
-                    Tab(text: 'PRESETS'),
-                    Tab(text: 'TONEMAPPERS'),
-                    Tab(text: 'GRADIENT MAP'),
-                    Tab(text: 'LUT'),
-                    Tab(text: 'BASIC'),
-                    Tab(text: 'COLORISTA'),
-                    Tab(text: 'MAGIC'),
-                    Tab(text: 'COPIED STUFF'),
-                    Tab(text: 'GLOW / FLARE'),
-                    Tab(text: 'ATMOSPHERE'),
-                    Tab(text: 'CURVES'),
-                    Tab(text: 'TIMELINE'),
-                  ],
-                ),
-              ),
+              // Batch 7: the same tabs (15 since batch 12 C3) shown as 4 shelves (LOOK / TONE / FX / TEXT). Same controller, same indices, same TabBarView.
+              ShelfTabBar(controller: _tabController),
 
               Expanded(
                 flex: 5,
@@ -2368,11 +3242,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       ),
                       GradientMapsTab(
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2412,11 +3284,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildBasicGradingTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2425,11 +3295,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildColoristaTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2438,11 +3306,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildMagicTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2451,11 +3317,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildCopiedStuffTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2464,11 +3328,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildGlowsAndFlaresTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2477,11 +3339,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       EditorViews.buildAtmosphereTab(
                         context: context,
                         cur: _cur,
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
@@ -2492,10 +3352,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         cur: _cur,
                         selectedCurveChannel: _selectedCurveChannel,
                         onChannelChanged: (ch) => setState(() => _selectedCurveChannel = ch),
-                        onChanged: () {
-                          setState(() {});
-                          _applyGrade();
-                        },
+                        onChanged: _onSliderChanged,
                         onResetCurve: () {
                           _pushUndoSnapshot();
                           setState(() {});
@@ -2503,13 +3360,47 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           _autoSaveProject();
                         },
                       ),
-                      EditorViews.buildTimelineOptimizerTab(
+                      EditorViews.buildTextSuiteTab(
                         context: context,
                         project: _project,
-                        videoDuration: _videoDurationSeconds,
-                        currentPosition: _currentTimelinePosition,
-                        onChanged: () {
-                          setState(() {});
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      VfxSuite.buildVfxTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      VfxSuite.buildSapphireTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      VfxSuite.buildTimeSliceTab(
+                        context: context,
+                        cur: _cur,
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {}); // values changed during the drag: refresh everything else once, now
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
                           _applyGrade();
                         },
                       ),
@@ -2522,5 +3413,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         ),
       ),
     );
+  }
+}
+
+/// Result of _tsDecodeRing: the decoded frames plus how ring slot j maps onto them (slots before the clip start repeat the first frame, slots after the end the last).
+class _TsDecoded {
+  final Uint8List bytes;
+  final int lead; // ring slots before frame 0
+  final int have; // frames actually decoded
+  _TsDecoded(this.bytes, this.lead, this.have);
+
+  Uint8List frame(int slot, int frameBytes) {
+    final src = (slot < lead) ? 0 : math.min(slot - lead, have - 1);
+    return Uint8List.sublistView(bytes, src * frameBytes, (src + 1) * frameBytes);
   }
 }

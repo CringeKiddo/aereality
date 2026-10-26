@@ -46,6 +46,10 @@ int gEnginePrecision = 1;
 // Global Toggle: Grade Active Scrub Frame only vs Continuous Frame Grading
 bool gGradeActiveFrameOnly = true;
 
+// Pre-compute the anamorphic flare beam at half resolution (native pass 10). OFF = old per-pixel flare maths.
+// Switch in Settings > Preview; compare both on the same clip before leaving it on.
+bool gFlareHalfRes = false;
+
 // -----------------------------------------------------------------------------
 // Anime Aesthetic Palette Constants
 // -----------------------------------------------------------------------------
@@ -86,13 +90,29 @@ class PresetStyle {
 const List<PresetStyle> kAnimePresetStyles = [
   PresetStyle(name: 'Frieren v3', accent: AnimePalette.yamatoIce),
   PresetStyle(name: 'Frieren Upd', accent: AnimePalette.silverWhite),
+  PresetStyle(name: 'Soft Cold CC', accent: AnimePalette.yamatoIce),
+  PresetStyle(name: 'Foggy CC', accent: AnimePalette.tojiSteel),
 ];
 
 // -----------------------------------------------------------------------------
 // Master Clean Export Matrix Engine (AV1, VP9, ProRes, FFV1)
 // Complete 16-Bit & 10-Bit Matrix • Zero Stride Mismatches • Faststart Support
 // -----------------------------------------------------------------------------
-class ExportMatrix {
+// ================================================
+// KEEP THIS CLASS (LegacyExportMatrix). DO NOT DELETE.
+// ================================================
+// Deprecated fallback, intentionally kept by owner.
+// (This is a block INSIDE constants.dart, which is a LIVE file:
+//  everything above this block is in active use.)
+// Zero callers in the live path.
+// Live export path: export_suite.dart -> export_matrix.dart
+// If you are an AI or future maintainer: leave this class
+// alone. Do not import, call, or reference it.
+/// DEPRECATED (batch 7): nothing in the app references this class. The live matrix is ExportMatrix in export_matrix.dart
+/// (HEVC / H.264 / AV1 / VP9 / ProRes); this one describes an older AV1 / VP9 / FFV1 / ProRes-only layout. Renamed so the two
+/// no longer clash on import; kept (not deleted) until you confirm, see SUMMARY.txt.
+@Deprecated('Use ExportMatrix from export_matrix.dart')
+class LegacyExportMatrix {
   static const Map<String, List<String>> containerCodecs = {
     'MKV': [
       'AV1 (libsvtav1 Master)',

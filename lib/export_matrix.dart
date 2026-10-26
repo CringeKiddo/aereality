@@ -31,6 +31,7 @@ class ExportMatrix {
 
   /// Codecs that are reliably available on Android mobile devices
   /// (Fallback-safe encoder support matrix)
+  // ignore: unused_field
   static const Set<String> _androidReliableCodecs = {
     'H.264 (libx264)',
     'H.265 (libx265)',
@@ -61,6 +62,8 @@ class ExportMatrix {
     final isMkv = container.toUpperCase() == 'MKV';
 
     if (depth == '16-bit') {
+      // 4:4:4 10-bit: ProRes 4444, or MKV with HEVC / VP9. H.264 4:4:4 and SVT-AV1 4:4:4 do not decode / encode reliably on phones.
+      if (codec.contains('H.264') || codec.contains('AV1')) return false;
       return isProRes || isMkv;
     }
     if (depth == '10-bit') {

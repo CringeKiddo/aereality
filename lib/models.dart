@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'gradient_map.dart';
+import 'vfx_slots.dart';
+import 'time_slice_slots.dart'; // batch 12 (step A): Time Slice settings model
 
 // =============================================================================
 // MUSIC ONLY (sound effects were removed). Plays shuffled tracks from assets/music/
@@ -165,6 +167,142 @@ class Music {
   }
 }
 
+
+// =============================================================================
+// BATCH 4: per-layer FX block (72 floats) + free-point curves (72 floats).
+// Slot numbers MUST match FxData / CurveData in aereality_core.comp.
+// =============================================================================
+class Fx {
+  static const int size = 72;
+  static const int packBase = 2432;      // + layer * 72
+  static const int curveBase = 3152;     // + layer * 72
+  // per-effect opacity (default 1)
+  static const int opCurves = 0, opGradMap = 1, opDuotone = 2, opDiffusion = 3, opProMist = 4, opFog = 5,
+      opBlendFx = 6, opEdgeSoft = 7, opDeepGlow = 8, opKawase = 9, opShaderly = 10, opHalation = 11,
+      opDof = 12, opEdgeBleed = 13, opLightWrap = 14;
+  // custom blend per effect: 0 = the effect's own default compositing, n = LayerBlendMode index + 1
+  static const int cbGradMap = 15, cbHalation = 16, cbShaderly = 17, cbDeepGlow = 18, cbDuotone = 19, cbFog = 20,
+      cbDiffusion = 21, cbProMist = 22;
+  // Optical Diffusion
+  static const int diffAmt = 23, diffThreshold = 24, diffRadius = 25, diffMix = 26, diffWarmth = 27;
+  // Pro Mist
+  static const int mistAmt = 28, mistThreshold = 29, mistRadius = 30, mistTint = 31, mistLift = 32;
+  // Duotone
+  static const int duoOn = 33, duoShadow = 34, duoHigh = 35, duoMid = 36, duoMidPos = 37, duoContrast = 38,
+      duoGamma = 39, duoMix = 40, duoMode = 41, duoKeepLight = 42, duoInvert = 43, duoBands = 44;
+  // Overall Blend (two colour regions -> one look)
+  static const int obStrength = 45, obHueA = 46, obHueB = 47, obWidth = 48, obMode = 49, obSoft = 50,
+      obKeepLum = 51, obSat = 52;
+  // Fog v2
+  static const int fogDensity = 53, fogSpread = 54, fogColor = 55, fogReact = 56, fogScale = 57, fogHeight = 58, fogDrift = 59;
+  // Edge Softness
+  static const int esAmount = 60, esX = 61, esY = 62, esZ = 63, esFalloff = 64, esAxisX = 65, esAxisY = 66,
+      esAxisZ = 67, esWidth = 68, dofPreview = 69;
+
+  static const int _op0 = 0, _op1 = 14;
+
+  static List<double> defaults() {
+    final f = List<double>.filled(size, 0.0);
+    for (int i = _op0; i <= _op1; i++) {
+      f[i] = 1.0;
+    }
+    f[duoShadow] = 0x14233A.toDouble();   // deep navy
+    f[duoHigh] = 0xF2C48D.toDouble();     // warm cream
+    f[duoMid] = -1.0;                     // unset = two-colour duotone
+    f[duoMidPos] = 0.5;
+    f[duoGamma] = 1.0;
+    f[duoMix] = 1.0;
+    f[duoKeepLight] = 0.0;
+    f[diffThreshold] = 0.55;
+    f[diffRadius] = 0.5;
+    f[diffMix] = 0.25;
+    f[mistThreshold] = 0.50;
+    f[mistRadius] = 0.55;
+    f[mistTint] = 0.40;
+    f[obHueA] = 0.0;
+    f[obHueB] = 0.62;
+    f[obWidth] = 0.12;
+    f[obSoft] = 0.5;
+    f[obKeepLum] = 0.8;
+    f[obSat] = 1.0;
+    f[fogColor] = 0xC9D3DE.toDouble();
+    f[fogSpread] = 0.5;
+    f[fogScale] = 0.45;
+    f[fogHeight] = 0.5;
+    f[esWidth] = 0.4;
+    f[esFalloff] = 0.4;
+    f[esAxisX] = 1.0;
+    f[esAxisY] = 1.0;
+    f[esAxisZ] = 1.0;
+    return f;
+  }
+
+  /// Fixes length / NaN so older presets and broken JSON can never corrupt the GPU block.
+  static List<double> sanitize(List<double>? src) {
+    final d = defaults();
+    if (src == null) return d;
+    for (int i = 0; i < size && i < src.length; i++) {
+      final v = src[i];
+      if (!v.isNaN && !v.isInfinite) d[i] = v;
+    }
+    return d;
+  }
+
+  // ---------------- free-point curves ----------------
+  static const int kMaxCurvePoints = 8;
+  static const List<double> identityXY = [0.0, 0.0, 1.0, 1.0];
+
+  /// Sort by x, keep inside 0..1, endpoints pinned to x = 0 and x = 1, minimum x gap, y never decreases (no inversion).
+  static List<double> normalizeCurveXY(List<double>? xy) {
+    if (xy == null || xy.length < 4) return List<double>.from(identityXY);
+    final pts = <List<double>>[];
+    for (int i = 0; i + 1 < xy.length; i += 2) {
+      double x = xy[i], y = xy[i + 1];
+      if (x.isNaN || y.isNaN || x.isInfinite || y.isInfinite) continue;
+      pts.add([x.clamp(0.0, 1.0).toDouble(), y.clamp(0.0, 1.0).toDouble()]);
+    }
+    if (pts.length < 2) return List<double>.from(identityXY);
+    pts.sort((a, b) => a[0].compareTo(b[0]));
+    while (pts.length > kMaxCurvePoints) {
+      pts.removeAt(pts.length ~/ 2);
+    }
+    pts.first[0] = 0.0;
+    pts.last[0] = 1.0;
+    final out = <double>[];
+    for (int i = 0; i < pts.length; i++) {
+      double x = pts[i][0];
+      double y = pts[i][1];
+      if (i > 0) {
+        if (x < out[out.length - 2] + 0.02) x = out[out.length - 2] + 0.02;
+        if (y < out[out.length - 1]) y = out[out.length - 1];
+      }
+      if (i == pts.length - 1) x = 1.0;
+      out.add(x.clamp(0.0, 1.0).toDouble());
+      out.add(y.clamp(0.0, 1.0).toDouble());
+    }
+    return out;
+  }
+
+  static bool isIdentityXY(List<double> xy) {
+    if (xy.length < 4) return true;
+    for (int i = 0; i + 1 < xy.length; i += 2) {
+      if ((xy[i] - xy[i + 1]).abs() > 0.002) return false;
+    }
+    return true;
+  }
+
+  /// Old 5-value curve (x = 0, .25, .5, .75, 1) -> point list, so presets saved before batch 4 still load.
+  static List<double> legacyToXY(List<double> y5) {
+    if (y5.length != 5) return List<double>.from(identityXY);
+    final out = <double>[];
+    for (int i = 0; i < 5; i++) {
+      out.add(i / 4.0);
+      out.add(y5[i]);
+    }
+    return normalizeCurveXY(out);
+  }
+}
+
 enum LayerBlendMode {
   normal,
   screen,
@@ -174,6 +312,20 @@ enum LayerBlendMode {
   multiply,
   add,
   linearDodge,
+  // appended (indices 8..20) so saved presets keep their meaning
+  darken,
+  lighten,
+  colorDodge,
+  colorBurn,
+  hardLight,
+  difference,
+  exclusion,
+  hue,
+  saturationBlend,
+  colorBlend,
+  luminosity,
+  linearBurn,
+  subtract,
 }
 
 /// Represents an isolated timeline clip region (up to 3 sequential layers)
@@ -251,6 +403,15 @@ class AdjustmentLayer {
   LayerBlendMode blendMode;
   bool blendLinear; // false = AE Gamma space, true = Physical Linear
   GradientMapSettings gradientMap; // per-layer gradient map (runs before the LUT)
+  List<double> fx; // batch 4 per-effect block (see class Fx)
+  List<double> vfx; // batch 6 VFX block: bubbles / rain / particles (see class Vfx)
+  List<double> sap; // batch 6 Sapphire block: S_Glint + S_LightLeak (see class Sap)
+  List<double> timeSlice; // batch 12 Time Slice block (see class TimeSlice); old presets without it load the defaults (effect off)
+  List<double> mathOps; // batch 14 MathOps block (see class MathOps in vfx_slots.dart); old presets without it load the defaults (effect off)
+  List<double> grad4; // batch 14 4-Way Gradient block (see class Gradient4Way in vfx_slots.dart); old presets without it load the defaults (effect off)
+  List<double> bevel; // batch 13 Global Metallic Bevel block (see class Bevel in vfx_slots.dart); old presets without it load the defaults (effect off)
+  // Curves v2: flat [x0,y0,x1,y1,...] per channel (RGB, R, G, B). Empty = fall back to the legacy 5-point curves.
+  List<double> curveXYM, curveXYR, curveXYG, curveXYB;
 
   // Basic Grading
   double brightness;
@@ -349,11 +510,11 @@ class AdjustmentLayer {
   double thinStreakSoftness;
   bool thinStreakFromEdge; // legacy flag: true is read as flareOrigin = 1.0
   double flareOrigin;     // 0 = flares grow out of the highlight .. 1 = flares enter from the frame edges and run inward
-  double flareThreshold;  // 0..1 how bright / compact a source must be (higher = fewer flares)
+  double flareThreshold;  // 0..1 source strength a flare needs (higher = fewer flares; also ranks sources, v2.7)
   double flareSpacing;    // minimum vertical distance between flares, fraction of frame height (0 = off)
   double flareThickness;  // 0..1 band thickness
   double flareFalloff;    // 0..1 how fast the flare fades along its length
-  double flareSceneTint;  // 0 = source colour .. 1 = scene colour
+  double flareSceneTint;  // Colour Respect (v2.7): 0 = transparent white-ish haze .. 1 = colours taken from the video
   double flareCoreWhite;  // 0..1 hot white core
   double lineArtStrength;
   double lineArtWidth;
@@ -540,6 +701,17 @@ class AdjustmentLayer {
     this.halationStrength = 1.0,
     this.halationThreshold = 0.60,
     GradientMapSettings? gradientMap,
+    List<double>? fx,
+    List<double>? vfx,
+    List<double>? sap,
+    List<double>? timeSlice,
+    List<double>? bevel,
+    List<double>? mathOps,
+    List<double>? grad4,
+    List<double>? curveXYM,
+    List<double>? curveXYR,
+    List<double>? curveXYG,
+    List<double>? curveXYB,
     this.lineChromaStrength = 0.0,
     this.centerAura = 0.0,
     this.horizontalRamp = 0.0,
@@ -611,6 +783,17 @@ class AdjustmentLayer {
     this.coloristaMix = 1.0,
     this.coloristaPreserveLuma = 0.0,
   })  : gradientMap = gradientMap ?? GradientMapSettings(),
+        fx = Fx.sanitize(fx),
+        vfx = Vfx.sanitize(vfx),
+        sap = Sap.sanitize(sap),
+        timeSlice = TimeSlice.sanitize(timeSlice),
+        bevel = Bevel.sanitize(bevel),
+        mathOps = MathOps.sanitize(mathOps),
+        grad4 = Gradient4Way.sanitize(grad4),
+        curveXYM = curveXYM ?? <double>[],
+        curveXYR = curveXYR ?? <double>[],
+        curveXYG = curveXYG ?? <double>[],
+        curveXYB = curveXYB ?? <double>[],
         curveMaster = sanitizeCurve(curveMaster),
         curveRed = sanitizeCurve(curveRed),
         curveGreen = sanitizeCurve(curveGreen),
@@ -787,6 +970,17 @@ class AdjustmentLayer {
       halationStrength: halationStrength,
       halationThreshold: halationThreshold,
       gradientMap: gradientMap.clone(),
+      fx: List<double>.from(fx),
+      vfx: List<double>.from(vfx),
+      sap: List<double>.from(sap),
+      timeSlice: List<double>.from(timeSlice),
+      bevel: List<double>.from(bevel),
+      mathOps: List<double>.from(mathOps),
+      grad4: List<double>.from(grad4),
+      curveXYM: List<double>.from(curveXYM),
+      curveXYR: List<double>.from(curveXYR),
+      curveXYG: List<double>.from(curveXYG),
+      curveXYB: List<double>.from(curveXYB),
       lineChromaStrength: lineChromaStrength,
       centerAura: centerAura,
       horizontalRamp: horizontalRamp,
@@ -946,6 +1140,14 @@ class AdjustmentLayer {
       'halationStrength': halationStrength,
       'halationThreshold': halationThreshold,
       'gradientMap': gradientMap.toJson(),
+      'fx': fx,
+      'vfx': vfx,
+      'sap': sap,
+      'timeSlice': timeSlice,
+      'bevel': bevel,
+      'mathOps': mathOps,
+      'grad4': grad4,
+      'curveXY': [curveXYM, curveXYR, curveXYG, curveXYB],
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
       'horizontalRamp': horizontalRamp,
@@ -1110,6 +1312,17 @@ class AdjustmentLayer {
       halationStrength: (json['halationStrength'] as num?)?.toDouble() ?? 1.0,
       halationThreshold: (json['halationThreshold'] as num?)?.toDouble() ?? 0.60,
       gradientMap: GradientMapSettings.fromJson(json['gradientMap'] is Map ? Map<String, dynamic>.from(json['gradientMap'] as Map) : null),
+      fx: (json['fx'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      vfx: (json['vfx'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      sap: (json['sap'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      timeSlice: (json['timeSlice'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      bevel: (json['bevel'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      mathOps: (json['mathOps'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      grad4: (json['grad4'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      curveXYM: _xyFromJson(json['curveXY'], 0),
+      curveXYR: _xyFromJson(json['curveXY'], 1),
+      curveXYG: _xyFromJson(json['curveXY'], 2),
+      curveXYB: _xyFromJson(json['curveXY'], 3),
       lineChromaStrength: (json['lineChromaStrength'] as num?)?.toDouble() ?? 0.0,
       centerAura: (json['centerAura'] as num?)?.toDouble() ?? 0.0,
       horizontalRamp: (json['horizontalRamp'] as num?)?.toDouble() ?? 0.0,
@@ -1184,6 +1397,425 @@ class AdjustmentLayer {
   }
 }
 
+
+// =============================================================================
+// TEXT SUITE - PERSONAL SETTINGS + VECTOR POINTS (batch 5)
+// Packed into the last 224 floats of the uniform buffer (index 3872 + slot); slots are mirrored in the shader as tx[].
+// =============================================================================
+class TextVecPoint {
+  double rx; // rest position inside the box, 0..1
+  double ry;
+  double cx; // current (dragged) position
+  double cy;
+  TextVecPoint(double rx, double ry, [double? cx, double? cy])
+      : rx = rx,
+        ry = ry,
+        cx = cx ?? rx,
+        cy = cy ?? ry;
+
+  TextVecPoint clone() => TextVecPoint(rx, ry, cx, cy);
+  Map<String, dynamic> toJson() => {'rx': rx, 'ry': ry, 'cx': cx, 'cy': cy};
+  factory TextVecPoint.fromJson(Map<String, dynamic> j) => TextVecPoint(
+        (j['rx'] as num?)?.toDouble() ?? 0.5,
+        (j['ry'] as num?)?.toDouble() ?? 0.5,
+        (j['cx'] as num?)?.toDouble(),
+        (j['cy'] as num?)?.toDouble(),
+      );
+}
+
+double _d(dynamic v, double fallback) => (v is num) ? v.toDouble() : fallback;
+
+class TextFx {
+  static const int kBase = 3872;
+  static const int kMaxPoints = 16;
+
+  double style; // 0 = metallic, 1 = silky
+  double roundness; // how rounded / tube-like the strokes reflect
+  double bandCount; // highlight bands across the box
+  double bandAngle; // sweep direction (radians)
+  double bandSoft; // band softness / falloff
+  double bandStrength; // directional highlight strength
+  double anisotropy; // silk brushed sheen
+  double bodyDark; // darker body
+  double rimSharp; // sharp rim line
+  double ambient; // soft ambient reflection
+  double fresnel; // Fresnel edge reflection
+  double hiH; // highlight colour wheel: hue 0..1
+  double hiS; // highlight colour wheel: saturation
+  double hiV; // highlight colour wheel: value
+  double bodyH; // body colour wheel: hue
+  double bodyS; // body colour wheel: saturation
+  double bodyV; // body colour wheel: value
+  double tintMix; // how much the wheel colours replace the text own colour
+  double glowIntensity; // deep glow strength
+  double glowRadius; // deep glow size
+  double glowRolloff; // deep glow spread / tail (goes high, no low clamp)
+  double glowOffX; // glow position X (box heights)
+  double glowOffY; // glow position Y (box heights)
+  double glowInner; // glow bleeding onto the letters
+  double glowWhiteCore; // hot white core
+  double glowColorMix; // glow colour: 0 = text colour, 1 = glow wheel
+  double glowH; // glow colour wheel: hue
+  double glowS; // glow colour wheel: saturation
+  double glowV; // glow colour wheel: value
+  double glowQuality; // glow sample count (higher = smoother, slower)
+  double edgeSoften; // softener for ragged / aliased edges
+  double rangeLo; // mask range below the threshold
+  double rangeHi; // mask range above the threshold
+  double patternType; // 0 none, 1 pixel mosaic, 2 scanlines, 3 checker, 4 halftone, 5 grain
+  double patternScale; // pattern cell size
+  double patternStrength; // pattern strength
+  double patternAngle; // pattern rotation (radians)
+  double opacity; // per-effect opacity of the whole text overlay
+  double vecInfluence; // vector mode: reach of each point (box heights)
+  double vecAmount; // vector mode: warp amount
+
+  bool vecEnabled;
+  bool vecAddMode; // UI only: tapping the box adds a point (not packed, still saved with the project)
+  List<TextVecPoint> points;
+
+  TextFx({
+    this.style = 0.0,
+    this.roundness = 0.9,
+    this.bandCount = 2.0,
+    this.bandAngle = 0.35,
+    this.bandSoft = 0.25,
+    this.bandStrength = 0.8,
+    this.anisotropy = 0.5,
+    this.bodyDark = 0.35,
+    this.rimSharp = 1.0,
+    this.ambient = 0.35,
+    this.fresnel = 0.6,
+    this.hiH = 0.0,
+    this.hiS = 0.0,
+    this.hiV = 1.0,
+    this.bodyH = 0.6,
+    this.bodyS = 0.1,
+    this.bodyV = 0.6,
+    this.tintMix = 0.0,
+    this.glowIntensity = 0.9,
+    this.glowRadius = 0.6,
+    this.glowRolloff = 0.8,
+    this.glowOffX = 0.0,
+    this.glowOffY = 0.0,
+    this.glowInner = 0.15,
+    this.glowWhiteCore = 0.5,
+    this.glowColorMix = 0.0,
+    this.glowH = 0.52,
+    this.glowS = 0.55,
+    this.glowV = 1.0,
+    this.glowQuality = 0.6,
+    this.edgeSoften = 0.2,
+    this.rangeLo = 0.14,
+    this.rangeHi = 0.08,
+    this.patternType = 0.0,
+    this.patternScale = 8.0,
+    this.patternStrength = 0.5,
+    this.patternAngle = 0.0,
+    this.opacity = 1.0,
+    this.vecInfluence = 0.35,
+    this.vecAmount = 1.0,
+    this.vecEnabled = false,
+    this.vecAddMode = false,
+    List<TextVecPoint>? points,
+  }) : points = points ?? [];
+
+  TextFx clone() => TextFx(
+      style: style,
+      roundness: roundness,
+      bandCount: bandCount,
+      bandAngle: bandAngle,
+      bandSoft: bandSoft,
+      bandStrength: bandStrength,
+      anisotropy: anisotropy,
+      bodyDark: bodyDark,
+      rimSharp: rimSharp,
+      ambient: ambient,
+      fresnel: fresnel,
+      hiH: hiH,
+      hiS: hiS,
+      hiV: hiV,
+      bodyH: bodyH,
+      bodyS: bodyS,
+      bodyV: bodyV,
+      tintMix: tintMix,
+      glowIntensity: glowIntensity,
+      glowRadius: glowRadius,
+      glowRolloff: glowRolloff,
+      glowOffX: glowOffX,
+      glowOffY: glowOffY,
+      glowInner: glowInner,
+      glowWhiteCore: glowWhiteCore,
+      glowColorMix: glowColorMix,
+      glowH: glowH,
+      glowS: glowS,
+      glowV: glowV,
+      glowQuality: glowQuality,
+      edgeSoften: edgeSoften,
+      rangeLo: rangeLo,
+      rangeHi: rangeHi,
+      patternType: patternType,
+      patternScale: patternScale,
+      patternStrength: patternStrength,
+      patternAngle: patternAngle,
+      opacity: opacity,
+      vecInfluence: vecInfluence,
+      vecAmount: vecAmount,
+      vecEnabled: vecEnabled,
+      vecAddMode: vecAddMode,
+      points: points.map((p) => p.clone()).toList(),
+    );
+
+  Map<String, dynamic> toJson() => {
+      'style': style,
+      'roundness': roundness,
+      'bandCount': bandCount,
+      'bandAngle': bandAngle,
+      'bandSoft': bandSoft,
+      'bandStrength': bandStrength,
+      'anisotropy': anisotropy,
+      'bodyDark': bodyDark,
+      'rimSharp': rimSharp,
+      'ambient': ambient,
+      'fresnel': fresnel,
+      'hiH': hiH,
+      'hiS': hiS,
+      'hiV': hiV,
+      'bodyH': bodyH,
+      'bodyS': bodyS,
+      'bodyV': bodyV,
+      'tintMix': tintMix,
+      'glowIntensity': glowIntensity,
+      'glowRadius': glowRadius,
+      'glowRolloff': glowRolloff,
+      'glowOffX': glowOffX,
+      'glowOffY': glowOffY,
+      'glowInner': glowInner,
+      'glowWhiteCore': glowWhiteCore,
+      'glowColorMix': glowColorMix,
+      'glowH': glowH,
+      'glowS': glowS,
+      'glowV': glowV,
+      'glowQuality': glowQuality,
+      'edgeSoften': edgeSoften,
+      'rangeLo': rangeLo,
+      'rangeHi': rangeHi,
+      'patternType': patternType,
+      'patternScale': patternScale,
+      'patternStrength': patternStrength,
+      'patternAngle': patternAngle,
+      'opacity': opacity,
+      'vecInfluence': vecInfluence,
+      'vecAmount': vecAmount,
+      'vecEnabled': vecEnabled,
+      'points': points.map((p) => p.toJson()).toList(),
+    };
+
+  factory TextFx.fromJson(Map<String, dynamic> j) => TextFx(
+      style: _d(j['style'], 0.0),
+      roundness: _d(j['roundness'], 0.9),
+      bandCount: _d(j['bandCount'], 2.0),
+      bandAngle: _d(j['bandAngle'], 0.35),
+      bandSoft: _d(j['bandSoft'], 0.25),
+      bandStrength: _d(j['bandStrength'], 0.8),
+      anisotropy: _d(j['anisotropy'], 0.5),
+      bodyDark: _d(j['bodyDark'], 0.35),
+      rimSharp: _d(j['rimSharp'], 1.0),
+      ambient: _d(j['ambient'], 0.35),
+      fresnel: _d(j['fresnel'], 0.6),
+      hiH: _d(j['hiH'], 0.0),
+      hiS: _d(j['hiS'], 0.0),
+      hiV: _d(j['hiV'], 1.0),
+      bodyH: _d(j['bodyH'], 0.6),
+      bodyS: _d(j['bodyS'], 0.1),
+      bodyV: _d(j['bodyV'], 0.6),
+      tintMix: _d(j['tintMix'], 0.0),
+      glowIntensity: _d(j['glowIntensity'], 0.9),
+      glowRadius: _d(j['glowRadius'], 0.6),
+      glowRolloff: _d(j['glowRolloff'], 0.8),
+      glowOffX: _d(j['glowOffX'], 0.0),
+      glowOffY: _d(j['glowOffY'], 0.0),
+      glowInner: _d(j['glowInner'], 0.15),
+      glowWhiteCore: _d(j['glowWhiteCore'], 0.5),
+      glowColorMix: _d(j['glowColorMix'], 0.0),
+      glowH: _d(j['glowH'], 0.52),
+      glowS: _d(j['glowS'], 0.55),
+      glowV: _d(j['glowV'], 1.0),
+      glowQuality: _d(j['glowQuality'], 0.6),
+      edgeSoften: _d(j['edgeSoften'], 0.2),
+      rangeLo: _d(j['rangeLo'], 0.14),
+      rangeHi: _d(j['rangeHi'], 0.08),
+      patternType: _d(j['patternType'], 0.0),
+      patternScale: _d(j['patternScale'], 8.0),
+      patternStrength: _d(j['patternStrength'], 0.5),
+      patternAngle: _d(j['patternAngle'], 0.0),
+      opacity: _d(j['opacity'], 1.0),
+      vecInfluence: _d(j['vecInfluence'], 0.35),
+      vecAmount: _d(j['vecAmount'], 1.0),
+      vecEnabled: j['vecEnabled'] == true,
+      points: (j['points'] is List)
+          ? (j['points'] as List).whereType<Map>().take(kMaxPoints).map((m) => TextVecPoint.fromJson(Map<String, dynamic>.from(m))).toList()
+          : <TextVecPoint>[],
+    );
+
+  // ---- vector points ----
+  bool get canAddPoint => points.length < kMaxPoints;
+
+  void addPoint(double x, double y) {
+    if (!canAddPoint) return;
+    final px = x.clamp(0.0, 1.0).toDouble();
+    final py = y.clamp(0.0, 1.0).toDouble();
+    points.add(TextVecPoint(px, py));
+  }
+
+  void removePoint(int i) {
+    if (i >= 0 && i < points.length) points.removeAt(i);
+  }
+
+  /// Restores the text: every point goes back to its rest position (the points stay).
+  void resetDisplacement() {
+    for (final p in points) {
+      p.cx = p.rx;
+      p.cy = p.ry;
+    }
+  }
+
+  void clearPoints() => points.clear();
+
+  /// Evenly spread grid of control points (cols x rows, at most 16).
+  void autoGrid(int cols, int rows) {
+    points.clear();
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if (points.length >= kMaxPoints) return;
+        points.add(TextVecPoint((c + 0.5) / cols, (r + 0.5) / rows));
+      }
+    }
+  }
+
+  /// Resets only the look settings (colours, glow, softeners ...), keeps vector points.
+  void resetLook() {
+    final f = TextFx();
+    final keepVec = vecEnabled;
+    final keepPts = points;
+    final keepAdd = vecAddMode;
+    final j = f.toJson();
+    j['vecEnabled'] = keepVec;
+    final n = TextFx.fromJson(j);
+    _copyLook(n);
+    vecEnabled = keepVec;
+    vecAddMode = keepAdd;
+    points = keepPts;
+  }
+
+  void _copyLook(TextFx o) {
+    style = o.style;
+    roundness = o.roundness;
+    bandCount = o.bandCount;
+    bandAngle = o.bandAngle;
+    bandSoft = o.bandSoft;
+    bandStrength = o.bandStrength;
+    anisotropy = o.anisotropy;
+    bodyDark = o.bodyDark;
+    rimSharp = o.rimSharp;
+    ambient = o.ambient;
+    fresnel = o.fresnel;
+    hiH = o.hiH;
+    hiS = o.hiS;
+    hiV = o.hiV;
+    bodyH = o.bodyH;
+    bodyS = o.bodyS;
+    bodyV = o.bodyV;
+    tintMix = o.tintMix;
+    glowIntensity = o.glowIntensity;
+    glowRadius = o.glowRadius;
+    glowRolloff = o.glowRolloff;
+    glowOffX = o.glowOffX;
+    glowOffY = o.glowOffY;
+    glowInner = o.glowInner;
+    glowWhiteCore = o.glowWhiteCore;
+    glowColorMix = o.glowColorMix;
+    glowH = o.glowH;
+    glowS = o.glowS;
+    glowV = o.glowV;
+    glowQuality = o.glowQuality;
+    edgeSoften = o.edgeSoften;
+    rangeLo = o.rangeLo;
+    rangeHi = o.rangeHi;
+    patternType = o.patternType;
+    patternScale = o.patternScale;
+    patternStrength = o.patternStrength;
+    patternAngle = o.patternAngle;
+    opacity = o.opacity;
+    vecInfluence = o.vecInfluence;
+    vecAmount = o.vecAmount;
+  }
+
+  static void _col(Float32List u, int slot, double h, double s, double v) {
+    final c = _hsv(h, s, v);
+    u[kBase + slot] = c.red / 255.0;
+    u[kBase + slot + 1] = c.green / 255.0;
+    u[kBase + slot + 2] = c.blue / 255.0;
+  }
+
+  static Color _hsv(double h, double s, double v) =>
+      HSVColor.fromAHSV(1.0, (h.clamp(0.0, 1.0) * 360.0).toDouble(), s.clamp(0.0, 1.0).toDouble(), v.clamp(0.0, 1.0).toDouble()).toColor();
+
+  Color get hiColor => _hsv(hiH, hiS, hiV);
+  Color get bodyColor => _hsv(bodyH, bodyS, bodyV);
+  Color get glowColor => _hsv(glowH, glowS, glowV);
+
+  /// Writes the personal block (floats 3872..4095) into the uniform buffer (Vfx.uboFloats floats; only the first 4096 are touched here).
+  void packInto(Float32List u) {
+    if (u.length < kBase + 224) return;
+    u[kBase + 0] = 1.0; // block present
+    u[kBase + 1] = style;
+    u[kBase + 2] = roundness;
+    u[kBase + 3] = bandCount;
+    u[kBase + 4] = bandAngle;
+    u[kBase + 5] = bandSoft;
+    u[kBase + 6] = bandStrength;
+    u[kBase + 7] = anisotropy;
+    u[kBase + 8] = bodyDark;
+    u[kBase + 9] = rimSharp;
+    u[kBase + 10] = ambient;
+    u[kBase + 11] = fresnel;
+    _col(u, 12, hiH, hiS, hiV);
+    _col(u, 15, bodyH, bodyS, bodyV);
+    u[kBase + 18] = tintMix;
+    u[kBase + 20] = glowIntensity;
+    u[kBase + 21] = glowRadius;
+    u[kBase + 22] = glowRolloff;
+    u[kBase + 23] = glowOffX;
+    u[kBase + 24] = glowOffY;
+    u[kBase + 25] = glowInner;
+    u[kBase + 26] = glowWhiteCore;
+    u[kBase + 27] = glowColorMix;
+    _col(u, 28, glowH, glowS, glowV);
+    u[kBase + 31] = glowQuality;
+    u[kBase + 32] = edgeSoften;
+    u[kBase + 33] = rangeLo;
+    u[kBase + 34] = rangeHi;
+    u[kBase + 35] = patternType;
+    u[kBase + 36] = patternScale;
+    u[kBase + 37] = patternStrength;
+    u[kBase + 38] = patternAngle;
+    u[kBase + 39] = opacity;
+    final n = points.length < kMaxPoints ? points.length : kMaxPoints;
+    u[kBase + 40] = vecEnabled ? 1.0 : 0.0;
+    u[kBase + 41] = n.toDouble();
+    u[kBase + 42] = vecInfluence;
+    u[kBase + 43] = vecAmount;
+    for (int i = 0; i < n; i++) {
+      final b = kBase + 48 + i * 4;
+      u[b] = points[i].rx;
+      u[b + 1] = points[i].ry;
+      u[b + 2] = points[i].cx;
+      u[b + 3] = points[i].cy;
+    }
+  }
+}
+
 class ProjectData {
   String mediaPath;
   bool isImage;
@@ -1203,6 +1835,7 @@ class ProjectData {
   double textContactShadow;
   double textLumaThreshold;
   double textMetallicTint;
+  TextFx text; // personal text-suite settings + vector points (batch 5)
 
   bool enableTimelineSegments;
   List<TimelineClipSegment> timelineSegments;
@@ -1211,6 +1844,8 @@ class ProjectData {
   double ditherStrength;
   double deepTeal;
   double magicCurves;
+  double panX; // -1..1, where the ratio frame sits on the media
+  double panY;
 
   ProjectData({
     required this.mediaPath,
@@ -1230,13 +1865,17 @@ class ProjectData {
     this.textContactShadow = 0.6,
     this.textLumaThreshold = 0.40,
     this.textMetallicTint = 0.0,
+    TextFx? text,
     this.enableTimelineSegments = false,
     List<TimelineClipSegment>? timelineSegments,
     this.activeTimelineSegmentIndex = 0,
     this.ditherStrength = 1.0,
     this.deepTeal = 0.0,
     this.magicCurves = 0.0,
+    this.panX = 0.0,
+    this.panY = 0.0,
   })  : layers = layers ?? [],
+        text = text ?? TextFx(),
         timelineSegments = timelineSegments ?? [];
 
   AdjustmentLayer get currentLayer {
@@ -1269,12 +1908,15 @@ class ProjectData {
       textContactShadow: textContactShadow,
       textLumaThreshold: textLumaThreshold,
       textMetallicTint: textMetallicTint,
+      text: text.clone(),
       enableTimelineSegments: enableTimelineSegments,
       timelineSegments: timelineSegments.map((s) => s.clone()).toList(),
       activeTimelineSegmentIndex: activeTimelineSegmentIndex,
       ditherStrength: ditherStrength,
       deepTeal: deepTeal,
       magicCurves: magicCurves,
+      panX: panX,
+      panY: panY,
     );
   }
 
@@ -1297,12 +1939,15 @@ class ProjectData {
       'textContactShadow': textContactShadow,
       'textLumaThreshold': textLumaThreshold,
       'textMetallicTint': textMetallicTint,
+      'textPersonal': text.toJson(),
       'enableTimelineSegments': enableTimelineSegments,
       'timelineSegments': timelineSegments.map((s) => s.toJson()).toList(),
       'activeTimelineSegmentIndex': activeTimelineSegmentIndex,
       'ditherStrength': ditherStrength,
       'deepTeal': deepTeal,
       'magicCurves': magicCurves,
+      'panX': panX,
+      'panY': panY,
     };
   }
 
@@ -1328,6 +1973,7 @@ class ProjectData {
       textContactShadow: (json['textContactShadow'] as num?)?.toDouble() ?? 0.6,
       textLumaThreshold: (json['textLumaThreshold'] as num?)?.toDouble() ?? 0.40,
       textMetallicTint: (json['textMetallicTint'] as num?)?.toDouble() ?? 0.0,
+      text: (json['textPersonal'] is Map) ? TextFx.fromJson(Map<String, dynamic>.from(json['textPersonal'] as Map)) : TextFx(),
       enableTimelineSegments: json['enableTimelineSegments'] ?? false,
       timelineSegments: (json['timelineSegments'] as List<dynamic>?)
               ?.map((s) => TimelineClipSegment.fromJson(s))
@@ -1337,6 +1983,8 @@ class ProjectData {
       ditherStrength: (json['ditherStrength'] as num?)?.toDouble() ?? 1.0,
       deepTeal: (json['deepTeal'] as num?)?.toDouble() ?? 0.0,
       magicCurves: (json['magicCurves'] as num?)?.toDouble() ?? 0.0,
+      panX: (json['panX'] as num?)?.toDouble() ?? 0.0,
+      panY: (json['panY'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
@@ -1576,5 +2224,63 @@ class ProjectManager {
       final content = jsonEncode(list.map((p) => p.toJson()).toList());
       await file.writeAsString(content, flush: true);
     } catch (_) {}
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Batch 4: Curves v2 accessors + GPU packing (kept here so no new dart file is needed)
+// -----------------------------------------------------------------------------
+List<double> _xyFromJson(dynamic v, int ch) {
+  if (v is List && v.length > ch && v[ch] is List) {
+    return (v[ch] as List).map((e) => (e as num).toDouble()).toList();
+  }
+  return <double>[];
+}
+
+extension LayerCurvesV2 on AdjustmentLayer {
+  /// Effective point list of a channel (0 RGB, 1 R, 2 G, 3 B). Falls back to the legacy 5-point curve of old presets.
+  List<double> curveXY(int ch) {
+    final own = ch == 0 ? curveXYM : (ch == 1 ? curveXYR : (ch == 2 ? curveXYG : curveXYB));
+    if (own.length >= 4) return Fx.normalizeCurveXY(own);
+    final legacy = ch == 0 ? curveMaster : (ch == 1 ? curveRed : (ch == 2 ? curveGreen : curveBlue));
+    return Fx.legacyToXY(legacy);
+  }
+
+  void setCurveXY(int ch, List<double> xy) {
+    final n = Fx.normalizeCurveXY(xy);
+    if (ch == 0) {
+      curveXYM = n;
+    } else if (ch == 1) {
+      curveXYR = n;
+    } else if (ch == 2) {
+      curveXYG = n;
+    } else {
+      curveXYB = n;
+    }
+  }
+
+  void resetCurveXY(int ch) => setCurveXY(ch, Fx.identityXY);
+
+  /// Writes the fx block and the curve block of this layer into the uniform array.
+  void packFxInto(List<double> u, int layerIndex) {
+    final fo = Fx.packBase + layerIndex * Fx.size;
+    for (int i = 0; i < Fx.size; i++) {
+      u[fo + i] = fx[i];
+    }
+    final co = Fx.curveBase + layerIndex * 72;
+    for (int ch = 0; ch < 4; ch++) {
+      final xy = curveXY(ch);
+      final o = co + ch * 18;
+      if (Fx.isIdentityXY(xy)) {
+        u[o] = 0.0;
+        continue;
+      }
+      final n = xy.length ~/ 2;
+      u[o] = n.toDouble();
+      for (int k = 0; k < n && k < Fx.kMaxCurvePoints; k++) {
+        u[o + 1 + k * 2] = xy[k * 2];
+        u[o + 2 + k * 2] = xy[k * 2 + 1];
+      }
+    }
   }
 }
