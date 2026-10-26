@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../constants.dart';
 
 const Color kAquamarine = Color(0xFF00E5FF);
 
@@ -623,4 +622,250 @@ class _HueBandPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HueBandPainter old) => true;
+}
+
+// =============================================================================
+// BATCH 4: FreeCurveEditor - After-Effects-style curves with free points.
+//  * tap on empty space = add a point (up to 8)          * drag a point = move it (x and y)
+//  * double-tap a point = delete it (end points stay)     * points can never cross, y never goes down -> no inversion
+//  * the drawn curve is the same monotone cubic (PCHIP) the shader evaluates (cvEval in aereality_core.comp)
+//  * updates are throttled to ~30 per second while dragging, with a final exact update on release, so the grade
+//    preview stays smooth (the Batch 2 slider smoothness is not touched).
+// Data format: flat [x0, y0, x1, y1, ...], x ascending 0..1, same as AdjustmentLayer.curveXY().
+// =============================================================================
+class FreeCurveEditor extends StatefulWidget {
+  final List<double> xy;
+  final Color curveColor;
+  final ValueChanged<List<double>> onChanged;
+  final VoidCallback? onEnded;
+
+  const FreeCurveEditor({
+    super.key,
+    required this.xy,
+    required this.curveColor,
+    required this.onChanged,
+    this.onEnded,
+  });
+
+  @override
+  State<FreeCurveEditor> createState() => _FreeCurveEditorState();
+}
+
+class _FreeCurveEditorState extends State<FreeCurveEditor> {
+  late List<double> _pts;
+  int? _active;
+  double _grabDx = 0.0;
+  double _grabDy = 0.0;
+  final Stopwatch _sw = Stopwatch()..start();
+  int _lastEmitMs = 0;
+  static const double _hit = 0.085;
+  static const int _maxPts = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    _pts = List<double>.from(widget.xy);
+  }
+
+  @override
+  void didUpdateWidget(covariant FreeCurveEditor old) {
+    super.didUpdateWidget(old);
+    if (_active == null) _pts = List<double>.from(widget.xy);   // external change (reset, preset, channel switch)
+  }
+
+  int get _n => _pts.length ~/ 2;
+
+  int _nearest(double nx, double ny) {
+    int best = -1;
+    double bd = _hit;
+    for (int i = 0; i < _n; i++) {
+      final dx = _pts[i * 2] - nx;
+      final dy = _pts[i * 2 + 1] - ny;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  void _emit({bool force = false}) {
+    final now = _sw.elapsedMilliseconds;
+    if (!force && now - _lastEmitMs < 33) return;
+    _lastEmitMs = now;
+    widget.onChanged(List<double>.from(_pts));
+  }
+
+  void _insertPoint(double nx, double ny) {
+    if (_n >= _maxPts) return;
+    int at = 0;
+    while (at < _n && _pts[at * 2] < nx) {
+      at++;
+    }
+    if (at == 0 || at >= _n) return;   // never in front of the first / behind the last point
+    final lo = _pts[(at - 1) * 2 + 1];
+    final hi = _pts[at * 2 + 1];
+    final y = ny.clamp(lo, hi).toDouble();
+    _pts.insertAll(at * 2, [nx.clamp(_pts[(at - 1) * 2] + 0.02, _pts[at * 2] - 0.02).toDouble(), y]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final double size = math.min(constraints.maxWidth, 300.0);
+      double nx(Offset o) => (o.dx / size).clamp(0.0, 1.0).toDouble();
+      double ny(Offset o) => (1.0 - o.dy / size).clamp(0.0, 1.0).toDouble();
+      return Center(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (d) {
+            final x = nx(d.localPosition), y = ny(d.localPosition);
+            if (_nearest(x, y) >= 0) return;
+            setState(() => _insertPoint(x, y));
+            _emit(force: true);
+            widget.onEnded?.call();
+          },
+          onDoubleTapDown: (d) {
+            final i = _nearest(nx(d.localPosition), ny(d.localPosition));
+            if (i > 0 && i < _n - 1) {
+              setState(() => _pts.removeRange(i * 2, i * 2 + 2));
+              _emit(force: true);
+              widget.onEnded?.call();
+            }
+          },
+          onDoubleTap: () {},
+          onPanStart: (d) {
+            final x = nx(d.localPosition), y = ny(d.localPosition);
+            final i = _nearest(x, y);
+            if (i >= 0) {
+              setState(() {
+                _active = i;
+                _grabDx = _pts[i * 2] - x;     // relative drag: the point does not jump to the finger
+                _grabDy = _pts[i * 2 + 1] - y;
+              });
+            }
+          },
+          onPanUpdate: (d) {
+            final i = _active;
+            if (i == null) return;
+            double x = nx(d.localPosition) + _grabDx;
+            double y = ny(d.localPosition) + _grabDy;
+            final last = _n - 1;
+            if (i == 0) {
+              x = 0.0;
+            } else if (i == last) {
+              x = 1.0;
+            } else {
+              x = x.clamp(_pts[(i - 1) * 2] + 0.02, _pts[(i + 1) * 2] - 0.02).toDouble();
+            }
+            final lo = i > 0 ? _pts[(i - 1) * 2 + 1] : 0.0;
+            final hi = i < last ? _pts[(i + 1) * 2 + 1] : 1.0;
+            y = y.clamp(lo, hi).toDouble();
+            setState(() {
+              _pts[i * 2] = x;
+              _pts[i * 2 + 1] = y;
+            });
+            _emit();
+          },
+          onPanEnd: (_) {
+            _emit(force: true);
+            setState(() => _active = null);
+            widget.onEnded?.call();
+          },
+          onPanCancel: () => setState(() => _active = null),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0C0C10),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: CustomPaint(painter: _FreeCurvePainter(_pts, widget.curveColor, _active)),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+class _FreeCurvePainter extends CustomPainter {
+  final List<double> pts;
+  final Color color;
+  final int? active;
+  _FreeCurvePainter(this.pts, this.color, this.active);
+
+  static double _slope(List<double> p, int k, int n) {
+    double x(int i) => p[i * 2];
+    double y(int i) => p[i * 2 + 1];
+    if (k == 0) return (y(1) - y(0)) / math.max(x(1) - x(0), 1e-4);
+    if (k == n - 1) return (y(k) - y(k - 1)) / math.max(x(k) - x(k - 1), 1e-4);
+    final h0 = math.max(x(k) - x(k - 1), 1e-4);
+    final h1 = math.max(x(k + 1) - x(k), 1e-4);
+    final d0 = (y(k) - y(k - 1)) / h0;
+    final d1 = (y(k + 1) - y(k)) / h1;
+    if (d0 * d1 <= 0.0) return 0.0;
+    final w1 = 2.0 * h1 + h0;
+    final w2 = h1 + 2.0 * h0;
+    return (w1 + w2) / (w1 / d0 + w2 / d1);
+  }
+
+  /// Same maths as cvEval() in the shader.
+  static double eval(List<double> p, double x) {
+    final n = p.length ~/ 2;
+    if (n < 2) return x;
+    x = x.clamp(0.0, 1.0).toDouble();
+    int seg = 0;
+    for (int k = 0; k < n - 1; k++) {
+      if (x >= p[(k + 1) * 2]) seg = k + 1;
+    }
+    seg = math.min(seg, n - 2);
+    final x0 = p[seg * 2], x1 = p[(seg + 1) * 2];
+    final h = math.max(x1 - x0, 1e-4);
+    final t = ((x - x0) / h).clamp(0.0, 1.0).toDouble();
+    final y0 = p[seg * 2 + 1], y1 = p[(seg + 1) * 2 + 1];
+    final m0 = _slope(p, seg, n) * h;
+    final m1 = _slope(p, seg + 1, n) * h;
+    final t2 = t * t, t3 = t2 * t;
+    final y = (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * m1;
+    return y.clamp(0.0, 1.0).toDouble();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grid = Paint()
+      ..color = Colors.white.withOpacity(0.06)
+      ..strokeWidth = 1.0;
+    for (int i = 1; i < 4; i++) {
+      canvas.drawLine(Offset(size.width * i / 4, 0), Offset(size.width * i / 4, size.height), grid);
+      canvas.drawLine(Offset(0, size.height * i / 4), Offset(size.width, size.height * i / 4), grid);
+    }
+    canvas.drawLine(Offset(0, size.height), Offset(size.width, 0), Paint()..color = Colors.white10);
+    final path = Path();
+    for (int px = 0; px <= size.width.toInt(); px++) {
+      final y = size.height - eval(pts, px / size.width) * size.height;
+      if (px == 0) {
+        path.moveTo(0, y);
+      } else {
+        path.lineTo(px.toDouble(), y);
+      }
+    }
+    canvas.drawPath(path, Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke);
+    for (int i = 0; i < pts.length ~/ 2; i++) {
+      final c = Offset(pts[i * 2] * size.width, size.height - pts[i * 2 + 1] * size.height);
+      final act = active == i;
+      canvas.drawCircle(c, act ? 8.0 : 5.5, Paint()..color = act ? Colors.white : color);
+      canvas.drawCircle(c, act ? 8.0 : 5.5, Paint()
+        ..color = Colors.black
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FreeCurvePainter old) => true;
 }
