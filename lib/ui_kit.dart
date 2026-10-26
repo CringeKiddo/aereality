@@ -115,7 +115,7 @@ class _SlideInTiltState extends State<SlideInTilt> with SingleTickerProviderStat
 // -----------------------------------------------------------------------------
 // Bevelled plate shapes
 // -----------------------------------------------------------------------------
-ShapeBorder shelfShape({double cut = 9, Color? edge, double width = 1}) {
+OutlinedBorder shelfShape({double cut = 9, Color? edge, double width = 1}) {
   return BeveledRectangleBorder(
     borderRadius: BorderRadius.circular(cut),
     side: BorderSide(color: edge ?? kBorderDark, width: width),
