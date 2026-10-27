@@ -16,6 +16,7 @@
 // =============================================================================
 
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -139,6 +140,11 @@ class MotionProcessResult {
   MotionProcessResult(this.path, this.width, this.height, this.fps, this.frames, this.durationMs);
 }
 
+/// Runs in a short-lived isolate (see MotionEngine.ensureVulkan). Must only touch its arguments and top-level code.
+void _initVulkanOffUi(Uint8List shaderBytes, int precisionBits) {
+  initVulkan(shaderBytes, precisionBits);
+}
+
 class MotionEngine {
   MotionEngine(this.src);
   final MotionSource src;
@@ -151,7 +157,17 @@ class MotionEngine {
     for (final path in const ['assets/shaders/aereality_core.spv', 'shaders/aereality_core.spv']) {
       try {
         final bd = await rootBundle.load(path);
-        initVulkan(bd.buffer.asUint8List(), gEnginePrecision);
+        // init_vulkan builds the whole compute pipeline and blocks for seconds on weak GPUs. On recent Flutter the Dart UI code runs on
+        // Android's main thread, so doing it here froze all input until the ANR watchdog fired. A short-lived isolate does it instead
+        // (native state is process-global and mutex-protected; init_vulkan returns 1 if already initialised).
+        final bytes = bd.buffer.asUint8List();
+        final prec = gEnginePrecision; // globals are per isolate: pass the value in
+        try {
+          await Isolate.run(() => _initVulkanOffUi(bytes, prec));
+        } catch (e) {
+          debugPrint('initVulkan isolate failed ($e) - initialising inline');
+          initVulkan(bytes, prec);
+        }
         vulkanSetFlareHalfRes(gFlareHalfRes);
         _vkReady = true;
         break;

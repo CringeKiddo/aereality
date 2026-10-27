@@ -67,7 +67,10 @@ class _TouchParticlesWrapperState extends State<TouchParticlesWrapper> with Sing
     super.dispose();
   }
 
+  static const int _maxParticles = 40; // each one is a blurred draw: unbounded drags made the UI thread stall on weaker phones
+
   void _spawnParticles(Offset pos) {
+    if (_particles.length >= _maxParticles) return;
     // Cyan + Lavender particles
     final colors = gColourOff.value
         ? const [Color(0xFFFFFFFF), Color(0xFFD5D8E0), Color(0xFFB8BCC8), Color(0xFFE8EAF0)] // colour off: neutral

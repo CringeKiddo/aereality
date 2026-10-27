@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -1194,6 +1195,11 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 // 100% Complete Section - Zero Feature Omissions
 // =============================================================================
 
+/// Runs in a short-lived isolate (see _loadShader). Must only touch its arguments and top-level code.
+void _initVulkanOffUi(Uint8List shaderBytes, int precisionBits) {
+  initVulkan(shaderBytes, precisionBits);
+}
+
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
   final String? projectName;
@@ -1274,6 +1280,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _pbDecoding = false;
   int _pbGen = 0;
   bool _isSavingProject = false;
+  Future<void>? _vkReady; // completes when the Vulkan engine has been created (off the UI thread); the first grade waits for it
 
   AdjustmentLayer get _cur => _project.currentLayer;
 
@@ -1282,7 +1289,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
     _tabController = TabController(length: 15, vsync: this); // 15 since batch 12 C3 (index 14 = TIME SLICE)
-    _loadShader();
+    _vkReady = _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
     _pushUndoSnapshot();
@@ -1520,7 +1527,17 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     if (shaderBytes != null) {
-      initVulkan(shaderBytes, gEnginePrecision);
+      // init_vulkan builds the whole compute pipeline (one huge shader) and can take many seconds on a weak GPU / battery saver.
+      // Run on the UI isolate it froze every tap until Android's ANR watchdog fired. The native state is process-global and
+      // mutex-protected (init_vulkan returns 1 if already initialised), so a short-lived isolate can create it safely.
+      final bytes = shaderBytes;
+      final prec = gEnginePrecision; // globals are per isolate: pass the value in
+      try {
+        await Isolate.run(() => _initVulkanOffUi(bytes, prec));
+      } catch (e) {
+        debugPrint('initVulkan isolate failed ($e) - initialising inline');
+        initVulkan(bytes, prec);
+      }
       vulkanSetFlareHalfRes(gFlareHalfRes);
     }
   }
@@ -1650,6 +1667,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _needsReprocess = false;
 
     try {
+      await _vkReady; // engine creation runs off the UI thread now: do not grade before it is ready
       if (_srcW > 0) _updateDimensions(_srcW, _srcH); // paused = full quality, scrubbing = interactive quality
       final int w = _renderWidth;
       final int h = _renderHeight;
