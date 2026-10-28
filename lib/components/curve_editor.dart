@@ -1,7 +1,35 @@
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 const Color kAquamarine = Color(0xFF00E5FF);
+
+// =============================================================================
+// DragLock (batch 16)
+// A plain GestureDetector with onPanStart / onPanUpdate loses the gesture arena to the parent ListView / TabBarView / PageView: those
+// recognise a drag after 18 px along ONE axis, a pan needs 18 px in any direction, so the page scrolls instead of the control moving.
+// DragLock puts an EagerGestureRecognizer (it wins the arena the moment a finger lands on the control) around its child, so no
+// ancestor can ever steal the drag that starts here. Because it wins at pointer-down, the child must NOT rely on GestureDetector
+// callbacks (they would lose to it); it reads raw pointer events with a Listener instead (see FreeCurveEditor / ColorWheelPicker).
+// =============================================================================
+class DragLock extends StatelessWidget {
+  final Widget child;
+  const DragLock({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
+      gestures: <Type, GestureRecognizerFactory>{
+        EagerGestureRecognizer: GestureRecognizerFactoryWithHandlers<EagerGestureRecognizer>(
+          () => EagerGestureRecognizer(),
+          (EagerGestureRecognizer instance) {},
+        ),
+      },
+      child: child,
+    );
+  }
+}
 
 /// 5-point tone curve editor.
 ///
@@ -291,7 +319,7 @@ class ColoristaWheel extends StatelessWidget {
 // Double-tap resets. Output is a vector (x right, y up, length <= 1) which is exactly what the shader's
 // wheelTint() expects, so the colour you see under the puck is the colour that gets pushed.
 // =============================================================================
-class ColorWheelPicker extends StatelessWidget {
+class ColorWheelPicker extends StatefulWidget {
   final String label;
   final double x;
   final double y;
@@ -309,7 +337,20 @@ class ColorWheelPicker extends StatelessWidget {
     this.size = 128.0,
   });
 
+  @override
+  State<ColorWheelPicker> createState() => _ColorWheelPickerState();
+}
+
+class _ColorWheelPickerState extends State<ColorWheelPicker> {
+  int? _pointer; // the finger that owns the wheel (a second finger is ignored)
+  int _lastTapMs = 0;
+  Offset _lastTapPos = Offset.zero;
+  Offset _downPos = Offset.zero;
+  bool _moved = false;
+  final Stopwatch _sw = Stopwatch()..start();
+
   void _set(Offset p) {
+    final size = widget.size;
     final c = size / 2.0;
     double dx = (p.dx - c) / c;
     double dy = -(p.dy - c) / c;
@@ -318,33 +359,66 @@ class ColorWheelPicker extends StatelessWidget {
       dx /= len;
       dy /= len;
     }
-    onChanged(dx, dy);
+    widget.onChanged(dx, dy);
+  }
+
+  void _down(PointerDownEvent e) {
+    if (_pointer != null) return;
+    _pointer = e.pointer;
+    _downPos = e.localPosition;
+    _moved = false;
+    _set(e.localPosition); // the puck goes to the finger at once (like the old onTapDown)
+  }
+
+  void _move(PointerMoveEvent e) {
+    if (e.pointer != _pointer) return;
+    if (!_moved && (e.localPosition - _downPos).distance > 4.0) _moved = true;
+    _set(e.localPosition);
+  }
+
+  void _up(PointerUpEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    final now = _sw.elapsedMilliseconds;
+    if (!_moved && now - _lastTapMs < 320 && (e.localPosition - _lastTapPos).distance < 30.0) {
+      widget.onChanged(0.0, 0.0); // double tap resets
+      _lastTapMs = 0;
+    } else if (!_moved) {
+      _lastTapMs = now;
+      _lastTapPos = e.localPosition;
+    }
+    widget.onEnded?.call();
+  }
+
+  void _cancel(PointerCancelEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    widget.onEnded?.call();
   }
 
   @override
   Widget build(BuildContext context) {
+    final x = widget.x, y = widget.y;
     final amount = math.min(math.sqrt(x * x + y * y), 1.0);
     double hueDeg = math.atan2(y, x) * 180.0 / math.pi;
     if (hueDeg < 0) hueDeg += 360.0;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.6)),
+        Text(widget.label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.6)),
         const SizedBox(height: 6),
-        GestureDetector(
-          onPanStart: (d) => _set(d.localPosition),
-          onPanUpdate: (d) => _set(d.localPosition),
-          onPanEnd: (_) => onEnded?.call(),
-          onTapDown: (d) => _set(d.localPosition),
-          onTapUp: (_) => onEnded?.call(),
-          onDoubleTap: () {
-            onChanged(0.0, 0.0);
-            onEnded?.call();
-          },
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: CustomPaint(painter: _WheelPainter(x: x, y: y)),
+        DragLock(
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: _down,
+            onPointerMove: _move,
+            onPointerUp: _up,
+            onPointerCancel: _cancel,
+            child: SizedBox(
+              width: widget.size,
+              height: widget.size,
+              child: CustomPaint(painter: _WheelPainter(x: x, y: y)),
+            ),
           ),
         ),
         const SizedBox(height: 4),
@@ -661,6 +735,15 @@ class _FreeCurveEditorState extends State<FreeCurveEditor> {
   static const double _hit = 0.085;
   static const int _maxPts = 8;
 
+  // raw pointer handling (batch 16): see DragLock. A touch that lands on a point grabs ONLY that point (drag moves it, a quick
+  // second tap on it deletes it); a tap on empty space adds a point; a drag that starts on empty space does nothing.
+  int? _pointer;
+  bool _moved = false;
+  Offset _downLocal = Offset.zero;
+  bool _downOnPoint = false;
+  int _lastTapMs = 0;
+  int _lastTapIdx = -1;
+
   @override
   void initState() {
     super.initState();
@@ -710,6 +793,96 @@ class _FreeCurveEditorState extends State<FreeCurveEditor> {
     _pts.insertAll(at * 2, [nx.clamp(_pts[(at - 1) * 2] + 0.02, _pts[at * 2] - 0.02).toDouble(), y]);
   }
 
+  void _down(PointerDownEvent e, double x, double y) {
+    if (_pointer != null) return; // one finger at a time
+    _pointer = e.pointer;
+    _moved = false;
+    _downLocal = e.localPosition;
+    final i = _nearest(x, y);
+    _downOnPoint = i >= 0;
+    if (i >= 0) {
+      setState(() {
+        _active = i;
+        _grabDx = _pts[i * 2] - x; // relative drag: the point does not jump to the finger
+        _grabDy = _pts[i * 2 + 1] - y;
+      });
+    }
+  }
+
+  void _move(PointerMoveEvent e, double x, double y) {
+    if (e.pointer != _pointer) return;
+    if (!_moved && (e.localPosition - _downLocal).distance > 5.0) _moved = true;
+    final i = _active;
+    if (i == null || !_moved) return;
+    double nxv = x + _grabDx;
+    double nyv = y + _grabDy;
+    final last = _n - 1;
+    if (i == 0) {
+      nxv = 0.0;
+    } else if (i == last) {
+      nxv = 1.0;
+    } else {
+      nxv = nxv.clamp(_pts[(i - 1) * 2] + 0.02, _pts[(i + 1) * 2] - 0.02).toDouble();
+    }
+    final lo = i > 0 ? _pts[(i - 1) * 2 + 1] : 0.0;
+    final hi = i < last ? _pts[(i + 1) * 2 + 1] : 1.0;
+    nyv = nyv.clamp(lo, hi).toDouble();
+    setState(() {
+      _pts[i * 2] = nxv;
+      _pts[i * 2 + 1] = nyv;
+    });
+    _emit();
+  }
+
+  void _up(PointerUpEvent e, double x, double y) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    final now = _sw.elapsedMilliseconds;
+    if (_moved) {
+      _emit(force: true);
+      setState(() => _active = null);
+      widget.onEnded?.call();
+      return;
+    }
+    // a tap
+    final grabbed = _active;
+    setState(() => _active = null);
+    if (_downOnPoint && grabbed != null) {
+      // double tap on a point deletes it (end points stay)
+      if (_lastTapIdx == grabbed && now - _lastTapMs < 320) {
+        if (grabbed > 0 && grabbed < _n - 1) {
+          setState(() => _pts.removeRange(grabbed * 2, grabbed * 2 + 2));
+          _emit(force: true);
+          widget.onEnded?.call();
+        }
+        _lastTapIdx = -1;
+      } else {
+        _lastTapIdx = grabbed;
+        _lastTapMs = now;
+      }
+      return;
+    }
+    // single tap on empty space adds a point
+    final before = _n;
+    setState(() => _insertPoint(x, y));
+    if (_n != before) {
+      _lastTapIdx = _nearest(x, y);
+      _lastTapMs = now;
+      _emit(force: true);
+      widget.onEnded?.call();
+    }
+  }
+
+  void _cancel(PointerCancelEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    if (_active != null) {
+      _emit(force: true);
+      setState(() => _active = null);
+      widget.onEnded?.call();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
@@ -717,72 +890,23 @@ class _FreeCurveEditorState extends State<FreeCurveEditor> {
       double nx(Offset o) => (o.dx / size).clamp(0.0, 1.0).toDouble();
       double ny(Offset o) => (1.0 - o.dy / size).clamp(0.0, 1.0).toDouble();
       return Center(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: (d) {
-            final x = nx(d.localPosition), y = ny(d.localPosition);
-            if (_nearest(x, y) >= 0) return;
-            setState(() => _insertPoint(x, y));
-            _emit(force: true);
-            widget.onEnded?.call();
-          },
-          onDoubleTapDown: (d) {
-            final i = _nearest(nx(d.localPosition), ny(d.localPosition));
-            if (i > 0 && i < _n - 1) {
-              setState(() => _pts.removeRange(i * 2, i * 2 + 2));
-              _emit(force: true);
-              widget.onEnded?.call();
-            }
-          },
-          onDoubleTap: () {},
-          onPanStart: (d) {
-            final x = nx(d.localPosition), y = ny(d.localPosition);
-            final i = _nearest(x, y);
-            if (i >= 0) {
-              setState(() {
-                _active = i;
-                _grabDx = _pts[i * 2] - x;     // relative drag: the point does not jump to the finger
-                _grabDy = _pts[i * 2 + 1] - y;
-              });
-            }
-          },
-          onPanUpdate: (d) {
-            final i = _active;
-            if (i == null) return;
-            double x = nx(d.localPosition) + _grabDx;
-            double y = ny(d.localPosition) + _grabDy;
-            final last = _n - 1;
-            if (i == 0) {
-              x = 0.0;
-            } else if (i == last) {
-              x = 1.0;
-            } else {
-              x = x.clamp(_pts[(i - 1) * 2] + 0.02, _pts[(i + 1) * 2] - 0.02).toDouble();
-            }
-            final lo = i > 0 ? _pts[(i - 1) * 2 + 1] : 0.0;
-            final hi = i < last ? _pts[(i + 1) * 2 + 1] : 1.0;
-            y = y.clamp(lo, hi).toDouble();
-            setState(() {
-              _pts[i * 2] = x;
-              _pts[i * 2 + 1] = y;
-            });
-            _emit();
-          },
-          onPanEnd: (_) {
-            _emit(force: true);
-            setState(() => _active = null);
-            widget.onEnded?.call();
-          },
-          onPanCancel: () => setState(() => _active = null),
-          child: Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0C0C10),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white12),
+        child: DragLock(
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (e) => _down(e, nx(e.localPosition), ny(e.localPosition)),
+            onPointerMove: (e) => _move(e, nx(e.localPosition), ny(e.localPosition)),
+            onPointerUp: (e) => _up(e, nx(e.localPosition), ny(e.localPosition)),
+            onPointerCancel: _cancel,
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0C0C10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: CustomPaint(painter: _FreeCurvePainter(_pts, widget.curveColor, _active)),
             ),
-            child: CustomPaint(painter: _FreeCurvePainter(_pts, widget.curveColor, _active)),
           ),
         ),
       );
