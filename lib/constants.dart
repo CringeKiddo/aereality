@@ -15,23 +15,20 @@ const String kMyYouTubeChannel = 'https://youtube.com/@cringekiddo';
 // Global Theme & Brand Colors
 // -----------------------------------------------------------------------------
 const Color kCyanAccent = Color(0xFF00E5FF);
-const Color kBackgroundDark = Color(0xFF08080C);
-const Color kSurfaceDark = Color(0xFF101016);
-const Color kCardDark = Color(0xFF161620);
-const Color kBorderDark = Color(0xFF222230);
 
-// Global Active Accent
-final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kCyanAccent);
-
-// Live palette (batch 16): the theme dropdown (app_theme.dart) swaps this; screens read gPalette.value.* instead of the k...Dark constants.
+// Batch 16: the surface colours follow the selected theme (ThemeManager, app_theme.dart). The names stay exactly the same, so every
+// file that reads kBackgroundDark / kSurfaceDark / kCardDark / kBorderDark keeps working; they are getters now, not compile-time
+// constants, so they cannot be used inside a `const` expression any more (the one place that did, main.dart's AppBarTheme, was changed).
+// The Default theme holds the original values, so the Default look is unchanged.
 class AppPalette {
-  final Color bg;
-  final Color surface;
-  final Color card;
-  final Color border;
-  final Color panel; // editor shelf bar / app bar of the editor
-  final Color editor; // editor tab area
-  final Color project; // editor scaffold background
+  final Color bg; // kBackgroundDark: scaffold / main menu background
+  final Color surface; // kSurfaceDark: panels, dialogs
+  final Color card; // kCardDark: cards, tiles
+  final Color border; // kBorderDark: plate edges
+  final Color panel; // editor shelf bar / app bar of the editor (ui_kit.dart ShelfTabBar; was Color(0xFF0F0F14))
+  final Color editor; // kEditorDark: editor tab area (was Color(0xFF0C0C10))
+  final Color project; // kProjectBgDark: editor scaffold background (was Color(0xFF0A0A0E))
+  final Color? controlColor; // slider rows / editor controls (was Color(0xFF14141C) in editor_views.dart); null = derived
   const AppPalette({
     required this.bg,
     required this.surface,
@@ -40,21 +37,36 @@ class AppPalette {
     required this.panel,
     required this.editor,
     required this.project,
+    this.controlColor,
   });
+
+  /// Colour of slider rows / editor controls. The themes in app_theme.dart do not set it, so it sits between their surface and card.
+  Color get control => controlColor ?? Color.lerp(surface, card, 0.55)!;
 }
 
-// "Default" = the original colours (panel / editor / project were hard-coded in main.dart and ui_kit.dart before).
 const AppPalette kDefaultPalette = AppPalette(
-  bg: kBackgroundDark,
-  surface: kSurfaceDark,
-  card: kCardDark,
-  border: kBorderDark,
+  bg: Color(0xFF08080C),
+  surface: Color(0xFF101016),
+  card: Color(0xFF161620),
+  border: Color(0xFF222230),
   panel: Color(0xFF0F0F14),
   editor: Color(0xFF0C0C10),
   project: Color(0xFF0A0A0E),
+  controlColor: Color(0xFF14141C),
 );
 
+/// The active palette. ThemeManager writes it; gAccentListenable (accent_state.dart) includes it, so the MaterialApp rebuilds.
 final ValueNotifier<AppPalette> gPalette = ValueNotifier<AppPalette>(kDefaultPalette);
+
+Color get kBackgroundDark => gPalette.value.bg;
+Color get kSurfaceDark => gPalette.value.surface;
+Color get kCardDark => gPalette.value.card;
+Color get kBorderDark => gPalette.value.border;
+Color get kEditorDark => gPalette.value.editor;
+Color get kProjectBgDark => gPalette.value.project;
+
+// Global Active Accent
+final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kCyanAccent);
 
 // -----------------------------------------------------------------------------
 // Global Engine & Performance Settings

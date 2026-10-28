@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -36,9 +37,9 @@ import 'grade_worker.dart';
 import 'accent_state.dart';
 import 'ui_kit.dart';
 import 'star_field.dart';
-import 'app_settings.dart'; // batch 16: SharedPreferences persistence of the main-menu settings
-import 'app_theme.dart'; // batch 16: ThemeManager (palette + signature accent)
-import 'engine_boot.dart'; // batch 16: startup loading screen + one-time engine init (BootGate)
+import 'engine_boot.dart'; // batch 16: engine starts at app start behind a loading screen
+import 'app_settings.dart'; // batch 16: SharedPreferences settings
+import 'app_theme.dart'; // batch 16: theme manager
 import 'motion_s_screen.dart'; // batch 9: Motion S (full screen, opened from the main menu)
 import 'time_slice_slots.dart'; // batch 12 step C2: wipe scheduler + packing
 import 'cut_detector.dart'; // batch 12: CutDetector (cut scan + detection for the Time Slice wipe scheduler)
@@ -54,14 +55,19 @@ Future<void> main() async {
   await CrashLog.init();
   CrashLog.install();
 
-  // batch 16: FFmpegKit is now initialised by EngineBoot (first stage of the loading screen), not here.
-  await SettingsStore.load(); // preview quality / grade-paused-frame / fast flares / saved theme id (before the first frame)
-  await AccentStore.load(); // saved accent colour / gradient blend / colour off (batch 7)
-  ThemeManager.restore(); // puts the saved theme's PALETTE on screen; the accent stays whatever accent.json restored
+  // Settings first (they are tiny and decide how the very first frame looks): preview quality / grade-paused-only / fast flares /
+  // theme (batch 16, SharedPreferences), then the saved accent colour / gradient blend / colour off (batch 7, accent.json).
+  await SettingsStore.load();
+  await AccentStore.load();
+  ThemeManager.restore(); // palette only: the accent comes from accent.json
+
   Music.init(); // bundled music only (never touches the export pipeline)
-  EngineBoot.start(); // not awaited: the loading screen (BootGate) shows its progress
   runApp(const ShaderlyApp());
   CrashLog.scheduleReport();
+
+  // Batch 16: FFmpeg + the Vulkan pipeline + the grading worker are created HERE, once, behind the loading screen (BootGate below).
+  // Nothing else in the app creates the engine any more.
+  EngineBoot.start();
 }
 
 class ShaderlyApp extends StatelessWidget {
@@ -69,40 +75,35 @@ class ShaderlyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuilds on accent changes AND on theme (palette) changes, so the whole MaterialApp theme follows both live.
     return AnimatedBuilder(
-      animation: Listenable.merge(<Listenable>[gAccentListenable, gPalette]),
+      animation: gAccentListenable,
       builder: (context, _) {
         final accentColor = gCustomAccentColor.value;
-        final pal = gPalette.value;
         return MaterialApp(
           navigatorKey: CrashLog.navigatorKey,
           title: 'Shaderly',
           theme: ThemeData.dark().copyWith(
-            scaffoldBackgroundColor: pal.bg,
+            scaffoldBackgroundColor: kBackgroundDark,
             primaryColor: accentColor,
             colorScheme: ColorScheme.dark(
               primary: accentColor,
               secondary: kCyanAccent,
-              surface: pal.card,
+              surface: kCardDark,
             ),
-            appBarTheme: AppBarTheme(
-              backgroundColor: pal.bg,
+            appBarTheme: AppBarTheme( // not const any more: kBackgroundDark follows the theme
+              backgroundColor: kBackgroundDark,
               elevation: 0,
-              titleTextStyle: const TextStyle(
+              titleTextStyle: TextStyle(
                 color: Colors.white,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.5,
               ),
-              iconTheme: const IconThemeData(color: Colors.white),
+              iconTheme: IconThemeData(color: Colors.white),
             ),
           ),
-          // batch 16: the main menu / editor are not even built until EngineBoot reports Ready.
-          home: BootGate(
-            child: TouchParticlesWrapper(
-              child: const HomeScreen(),
-            ),
+          home: TouchParticlesWrapper(
+            child: const BootGate(child: HomeScreen()), // loading screen until EngineBoot reports Ready
           ),
           debugShowCheckedModeBanner: false,
         );
@@ -124,7 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, Uint8List?> _thumbnails = {};
 
   void _onPalette() {
-    if (mounted) setState(() {}); // theme changed: re-read gPalette in this screen
+    if (mounted) setState(() {}); // theme changed: re-read the palette in this screen
   }
 
   @override
@@ -218,7 +219,7 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: gPalette.value.card,
+        backgroundColor: kCardDark,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: Text('Delete "${proj.name}"?', style: const TextStyle(color: Colors.white70)),
@@ -512,16 +513,16 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ]),
                           const SizedBox(height: 10),
-                          shelf(5, 'THEME', Icons.brush_rounded, [
+                          shelf(1, 'THEME', Icons.dashboard_customize_rounded, [
                             ThemeDropdown(
                               onChanged: () {
                                 setModal(() {});
                                 setState(() {});
                               },
-                            ),
+                            ), // ui_kit.dart: Default + 6 character themes, applied live and saved
                           ]),
                           const SizedBox(height: 10),
-                          shelf(1, 'PROCESSING PRECISION', Icons.memory_rounded, [
+                          shelf(2, 'PROCESSING PRECISION', Icons.memory_rounded, [
                             Container(
                               width: double.infinity,
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -536,7 +537,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ]),
                           const SizedBox(height: 10),
-                          shelf(2, 'PREVIEW', Icons.visibility_rounded, [
+                          shelf(3, 'PREVIEW', Icons.visibility_rounded, [
                             Wrap(
                               spacing: 8,
                               runSpacing: 6,
@@ -547,7 +548,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 0.25);
-                                    SettingsStore.save();
+                                    SettingsStore.save(); // batch 16: survives a restart
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -558,7 +559,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 0.50);
-                                    SettingsStore.save();
+                                    SettingsStore.save(); // batch 16: survives a restart
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -569,7 +570,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 1.0);
-                                    SettingsStore.save();
+                                    SettingsStore.save(); // batch 16: survives a restart
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -583,7 +584,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               activeColor: accent,
                               onChanged: (val) {
                                 setModal(() => gGradeActiveFrameOnly = val);
-                                SettingsStore.save();
+                                SettingsStore.save(); // batch 16
                                 setState(() {});
                               },
                             ),
@@ -594,14 +595,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               activeColor: accent,
                               onChanged: (val) {
                                 setModal(() => gFlareHalfRes = val);
-                                SettingsStore.save();
                                 vulkanSetFlareHalfRes(val);
+                                SettingsStore.save(); // batch 16
                                 setState(() {});
                               },
                             ),
                           ]),
                           const SizedBox(height: 10),
-                          shelf(3, 'MUSIC', Icons.music_note_rounded, [
+                          shelf(4, 'MUSIC', Icons.music_note_rounded, [
                             _soundRow('Music', Music.enabled, Music.volume, accent, setModal,
                                 (v) => Music.enabled = v, (v) => Music.volume = v,
                                 note: Music.trackCount == 0
@@ -609,7 +610,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : '${Music.trackCount} tracks, shuffled.'),
                           ]),
                           const SizedBox(height: 10),
-                          shelf(4, 'CREATOR', Icons.person_rounded, [
+                          shelf(5, 'CREATOR', Icons.person_rounded, [
                             ElevatedButton.icon(
                               onPressed: () {
                                 Clipboard.setData(const ClipboardData(text: kMyYouTubeChannel));
@@ -654,7 +655,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final double top = MediaQuery.of(context).padding.top + kToolbarHeight;
 
     return Scaffold(
-      backgroundColor: gPalette.value.bg,
+      backgroundColor: kBackgroundDark,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -854,7 +855,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               index: i,
                               child: Container(
                                 decoration: ShapeDecoration(
-                                  color: gPalette.value.card,
+                                  color: kCardDark,
                                   shape: shelfShape(cut: 9, edge: Colors.white.withOpacity(0.06)),
                                 ),
                                 child: ListTile(
@@ -941,7 +942,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: gPalette.value.card,
+        backgroundColor: kCardDark,
         title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: Text('Delete "${p.name}"?', style: const TextStyle(color: Colors.white70)),
         actions: [
@@ -977,7 +978,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                     final thumb = widget.thumbnails[p.id];
                     return Container(
                       decoration: BoxDecoration(
-                        color: gPalette.value.card,
+                        color: kCardDark,
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.white.withOpacity(0.06)),
                       ),
@@ -1051,7 +1052,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? accent.withOpacity(0.18) : gPalette.value.card,
+          color: isSelected ? accent.withOpacity(0.18) : kCardDark,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isSelected ? accent : Colors.white12, width: isSelected ? 2.0 : 1.0),
         ),
@@ -1094,7 +1095,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('New Project')),
-      // batch 16: SafeArea + scroll view keep OPEN EDITOR above the Android navigation bar / gesture bar on every screen height.
+      // batch 16 (16B layout): SafeArea + scroll view keep OPEN EDITOR above the Android navigation bar / gesture bar on every screen height.
       body: SafeArea(
         top: false,
         child: LayoutBuilder(
@@ -1112,7 +1113,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
               decoration: InputDecoration(
                 filled: true,
-                fillColor: gPalette.value.card,
+                fillColor: kCardDark,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
               onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shaderly Master',
@@ -1149,7 +1150,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: gPalette.value.card,
+                  color: kCardDark,
                   border: Border.all(color: Colors.white.withOpacity(0.08)),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1260,6 +1261,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   VideoPlayerController? _controller;
   bool _isPlaying = false;
+  // batch 16 playback state (see _togglePlayPause / _onControllerValue / live playback below)
+  bool _playTransition = false; // a play / pause / end handler is running: the controller listener ignores values meanwhile
+  bool _gradeStale = false; // the graded picture on screen is older than the video position (play started / video ended): show the video until a fresh grade lands
+  bool _liveFresh = false; // the live-graded overlay is close enough to the playing video to be shown
+  double _liveFramePos = 0.0; // video position (s) of the graded frame currently on screen during live playback
+  int _liveMisses = 0; // consecutive live ticks where the overlay was stale / the GPU was busy
+  bool _liveSuspended = false; // live grading gave up for this play session (too slow): the native video texture is shown alone until the next pause
+  int _liveStartMs = 0;
   img.Image? _cachedRawImage;
   bool _isFullScreen = false;
 
@@ -1278,9 +1287,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Timer? _playbackTimer;
   double _currentTimelinePosition = 0.0;
-  // batch 16: the scrubber (time, slider, play icon) listens to this instead of a whole-screen setState every 100 ms, so playback
-  // no longer rebuilds all 15 editor tabs ten times a second (that rebuild was the UI-thread load during playback).
+  // batch 16 (16B): the time text + slider listen to this instead of a whole-screen setState every 100 ms, so playback no longer rebuilds all
+  // editor tabs ten times a second. _currentTimelinePosition stays the value every other piece of code reads.
   final ValueNotifier<double> _posNotifier = ValueNotifier<double>(0.0);
+  void _setPos(double v) {
+    _currentTimelinePosition = v;
+    _posNotifier.value = v;
+  }
   double _videoDurationSeconds = 1.0;
 
   List<CustomPresetItem> _customPresets = [];
@@ -1319,8 +1332,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _pbDecoding = false;
   int _pbGen = 0;
   bool _isSavingProject = false;
-  // batch 16: the engine is created ONCE at app start (engine_boot.dart) and the editor cannot open before it is Ready, so there is nothing to wait for.
-  Future<void>? _vkReady = Future<void>.value();
 
   AdjustmentLayer get _cur => _project.currentLayer;
 
@@ -1346,7 +1357,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _previewTick.dispose();
     _posNotifier.dispose();
     _tabController.dispose();
-    _controller?.removeListener(_onPlayerValue);
+    _controller?.removeListener(_onControllerValue);
     _controller?.pause();
     _controller?.dispose();
     _controller = null;
@@ -1459,68 +1470,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // Preview size follows the imported media: native resolution (times the preview scale), long edge capped at 2560.
-  // ---------------------------------------------------------------------------------------------------
-  // batch 16: play / pause state. The icon is driven by the player's own value (isPlaying), _isPlaying mirrors it.
-  // ---------------------------------------------------------------------------------------------------
-  void _togglePlay() {
-    final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
-    if (c.value.isPlaying) {
-      c.pause();
-      _isPlaying = false;
-      _currentTimelinePosition = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
-      _posNotifier.value = _currentTimelinePosition;
-      Music.onVideoPause(); // music fades back in ~7 s after pausing
-      _stopLivePlayback(); // sharpen: back to full preview quality
-      setState(() {});
-      _applyGrade(forceExtract: true);
-    } else {
-      final durMs = c.value.duration.inMilliseconds;
-      if (durMs > 0 && c.value.position.inMilliseconds >= durMs - 100) {
-        // parked on the last frame: play starts from the beginning
-        c.seekTo(Duration.zero);
-        _currentTimelinePosition = 0.0;
-        _posNotifier.value = 0.0;
-      }
-      c.play(); // sets value.isPlaying synchronously, so the icon flips on this very frame
-      _isPlaying = true;
-      Music.onVideoPlay(); // music fades out so the video's audio is clean
-      _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
-      setState(() {});
-    }
-  }
-
-  void _onPlayerValue() {
-    final c = _controller;
-    if (c == null || !mounted || !_isPlaying) return;
-    final v = c.value;
-    if (!v.isInitialized) return;
-    final durMs = v.duration.inMilliseconds;
-    final atEnd = durMs > 0 && v.position.inMilliseconds >= durMs - 40;
-    if (atEnd || !v.isPlaying) _finishPlayback(atEnd: atEnd);
-  }
-
-  /// The clip ended (or the player stopped by itself): pause cleanly on the last frame, no seek-to-zero, no restart.
-  void _finishPlayback({required bool atEnd}) {
-    final c = _controller;
-    if (c == null || !_isPlaying) return; // re-entrancy guard: runs once per stop
-    _isPlaying = false; // first, so _applyGrade stops returning early
-    c.pause();
-    if (atEnd) {
-      final last = math.max(0.0, _videoDurationSeconds - 0.05); // a frame ffmpeg can still extract
-      _currentTimelinePosition = last;
-      _posNotifier.value = last;
-      c.seekTo(Duration(milliseconds: (last * 1000).round()));
-    } else {
-      _currentTimelinePosition = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
-      _posNotifier.value = _currentTimelinePosition;
-    }
-    Music.onVideoPause();
-    _stopLivePlayback();
-    setState(() {});
-    _applyGrade(forceExtract: true); // graded paused frame for the spot we stopped on
-  }
-
   void _updateDimensions(int srcW, int srcH) {
     _srcW = srcW;
     _srcH = srcH;
@@ -1570,7 +1519,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
     showModalBottomSheet(
       context: context,
-      backgroundColor: gPalette.value.card,
+      backgroundColor: kCardDark,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1643,12 +1592,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _lastGradeSig = '';
     Music.onVideoPause();
     if (_controller != null) {
-      _controller!.removeListener(_onPlayerValue);
+      _controller!.removeListener(_onControllerValue);
       await _controller!.pause();
       await _controller!.dispose();
       _controller = null;
     }
-    _posNotifier.value = 0.0;
+    _gradeStale = false;
+    _liveFresh = false;
 
     setState(() {
       _project.mediaPath = path;
@@ -1657,6 +1607,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _processedStaticImage = null;
       _isPlaying = false;
       _currentTimelinePosition = 0.0;
+      _posNotifier.value = 0.0;
     });
 
     if (isImg) {
@@ -1681,19 +1632,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
           _controller!.pause();
           _isPlaying = false;
-          _controller!.addListener(_onPlayerValue); // batch 16: keeps _isPlaying in step with the player and handles the end of the clip
+          _controller!.addListener(_onControllerValue); // batch 16: the play icon / end of video follow the player
 
           setState(() {});
           _applyGrade(forceExtract: true);
 
-          // Position clock for the scrubber only (no whole-screen setState). It no longer seeks / re-plays at the end:
-          // the end of the clip is handled once, in _onPlayerValue -> _finishPlayback.
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
             final c = _controller;
-            if (c == null || !mounted || !c.value.isInitialized || !c.value.isPlaying) return;
-            final newPos = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
-            _currentTimelinePosition = newPos;
-            _posNotifier.value = newPos;
+            if (c != null && c.value.isInitialized && c.value.isPlaying && mounted && !_playTransition) {
+              // batch 16: the old "seek to 0 and play again" loop is gone from here; the end of the video is handled by
+              // _onControllerValue (pause cleanly and stay on the last frame)
+              _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds)); // no setState: only the scrubber repaints
+            }
           });
         });
     }
@@ -1715,7 +1665,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       if (out.existsSync()) out.deleteSync();
     } catch (_) {}
     await FFmpegKit.execute(
-      '-hide_banner -y -ss $_currentTimelinePosition -noaccurate_seek -i "${_project.mediaPath}" -frames:v 1 '
+      '-hide_banner -y -ss $_currentTimelinePosition ${(_scrubbing || _isPlaying) ? '-noaccurate_seek ' : ''}-i "${_project.mediaPath}" -frames:v 1 '
       '-vf "${_previewVf(w, h)}" -f rawvideo -pix_fmt rgba "${out.path}"',
     );
     if (!out.existsSync()) return null;
@@ -1736,9 +1686,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
     _isVulkanProcessing = true;
     _needsReprocess = false;
+    _previewTick.value++; // batch 16: lets the preview layer show / hide its spinner
 
     try {
-      await _vkReady; // engine creation runs off the UI thread now: do not grade before it is ready
       if (_srcW > 0) _updateDimensions(_srcW, _srcH); // paused = full quality, scrubbing = interactive quality
       final int w = _renderWidth;
       final int h = _renderHeight;
@@ -1773,7 +1723,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
         // Nothing changed since the picture on screen (same frame, same settings): skip the GPU completely.
         final sig = '${identityHashCode(rawBytes)}|$w|$h|${Object.hashAll(uniforms)}|${lutTable == null ? 0 : identityHashCode(lutTable)}';
-        if (sig == _lastGradeSig && _processedStaticImage != null) return;
+        if (sig == _lastGradeSig && _processedStaticImage != null) {
+          _gradeStale = false;
+          return;
+        }
 
         // The GPU work runs in the worker isolate: the UI isolate stays free (sliders, taps, animations).
         final res = await GradeWorker.instance.grade(rgba: rawBytes, w: w, h: h, uniforms: uniforms, lut: lutTable);
@@ -1783,6 +1736,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           _processedStaticImage?.dispose();
           _processedStaticImage = im;
           _lastGradeSig = sig;
+          _gradeStale = false; // batch 16: a fresh grade of the current position is on screen
           _previewTick.value++;
         } else {
           im.dispose();
@@ -1791,6 +1745,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     } catch (_) {
     } finally {
       _isVulkanProcessing = false;
+      if (mounted) _previewTick.value++; // batch 16: spinner / picture state may have changed
       if (_needsReprocess && mounted) {
         final fe = _pendingExtract;
         _pendingExtract = false;
@@ -1824,6 +1779,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _pbBuf = null;
     _pbNextBuf = null;
     _liveReady = false;
+    _liveFresh = false;
+    _liveMisses = 0;
+    _liveSuspended = false;
+    _liveStartMs = DateTime.now().millisecondsSinceEpoch;
     _previewTick.value++;
     if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already true -> lower quality
     vulkanSetBandBudgetMs(12);
@@ -1839,32 +1798,51 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _pbBuf = null;
     _pbNextBuf = null;
     _liveReady = false;
+    _liveFresh = false;
+    _liveMisses = 0;
     vulkanSetBandBudgetMs(40);
     if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already false -> full quality
     _previewTick.value++;
   }
 
+  // Decoding (ffmpeg, its own native threads) and grading (GradeWorker isolate) are separate pipelines that only meet at the
+  // _pbBuf / _pbNextBuf buffers: the decoder never waits for the GPU and the grade tick never waits for the decoder (batch 16).
+  //  * every chunk goes to its own temp file (the current-chunk and the prefetch decode can run at the same time),
+  //  * the chunk file is read in a short-lived isolate: reading tens of MB on the UI isolate was a visible stall at every chunk change,
+  //  * "current" and "next" have separate in-flight flags, so a prefetch can never block the decode the player needs right now.
+  int _pbFileCounter = 0;
+  bool _pbDecodingNext = false;
+
   Future<Uint8List?> _decodeChunk(double startSec, int w, int h) async {
     final dir = await getTemporaryDirectory();
-    final f = File('${dir.path}/pb_chunk.rgba');
+    final path = '${dir.path}/pb_chunk_${_pbFileCounter++ % 4}.rgba';
     try {
+      final f = File(path);
       if (f.existsSync()) f.deleteSync();
     } catch (_) {}
     await FFmpegKit.execute(
       '-hide_banner -y -ss ${startSec.toStringAsFixed(3)} -i "${_project.mediaPath}" -an -sn -dn '
-      '-vf "fps=$_pbFps,${_previewVf(w, h)}" -frames:v $_pbChunkFrames -f rawvideo -pix_fmt rgba "${f.path}"',
+      '-vf "fps=$_pbFps,${_previewVf(w, h)}" -frames:v $_pbChunkFrames -f rawvideo -pix_fmt rgba "$path"',
     );
-    if (!f.existsSync()) return null;
-    final b = await f.readAsBytes();
-    try {
-      f.deleteSync();
-    } catch (_) {}
+    final Uint8List b = await Isolate.run<Uint8List>(() {
+      final file = File(path);
+      if (!file.existsSync()) return Uint8List(0);
+      final bytes = file.readAsBytesSync();
+      try {
+        file.deleteSync();
+      } catch (_) {}
+      return bytes;
+    });
     return b.length >= w * h * 4 ? b : null;
   }
 
   Future<void> _pbRequest(double startSec, int w, int h, {required bool asNext}) async {
-    if (_pbDecoding) return;
-    _pbDecoding = true;
+    if (asNext ? _pbDecodingNext : _pbDecoding) return;
+    if (asNext) {
+      _pbDecodingNext = true;
+    } else {
+      _pbDecoding = true;
+    }
     final gen = _pbGen;
     try {
       final b = await _decodeChunk(startSec, w, h);
@@ -1883,17 +1861,49 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     } catch (_) {
     } finally {
-      _pbDecoding = false;
+      if (asNext) {
+        _pbDecodingNext = false;
+      } else {
+        _pbDecoding = false;
+      }
     }
   }
 
+  /// How far (seconds) the graded overlay may trail the playing video before it is hidden and the native video texture shows alone.
+  static const double kLiveMaxLagSec = 0.20;
+
+  /// Live grading gives up for this play session after this many consecutive bad ticks (40 ms each = about 1.2 s) ...
+  static const int kLiveMaxMisses = 30;
+
+  /// ... or when no graded frame has appeared at all this long after play started (first chunk decode included).
+  static const int kLiveFirstFrameTimeoutMs = 6000;
+
   void _playbackGradeTick() {
     final c = _controller;
-    if (!mounted || c == null || !c.value.isInitialized || !c.value.isPlaying || _srcW <= 0) return;
+    if (!mounted || c == null || !c.value.isInitialized || !c.value.isPlaying || _srcW <= 0 || _liveSuspended || _playTransition) return;
     final pos = c.value.position.inMilliseconds / 1000.0;
     final w = _renderWidth;
     final h = _renderHeight;
     final fb = w * h * 4;
+
+    // Graceful degradation (batch 16): the overlay is only shown while it is close to the video. If the graded frames trail
+    // behind (GPU / decoder too slow for this clip at this preview quality) the picture falls back to the native video
+    // texture, which always plays smoothly, instead of showing a slideshow on top of it; after about a second of that the live
+    // grading stops for the rest of this play session (no decoding, no GPU work) and the frame is graded again on pause.
+    if (_liveReady) {
+      final fresh = (pos - _liveFramePos).abs() <= kLiveMaxLagSec;
+      if (fresh != _liveFresh) {
+        _liveFresh = fresh;
+        _previewTick.value++;
+      }
+      if (!fresh) _liveMisses++;
+    } else if (DateTime.now().millisecondsSinceEpoch - _liveStartMs > kLiveFirstFrameTimeoutMs) {
+      _liveMisses = kLiveMaxMisses;
+    }
+    if (_liveMisses >= kLiveMaxMisses) {
+      _suspendLive();
+      return;
+    }
 
     if (_pbBuf != null && (_pbW != w || _pbH != h)) {
       _pbBuf = null;
@@ -1921,17 +1931,37 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     int idx = ((pos - _pbStart) * _pbFps).floor();
     idx = idx.clamp(0, _pbCount - 1).toInt();
     if (_tsPreviewTick(pos, w, h)) return; // batch 12 C2: inside a Time Slice wipe the ring emit replaces the plain grade of this frame
-    _gradeLive(Uint8List.sublistView(_pbBuf!, idx * fb, (idx + 1) * fb), w, h);
+    _gradeLive(Uint8List.sublistView(_pbBuf!, idx * fb, (idx + 1) * fb), w, h, _pbStart + idx / _pbFps);
   }
 
-  Future<void> _gradeLive(Uint8List frame, int w, int h) async {
+  void _suspendLive() {
+    _liveSuspended = true;
+    _pbTimer?.cancel();
+    _pbTimer = null;
+    _pbGen++; // drops any chunk decode still in flight
+    _pbBuf = null;
+    _pbNextBuf = null;
+    _liveReady = false;
+    _liveFresh = false;
+    _previewTick.value++;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Live grading cannot keep up with this clip: playing the video as is. The frame is graded again when you pause. A lower preview quality (Settings) helps.'),
+          duration: Duration(seconds: 5),
+        ),
+      );
+    }
+  }
+
+  Future<void> _gradeLive(Uint8List frame, int w, int h, double framePos) async {
     if (_isVulkanProcessing) return;
     _isVulkanProcessing = true;
     try {
       final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
       final res = await GradeWorker.instance.grade(rgba: frame, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
       final im = await _rgbaToImage(res.rgba, w, h);
-      if (!mounted || !(_controller?.value.isPlaying ?? false)) {
+      if (!mounted || !(_controller?.value.isPlaying ?? false) || _liveSuspended) {
         im.dispose();
         return;
       }
@@ -1940,19 +1970,115 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _renderWidth = w;
       _renderHeight = h;
       _liveReady = true;
+      _liveFramePos = framePos;
+      _liveFresh = true;
+      _liveMisses = 0;
       _previewTick.value++;
     } catch (_) {
     } finally {
       _isVulkanProcessing = false;
-      // batch 16: a regrade requested while this live frame was in flight (pause / end of clip) used to be thrown away here,
-      // which left the stopped picture stale. Run it now when playback is over.
-      final pending = _needsReprocess;
       _needsReprocess = false;
-      if (pending && mounted && !_isPlaying) {
-        final fe = _pendingExtract;
-        _pendingExtract = false;
-        _applyGrade(forceExtract: fe);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------------
+  // PLAY / PAUSE / END OF VIDEO (batch 16)
+  // The play icon follows the player: _isPlaying flips the instant the button is tapped, and the controller listener corrects it if
+  // the player disagrees (the video ended, the OS paused it ...). The end of the video pauses cleanly and parks on the last frame;
+  // pressing play there starts again from 0. The picture shown after a pause is only the graded frame of THAT position: until it
+  // is ready the native video texture shows (never a graded frame from before the video was played).
+  // ---------------------------------------------------------------------------------------------------
+  static const Duration _kEndSlack = Duration(milliseconds: 120);
+
+  bool _controllerAtEnd(VideoPlayerController c) {
+    final d = c.value.duration;
+    return d > Duration.zero && c.value.position >= d - _kEndSlack;
+  }
+
+  Future<void> _togglePlayPause() async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || _playTransition) return;
+    _playTransition = true;
+    try {
+      if (_isPlaying) {
+        setState(() => _isPlaying = false); // the icon flips instantly
+        await c.pause();
+        _onPlaybackPaused(c);
+      } else {
+        final restart = _controllerAtEnd(c);
+        setState(() => _isPlaying = true); // the icon flips instantly
+        _gradeStale = true; // the graded frame on screen belongs to the old position
+        if (restart) {
+          await c.seekTo(Duration.zero);
+          _setPos(0.0);
+        }
+        await c.play();
+        Music.onVideoPlay(); // music fades out so the video's audio is clean
+        _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
       }
+    } catch (e) {
+      debugPrint('play / pause failed: $e');
+      if (mounted) setState(() => _isPlaying = c.value.isPlaying);
+    } finally {
+      _playTransition = false;
+    }
+  }
+
+  void _onControllerValue() {
+    final c = _controller;
+    if (c == null || !mounted || _playTransition || !c.value.isInitialized) return;
+    if (_isPlaying && !c.value.isPlaying) {
+      if (_controllerAtEnd(c)) {
+        _onPlaybackEnded(c);
+      } else {
+        // the platform stopped playback by itself (audio focus, app switch ...): the icon follows
+        setState(() => _isPlaying = false);
+        _onPlaybackPaused(c);
+      }
+    }
+  }
+
+  void _onPlaybackPaused(VideoPlayerController c) {
+    if (!mounted) return;
+    // the exact paused position (the 100 ms timer can be one tick behind): the graded frame is cut from here
+    _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds));
+    setState(() {}); // play icon
+    Music.onVideoPause(); // music fades back in ~7 s after pausing
+    _stopLivePlayback(); // sharpen: back to full preview quality
+    _gradeAfterPause();
+  }
+
+  Future<void> _gradeAfterPause() async {
+    // A live grade may still be in flight and clears _needsReprocess when it ends, so wait for it here instead of queueing.
+    int guard = 0;
+    while (_isVulkanProcessing && guard++ < 100 && mounted) {
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    if (!mounted || _isPlaying) return;
+    _applyGrade(forceExtract: true);
+  }
+
+  Future<void> _onPlaybackEnded(VideoPlayerController c) async {
+    _playTransition = true;
+    try {
+      final d = c.value.duration;
+      // one frame before the very end: the texture keeps a real picture there (a seek to the exact end can show black or jump)
+      final Duration last = d > const Duration(milliseconds: 80) ? d - const Duration(milliseconds: 40) : Duration.zero;
+      setState(() {
+        _isPlaying = false;
+        _currentTimelinePosition = last.inMilliseconds / 1000.0;
+        _posNotifier.value = _currentTimelinePosition;
+      });
+      _gradeStale = true;
+      Music.onVideoPause();
+      _stopLivePlayback();
+      await c.seekTo(last);
+      if (!mounted) return;
+      _gradeAfterPause();
+    } catch (e) {
+      debugPrint('end of video handling failed: $e');
+    } finally {
+      _playTransition = false;
     }
   }
 
@@ -2283,6 +2409,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _renderWidth = w;
       _renderHeight = h;
       _liveReady = true;
+      _liveFramePos = pos; // batch 16: freshness bookkeeping of the live overlay (the Time Slice logic itself is unchanged)
+      _liveFresh = true;
+      _liveMisses = 0;
       _previewTick.value++;
     } catch (_) {
     } finally {
@@ -2820,7 +2949,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isSel ? accent.withOpacity(0.18) : gPalette.value.card,
+                        color: isSel ? accent.withOpacity(0.18) : kCardDark,
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(color: isSel ? accent : Colors.white12),
                       ),
@@ -2915,7 +3044,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           const SizedBox(width: 12),
           DropdownButton<LayerBlendMode>(
             value: _cur.blendMode,
-            dropdownColor: gPalette.value.card,
+            dropdownColor: kCardDark,
             underline: const SizedBox(),
             style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
             items: const [
@@ -2984,28 +3113,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     final accent = gCustomAccentColor.value;
-    final controller = _controller!;
 
     return Container(
       color: Colors.black45,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: Row(
         children: [
-          // batch 16: the icon listens to the player itself (value.isPlaying), so it flips the instant play() / pause() runs,
-          // and also when the player stops on its own at the end of the clip.
           GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _togglePlay,
+            behavior: HitTestBehavior.opaque, // batch 16: the whole padded box is the button, not just the glyph
+            onTap: _togglePlayPause, // flips the icon instantly, then plays / pauses; the controller listener keeps it in sync
             child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: ValueListenableBuilder<VideoPlayerValue>(
-                valueListenable: controller,
-                builder: (context, v, _) => Icon(v.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 28),
             ),
           ),
-          const SizedBox(width: 2),
-          // position text + slider are driven by _posNotifier: only this row repaints while the video plays
+          const SizedBox(width: 8),
           ValueListenableBuilder<double>(
             valueListenable: _posNotifier,
             builder: (context, pos, _) => Text(
@@ -3030,8 +3152,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   max: _videoDurationSeconds,
                   onChangeStart: (_) => _scrubbing = true,
                   onChanged: (val) {
-                    _currentTimelinePosition = val;
-                    _posNotifier.value = val;
+                    _setPos(val);
                     _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
                     if (!gGradeActiveFrameOnly) {
                       _applyGrade(forceExtract: true);
@@ -3076,7 +3197,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final bool hasMedia = _processedStaticImage != null;
 
     return Scaffold(
-      backgroundColor: gPalette.value.project,
+      backgroundColor: kProjectBgDark,
       appBar: _isFullScreen
           ? null
           : AppBar(
@@ -3164,26 +3285,25 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         child: Column(
           children: [
             Expanded(
-              flex: _isFullScreen ? 10 : 5,
+              flex: _isFullScreen ? 10 : (_getAspectRatioValue(_project.aspectRatio) < 1.0 ? 6 : 5), // taller share for portrait ratios [ASSUMED]
               child: Stack(
                 fit: StackFit.expand,
                 children: [
                   Container(
                     color: Colors.black,
-                    // batch 16: the preview box is sized from the space actually available: the largest box of the project ratio
-                    // (4:5, 16:9, 1:1, ...) that fits, centred, on whole pixels. Recomputed on every layout (ratio change, fullscreen,
-                    // rotation, keyboard), so no ratio is stretched or off-centre.
                     child: LayoutBuilder(
-                      builder: (context, outer) {
-                        const double pad = 6.0;
-                        final double availW = math.max(1.0, outer.maxWidth - pad * 2);
-                        final double availH = math.max(1.0, outer.maxHeight - pad * 2);
-                        final double ar = _getAspectRatioValue(_project.aspectRatio);
+                      builder: (context, area) {
+                        // batch 16: the preview box is computed from the free space and the ratio, then centred: 4:5, 16:9, 1:1 ... all fill
+                        // the area as far as their shape allows, with the same 6 px margin, never offset.
+                        const double margin = 6.0;
+                        final double ratio = _getAspectRatioValue(_project.aspectRatio);
+                        final double availW = math.max(1.0, area.maxWidth - margin * 2);
+                        final double availH = math.max(1.0, area.maxHeight - margin * 2);
                         double boxW = availW;
-                        double boxH = boxW / ar;
+                        double boxH = boxW / ratio;
                         if (boxH > availH) {
                           boxH = availH;
-                          boxW = boxH * ar;
+                          boxW = boxH * ratio;
                         }
                         boxW = math.max(1.0, boxW.floorToDouble());
                         boxH = math.max(1.0, boxH.floorToDouble());
@@ -3191,8 +3311,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                           child: SizedBox(
                             width: boxW,
                             height: boxH,
-                            child: GlowFrame(
-                        child: LayoutBuilder(
+                            child: GlowFrame(child: LayoutBuilder(
                           builder: (context, constraints) {
                             return GestureDetector(
                               behavior: HitTestBehavior.translucent,
@@ -3218,7 +3337,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     valueListenable: _previewTick,
                                     builder: (context, _, __) {
                                       final has = _processedStaticImage != null;
-                                      final show = has && (gGradeActiveFrameOnly ? !_isPlaying : (!_isPlaying || _liveReady));
+                                      // batch 16: while playing, the graded overlay only shows when live grading is on, keeping up and fresh; otherwise the native
+                                      // video texture plays alone. Paused: the graded frame of THIS position (never a stale one from before the video was played).
+                                      final bool show = _isPlaying
+                                          ? (has && !gGradeActiveFrameOnly && !_liveSuspended && _liveReady && _liveFresh)
+                                          : (has && !_gradeStale);
                                       if (show) {
                                         return FittedBox(
                                           fit: BoxFit.cover,
@@ -3229,7 +3352,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                           ),
                                         );
                                       }
-                                      if (!_isPlaying && !has) {
+                                      // the spinner only runs while a grade is really in progress (or the media is still opening), never forever
+                                      final mediaOpening = !_project.isImage && (_controller == null || !_controller!.value.isInitialized);
+                                      if (!_isPlaying && !has && (_isVulkanProcessing || mediaOpening)) {
                                         return const Center(child: CircularProgressIndicator(color: Colors.white38));
                                       }
                                       return const SizedBox.shrink();
@@ -3242,10 +3367,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                               ),
                             );
                           },
-                        ),
-                            ),
-                          ),
-                        );
+                        ))));
                       },
                     ),
                   ),
@@ -3285,7 +3407,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Expanded(
                 flex: 5,
                 child: Container(
-                  color: gPalette.value.editor,
+                  color: kEditorDark,
                   child: TabBarView(
                     controller: _tabController,
                     children: [

@@ -31,7 +31,7 @@ final ValueNotifier<Color> gChosenAccent = ValueNotifier<Color>(kCyanAccent);
 final ValueNotifier<Set<int>> gGradientColours = ValueNotifier<Set<int>>(<int>{});
 
 /// Listen to this for anything that must follow the accent live (glow frame, sliders, tab shelf ...).
-final Listenable gAccentListenable = Listenable.merge(<Listenable>[gCustomAccentColor, gColourOff, gGradientColours]);
+final Listenable gAccentListenable = Listenable.merge(<Listenable>[gCustomAccentColor, gColourOff, gGradientColours, gPalette]); // gPalette: batch 16 themes
 
 /// True when the effective accent should be drawn as a gradient.
 bool get gAccentGradientOn => !gColourOff.value && gGradientColours.value.contains(gChosenAccent.value.value);

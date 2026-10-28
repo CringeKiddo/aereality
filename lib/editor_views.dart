@@ -413,7 +413,7 @@ class EditorViews {
           margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFF14141C),
+            color: gPalette.value.control,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: Colors.white.withOpacity(0.04)),
           ),
@@ -543,20 +543,6 @@ class EditorViews {
     );
   }
 
-  /// batch 16: gesture shield for the colour wheels and the curve editor. A raw, opaque GestureDetector that also listens to
-  /// pan start / update / end, so a drag that starts on the control is claimed by the control's own subtree and can never fall
-  /// through to the parent ListView (vertical scroll) or the TabBarView / PageView (horizontal swipe between tabs).
-  /// The control's own detectors are deeper in the tree, so they still win the arena first: taps and drags behave as before.
-  static Widget gestureShield(Widget child) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onPanStart: (_) {},
-      onPanUpdate: (_) {},
-      onPanEnd: (_) {},
-      child: child,
-    );
-  }
-
   static Widget _wheelCard({
     required BuildContext context,
     required String title,
@@ -573,7 +559,7 @@ class EditorViews {
       margin: const EdgeInsets.all(4),
       padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF14141C),
+        color: gPalette.value.control,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
@@ -581,7 +567,7 @@ class EditorViews {
         final size = math.min(c.maxWidth - 8, 150.0);
         return Column(
           children: [
-            gestureShield(ColorWheelPicker(label: title, x: x, y: y, size: size, onChanged: onWheel, onEnded: onEnded)),
+            ColorWheelPicker(label: title, x: x, y: y, size: size, onChanged: onWheel, onEnded: onEnded), // gesture lock lives inside the control (DragLock, curve_editor.dart)
             const SizedBox(height: 4),
             _miniSlider(context: context, label: 'Luma', val: luma, min: lumaMin, max: lumaMax, onChanged: onLuma, onEnded: onEnded),
           ],
@@ -993,7 +979,7 @@ class EditorViews {
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -1050,7 +1036,7 @@ class EditorViews {
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 4),
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
           child: Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1150,7 +1136,7 @@ class EditorViews {
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
           child: Wrap(
             spacing: 6,
             runSpacing: 4,
@@ -1265,7 +1251,7 @@ class EditorViews {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
       child: Wrap(
         spacing: 6,
         runSpacing: 4,
@@ -1390,7 +1376,7 @@ class EditorViews {
     }
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
       child: Column(
         children: [
           Padding(
@@ -1455,7 +1441,7 @@ class EditorViews {
             children: [
               for (final combo in _duoCombos)
                 ActionChip(
-                  backgroundColor: const Color(0xFF14141C),
+                  backgroundColor: gPalette.value.control,
                   avatar: Container(
                     width: 16,
                     height: 16,
@@ -1641,16 +1627,14 @@ class EditorViews {
           }),
         ),
         const SizedBox(height: 16),
-        gestureShield(
-          FreeCurveEditor(
-            key: ValueKey('curve_${cur.id}_$ch'),
-            xy: xy,
-            curveColor: colors[ch],
-            onChanged: (pts) {
-              cur.setCurveXY(ch, pts);
-              onChanged();
-            },
-          ),
+        FreeCurveEditor(
+          key: ValueKey('curve_${cur.id}_$ch'),
+          xy: xy,
+          curveColor: colors[ch],
+          onChanged: (pts) {
+            cur.setCurveXY(ch, pts);
+            onChanged();
+          },
         ),
         const SizedBox(height: 10),
         Center(
@@ -1981,7 +1965,7 @@ class EditorViews {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: project.enableTimelineSegments ? accent.withOpacity(0.18) : const Color(0xFF14141C),
+                color: project.enableTimelineSegments ? accent.withOpacity(0.18) : gPalette.value.control,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: project.enableTimelineSegments ? accent : Colors.white10,
@@ -2316,7 +2300,7 @@ class EditorViews {
     Widget chips(List<List<Object>> items, double cur, void Function(double) set) => Container(
           margin: const EdgeInsets.symmetric(horizontal: 4),
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
           child: Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -2356,7 +2340,7 @@ class EditorViews {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: project.textSuiteEnabled ? accent.withOpacity(0.18) : const Color(0xFF14141C),
+            color: project.textSuiteEnabled ? accent.withOpacity(0.18) : gPalette.value.control,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: project.textSuiteEnabled ? accent : Colors.white10,
@@ -2524,7 +2508,7 @@ class EditorViews {
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(color: gPalette.value.control, borderRadius: BorderRadius.circular(10)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -3205,7 +3189,7 @@ class _TextColourWheelCardState extends State<TextColourWheelCard> {
       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF14141C),
+        color: gPalette.value.control,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.white.withOpacity(0.04)),
       ),
@@ -3374,7 +3358,7 @@ class _HueSatPanelState extends State<HueSatPanel> {
                   label: Text(m['n'] as String, style: TextStyle(fontSize: 11, color: _mode == m['i'] ? Colors.black : Colors.white70, fontWeight: FontWeight.bold)),
                   selected: _mode == m['i'],
                   selectedColor: accent,
-                  backgroundColor: const Color(0xFF14141C),
+                  backgroundColor: gPalette.value.control,
                   onSelected: (_) => setState(() => _mode = m['i'] as int),
                 ),
             ],
@@ -3538,7 +3522,7 @@ class _SmoothSliderRowState extends State<SmoothSliderRow> {
         padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
         child: DecoratedBox(
           decoration: ShapeDecoration(
-            color: const Color(0xFF14141C),
+            color: gPalette.value.control,
             shape: shelfShape(cut: 7, edge: Colors.white.withOpacity(0.05)),
           ),
           child: Padding(
