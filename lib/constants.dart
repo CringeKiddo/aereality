@@ -23,6 +23,39 @@ const Color kBorderDark = Color(0xFF222230);
 // Global Active Accent
 final ValueNotifier<Color> gCustomAccentColor = ValueNotifier<Color>(kCyanAccent);
 
+// Live palette (batch 16): the theme dropdown (app_theme.dart) swaps this; screens read gPalette.value.* instead of the k...Dark constants.
+class AppPalette {
+  final Color bg;
+  final Color surface;
+  final Color card;
+  final Color border;
+  final Color panel; // editor shelf bar / app bar of the editor
+  final Color editor; // editor tab area
+  final Color project; // editor scaffold background
+  const AppPalette({
+    required this.bg,
+    required this.surface,
+    required this.card,
+    required this.border,
+    required this.panel,
+    required this.editor,
+    required this.project,
+  });
+}
+
+// "Default" = the original colours (panel / editor / project were hard-coded in main.dart and ui_kit.dart before).
+const AppPalette kDefaultPalette = AppPalette(
+  bg: kBackgroundDark,
+  surface: kSurfaceDark,
+  card: kCardDark,
+  border: kBorderDark,
+  panel: Color(0xFF0F0F14),
+  editor: Color(0xFF0C0C10),
+  project: Color(0xFF0A0A0E),
+);
+
+final ValueNotifier<AppPalette> gPalette = ValueNotifier<AppPalette>(kDefaultPalette);
+
 // -----------------------------------------------------------------------------
 // Global Engine & Performance Settings
 // -----------------------------------------------------------------------------

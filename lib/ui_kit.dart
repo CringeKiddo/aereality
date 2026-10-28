@@ -11,6 +11,7 @@
 //   shelfSliderTheme / ShelfSliderTrackShape / DiamondThumbShape    slider look used by SmoothSliderRow
 //   SlideInTilt     slide + slight tilt + fade entrance (never blocks touches)
 //   GlowFrame       slightly glowing edge that follows the accent (timeline preview box)
+//   ThemeDropdown   (batch 16) Settings dropdown: Default + the 6 character themes (ThemeManager in app_theme.dart)
 // =============================================================================
 
 import 'dart:math' as math;
@@ -19,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'accent_state.dart';
+import 'app_theme.dart';
 import 'constants.dart';
 
 // -----------------------------------------------------------------------------
@@ -118,7 +120,7 @@ class _SlideInTiltState extends State<SlideInTilt> with SingleTickerProviderStat
 OutlinedBorder shelfShape({double cut = 9, Color? edge, double width = 1}) {
   return BeveledRectangleBorder(
     borderRadius: BorderRadius.circular(cut),
-    side: BorderSide(color: edge ?? kBorderDark, width: width),
+    side: BorderSide(color: edge ?? gPalette.value.border, width: width),
   );
 }
 
@@ -205,12 +207,13 @@ class ShelfPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final panel = ValueListenableBuilder<Color>(
-      valueListenable: gCustomAccentColor,
-      builder: (context, accent, _) {
+    final panel = AnimatedBuilder(
+      animation: Listenable.merge(<Listenable>[gCustomAccentColor, gPalette]),
+      builder: (context, _) {
+        final accent = gCustomAccentColor.value;
         return DecoratedBox(
           decoration: ShapeDecoration(
-            color: kSurfaceDark.withOpacity(0.92),
+            color: gPalette.value.surface.withOpacity(0.92),
             shape: shelfShape(edge: Colors.white.withOpacity(0.07), cut: 10),
             shadows: [BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 14, offset: const Offset(0, 6))],
           ),
@@ -386,7 +389,7 @@ class _ShelfTabBarState extends State<ShelfTabBar> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: gAccentListenable,
+      animation: Listenable.merge(<Listenable>[gAccentListenable, gPalette]),
       builder: (context, _) {
         final accent = gCustomAccentColor.value;
         final cur = widget.controller.index;
@@ -394,7 +397,7 @@ class _ShelfTabBarState extends State<ShelfTabBar> {
         final def = _kShelves[shelf];
         return Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF0F0F14),
+            color: gPalette.value.panel,
             border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05))),
           ),
           padding: const EdgeInsets.fromLTRB(8, 6, 8, 5),
@@ -631,4 +634,84 @@ SliderThemeData shelfSliderTheme(BuildContext context) {
     inactiveTrackColor: Colors.white12,
     thumbColor: accent,
   );
+}
+
+// -----------------------------------------------------------------------------
+// ThemeDropdown (batch 16)
+// -----------------------------------------------------------------------------
+/// "Default" + the 6 character themes from ThemeManager. Choosing one applies palette + signature accent live and saves it
+/// (ThemeManager.select -> SettingsStore + AccentStore). [onChanged] lets the host dialog / screen rebuild itself.
+class ThemeDropdown extends StatelessWidget {
+  final VoidCallback? onChanged;
+  const ThemeDropdown({super.key, this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge(<Listenable>[ThemeManager.current, gCustomAccentColor, gPalette]),
+      builder: (context, _) {
+        final accent = gCustomAccentColor.value;
+        final cur = ThemeManager.current.value;
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: ShapeDecoration(
+            color: gPalette.value.card,
+            shape: shelfShape(cut: 7, edge: accent.withOpacity(0.35)),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: cur,
+              isExpanded: true,
+              dropdownColor: gPalette.value.card,
+              iconEnabledColor: accent,
+              // the closed button shows the name only; the open list shows name + note
+              selectedItemBuilder: (context) => [
+                for (final t in ThemeManager.themes)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(t.name, style: TextStyle(color: accent, fontSize: 13, fontWeight: FontWeight.w800)),
+                  ),
+              ],
+              items: [
+                for (final t in ThemeManager.themes)
+                  DropdownMenuItem<String>(
+                    value: t.id,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 14,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: t.accent,
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(color: t.palette.border, width: 2),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(t.name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                              Text(t.note, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white38, fontSize: 10.5)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: (id) {
+                if (id == null || id == cur) return;
+                ThemeManager.select(id);
+                onChanged?.call();
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

@@ -140,7 +140,7 @@ class EditorViews {
             return Container(
               margin: const EdgeInsets.only(bottom: 8),
               decoration: BoxDecoration(
-                color: isSel ? accent.withOpacity(0.16) : kCardDark,
+                color: isSel ? accent.withOpacity(0.16) : gPalette.value.card,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06)),
               ),
@@ -164,7 +164,7 @@ class EditorViews {
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
-              color: isSel ? accent.withOpacity(0.16) : kCardDark,
+              color: isSel ? accent.withOpacity(0.16) : gPalette.value.card,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06)),
             ),
@@ -242,7 +242,7 @@ class EditorViews {
           return Container(
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
-              color: isSel ? accent.withOpacity(0.14) : kCardDark,
+              color: isSel ? accent.withOpacity(0.14) : gPalette.value.card,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: isSel ? accent : Colors.white.withOpacity(0.06),
@@ -327,7 +327,7 @@ class EditorViews {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: kCardDark,
+              color: gPalette.value.card,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.white.withOpacity(0.04)),
             ),
@@ -346,7 +346,7 @@ class EditorViews {
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: isSel ? accent.withOpacity(0.16) : kCardDark,
+                color: isSel ? accent.withOpacity(0.16) : gPalette.value.card,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: isSel ? accent : Colors.white.withOpacity(0.06), width: isSel ? 1.5 : 1.0),
               ),
@@ -543,6 +543,20 @@ class EditorViews {
     );
   }
 
+  /// batch 16: gesture shield for the colour wheels and the curve editor. A raw, opaque GestureDetector that also listens to
+  /// pan start / update / end, so a drag that starts on the control is claimed by the control's own subtree and can never fall
+  /// through to the parent ListView (vertical scroll) or the TabBarView / PageView (horizontal swipe between tabs).
+  /// The control's own detectors are deeper in the tree, so they still win the arena first: taps and drags behave as before.
+  static Widget gestureShield(Widget child) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (_) {},
+      onPanUpdate: (_) {},
+      onPanEnd: (_) {},
+      child: child,
+    );
+  }
+
   static Widget _wheelCard({
     required BuildContext context,
     required String title,
@@ -567,7 +581,7 @@ class EditorViews {
         final size = math.min(c.maxWidth - 8, 150.0);
         return Column(
           children: [
-            ColorWheelPicker(label: title, x: x, y: y, size: size, onChanged: onWheel, onEnded: onEnded),
+            gestureShield(ColorWheelPicker(label: title, x: x, y: y, size: size, onChanged: onWheel, onEnded: onEnded)),
             const SizedBox(height: 4),
             _miniSlider(context: context, label: 'Luma', val: luma, min: lumaMin, max: lumaMax, onChanged: onLuma, onEnded: onEnded),
           ],
@@ -775,7 +789,7 @@ class EditorViews {
           Expanded(child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12))),
           DropdownButton<int>(
             value: v,
-            dropdownColor: kCardDark,
+            dropdownColor: gPalette.value.card,
             underline: const SizedBox(),
             style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
             items: [for (int i = 0; i < names.length; i++) DropdownMenuItem(value: i, child: Text(names[i]))],
@@ -1311,7 +1325,7 @@ class EditorViews {
           Expanded(child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12))),
           DropdownButton<int>(
             value: v,
-            dropdownColor: kCardDark,
+            dropdownColor: gPalette.value.card,
             underline: const SizedBox(),
             style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
             items: [
@@ -1627,14 +1641,16 @@ class EditorViews {
           }),
         ),
         const SizedBox(height: 16),
-        FreeCurveEditor(
-          key: ValueKey('curve_${cur.id}_$ch'),
-          xy: xy,
-          curveColor: colors[ch],
-          onChanged: (pts) {
-            cur.setCurveXY(ch, pts);
-            onChanged();
-          },
+        gestureShield(
+          FreeCurveEditor(
+            key: ValueKey('curve_${cur.id}_$ch'),
+            xy: xy,
+            curveColor: colors[ch],
+            onChanged: (pts) {
+              cur.setCurveXY(ch, pts);
+              onChanged();
+            },
+          ),
         ),
         const SizedBox(height: 10),
         Center(
@@ -2104,7 +2120,7 @@ class EditorViews {
               Container(
                 padding: const EdgeInsets.all(22),
                 decoration: BoxDecoration(
-                  color: kCardDark,
+                  color: gPalette.value.card,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: Colors.white.withOpacity(0.04)),
                 ),
@@ -2126,7 +2142,7 @@ class EditorViews {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: kCardDark,
+                      color: gPalette.value.card,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Column(
@@ -2600,7 +2616,7 @@ class EditorViews {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
+        backgroundColor: gPalette.value.card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Export CC Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: Column(
@@ -2717,7 +2733,7 @@ class EditorViews {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
+        backgroundColor: gPalette.value.card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Save Preset', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: TextField(

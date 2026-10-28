@@ -7,7 +7,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -37,6 +36,9 @@ import 'grade_worker.dart';
 import 'accent_state.dart';
 import 'ui_kit.dart';
 import 'star_field.dart';
+import 'app_settings.dart'; // batch 16: SharedPreferences persistence of the main-menu settings
+import 'app_theme.dart'; // batch 16: ThemeManager (palette + signature accent)
+import 'engine_boot.dart'; // batch 16: startup loading screen + one-time engine init (BootGate)
 import 'motion_s_screen.dart'; // batch 9: Motion S (full screen, opened from the main menu)
 import 'time_slice_slots.dart'; // batch 12 step C2: wipe scheduler + packing
 import 'cut_detector.dart'; // batch 12: CutDetector (cut scan + detection for the Time Slice wipe scheduler)
@@ -52,14 +54,12 @@ Future<void> main() async {
   await CrashLog.init();
   CrashLog.install();
 
-  try {
-    await FFmpegKitExtended.initialize();
-  } catch (e) {
-    debugPrint('FFmpeg initialization error: $e');
-  }
-
+  // batch 16: FFmpegKit is now initialised by EngineBoot (first stage of the loading screen), not here.
+  await SettingsStore.load(); // preview quality / grade-paused-frame / fast flares / saved theme id (before the first frame)
   await AccentStore.load(); // saved accent colour / gradient blend / colour off (batch 7)
+  ThemeManager.restore(); // puts the saved theme's PALETTE on screen; the accent stays whatever accent.json restored
   Music.init(); // bundled music only (never touches the export pipeline)
+  EngineBoot.start(); // not awaited: the loading screen (BootGate) shows its progress
   runApp(const ShaderlyApp());
   CrashLog.scheduleReport();
 }
@@ -69,35 +69,40 @@ class ShaderlyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuilds on accent changes AND on theme (palette) changes, so the whole MaterialApp theme follows both live.
     return AnimatedBuilder(
-      animation: gAccentListenable,
+      animation: Listenable.merge(<Listenable>[gAccentListenable, gPalette]),
       builder: (context, _) {
         final accentColor = gCustomAccentColor.value;
+        final pal = gPalette.value;
         return MaterialApp(
           navigatorKey: CrashLog.navigatorKey,
           title: 'Shaderly',
           theme: ThemeData.dark().copyWith(
-            scaffoldBackgroundColor: kBackgroundDark,
+            scaffoldBackgroundColor: pal.bg,
             primaryColor: accentColor,
             colorScheme: ColorScheme.dark(
               primary: accentColor,
               secondary: kCyanAccent,
-              surface: kCardDark,
+              surface: pal.card,
             ),
-            appBarTheme: const AppBarTheme(
-              backgroundColor: kBackgroundDark,
+            appBarTheme: AppBarTheme(
+              backgroundColor: pal.bg,
               elevation: 0,
-              titleTextStyle: TextStyle(
+              titleTextStyle: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.5,
               ),
-              iconTheme: IconThemeData(color: Colors.white),
+              iconTheme: const IconThemeData(color: Colors.white),
             ),
           ),
-          home: TouchParticlesWrapper(
-            child: const HomeScreen(),
+          // batch 16: the main menu / editor are not even built until EngineBoot reports Ready.
+          home: BootGate(
+            child: TouchParticlesWrapper(
+              child: const HomeScreen(),
+            ),
           ),
           debugShowCheckedModeBanner: false,
         );
@@ -118,10 +123,21 @@ class _HomeScreenState extends State<HomeScreen> {
   List<StoredProject> _recent = [];
   final Map<String, Uint8List?> _thumbnails = {};
 
+  void _onPalette() {
+    if (mounted) setState(() {}); // theme changed: re-read gPalette in this screen
+  }
+
   @override
   void initState() {
     super.initState();
+    gPalette.addListener(_onPalette);
     _load();
+  }
+
+  @override
+  void dispose() {
+    gPalette.removeListener(_onPalette);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -202,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
+        backgroundColor: gPalette.value.card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: Text('Delete "${proj.name}"?', style: const TextStyle(color: Colors.white70)),
@@ -496,6 +512,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ]),
                           const SizedBox(height: 10),
+                          shelf(5, 'THEME', Icons.brush_rounded, [
+                            ThemeDropdown(
+                              onChanged: () {
+                                setModal(() {});
+                                setState(() {});
+                              },
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
                           shelf(1, 'PROCESSING PRECISION', Icons.memory_rounded, [
                             Container(
                               width: double.infinity,
@@ -522,6 +547,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 0.25);
+                                    SettingsStore.save();
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -532,6 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 0.50);
+                                    SettingsStore.save();
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -542,6 +569,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedColor: accent,
                                   onSelected: (_) {
                                     setModal(() => gPreviewScale = 1.0);
+                                    SettingsStore.save();
                                     setState(() {});
                                     Navigator.pop(ctx);
                                   },
@@ -555,6 +583,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               activeColor: accent,
                               onChanged: (val) {
                                 setModal(() => gGradeActiveFrameOnly = val);
+                                SettingsStore.save();
                                 setState(() {});
                               },
                             ),
@@ -565,6 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               activeColor: accent,
                               onChanged: (val) {
                                 setModal(() => gFlareHalfRes = val);
+                                SettingsStore.save();
                                 vulkanSetFlareHalfRes(val);
                                 setState(() {});
                               },
@@ -624,7 +654,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final double top = MediaQuery.of(context).padding.top + kToolbarHeight;
 
     return Scaffold(
-      backgroundColor: kBackgroundDark,
+      backgroundColor: gPalette.value.bg,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -824,7 +854,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               index: i,
                               child: Container(
                                 decoration: ShapeDecoration(
-                                  color: kCardDark,
+                                  color: gPalette.value.card,
                                   shape: shelfShape(cut: 9, edge: Colors.white.withOpacity(0.06)),
                                 ),
                                 child: ListTile(
@@ -911,7 +941,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: kCardDark,
+        backgroundColor: gPalette.value.card,
         title: const Text('Delete Project?', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         content: Text('Delete "${p.name}"?', style: const TextStyle(color: Colors.white70)),
         actions: [
@@ -947,7 +977,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                     final thumb = widget.thumbnails[p.id];
                     return Container(
                       decoration: BoxDecoration(
-                        color: kCardDark,
+                        color: gPalette.value.card,
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.white.withOpacity(0.06)),
                       ),
@@ -1021,7 +1051,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? accent.withOpacity(0.18) : kCardDark,
+          color: isSelected ? accent.withOpacity(0.18) : gPalette.value.card,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isSelected ? accent : Colors.white12, width: isSelected ? 2.0 : 1.0),
         ),
@@ -1064,9 +1094,16 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('New Project')),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
+      // batch 16: SafeArea + scroll view keep OPEN EDITOR above the Android navigation bar / gesture bar on every screen height.
+      body: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, viewport) => SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + MediaQuery.of(context).viewPadding.bottom),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: viewport.maxHeight - 40),
+              child: IntrinsicHeight(
+                child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('PROJECT TITLE', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold)),
@@ -1075,7 +1112,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
               decoration: InputDecoration(
                 filled: true,
-                fillColor: kCardDark,
+                fillColor: gPalette.value.card,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
               ),
               onChanged: (val) => _projectName = val.isNotEmpty ? val : 'Shaderly Master',
@@ -1112,7 +1149,7 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: kCardDark,
+                  color: gPalette.value.card,
                   border: Border.all(color: Colors.white.withOpacity(0.08)),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1184,6 +1221,10 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
               ),
             ),
           ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1194,11 +1235,6 @@ class _ProjectSetupScreenState extends State<ProjectSetupScreen> {
 // True 32-Bit Float Linear Pipeline - Native Vulkan Compute Architecture
 // 100% Complete Section - Zero Feature Omissions
 // =============================================================================
-
-/// Runs in a short-lived isolate (see _loadShader). Must only touch its arguments and top-level code.
-void _initVulkanOffUi(Uint8List shaderBytes, int precisionBits) {
-  initVulkan(shaderBytes, precisionBits);
-}
 
 class ProjectScreen extends StatefulWidget {
   final ProjectData? initialProject;
@@ -1242,6 +1278,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   Timer? _playbackTimer;
   double _currentTimelinePosition = 0.0;
+  // batch 16: the scrubber (time, slider, play icon) listens to this instead of a whole-screen setState every 100 ms, so playback
+  // no longer rebuilds all 15 editor tabs ten times a second (that rebuild was the UI-thread load during playback).
+  final ValueNotifier<double> _posNotifier = ValueNotifier<double>(0.0);
   double _videoDurationSeconds = 1.0;
 
   List<CustomPresetItem> _customPresets = [];
@@ -1280,7 +1319,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   bool _pbDecoding = false;
   int _pbGen = 0;
   bool _isSavingProject = false;
-  Future<void>? _vkReady; // completes when the Vulkan engine has been created (off the UI thread); the first grade waits for it
+  // batch 16: the engine is created ONCE at app start (engine_boot.dart) and the editor cannot open before it is Ready, so there is nothing to wait for.
+  Future<void>? _vkReady = Future<void>.value();
 
   AdjustmentLayer get _cur => _project.currentLayer;
 
@@ -1289,7 +1329,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
     _tabController = TabController(length: 15, vsync: this); // 15 since batch 12 C3 (index 14 = TIME SLICE)
-    _vkReady = _loadShader();
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
     _pushUndoSnapshot();
@@ -1305,7 +1344,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _pbTimer?.cancel();
     _rebuildThrottle?.cancel();
     _previewTick.dispose();
+    _posNotifier.dispose();
     _tabController.dispose();
+    _controller?.removeListener(_onPlayerValue);
     _controller?.pause();
     _controller?.dispose();
     _controller = null;
@@ -1418,6 +1459,68 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // Preview size follows the imported media: native resolution (times the preview scale), long edge capped at 2560.
+  // ---------------------------------------------------------------------------------------------------
+  // batch 16: play / pause state. The icon is driven by the player's own value (isPlaying), _isPlaying mirrors it.
+  // ---------------------------------------------------------------------------------------------------
+  void _togglePlay() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (c.value.isPlaying) {
+      c.pause();
+      _isPlaying = false;
+      _currentTimelinePosition = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
+      _posNotifier.value = _currentTimelinePosition;
+      Music.onVideoPause(); // music fades back in ~7 s after pausing
+      _stopLivePlayback(); // sharpen: back to full preview quality
+      setState(() {});
+      _applyGrade(forceExtract: true);
+    } else {
+      final durMs = c.value.duration.inMilliseconds;
+      if (durMs > 0 && c.value.position.inMilliseconds >= durMs - 100) {
+        // parked on the last frame: play starts from the beginning
+        c.seekTo(Duration.zero);
+        _currentTimelinePosition = 0.0;
+        _posNotifier.value = 0.0;
+      }
+      c.play(); // sets value.isPlaying synchronously, so the icon flips on this very frame
+      _isPlaying = true;
+      Music.onVideoPlay(); // music fades out so the video's audio is clean
+      _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
+      setState(() {});
+    }
+  }
+
+  void _onPlayerValue() {
+    final c = _controller;
+    if (c == null || !mounted || !_isPlaying) return;
+    final v = c.value;
+    if (!v.isInitialized) return;
+    final durMs = v.duration.inMilliseconds;
+    final atEnd = durMs > 0 && v.position.inMilliseconds >= durMs - 40;
+    if (atEnd || !v.isPlaying) _finishPlayback(atEnd: atEnd);
+  }
+
+  /// The clip ended (or the player stopped by itself): pause cleanly on the last frame, no seek-to-zero, no restart.
+  void _finishPlayback({required bool atEnd}) {
+    final c = _controller;
+    if (c == null || !_isPlaying) return; // re-entrancy guard: runs once per stop
+    _isPlaying = false; // first, so _applyGrade stops returning early
+    c.pause();
+    if (atEnd) {
+      final last = math.max(0.0, _videoDurationSeconds - 0.05); // a frame ffmpeg can still extract
+      _currentTimelinePosition = last;
+      _posNotifier.value = last;
+      c.seekTo(Duration(milliseconds: (last * 1000).round()));
+    } else {
+      _currentTimelinePosition = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
+      _posNotifier.value = _currentTimelinePosition;
+    }
+    Music.onVideoPause();
+    _stopLivePlayback();
+    setState(() {});
+    _applyGrade(forceExtract: true); // graded paused frame for the spot we stopped on
+  }
+
   void _updateDimensions(int srcW, int srcH) {
     _srcW = srcW;
     _srcH = srcH;
@@ -1467,7 +1570,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final accent = gCustomAccentColor.value;
     showModalBottomSheet(
       context: context,
-      backgroundColor: kCardDark,
+      backgroundColor: gPalette.value.card,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1511,37 +1614,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade(forceExtract: !_project.isImage);
   }
 
-  Future<void> _loadShader() async {
-    final candidateNames = [
-      'assets/shaders/aereality_core.spv',
-      'shaders/aereality_core.spv',
-    ];
-
-    Uint8List? shaderBytes;
-    for (final path in candidateNames) {
-      try {
-        final byteData = await rootBundle.load(path);
-        shaderBytes = byteData.buffer.asUint8List();
-        break;
-      } catch (_) {}
-    }
-
-    if (shaderBytes != null) {
-      // init_vulkan builds the whole compute pipeline (one huge shader) and can take many seconds on a weak GPU / battery saver.
-      // Run on the UI isolate it froze every tap until Android's ANR watchdog fired. The native state is process-global and
-      // mutex-protected (init_vulkan returns 1 if already initialised), so a short-lived isolate can create it safely.
-      final bytes = shaderBytes;
-      final prec = gEnginePrecision; // globals are per isolate: pass the value in
-      try {
-        await Isolate.run(() => _initVulkanOffUi(bytes, prec));
-      } catch (e) {
-        debugPrint('initVulkan isolate failed ($e) - initialising inline');
-        initVulkan(bytes, prec);
-      }
-      vulkanSetFlareHalfRes(gFlareHalfRes);
-    }
-  }
-
   Future<void> _switchMediaFile() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.any);
     if (result != null && result.files.single.path != null) {
@@ -1571,10 +1643,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _lastGradeSig = '';
     Music.onVideoPause();
     if (_controller != null) {
+      _controller!.removeListener(_onPlayerValue);
       await _controller!.pause();
       await _controller!.dispose();
       _controller = null;
     }
+    _posNotifier.value = 0.0;
 
     setState(() {
       _project.mediaPath = path;
@@ -1607,22 +1681,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
           _controller!.pause();
           _isPlaying = false;
+          _controller!.addListener(_onPlayerValue); // batch 16: keeps _isPlaying in step with the player and handles the end of the clip
 
           setState(() {});
           _applyGrade(forceExtract: true);
 
+          // Position clock for the scrubber only (no whole-screen setState). It no longer seeks / re-plays at the end:
+          // the end of the clip is handled once, in _onPlayerValue -> _finishPlayback.
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-            if (_controller != null && _controller!.value.isInitialized && _controller!.value.isPlaying && mounted) {
-              final newPos = _controller!.value.position.inMilliseconds / 1000.0;
-              if (newPos >= _videoDurationSeconds) {
-                _controller!.seekTo(Duration.zero);
-                _controller!.play();
-              }
-              setState(() {
-                _currentTimelinePosition = newPos;
-              });
-
-            }
+            final c = _controller;
+            if (c == null || !mounted || !c.value.isInitialized || !c.value.isPlaying) return;
+            final newPos = (c.value.position.inMilliseconds / 1000.0).clamp(0.0, _videoDurationSeconds).toDouble();
+            _currentTimelinePosition = newPos;
+            _posNotifier.value = newPos;
           });
         });
     }
@@ -1873,7 +1944,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     } catch (_) {
     } finally {
       _isVulkanProcessing = false;
+      // batch 16: a regrade requested while this live frame was in flight (pause / end of clip) used to be thrown away here,
+      // which left the stopped picture stale. Run it now when playback is over.
+      final pending = _needsReprocess;
       _needsReprocess = false;
+      if (pending && mounted && !_isPlaying) {
+        final fe = _pendingExtract;
+        _pendingExtract = false;
+        _applyGrade(forceExtract: fe);
+      }
     }
   }
 
@@ -2741,7 +2820,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                       margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isSel ? accent.withOpacity(0.18) : kCardDark,
+                        color: isSel ? accent.withOpacity(0.18) : gPalette.value.card,
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(color: isSel ? accent : Colors.white12),
                       ),
@@ -2836,7 +2915,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           const SizedBox(width: 12),
           DropdownButton<LayerBlendMode>(
             value: _cur.blendMode,
-            dropdownColor: kCardDark,
+            dropdownColor: gPalette.value.card,
             underline: const SizedBox(),
             style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
             items: const [
@@ -2905,35 +2984,34 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     final accent = gCustomAccentColor.value;
+    final controller = _controller!;
 
     return Container(
       color: Colors.black45,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       child: Row(
         children: [
+          // batch 16: the icon listens to the player itself (value.isPlaying), so it flips the instant play() / pause() runs,
+          // and also when the player stops on its own at the end of the clip.
           GestureDetector(
-            onTap: () {
-              setState(() {
-                if (_controller!.value.isPlaying) {
-                  _controller!.pause();
-                  _isPlaying = false;
-                  Music.onVideoPause(); // music fades back in ~7 s after pausing
-                  _stopLivePlayback(); // sharpen: back to full preview quality
-                  _applyGrade(forceExtract: true);
-                } else {
-                  _controller!.play();
-                  _isPlaying = true;
-                  Music.onVideoPlay(); // music fades out so the video's audio is clean
-                  _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
-                }
-              });
-            },
-            child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlay,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: ValueListenableBuilder<VideoPlayerValue>(
+                valueListenable: controller,
+                builder: (context, v, _) => Icon(v.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 24),
+              ),
+            ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            EditorViews.formatTimestampMs(_currentTimelinePosition),
-            style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+          const SizedBox(width: 2),
+          // position text + slider are driven by _posNotifier: only this row repaints while the video plays
+          ValueListenableBuilder<double>(
+            valueListenable: _posNotifier,
+            builder: (context, pos, _) => Text(
+              EditorViews.formatTimestampMs(pos),
+              style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+            ),
           ),
           Expanded(
             child: SliderTheme(
@@ -2944,26 +3022,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 thumbColor: accent,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               ),
-              child: Slider(
-                value: _currentTimelinePosition.clamp(0.0, _videoDurationSeconds),
-                min: 0.0,
-                max: _videoDurationSeconds,
-                onChangeStart: (_) => _scrubbing = true,
-                onChanged: (val) {
-                  setState(() {
+              child: ValueListenableBuilder<double>(
+                valueListenable: _posNotifier,
+                builder: (context, pos, _) => Slider(
+                  value: pos.clamp(0.0, _videoDurationSeconds).toDouble(),
+                  min: 0.0,
+                  max: _videoDurationSeconds,
+                  onChangeStart: (_) => _scrubbing = true,
+                  onChanged: (val) {
                     _currentTimelinePosition = val;
-                  });
-                  _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
-                  if (!gGradeActiveFrameOnly) {
-                    _applyGrade(forceExtract: true);
-                  }
-                },
-                onChangeEnd: (val) {
-                  _scrubbing = false; // sharpen after the scrub
-                  _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
-                    _applyGrade(forceExtract: true);
-                  });
-                },
+                    _posNotifier.value = val;
+                    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
+                    if (!gGradeActiveFrameOnly) {
+                      _applyGrade(forceExtract: true);
+                    }
+                  },
+                  onChangeEnd: (val) {
+                    _scrubbing = false; // sharpen after the scrub
+                    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
+                      _applyGrade(forceExtract: true);
+                    });
+                  },
+                ),
               ),
             ),
           ),
@@ -2996,11 +3076,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final bool hasMedia = _processedStaticImage != null;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0E),
+      backgroundColor: gPalette.value.project,
       appBar: _isFullScreen
           ? null
           : AppBar(
-              backgroundColor: const Color(0xFF0F0F14),
+              backgroundColor: gPalette.value.panel,
               elevation: 0,
               leading: IconButton(
                 icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70),
@@ -3090,11 +3170,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 children: [
                   Container(
                     color: Colors.black,
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: GlowFrame(child: AspectRatio(
-                        aspectRatio: _getAspectRatioValue(_project.aspectRatio),
+                    // batch 16: the preview box is sized from the space actually available: the largest box of the project ratio
+                    // (4:5, 16:9, 1:1, ...) that fits, centred, on whole pixels. Recomputed on every layout (ratio change, fullscreen,
+                    // rotation, keyboard), so no ratio is stretched or off-centre.
+                    child: LayoutBuilder(
+                      builder: (context, outer) {
+                        const double pad = 6.0;
+                        final double availW = math.max(1.0, outer.maxWidth - pad * 2);
+                        final double availH = math.max(1.0, outer.maxHeight - pad * 2);
+                        final double ar = _getAspectRatioValue(_project.aspectRatio);
+                        double boxW = availW;
+                        double boxH = boxW / ar;
+                        if (boxH > availH) {
+                          boxH = availH;
+                          boxW = boxH * ar;
+                        }
+                        boxW = math.max(1.0, boxW.floorToDouble());
+                        boxH = math.max(1.0, boxH.floorToDouble());
+                        return Center(
+                          child: SizedBox(
+                            width: boxW,
+                            height: boxH,
+                            child: GlowFrame(
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             return GestureDetector(
@@ -3146,8 +3243,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                             );
                           },
                         ),
-                      )),
-                      ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
 
@@ -3186,7 +3285,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
               Expanded(
                 flex: 5,
                 child: Container(
-                  color: const Color(0xFF0C0C10),
+                  color: gPalette.value.editor,
                   child: TabBarView(
                     controller: _tabController,
                     children: [
