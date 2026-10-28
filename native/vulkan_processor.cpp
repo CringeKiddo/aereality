@@ -1696,8 +1696,11 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
 
     // createHardwareSamplers() logs its own failures and leaves the handle null; check them here so a failure stops the boot.
-    // (It allocates only the 32 x 32 x 32 LUT image, ~0.5 MB, never the Time Slice ring.)
+    // Batch 17A fix: createHardwareSamplers() makes ONLY the two samplers. The 32 x 32 x 32 LUT image (~0.5 MB) used to be created later, in
+    // ensureBuffersCapacity(), so the check below could never pass and init_vulkan always returned 0. It is created here now (create3DLutImage()
+    // returns at once if it already exists). Never the Time Slice ring.
     createHardwareSamplers();
+    create3DLutImage();
     if (gVk.linearSampler == VK_NULL_HANDLE || gVk.lutSampler == VK_NULL_HANDLE ||
         gVk.lutImage == VK_NULL_HANDLE || gVk.lutMemory == VK_NULL_HANDLE || gVk.lutImageView == VK_NULL_HANDLE) {
         initFailMsg("Creating the samplers / 3D LUT image failed (vkCreateSampler, vkCreateImage, vkAllocateMemory or vkCreateImageView; see logcat tag ShaderlyVulkan).");
