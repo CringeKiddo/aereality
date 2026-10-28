@@ -9,11 +9,14 @@
 //    0 %   settings were already read in main() before the first frame
 //    3 %   media engine (FFmpegKit)                         -> 22 %
 //   22 %   shader asset (assets/shaders/aereality_core.spv)  -> 30 %
-//   30 %   Vulkan compute pipeline (Isolate.run -> init_vulkan, blocking native call, many seconds on weak GPUs)  -> 88 %
+//   30 %   Vulkan compute pipeline (init_vulkan, called DIRECTLY on the main isolate, blocking, a few seconds)    -> 88 %
 //   88 %   grading worker isolate + one 64 x 64 test grade through the real uniform packer                        -> 98 %
 //  100 %   Ready
-// init_vulkan is ONE blocking native call, so inside that stage the bar creeps forward on a time curve (it never passes 86 % until
-// the call returns); that is the only part of the bar that is an estimate. [ASSUMED]
+// Batch 17A: init_vulkan no longer runs in Isolate.run. It is called straight on the UI isolate (the loading screen is the only thing
+// on screen). While it runs the UI cannot repaint, so the bar is set to 55 % and the screen is given a moment to draw it BEFORE the call;
+// there is no creeping timer any more (a timer cannot fire while the isolate is blocked). A synchronous native call cannot be given a
+// timeout from Dart; what the 15 s limit (kBootStageTimeout) covers is every ASYNC stage (media engine, grading worker, test grade).
+// init_vulkan itself stops at the first failing Vulkan call and returns false with the exact VkResult (vulkanLastInitError()).
 //
 // Failure: a missing shader / a timeout / an exception shows the error with RETRY and CONTINUE ANYWAY (the app then uses the
 // CPU fallback grade that vulkan_bridge.dart already has). A failed GPU test grade is NOT an error: it is reported on the
@@ -21,7 +24,6 @@
 // =============================================================================
 
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -39,10 +41,9 @@ import 'star_field.dart';
 import 'ui_kit.dart';
 import 'vulkan_bridge.dart';
 
-/// Runs in a short-lived isolate (same idea as the old ProjectScreen / MotionEngine helpers). Touches only its arguments.
-void _bootInitVulkan(Uint8List shaderBytes, int precisionBits) {
-  initVulkan(shaderBytes, precisionBits);
-}
+/// Longest an ASYNC boot stage may take (media engine, grading worker + test grade) before the boot gives up on it (was 30 s for the test
+/// grade and 90 s for the GPU stage, i.e. up to a minute and a half on the loading screen).
+const Duration kBootStageTimeout = Duration(seconds: 15);
 
 class BootState {
   final double progress; // 0..1
@@ -98,12 +99,13 @@ class EngineBoot {
   static Future<void> _run() async {
     gpuOk = false;
     state.value = const BootState(progress: 0.0, message: 'Starting');
-    Timer? creep;
     try {
       // ---- media engine ------------------------------------------------------------------------------------------
       _emit(0.03, 'Waking the media engine');
       try {
-        await FFmpegKitExtended.initialize();
+        await Future<void>.sync(() async {
+          await FFmpegKitExtended.initialize();
+        }).timeout(kBootStageTimeout);
       } catch (e) {
         debugPrint('FFmpeg initialization error: $e'); // same as before: logged, not fatal
       }
@@ -116,29 +118,27 @@ class EngineBoot {
       }
 
       // ---- Vulkan pipeline ---------------------------------------------------------------------------------------
-      _emit(0.30, 'Building the GPU pipeline');
-      final started = DateTime.now();
-      creep = Timer.periodic(const Duration(milliseconds: 120), (_) {
-        final t = DateTime.now().difference(started).inMilliseconds / 1000.0;
-        // 0.30 -> 0.86 on an exponential curve (time constant ~6 s): moves, but never claims to be done
-        _emit(0.30 + 0.56 * (1.0 - math.exp(-t / 6.0)), 'Building the GPU pipeline');
-      });
-      final prec = gEnginePrecision; // globals are per isolate: pass the value in
-      try {
-        await Isolate.run(() => _bootInitVulkan(bytes, prec)).timeout(const Duration(seconds: 90));
-      } on TimeoutException {
-        rethrow;
-      } catch (e) {
-        debugPrint('initVulkan isolate failed ($e) - initialising inline');
-        initVulkan(bytes, prec);
+      // Called directly on this (UI) isolate. Paint the message first: once the native call starts nothing can repaint until it returns.
+      _emit(0.55, 'Building the GPU pipeline (a few seconds, the screen may pause)');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final prec = gEnginePrecision;
+      final sw = Stopwatch()..start();
+      final bool vkOk = initVulkan(bytes, prec);
+      sw.stop();
+      final String initLog = vulkanLastInitLog();
+      debugPrint('EngineBoot: init_vulkan ${vkOk ? 'ok' : 'FAILED'} in ${sw.elapsedMilliseconds} ms. $initLog');
+      if (!vkOk) {
+        final why = vulkanLastInitError();
+        throw StateError(why.isNotEmpty ? why : 'init_vulkan returned failure (no detail from this native build).');
       }
-      creep.cancel();
-      creep = null;
       vulkanSetFlareHalfRes(gFlareHalfRes);
+      final String? slowNote = sw.elapsed > kBootStageTimeout
+          ? 'GPU setup took ${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s. $initLog'
+          : null;
 
       // ---- grading worker + test grade -----------------------------------------------------------------------------
       _emit(0.88, 'Starting the grading worker');
-      String? note;
+      String? note = slowNote;
       try {
         const int tw = 64, th = 64;
         final rgba = Uint8List(tw * th * 4);
@@ -164,7 +164,7 @@ class EngineBoot {
           ],
         );
         final u = packProjectUniforms(project, tw.toDouble(), th.toDouble(), timeSeconds: 0.0, hasLut: false, lutOpacity: 1.0);
-        final r = await GradeWorker.instance.grade(rgba: rgba, w: tw, h: th, uniforms: u).timeout(const Duration(seconds: 30));
+        final r = await GradeWorker.instance.grade(rgba: rgba, w: tw, h: th, uniforms: u).timeout(kBootStageTimeout);
         gpuOk = r.gpuStatus == 0;
         if (!gpuOk) note = 'GPU test returned status ${r.gpuStatus}: the CPU fallback will be used for grading.';
       } catch (e) {
@@ -178,7 +178,6 @@ class EngineBoot {
       state.value = BootState(progress: 1.0, message: 'Ready', ready: true, note: note);
     } catch (e, st) {
       debugPrint('EngineBoot failed: $e\n$st');
-      creep?.cancel();
       state.value = BootState(progress: state.value.progress, message: 'The engine could not start', error: e.toString());
     }
   }

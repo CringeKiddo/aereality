@@ -913,6 +913,7 @@ class EditorViews {
         ),
         buildSliderRow(context: context, title: 'Skin Edge Bleed (Depth)', val: cur.skinEdgeBleed, min: 0.0, max: 1.5, onChanged: (v) { cur.skinEdgeBleed = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Skin Edge Bleed Width', val: cur.skinEdgeWidth, min: 0.0, max: 1.0, onChanged: (v) { cur.skinEdgeWidth = v; onChanged(); }, onEnded: onEnded),
+        _fxRow(context, cur, 'Skin Edge Bleed Opacity', Fx.opEdgeBleed, 0.0, 1.0, onChanged, onEnded),
         const SizedBox(height: 10),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -948,6 +949,8 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Shaderly Glow Radius', val: cur.shaderlyGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.shaderlyGlowRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Shaderly Glow Threshold', val: cur.shaderlyGlowThreshold, min: 0.10, max: 0.90, onChanged: (v) { cur.shaderlyGlowThreshold = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Shaderly Glow Tint Hue (0 = Natural)', val: cur.shaderlyGlowTint, min: 0.0, max: 1.0, onChanged: (v) { cur.shaderlyGlowTint = v; onChanged(); }, onEnded: onEnded),
+        _fxRow(context, cur, 'Shaderly Glow Opacity', Fx.opShaderly, 0.0, 1.0, onChanged, onEnded),
+        _blendPicker(cur, 'Shaderly Glow blend', Fx.cbShaderly, onChanged, onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -957,6 +960,8 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Deep Glow Intensity', val: cur.deepGlowIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.deepGlowIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Deep Glow Radius (Rolloff: High = Wide Spread)', val: cur.deepGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.deepGlowRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Deep Glow Threshold', val: cur.deepGlowThreshold, min: 0.15, max: 0.90, onChanged: (v) { cur.deepGlowThreshold = v; onChanged(); }, onEnded: onEnded),
+        _fxRow(context, cur, 'Deep Glow Opacity', Fx.opDeepGlow, 0.0, 1.0, onChanged, onEnded),
+        _blendPicker(cur, 'Deep Glow blend', Fx.cbDeepGlow, onChanged, onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -967,6 +972,7 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Kawase Glow Radius', val: cur.kawaseGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.kawaseGlowRadius = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Diffuse SP Glow (Prismatic Dispersion)', val: cur.diffuseGlow, min: 0.0, max: 1.5, onChanged: (v) { cur.diffuseGlow = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Diffuse SP Radius', val: cur.diffuseSpGlowRadius, min: 0.0, max: 1.0, onChanged: (v) { cur.diffuseSpGlowRadius = v; onChanged(); }, onEnded: onEnded),
+        _fxRow(context, cur, 'Kawase Glow Opacity', Fx.opKawase, 0.0, 1.0, onChanged, onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -1018,6 +1024,7 @@ class EditorViews {
             ],
           ),
         ),
+        _fxRow(context, cur, 'Light Wrap Opacity', Fx.opLightWrap, 0.0, 1.0, onChanged, onEnded),
 
         const SizedBox(height: 10),
         const Padding(
@@ -1209,6 +1216,8 @@ class EditorViews {
         buildSliderRow(context: context, title: 'Halation Warmth', val: cur.halationWarmth, min: 0.0, max: 1.5, onChanged: (v) { cur.halationWarmth = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Halation Strength', val: cur.halationStrength, min: 0.0, max: 1.5, onChanged: (v) { cur.halationStrength = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Halation Highlight Threshold', val: cur.halationThreshold, min: 0.25, max: 0.95, onChanged: (v) { cur.halationThreshold = v; onChanged(); }, onEnded: onEnded),
+        _fxRow(context, cur, 'Halation Opacity', Fx.opHalation, 0.0, 1.0, onChanged, onEnded),
+        _blendPicker(cur, 'Halation blend', Fx.cbHalation, onChanged, onEnded),
         buildSliderRow(context: context, title: 'Film Grain (Midtone Responsive)', val: cur.filmGrain, min: 0.0, max: 1.0, onChanged: (v) { cur.filmGrain = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Denoise Filter (Edge-Aware Bilateral)', val: cur.denoise, min: 0.0, max: 1.0, onChanged: (v) { cur.denoise = v; onChanged(); }, onEnded: onEnded),
       ],
@@ -1491,6 +1500,8 @@ class EditorViews {
         _fxToggle(cur, 'Invert Ramp', Fx.duoInvert, onChanged, onEnded),
         _fxRow(c, cur, 'Mix With Original', Fx.duoMix, 0.0, 1.0, onChanged, onEnded),
       ],
+      _fxRow(c, cur, 'Duotone Opacity', Fx.opDuotone, 0.0, 1.0, onChanged, onEnded),
+      _blendPicker(cur, 'Duotone blend', Fx.cbDuotone, onChanged, onEnded),
     ];
   }
 
@@ -1505,6 +1516,8 @@ class EditorViews {
       _fxRow(c, cur, 'Diffusion Radius', Fx.diffRadius, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Keep Original Sharp Frame', Fx.diffMix, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Warmth (cool - warm)', Fx.diffWarmth, -1.0, 1.0, onChanged, onEnded),
+      _fxRow(c, cur, 'Optical Diffusion Opacity', Fx.opDiffusion, 0.0, 1.0, onChanged, onEnded),
+      _blendPicker(cur, 'Optical Diffusion blend', Fx.cbDiffusion, onChanged, onEnded),
 
       _hdr('PRO MIST'),
       _note('Black Pro-Mist style: wide tinted halation bloom, milky blacks, softer contrast.'),
@@ -1513,6 +1526,8 @@ class EditorViews {
       _fxRow(c, cur, 'Mist Radius', Fx.mistRadius, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Halation Tint (neutral - red/orange)', Fx.mistTint, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Black Lift', Fx.mistLift, 0.0, 1.0, onChanged, onEnded),
+      _fxRow(c, cur, 'Pro Mist Opacity', Fx.opProMist, 0.0, 1.0, onChanged, onEnded),
+      _blendPicker(cur, 'Pro Mist blend', Fx.cbProMist, onChanged, onEnded),
 
       _hdr('OVERALL BLEND (two colour regions into one look)'),
       _note('Pick the two hues to merge (e.g. a red side and a blue side). UNIFY pulls both to one in-between colour, GRADIENT melts the border into a smooth transition.'),
@@ -1524,6 +1539,7 @@ class EditorViews {
       _fxRow(c, cur, 'Edge Softness of Regions / Transition Size', Fx.obSoft, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Keep Luminance', Fx.obKeepLum, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Output Saturation', Fx.obSat, 0.0, 2.0, onChanged, onEnded),
+      _fxRow(c, cur, 'Overall Blend Opacity', Fx.opBlendFx, 0.0, 1.0, onChanged, onEnded),
 
       _hdr('EDGE SOFTNESS'),
       _note('Softens edges only, with a direction. X / Y lean the softening to one side of every edge, Z favours bright (+) or dark (-) areas.'),
@@ -1536,31 +1552,15 @@ class EditorViews {
       _fxToggle(cur, 'X axis active', Fx.esAxisX, onChanged, onEnded),
       _fxToggle(cur, 'Y axis active', Fx.esAxisY, onChanged, onEnded),
       _fxToggle(cur, 'Z axis active', Fx.esAxisZ, onChanged, onEnded),
+      _fxRow(c, cur, 'Edge Softness Opacity', Fx.opEdgeSoft, 0.0, 1.0, onChanged, onEnded),
 
-      _hdr('EFFECT OPACITY & CUSTOM BLENDS'),
-      _note('Each effect has its own opacity (on top of the layer opacity). A custom blend changes how that one effect combines with the image; Default keeps the effect as it was.'),
+      _hdr('CURVES OPACITY'),
+      _note('The curves are drawn in the CURVES tab; this is the opacity of that effect (on top of the layer opacity).'),
       _fxRow(c, cur, 'Curves Opacity', Fx.opCurves, 0.0, 1.0, onChanged, onEnded),
+      _hdr('GRADIENT MAP OPACITY & BLEND'),
+      _note('The gradient map itself is picked in the GRADIENT MAPS tab; this is its opacity and custom blend (Default keeps the effect as it was).'),
       _fxRow(c, cur, 'Gradient Map Opacity', Fx.opGradMap, 0.0, 1.0, onChanged, onEnded),
       _blendPicker(cur, 'Gradient Map blend', Fx.cbGradMap, onChanged, onEnded),
-      _fxRow(c, cur, 'Duotone Opacity', Fx.opDuotone, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Duotone blend', Fx.cbDuotone, onChanged, onEnded),
-      _fxRow(c, cur, 'Optical Diffusion Opacity', Fx.opDiffusion, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Optical Diffusion blend', Fx.cbDiffusion, onChanged, onEnded),
-      _fxRow(c, cur, 'Pro Mist Opacity', Fx.opProMist, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Pro Mist blend', Fx.cbProMist, onChanged, onEnded),
-      _fxRow(c, cur, 'Overall Blend Opacity', Fx.opBlendFx, 0.0, 1.0, onChanged, onEnded),
-      _fxRow(c, cur, 'Edge Softness Opacity', Fx.opEdgeSoft, 0.0, 1.0, onChanged, onEnded),
-      _fxRow(c, cur, 'Fog Opacity', Fx.opFog, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Fog blend', Fx.cbFog, onChanged, onEnded),
-      _fxRow(c, cur, 'Deep Glow Opacity', Fx.opDeepGlow, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Deep Glow blend', Fx.cbDeepGlow, onChanged, onEnded),
-      _fxRow(c, cur, 'Kawase Glow Opacity', Fx.opKawase, 0.0, 1.0, onChanged, onEnded),
-      _fxRow(c, cur, 'Shaderly Glow Opacity', Fx.opShaderly, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Shaderly Glow blend', Fx.cbShaderly, onChanged, onEnded),
-      _fxRow(c, cur, 'Halation Opacity', Fx.opHalation, 0.0, 1.0, onChanged, onEnded),
-      _blendPicker(cur, 'Halation blend', Fx.cbHalation, onChanged, onEnded),
-      _fxRow(c, cur, 'Light Wrap Opacity', Fx.opLightWrap, 0.0, 1.0, onChanged, onEnded),
-      _fxRow(c, cur, 'Skin Edge Bleed Opacity', Fx.opEdgeBleed, 0.0, 1.0, onChanged, onEnded),
     ];
   }
 
@@ -1590,6 +1590,8 @@ class EditorViews {
       _fxRow(c, cur, 'Reacts To Brightness (bright areas punch through)', Fx.fogReact, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Drift Speed', Fx.fogDrift, 0.0, 3.0, onChanged, onEnded),
       _colorSlot(c, cur, 'Fog Colour', Fx.fogColor, onChanged, onEnded),
+      _fxRow(c, cur, 'Fog Opacity', Fx.opFog, 0.0, 1.0, onChanged, onEnded),
+      _blendPicker(cur, 'Fog blend', Fx.cbFog, onChanged, onEnded),
     ];
   }
 

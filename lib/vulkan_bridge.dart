@@ -125,6 +125,10 @@ typedef _TsReleaseDart = int Function();
 typedef _P23CountC = ffi.Int32 Function();
 typedef _P23CountDart = int Function();
 
+// Batch 17A: boot diagnostics (last init_vulkan failure text / stage timings)
+typedef _InitTextC = ffi.Pointer<Utf8> Function();
+typedef _InitTextDart = ffi.Pointer<Utf8> Function();
+
 typedef _ProcessImage16C = ffi.Void Function(
   ffi.Pointer<ffi.Uint16> inBytes,
   ffi.Int32 inW,
@@ -170,6 +174,8 @@ class VulkanBridge {
   static _TsEmitDart? _tsEmitFn;
   static _TsReleaseDart? _tsReleaseFn; // batch 12 step C2
   static _P23CountDart? _p23CountFn;
+  static _InitTextDart? _initErrorFn; // batch 17A
+  static _InitTextDart? _initLogFn;
 
   static bool _isVulkanInitialized = false;
 
@@ -193,6 +199,13 @@ class VulkanBridge {
             _getStatusFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('get_last_render_status');
           } catch (_) {
             _getStatusFn = null; // older native lib without status reporting
+          }
+          try {
+            _initErrorFn = _lib!.lookupFunction<_InitTextC, _InitTextDart>('get_last_init_error');
+            _initLogFn = _lib!.lookupFunction<_InitTextC, _InitTextDart>('get_last_init_log');
+          } catch (_) {
+            _initErrorFn = null; // older native lib without boot diagnostics
+            _initLogFn = null;
           }
           try {
             _setBandBudgetFn = _lib!.lookupFunction<_SetBandBudgetC, _SetBandBudgetDart>('set_band_budget_ms');
@@ -300,19 +313,45 @@ void vulkanSetFlareHalfRes(bool on) {
   VulkanBridge._setFlareHalfFn?.call(on ? 1 : 0);
 }
 
-void initVulkan(Uint8List shaderBytes, int precisionBits) {
+/// Batch 17A: returns true when the native engine is ready (init_vulkan returned 1). Blocking: call it from the isolate you want to
+/// block (EngineBoot calls it on the main isolate on purpose). When it returns false, [vulkanLastInitError] says which Vulkan call failed.
+bool initVulkan(Uint8List shaderBytes, int precisionBits) {
   VulkanBridge._ensureLibraryLoaded();
-  if (VulkanBridge._initVulkanFn != null) {
-    final ptr = calloc<ffi.Uint8>(shaderBytes.length);
-    try {
-      ptr.asTypedList(shaderBytes.length).setAll(0, shaderBytes);
-      final res = VulkanBridge._initVulkanFn!(ptr, shaderBytes.length, precisionBits);
-      VulkanBridge._isVulkanInitialized = (res == 1);
-    } catch (e) {
-      debugPrint('initVulkan error: $e');
-    } finally {
-      calloc.free(ptr);
-    }
+  if (VulkanBridge._initVulkanFn == null) return false;
+  final ptr = calloc<ffi.Uint8>(shaderBytes.length);
+  try {
+    ptr.asTypedList(shaderBytes.length).setAll(0, shaderBytes);
+    final res = VulkanBridge._initVulkanFn!(ptr, shaderBytes.length, precisionBits);
+    VulkanBridge._isVulkanInitialized = (res == 1);
+    if (res != 1) debugPrint('initVulkan FAILED: ${vulkanLastInitError()}');
+    return res == 1;
+  } catch (e) {
+    debugPrint('initVulkan error: $e');
+    return false;
+  } finally {
+    calloc.free(ptr);
+  }
+}
+
+/// Text of the last init_vulkan failure (exact failing call + VkResult name and number), or '' when none / not supported by this native lib.
+String vulkanLastInitError() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final p = VulkanBridge._initErrorFn?.call();
+    return (p == null || p == ffi.nullptr) ? '' : p.toDartString();
+  } catch (_) {
+    return '';
+  }
+}
+
+/// GPU name and per-stage timings of the last init_vulkan run ("pipeline compile 4210ms; ...").
+String vulkanLastInitLog() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final p = VulkanBridge._initLogFn?.call();
+    return (p == null || p == ffi.nullptr) ? '' : p.toDartString();
+  } catch (_) {
+    return '';
   }
 }
 
