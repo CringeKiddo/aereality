@@ -14,16 +14,23 @@ import 'models.dart';
 // FFI TYPEDEFS - VULKAN COLOR GRADING COMPUTE
 // ==========================================
 
+// Batch 17B: init_vulkan / init_vulkan_async take a 4th argument, the directory of the pipeline cache file (nullptr = no cache).
 typedef _InitVulkanC = ffi.Int32 Function(
   ffi.Pointer<ffi.Uint8> spvBytes,
   ffi.Int32 spvLength,
   ffi.Int32 precisionBits,
+  ffi.Pointer<Utf8> cacheDir,
 );
 typedef _InitVulkanDart = int Function(
   ffi.Pointer<ffi.Uint8> spvBytes,
   int spvLength,
   int precisionBits,
+  ffi.Pointer<Utf8> cacheDir,
 );
+
+// Batch 17B: polling the background init (never blocks, never takes the native pipeline mutex)
+typedef _IsReadyC = ffi.Bool Function();
+typedef _IsReadyDart = bool Function();
 
 typedef _GetStatusC = ffi.Int32 Function();
 typedef _GetStatusDart = int Function();
@@ -163,6 +170,10 @@ class VulkanBridge {
   static bool _libLoaded = false;
 
   static _InitVulkanDart? _initVulkanFn;
+  static _InitVulkanDart? _initVulkanAsyncFn; // batch 17B: runs init_vulkan on a native std::thread and returns at once
+  static _IsReadyDart? _isReadyFn; // batch 17B: is_vulkan_ready()
+  static _GetStatusDart? _initStateFn; // batch 17B: vulkan_init_state()  0 running, 1 ok, -1 failed
+  static _GetStatusDart? _initColdFn; // batch 17B: vulkan_init_is_cold() 1 = no valid pipeline cache (slow one-time compile)
   static _ProcessImage8Dart? _processImage8Fn;
   static _ProcessImage16Dart? _processImage16Fn;
   static _GetStatusDart? _getStatusFn;
@@ -206,6 +217,17 @@ class VulkanBridge {
           } catch (_) {
             _initErrorFn = null; // older native lib without boot diagnostics
             _initLogFn = null;
+          }
+          try {
+            _initVulkanAsyncFn = _lib!.lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan_async');
+            _isReadyFn = _lib!.lookupFunction<_IsReadyC, _IsReadyDart>('is_vulkan_ready');
+            _initStateFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('vulkan_init_state');
+            _initColdFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('vulkan_init_is_cold');
+          } catch (_) {
+            _initVulkanAsyncFn = null; // native lib without the batch 17B background init: EngineBoot falls back to the blocking call
+            _isReadyFn = null;
+            _initStateFn = null;
+            _initColdFn = null;
           }
           try {
             _setBandBudgetFn = _lib!.lookupFunction<_SetBandBudgetC, _SetBandBudgetDart>('set_band_budget_ms');
@@ -313,15 +335,17 @@ void vulkanSetFlareHalfRes(bool on) {
   VulkanBridge._setFlareHalfFn?.call(on ? 1 : 0);
 }
 
-/// Batch 17A: returns true when the native engine is ready (init_vulkan returned 1). Blocking: call it from the isolate you want to
-/// block (EngineBoot calls it on the main isolate on purpose). When it returns false, [vulkanLastInitError] says which Vulkan call failed.
-bool initVulkan(Uint8List shaderBytes, int precisionBits) {
+/// Batch 17A: returns true when the native engine is ready (init_vulkan returned 1). BLOCKING (it can take ~90 s on a cold shader cache):
+/// since batch 17B EngineBoot uses [startVulkanInit] + polling instead and only falls back to this when the native lib is too old.
+/// [cacheDir] (batch 17B) = directory of the pipeline cache file, null = no cache. When it returns false, [vulkanLastInitError] says which Vulkan call failed.
+bool initVulkan(Uint8List shaderBytes, int precisionBits, {String? cacheDir}) {
   VulkanBridge._ensureLibraryLoaded();
   if (VulkanBridge._initVulkanFn == null) return false;
   final ptr = calloc<ffi.Uint8>(shaderBytes.length);
+  final ffi.Pointer<Utf8> dirPtr = (cacheDir == null || cacheDir.isEmpty) ? ffi.nullptr.cast<Utf8>() : cacheDir.toNativeUtf8(allocator: calloc);
   try {
     ptr.asTypedList(shaderBytes.length).setAll(0, shaderBytes);
-    final res = VulkanBridge._initVulkanFn!(ptr, shaderBytes.length, precisionBits);
+    final res = VulkanBridge._initVulkanFn!(ptr, shaderBytes.length, precisionBits, dirPtr);
     VulkanBridge._isVulkanInitialized = (res == 1);
     if (res != 1) debugPrint('initVulkan FAILED: ${vulkanLastInitError()}');
     return res == 1;
@@ -330,6 +354,69 @@ bool initVulkan(Uint8List shaderBytes, int precisionBits) {
     return false;
   } finally {
     calloc.free(ptr);
+    if (dirPtr != ffi.nullptr) calloc.free(dirPtr);
+  }
+}
+
+/// Batch 17B: true when this native lib has the background init (init_vulkan_async).
+bool get vulkanHasAsyncInit {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._initVulkanAsyncFn != null && VulkanBridge._initStateFn != null;
+}
+
+/// Batch 17B: starts init_vulkan on a native std::thread and RETURNS AT ONCE (the UI isolate is never blocked, not even on the first boot,
+/// when an empty pipeline cache means a ~90 s shader compile). The native side copies [shaderBytes] and [cacheDir], so both are freed here.
+/// Returns false when the native lib has no async init or the thread could not be started. Calling it again while the thread still runs
+/// (RETRY after a timeout) just keeps waiting for that same thread. Poll with [isVulkanReady] / [vulkanInitState].
+bool startVulkanInit(Uint8List shaderBytes, int precisionBits, String cacheDir) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._initVulkanAsyncFn;
+  if (fn == null) return false;
+  final ptr = calloc<ffi.Uint8>(shaderBytes.length);
+  final ffi.Pointer<Utf8> dirPtr = cacheDir.isEmpty ? ffi.nullptr.cast<Utf8>() : cacheDir.toNativeUtf8(allocator: calloc);
+  try {
+    ptr.asTypedList(shaderBytes.length).setAll(0, shaderBytes);
+    return fn(ptr, shaderBytes.length, precisionBits, dirPtr) == 1;
+  } catch (e) {
+    debugPrint('startVulkanInit error: $e');
+    return false;
+  } finally {
+    calloc.free(ptr);
+    if (dirPtr != ffi.nullptr) calloc.free(dirPtr);
+  }
+}
+
+/// Batch 17B: true once the background init finished successfully (native is_vulkan_ready()). Cheap, never blocks.
+bool isVulkanReady() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final ready = VulkanBridge._isReadyFn?.call() ?? false;
+    VulkanBridge._isVulkanInitialized = ready || VulkanBridge._isVulkanInitialized;
+    return ready;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Batch 17B: 0 = the background init is still running (or never started), 1 = finished OK, -1 = finished with an error
+/// ([vulkanLastInitError] then has the text). Cheap, never blocks.
+int vulkanInitState() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return VulkanBridge._initStateFn?.call() ?? 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/// Batch 17B: true while the running init has NO valid pipeline cache, i.e. the one-time slow shader compile is happening (after a first
+/// install, an app update with a new shader, or a GPU driver update). false = cache hit = a few seconds.
+bool vulkanInitIsCold() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return (VulkanBridge._initColdFn?.call() ?? 1) != 0;
+  } catch (_) {
+    return true;
   }
 }
 

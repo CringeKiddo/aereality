@@ -577,16 +577,36 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ],
                             ),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Grade paused frame only', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                              value: gGradeActiveFrameOnly,
-                              activeColor: accent,
-                              onChanged: (val) {
-                                setModal(() => gGradeActiveFrameOnly = val);
-                                SettingsStore.save(); // batch 16
-                                setState(() {});
-                              },
+                            // batch 17B: Preview Engine (replaces the old "Grade paused frame only" switch; gGradeActiveFrameOnly mirrors it)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8, bottom: 6),
+                              child: Text('PREVIEW ENGINE', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+                            ),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                for (final PreviewEngine e in PreviewEngine.values)
+                                  ChoiceChip(
+                                    label: Text(previewEngineLabel(e)),
+                                    selected: gPreviewEngine == e,
+                                    selectedColor: accent,
+                                    onSelected: (_) {
+                                      setModal(() => gPreviewEngine = e);
+                                      SettingsStore.save(); // survives a restart
+                                      setState(() {});
+                                    },
+                                  ),
+                              ],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6, bottom: 6),
+                              child: Text(
+                                gPreviewEngine == PreviewEngine.smooth
+                                    ? 'The video plays at full speed with no grading. The frame is graded when you pause.'
+                                    : 'Every frame is graded before the next one shows. A heavy grade plays slower (like CapCut); the sound is muted while it cannot keep up.',
+                                style: const TextStyle(color: Colors.white38, fontSize: 11),
+                              ),
                             ),
                             SwitchListTile(
                               contentPadding: EdgeInsets.zero,
@@ -1264,11 +1284,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   // batch 16 playback state (see _togglePlayPause / _onControllerValue / live playback below)
   bool _playTransition = false; // a play / pause / end handler is running: the controller listener ignores values meanwhile
   bool _gradeStale = false; // the graded picture on screen is older than the video position (play started / video ended): show the video until a fresh grade lands
-  bool _liveFresh = false; // the live-graded overlay is close enough to the playing video to be shown
-  double _liveFramePos = 0.0; // video position (s) of the graded frame currently on screen during live playback
-  int _liveMisses = 0; // consecutive live ticks where the overlay was stale / the GPU was busy
-  bool _liveSuspended = false; // live grading gave up for this play session (too slow): the native video texture is shown alone until the next pause
-  int _liveStartMs = 0;
+  // batch 17B Preview Engine (see "PREVIEW ENGINE" below): the old live-overlay bookkeeping (_liveFresh / _liveMisses / _liveSuspended ...) is gone
+  bool _adaptiveActive = false; // an Adaptive (Slow) play session is running: its loop is the clock, the controller is only the sound
+  double _adaptShownPos = 0.0; // video time (s) of the graded frame on screen during an Adaptive session
+  double? _adaptJump; // set by the scrubber while playing: the Adaptive loop continues from there
   img.Image? _cachedRawImage;
   bool _isFullScreen = false;
 
@@ -1315,10 +1334,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   String _imgFrameKey = '';
   String _lastGradeSig = '';
   final ValueNotifier<int> _previewTick = ValueNotifier<int>(0); // repaints ONLY the graded preview layer
-  bool _liveReady = false; // true once a live-graded frame is on screen during playback
 
-  // continuous graded playback ("Grade paused frame only" OFF): 2 s chunks decoded by ONE ffmpeg call each
-  Timer? _pbTimer;
+  // Adaptive (Slow) playback: 2 s chunks decoded by ONE ffmpeg call each
   static const double _pbFps = 24.0;
   static const int _pbChunkFrames = 48;
   Uint8List? _pbBuf;
@@ -1352,7 +1369,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   @override
   void dispose() {
     _playbackTimer?.cancel();
-    _pbTimer?.cancel();
+    _adaptiveActive = false; // batch 17B: a running Adaptive loop ends (it also checks mounted)
+    _pbGen++;
     _rebuildThrottle?.cancel();
     _previewTick.dispose();
     _posNotifier.dispose();
@@ -1583,7 +1601,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
 
     _playbackTimer?.cancel();
-    _pbTimer?.cancel();
+    _adaptiveActive = false; // batch 17B
+    _adaptJump = null;
     _pbGen++;
     _pbBuf = null;
     _pbNextBuf = null;
@@ -1598,7 +1617,6 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _controller = null;
     }
     _gradeStale = false;
-    _liveFresh = false;
 
     setState(() {
       _project.mediaPath = path;
@@ -1639,7 +1657,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
           _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
             final c = _controller;
-            if (c != null && c.value.isInitialized && c.value.isPlaying && mounted && !_playTransition) {
+            if (c != null && c.value.isInitialized && c.value.isPlaying && mounted && !_playTransition && !_adaptiveActive) {
               // batch 16: the old "seek to 0 and play again" loop is gone from here; the end of the video is handled by
               // _onControllerValue (pause cleanly and stay on the last frame)
               _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds)); // no setState: only the scrubber repaints
@@ -1767,46 +1785,53 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   // ---------------------------------------------------------------------------------------------------
-  // CONTINUOUS GRADED PLAYBACK  (settings: "Grade paused frame only" = OFF)
-  // The video plays normally (it is the clock and the sound). Every ~40 ms the frame for the current play position is
-  // cut from a 2-second chunk (ONE ffmpeg call per chunk, decoded at the lower play quality), graded in the worker
-  // isolate and shown over the video. If the GPU is still busy the tick is skipped = frames are DROPPED, the UI never
-  // waits. Until the first graded frame is ready the raw video stays visible.
+  // PREVIEW ENGINE (batch 17B)            Settings > Preview > Preview Engine (gPreviewEngine, app_settings.dart)
+  //
+  // The old frame-skipping overlay (a 40 ms timer that graded "whatever frame the video is at" and DROPPED frames when the GPU was busy,
+  // then hid / re-showed the overlay depending on how far it trailed) is gone: it was the source of the half-second stutter, of the grade
+  // that rarely showed and of the old frames that flashed. There are now exactly two behaviours while the video plays:
+  //
+  //  * Smooth (Native):   the native video plays at full speed and NOTHING is graded. The frame is graded when you pause (and while you
+  //                       drag a slider on the paused frame), exactly as before.
+  //  * Adaptive (Slow):   the loop below is the CLOCK. For every frame it decodes, grades (the loop waits for the GPU) and only then shows
+  //                       it and moves on to the next frame. 100 ms of GPU time per frame = the clip plays at ~0.4x speed. No frame is ever
+  //                       skipped. The video_player controller is only the SOUND: it plays muted-or-not next to the loop, and while the
+  //                       picture cannot keep up with it (the sound would run ahead) it is muted; the sound comes back by itself after about a
+  //                       second of keeping up (the controller is then seeked to the picture first).
+  //
+  // Frames come from the same 2-second chunks as before (ONE ffmpeg call per chunk, 24 fps grid, _pbFps / _pbChunkFrames); the next chunk
+  // is prefetched half a chunk early, and when a chunk is still missing the loop simply waits for it (that wait is part of the slow-down).
   // ---------------------------------------------------------------------------------------------------
-  void _startLivePlayback() {
-    _pbTimer?.cancel();
+
+  /// Adaptive (Slow) mode is selected and the project is a video.
+  bool get _adaptiveMode => gPreviewEngine == PreviewEngine.adaptive && !_project.isImage;
+
+  /// Called when play starts (both engines): drops every chunk of an older session; Adaptive also drops to the lower play quality.
+  void _beginPlaybackSession() {
     _pbGen++;
     _pbBuf = null;
     _pbNextBuf = null;
-    _liveReady = false;
-    _liveFresh = false;
-    _liveMisses = 0;
-    _liveSuspended = false;
-    _liveStartMs = DateTime.now().millisecondsSinceEpoch;
-    _previewTick.value++;
-    if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already true -> lower quality
-    vulkanSetBandBudgetMs(12);
-    if (!gGradeActiveFrameOnly && !_project.isImage) {
-      _pbTimer = Timer.periodic(const Duration(milliseconds: 40), (_) => _playbackGradeTick());
+    if (_adaptiveMode) {
+      if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already true -> lower quality (faster frames)
+      vulkanSetBandBudgetMs(12);
     }
+    _previewTick.value++;
   }
 
-  void _stopLivePlayback() {
-    _pbTimer?.cancel();
-    _pbTimer = null;
+  /// Called on pause / end / media change: stops a running adaptive loop (it checks _pbGen) and drops in-flight chunk decodes.
+  void _endPlaybackSession() {
+    final bool wasAdaptive = _adaptiveActive;
+    _adaptiveActive = false;
+    _adaptJump = null;
     _pbGen++;
     _pbBuf = null;
     _pbNextBuf = null;
-    _liveReady = false;
-    _liveFresh = false;
-    _liveMisses = 0;
-    vulkanSetBandBudgetMs(40);
+    if (wasAdaptive) vulkanSetBandBudgetMs(40);
     if (_srcW > 0) _updateDimensions(_srcW, _srcH); // _isPlaying is already false -> full quality
     _previewTick.value++;
   }
 
-  // Decoding (ffmpeg, its own native threads) and grading (GradeWorker isolate) are separate pipelines that only meet at the
-  // _pbBuf / _pbNextBuf buffers: the decoder never waits for the GPU and the grade tick never waits for the decoder (batch 16).
+  // Decoding (ffmpeg, its own native threads) and grading (GradeWorker isolate) are separate pipelines. The chunk files:
   //  * every chunk goes to its own temp file (the current-chunk and the prefetch decode can run at the same time),
   //  * the chunk file is read in a short-lived isolate: reading tens of MB on the UI isolate was a visible stall at every chunk change,
   //  * "current" and "next" have separate in-flight flags, so a prefetch can never block the decode the player needs right now.
@@ -1869,126 +1894,231 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  /// How far (seconds) the graded overlay may trail the playing video before it is hidden and the native video texture shows alone.
-  static const double kLiveMaxLagSec = 0.20;
-
-  /// Live grading gives up for this play session after this many consecutive bad ticks (40 ms each = about 1.2 s) ...
-  static const int kLiveMaxMisses = 30;
-
-  /// ... or when no graded frame has appeared at all this long after play started (first chunk decode included).
-  static const int kLiveFirstFrameTimeoutMs = 6000;
-
-  void _playbackGradeTick() {
-    final c = _controller;
-    if (!mounted || c == null || !c.value.isInitialized || !c.value.isPlaying || _srcW <= 0 || _liveSuspended || _playTransition) return;
-    final pos = c.value.position.inMilliseconds / 1000.0;
-    final w = _renderWidth;
-    final h = _renderHeight;
-    final fb = w * h * 4;
-
-    // Graceful degradation (batch 16): the overlay is only shown while it is close to the video. If the graded frames trail
-    // behind (GPU / decoder too slow for this clip at this preview quality) the picture falls back to the native video
-    // texture, which always plays smoothly, instead of showing a slideshow on top of it; after about a second of that the live
-    // grading stops for the rest of this play session (no decoding, no GPU work) and the frame is graded again on pause.
-    if (_liveReady) {
-      final fresh = (pos - _liveFramePos).abs() <= kLiveMaxLagSec;
-      if (fresh != _liveFresh) {
-        _liveFresh = fresh;
-        _previewTick.value++;
-      }
-      if (!fresh) _liveMisses++;
-    } else if (DateTime.now().millisecondsSinceEpoch - _liveStartMs > kLiveFirstFrameTimeoutMs) {
-      _liveMisses = kLiveMaxMisses;
-    }
-    if (_liveMisses >= kLiveMaxMisses) {
-      _suspendLive();
-      return;
-    }
-
+  /// Adaptive (Slow): the raw RGBA of frame [fr] (24 fps grid, w x h) from the chunk buffers. Waits for the decode when the chunk is not there
+  /// yet (the slow-down). null = the session ended / the media has no such frame / decoding failed.
+  Future<Uint8List?> _adaptFrame(int fr, int w, int h, int gen) async {
+    final int fb = w * h * 4;
     if (_pbBuf != null && (_pbW != w || _pbH != h)) {
-      _pbBuf = null;
+      _pbBuf = null; // the preview size changed during the session: the chunks are the wrong size
       _pbNextBuf = null;
     }
-    bool inCur = _pbBuf != null && _pbCount > 0 && pos >= _pbStart && pos < _pbStart + _pbCount / _pbFps;
-    if (!inCur) {
-      if (_pbNextBuf != null && pos >= _pbNextStart && pos < _pbNextStart + _pbNextCount / _pbFps) {
-        _pbBuf = _pbNextBuf;
-        _pbStart = _pbNextStart;
-        _pbCount = _pbNextCount;
-        _pbW = w;
-        _pbH = h;
-        _pbNextBuf = null;
-        inCur = true;
-      } else {
-        _pbRequest(pos, w, h, asNext: false); // not ready yet: the raw video keeps showing
-        return;
+    for (int attempt = 0; attempt < 8; attempt++) {
+      if (gen != _pbGen || !mounted) return null;
+      final Uint8List? cur = _pbBuf;
+      if (cur != null) {
+        final int idx = fr - (_pbStart * _pbFps).round();
+        if (idx >= 0 && idx < _pbCount && cur.length >= (idx + 1) * fb) {
+          if (_pbNextBuf == null && idx >= _pbChunkFrames ~/ 2) {
+            _pbRequest(_pbStart + _pbCount / _pbFps, w, h, asNext: true); // prefetch the next 2 s while this one plays
+          }
+          return Uint8List.sublistView(cur, idx * fb, (idx + 1) * fb);
+        }
       }
+      final Uint8List? nxt = _pbNextBuf;
+      if (nxt != null) {
+        final int nIdx = fr - (_pbNextStart * _pbFps).round();
+        if (nIdx >= 0 && nIdx < _pbNextCount && nxt.length == _pbNextCount * fb) {
+          _pbBuf = nxt; // the prefetched chunk becomes the current one
+          _pbStart = _pbNextStart;
+          _pbCount = _pbNextCount;
+          _pbW = w;
+          _pbH = h;
+          _pbNextBuf = null;
+          continue;
+        }
+        if (nxt.length != _pbNextCount * fb) _pbNextBuf = null; // wrong size (preview size changed)
+      }
+      if (_pbDecoding) {
+        // a decode is already running (maybe the very one we need): wait for it, then look again
+        int waited = 0;
+        while (_pbDecoding && gen == _pbGen && mounted && waited < 20000) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          waited += 20;
+        }
+        continue;
+      }
+      final Uint8List? before = _pbBuf;
+      await _pbRequest(fr / _pbFps, w, h, asNext: false); // decode the chunk starting at this frame (awaited: the playback waits)
+      if (identical(_pbBuf, before)) return null; // the decode produced nothing (end of the media / failure / session gone): no frame
     }
-    if (_pbNextBuf == null && pos > _pbStart + (_pbChunkFrames / _pbFps) * 0.5) {
-      _pbRequest(_pbStart + _pbCount / _pbFps, w, h, asNext: true); // prefetch the next 2 s
-    }
-    if (_isVulkanProcessing) return; // GPU busy: drop this frame
-    int idx = ((pos - _pbStart) * _pbFps).floor();
-    idx = idx.clamp(0, _pbCount - 1).toInt();
-    if (_tsPreviewTick(pos, w, h)) return; // batch 12 C2: inside a Time Slice wipe the ring emit replaces the plain grade of this frame
-    _gradeLive(Uint8List.sublistView(_pbBuf!, idx * fb, (idx + 1) * fb), w, h, _pbStart + idx / _pbFps);
+    return null;
   }
 
-  void _suspendLive() {
-    _liveSuspended = true;
-    _pbTimer?.cancel();
-    _pbTimer = null;
-    _pbGen++; // drops any chunk decode still in flight
-    _pbBuf = null;
-    _pbNextBuf = null;
-    _liveReady = false;
-    _liveFresh = false;
-    _previewTick.value++;
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Live grading cannot keep up with this clip: playing the video as is. The frame is graded again when you pause. A lower preview quality (Settings) helps.'),
-          duration: Duration(seconds: 5),
-        ),
-      );
-    }
-  }
+  /// Adaptive (Slow): the playback loop. It is the clock; [c] only provides the sound. One frame at a time: decode -> grade (GPU, awaited)
+  /// -> wait until the frame is due -> show it. See the comment block above for the rules. Ends by itself at the end of the video.
+  Future<void> _adaptiveLoop(VideoPlayerController c, int gen, int startFrame) async {
+    final int stepUs = (1000000.0 / _pbFps).round();
+    final int lastFrame = math.max(0, (_videoDurationSeconds * _pbFps).floor() - 1);
+    final Stopwatch sw = Stopwatch()..start();
+    int fr = startFrame.clamp(0, lastFrame).toInt();
+    int nextDueUs = 0; // wall time (sw) at which the next frame should appear
+    bool audioStarted = false; // the controller is only started together with the FIRST graded frame (the first chunk decode takes a while)
+    bool muted = false;
+    int onTime = 0; // consecutive frames shown on time (used to bring the sound back)
+    int frameNo = 0;
+    int failures = 0;
+    bool ended = false;
 
-  Future<void> _gradeLive(Uint8List frame, int w, int h, double framePos) async {
-    if (_isVulkanProcessing) return;
-    _isVulkanProcessing = true;
+    bool alive() => gen == _pbGen && mounted && _adaptiveActive && _isPlaying;
+
     try {
-      final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
-      final res = await GradeWorker.instance.grade(rgba: frame, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
-      final im = await _rgbaToImage(res.rgba, w, h);
-      if (!mounted || !(_controller?.value.isPlaying ?? false) || _liveSuspended) {
-        im.dispose();
-        return;
+      while (alive()) {
+        final double? jump = _adaptJump; // the scrubber was moved while playing
+        if (jump != null) {
+          _adaptJump = null;
+          fr = (jump * _pbFps).round().clamp(0, lastFrame).toInt();
+          nextDueUs = sw.elapsedMicroseconds;
+        }
+        if (fr > lastFrame) {
+          ended = true;
+          break;
+        }
+
+        final int w = _renderWidth;
+        final int h = _renderHeight;
+        final Uint8List? frame = await _adaptFrame(fr, w, h, gen);
+        if (!alive()) break;
+        if (frame == null) {
+          ended = true; // no such frame: the end of the media (or the decode failed): finish cleanly
+          break;
+        }
+        final double pos = fr / _pbFps;
+
+        // ---- grade: the loop waits for the GPU here ----
+        ui.Image? im;
+        _isVulkanProcessing = true;
+        try {
+          im = await _tsPreviewImage(pos, w, h); // inside a Time Slice wipe the ring emit replaces the plain grade of this frame
+          if (im == null && alive()) {
+            final Float32List u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
+            u[0] = pos; // time-based effects (grain, flicker) follow the frame being graded, not the controller
+            final res = await GradeWorker.instance.grade(rgba: frame, w: w, h: h, uniforms: u, lut: _getActiveLutTable());
+            im = await _rgbaToImage(res.rgba, w, h);
+          }
+        } catch (e) {
+          debugPrint('Adaptive grade failed: $e');
+          im = null;
+        } finally {
+          _isVulkanProcessing = false;
+        }
+        if (!alive()) {
+          im?.dispose();
+          break;
+        }
+        if (im == null) {
+          if (++failures > 5) {
+            debugPrint('Adaptive preview: 5 frames in a row could not be graded, stopping playback.');
+            ended = true;
+            break;
+          }
+          fr++;
+          continue;
+        }
+        failures = 0;
+
+        // ---- sound: starts together with the first graded frame ----
+        if (!audioStarted) {
+          audioStarted = true;
+          try {
+            await c.seekTo(Duration(milliseconds: (pos * 1000).round()));
+            await c.setVolume(1.0);
+            await c.play();
+          } catch (e) {
+            debugPrint('Adaptive preview: sound could not start: $e');
+          }
+          if (!alive()) {
+            im.dispose();
+            break;
+          }
+          nextDueUs = sw.elapsedMicroseconds;
+        }
+
+        // ---- pace: never faster than real time, never skipping when slower ----
+        final int nowUs = sw.elapsedMicroseconds;
+        if (nowUs < nextDueUs) {
+          await Future<void>.delayed(Duration(microseconds: nextDueUs - nowUs));
+          if (!alive()) {
+            im.dispose();
+            break;
+          }
+        }
+        final int shownUs = sw.elapsedMicroseconds;
+        final int lateUs = shownUs - nextDueUs;
+
+        // ---- show it ----
+        _processedStaticImage?.dispose();
+        _processedStaticImage = im;
+        _renderWidth = w;
+        _renderHeight = h;
+        _gradeStale = false;
+        _adaptShownPos = pos;
+        if (!_scrubbing) _setPos(pos); // while the thumb is held the scrubber belongs to the finger
+        _previewTick.value++;
+
+        // a frame that was only a little late keeps the schedule (jitter must not slow the clip down); a really late one re-bases it
+        nextDueUs = lateUs <= stepUs ~/ 2 ? nextDueUs + stepUs : shownUs + stepUs;
+        onTime = lateUs <= stepUs ~/ 2 ? onTime + 1 : 0;
+
+        // ---- sound vs picture (checked every 6th frame; c.position asks the player, c.value.position is only refreshed every 500 ms) ----
+        frameNo++;
+        if (audioStarted && frameNo % 6 == 0) {
+          if (!muted) {
+            final Duration? cp = await c.position;
+            if (!alive()) break;
+            if (cp != null && (cp.inMilliseconds / 1000.0 - pos).abs() > kAdaptDesyncSec) {
+              muted = true; // the sound runs ahead of the picture: mute it instead of playing it out of sync
+              onTime = 0;
+              await c.setVolume(0.0);
+            }
+          } else if (onTime >= kAdaptResyncFrames) {
+            try {
+              await c.seekTo(Duration(milliseconds: (pos * 1000).round())); // the picture keeps up again: the sound joins it
+              await c.setVolume(1.0);
+              if (!c.value.isPlaying) await c.play();
+              muted = false;
+              onTime = 0;
+            } catch (_) {}
+            nextDueUs = sw.elapsedMicroseconds;
+          }
+        }
+        fr++;
       }
-      _processedStaticImage?.dispose();
-      _processedStaticImage = im;
-      _renderWidth = w;
-      _renderHeight = h;
-      _liveReady = true;
-      _liveFramePos = framePos;
-      _liveFresh = true;
-      _liveMisses = 0;
-      _previewTick.value++;
-    } catch (_) {
-    } finally {
-      _isVulkanProcessing = false;
-      _needsReprocess = false;
+    } catch (e, st) {
+      debugPrint('Adaptive preview loop failed: $e\n$st');
+      ended = true;
     }
+
+    // the video reached its end (not a pause, which bumps _pbGen first): stop cleanly on the last frame
+    if (ended && gen == _pbGen && mounted && _adaptiveActive && _isPlaying) {
+      await _onAdaptiveEnded(c);
+    }
+  }
+
+  Future<void> _onAdaptiveEnded(VideoPlayerController c) async {
+    _adaptiveActive = false;
+    try {
+      await c.pause();
+      await c.setVolume(1.0);
+    } catch (_) {}
+    if (!mounted) return;
+    await _onPlaybackEnded(c, keepPicture: true); // the graded frame stays on screen until the full-quality grade of the last frame replaces it
   }
 
   // ---------------------------------------------------------------------------------------------------
-  // PLAY / PAUSE / END OF VIDEO (batch 16)
+  // PLAY / PAUSE / END OF VIDEO
   // The play icon follows the player: _isPlaying flips the instant the button is tapped, and the controller listener corrects it if
-  // the player disagrees (the video ended, the OS paused it ...). The end of the video pauses cleanly and parks on the last frame;
-  // pressing play there starts again from 0. The picture shown after a pause is only the graded frame of THAT position: until it
-  // is ready the native video texture shows (never a graded frame from before the video was played).
+  // the player disagrees (Smooth mode: the video ended, the OS paused it ...). The end of the video pauses cleanly and parks on the last
+  // frame; pressing play there starts again from 0. The picture shown after a pause is only the graded frame of THAT position: in Smooth
+  // mode the native video texture shows until it is ready (never a graded frame from before the video was played); in Adaptive mode the
+  // last graded frame simply stays (it IS the frame of the pause position), so nothing flashes.
   // ---------------------------------------------------------------------------------------------------
   static const Duration _kEndSlack = Duration(milliseconds: 120);
+
+  /// Adaptive (Slow): the sound is muted when it runs this far (seconds) ahead of / behind the picture ...
+  static const double kAdaptDesyncSec = 0.12;
+
+  /// ... and comes back after this many consecutive frames shown on time (24 = about one second).
+  static const int kAdaptResyncFrames = 24;
 
   bool _controllerAtEnd(VideoPlayerController c) {
     final d = c.value.duration;
@@ -2001,24 +2131,47 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _playTransition = true;
     try {
       if (_isPlaying) {
+        // ---- pause ----
+        final bool wasAdaptive = _adaptiveActive;
+        final double shown = _adaptShownPos;
         setState(() => _isPlaying = false); // the icon flips instantly
+        _pbGen++; // the adaptive loop stops at its next check (_isPlaying is false and its generation is gone)
         await c.pause();
-        _onPlaybackPaused(c);
+        if (wasAdaptive) {
+          // the controller ran ahead of the picture (it only provided the sound): put it on the frame that is on screen
+          try {
+            await c.setVolume(1.0);
+            await c.seekTo(Duration(milliseconds: (shown * 1000).round()));
+          } catch (_) {}
+        }
+        _onPlaybackPaused(c, adaptivePos: wasAdaptive ? shown : null);
       } else {
-        final restart = _controllerAtEnd(c);
+        // ---- play ----
+        final bool restart = _controllerAtEnd(c);
+        final bool adaptive = _adaptiveMode;
         setState(() => _isPlaying = true); // the icon flips instantly
-        _gradeStale = true; // the graded frame on screen belongs to the old position
+        // Smooth: the graded frame on screen belongs to the old position, the native video shows until a fresh grade lands after the pause.
+        // Adaptive: the graded frame on screen IS the first frame of the session (except after the end, where play restarts at 0).
+        _gradeStale = !adaptive || restart;
         if (restart) {
           await c.seekTo(Duration.zero);
           _setPos(0.0);
         }
-        await c.play();
         Music.onVideoPlay(); // music fades out so the video's audio is clean
-        _startLivePlayback(); // lower quality while playing (+ live grade when the setting is OFF)
+        _beginPlaybackSession();
+        if (adaptive) {
+          _adaptiveActive = true;
+          _adaptJump = null;
+          _adaptShownPos = _currentTimelinePosition;
+          final int startFrame = restart ? 0 : (_currentTimelinePosition * _pbFps).round();
+          unawaited(_adaptiveLoop(c, _pbGen, startFrame)); // the loop is the clock; the controller starts with its first graded frame
+        } else {
+          await c.play(); // Smooth: the native video is the clock and plays untouched, nothing is graded until the pause
+        }
       }
     } catch (e) {
       debugPrint('play / pause failed: $e');
-      if (mounted) setState(() => _isPlaying = c.value.isPlaying);
+      if (mounted) setState(() => _isPlaying = c.value.isPlaying || _adaptiveActive);
     } finally {
       _playTransition = false;
     }
@@ -2027,6 +2180,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void _onControllerValue() {
     final c = _controller;
     if (c == null || !mounted || _playTransition || !c.value.isInitialized) return;
+    if (_adaptiveActive) return; // Adaptive: the loop is the clock, the controller is only the sound (it may end / pause on its own)
     if (_isPlaying && !c.value.isPlaying) {
       if (_controllerAtEnd(c)) {
         _onPlaybackEnded(c);
@@ -2038,18 +2192,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  void _onPlaybackPaused(VideoPlayerController c) {
+  void _onPlaybackPaused(VideoPlayerController c, {double? adaptivePos}) {
     if (!mounted) return;
-    // the exact paused position (the 100 ms timer can be one tick behind): the graded frame is cut from here
-    _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds));
+    // the exact paused position (the 100 ms timer can be one tick behind): the graded frame is cut from here.
+    // Adaptive: the position of the frame that is on screen (the controller was only the sound).
+    _setPos(adaptivePos ?? math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds));
     setState(() {}); // play icon
     Music.onVideoPause(); // music fades back in ~7 s after pausing
-    _stopLivePlayback(); // sharpen: back to full preview quality
+    _endPlaybackSession(); // sharpen: back to full preview quality
     _gradeAfterPause();
   }
 
   Future<void> _gradeAfterPause() async {
-    // A live grade may still be in flight and clears _needsReprocess when it ends, so wait for it here instead of queueing.
+    // A grade may still be in flight (Adaptive: the frame the loop was grading) and clears _needsReprocess when it ends, so wait for it
+    // here instead of queueing.
     int guard = 0;
     while (_isVulkanProcessing && guard++ < 100 && mounted) {
       await Future<void>.delayed(const Duration(milliseconds: 30));
@@ -2058,7 +2214,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _applyGrade(forceExtract: true);
   }
 
-  Future<void> _onPlaybackEnded(VideoPlayerController c) async {
+  Future<void> _onPlaybackEnded(VideoPlayerController c, {bool keepPicture = false}) async {
     _playTransition = true;
     try {
       final d = c.value.duration;
@@ -2069,9 +2225,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         _currentTimelinePosition = last.inMilliseconds / 1000.0;
         _posNotifier.value = _currentTimelinePosition;
       });
-      _gradeStale = true;
+      if (!keepPicture) _gradeStale = true; // Adaptive keeps its last graded frame on screen (no flash of the ungraded video)
       Music.onVideoPause();
-      _stopLivePlayback();
+      _endPlaybackSession();
       await c.seekTo(last);
       if (!mounted) return;
       _gradeAfterPause();
@@ -2118,6 +2274,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     _controller?.pause();
+    _controller?.setVolume(1.0); // batch 17B: Adaptive may have muted the sound
+    _adaptiveActive = false;
+    _adaptJump = null;
+    _pbGen++;
     _isPlaying = false;
     Music.setExporting(true); // music steps aside during export (nothing is ever mixed into the video)
 
@@ -2348,18 +2508,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  /// Called once per playback tick (GPU idle). Returns true when this tick started a ring emit (the plain grade is then skipped).
-  bool _tsPreviewTick(double pos, int w, int h) {
+  /// Adaptive (Slow) preview, once per frame: the finished Time Slice wipe frame for [pos] (ring emit, awaited), or null when the plain grade
+  /// should be used (no Time Slice layer, outside a wipe, ring not ready yet / filled for an older grade, GPU error). The ring itself is still
+  /// prepared in the background exactly as before (plain frames meanwhile). Batch 17B: was _tsPreviewTick + _tsEmitLive (fire-and-forget).
+  Future<ui.Image?> _tsPreviewImage(double pos, int w, int h) async {
     final lay = _tsLayer();
     if (lay < 0) {
       if (_tsRingKey.isNotEmpty) _tsReleaseRing();
-      return false;
+      return null;
     }
     final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
     final sched = _tsSched;
     if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) {
       _tsPrepSchedule(s, _pbFps); // cut scan (cached) + schedule, in the background; plain frames meanwhile
-      return false;
+      return null;
     }
     final frame = (pos * _pbFps).round();
     final cur = sched.at(frame);
@@ -2369,7 +2531,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final k = _tsKeyOf('pv', up.cutFrame, w, h, _pbFps);
         if (k != _tsRingKey) _tsPrepareRing(up, w, h, _pbFps, k, preview: true);
       }
-      return false;
+      return null;
     }
     final key = _tsKeyOf('pv', cur.cutFrame, w, h, _pbFps);
     if (key != _tsRingKey) {
@@ -2377,46 +2539,28 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
         _tsPrepareRing(wipe, w, h, _pbFps, key, preview: true);
       }
-      return false; // not ready: plain frame
+      return null; // not ready: plain frame
     }
-    _tsEmitLive(cur, s, lay, w, h, pos);
-    return true;
+    return _tsEmitImage(cur, s, lay, w, h, pos);
   }
 
-  Future<void> _tsEmitLive(TimeSliceFrame cur, List<double> s, int lay, int w, int h, double pos) async {
-    if (_isVulkanProcessing) return;
-    _isVulkanProcessing = true;
+  Future<ui.Image?> _tsEmitImage(TimeSliceFrame cur, List<double> s, int lay, int w, int h, double pos) async {
     try {
       final u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
       if (_tsSig(u) != _tsRingSig) {
         _tsRingKey = ''; // the grade changed since the ring was filled: plain frames until it is refilled
-        return;
+        return null;
       }
       u[0] = pos;
       TimeSlice.packFrameState(u, p: cur.p, n: cur.n, cutPointValue: s[TimeSlice.cutPoint], layer: lay);
       final out = await TimeSliceWorker.instance.emit(w: w, h: h, uniforms: u);
       if (out == null) {
-        _tsRingKey = ''; // ring gone (buffers were resized) or GPU error: plain frames, ring is refilled on the next tick
-        return;
+        _tsRingKey = ''; // ring gone (buffers were resized) or GPU error: plain frames, ring is refilled on the next frame
+        return null;
       }
-      final im = await _rgbaToImage(out, w, h);
-      if (!mounted || !(_controller?.value.isPlaying ?? false)) {
-        im.dispose();
-        return;
-      }
-      _processedStaticImage?.dispose();
-      _processedStaticImage = im;
-      _renderWidth = w;
-      _renderHeight = h;
-      _liveReady = true;
-      _liveFramePos = pos; // batch 16: freshness bookkeeping of the live overlay (the Time Slice logic itself is unchanged)
-      _liveFresh = true;
-      _liveMisses = 0;
-      _previewTick.value++;
+      return await _rgbaToImage(out, w, h);
     } catch (_) {
-    } finally {
-      _isVulkanProcessing = false;
-      _needsReprocess = false;
+      return null;
     }
   }
 
@@ -3154,12 +3298,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   onChanged: (val) {
                     _setPos(val);
                     _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
-                    if (!gGradeActiveFrameOnly) {
-                      _applyGrade(forceExtract: true);
-                    }
+                    if (_adaptiveActive) {
+                      _adaptJump = val; // Adaptive playing: the loop continues from the thumb
+                    } else if (gPreviewEngine == PreviewEngine.adaptive) {
+                      _applyGrade(forceExtract: true); // Adaptive, paused: the frame under the thumb is graded while scrubbing
+                    } // Smooth: nothing is graded until the thumb is released
                   },
                   onChangeEnd: (val) {
                     _scrubbing = false; // sharpen after the scrub
+                    if (_adaptiveActive) _adaptJump = val;
                     _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
                       _applyGrade(forceExtract: true);
                     });
@@ -3337,17 +3484,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                     valueListenable: _previewTick,
                                     builder: (context, _, __) {
                                       final has = _processedStaticImage != null;
-                                      // batch 16: while playing, the graded overlay only shows when live grading is on, keeping up and fresh; otherwise the native
-                                      // video texture plays alone. Paused: the graded frame of THIS position (never a stale one from before the video was played).
+                                      // batch 17B: while playing, Smooth (Native) shows the native video alone; Adaptive (Slow) shows the graded frame the loop put
+                                      // there (every frame is graded before it is shown, so it is never old). Paused: the graded frame of THIS position (never a
+                                      // stale one from before the video was played).
                                       final bool show = _isPlaying
-                                          ? (has && !gGradeActiveFrameOnly && !_liveSuspended && _liveReady && _liveFresh)
+                                          ? (has && _adaptiveActive && !_gradeStale)
                                           : (has && !_gradeStale);
                                       if (show) {
                                         return FittedBox(
                                           fit: BoxFit.cover,
                                           child: SizedBox(
-                                            width: _renderWidth.toDouble(),
-                                            height: _renderHeight.toDouble(),
+                                            // the picture's own size: _renderWidth / _renderHeight already switched to full quality on a pause while the
+                                            // lower-quality frame of the playback is still on screen
+                                            width: _processedStaticImage!.width.toDouble(),
+                                            height: _processedStaticImage!.height.toDouble(),
                                             child: RawImage(image: _processedStaticImage),
                                           ),
                                         );

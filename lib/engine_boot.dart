@@ -9,13 +9,17 @@
 //    0 %   settings were already read in main() before the first frame
 //    3 %   media engine (FFmpegKit)                         -> 22 %
 //   22 %   shader asset (assets/shaders/aereality_core.spv)  -> 30 %
-//   30 %   Vulkan compute pipeline (init_vulkan, called DIRECTLY on the main isolate, blocking, a few seconds)    -> 88 %
+//   30 %   Vulkan compute pipeline (native background thread, polled every 100 ms)                                -> 88 %
 //   88 %   grading worker isolate + one 64 x 64 test grade through the real uniform packer                        -> 98 %
 //  100 %   Ready
-// Batch 17A: init_vulkan no longer runs in Isolate.run. It is called straight on the UI isolate (the loading screen is the only thing
-// on screen). While it runs the UI cannot repaint, so the bar is set to 55 % and the screen is given a moment to draw it BEFORE the call;
-// there is no creeping timer any more (a timer cannot fire while the isolate is blocked). A synchronous native call cannot be given a
-// timeout from Dart; what the 15 s limit (kBootStageTimeout) covers is every ASYNC stage (media engine, grading worker, test grade).
+// Batch 17B (replaces the batch 17A "blocking call on the UI isolate"): init_vulkan runs on a native std::thread (init_vulkan_async) and
+// this file POLLS it with a Timer every 100 ms, so the loading screen animates the whole time and Android never sees a blocked UI thread
+// (the ANR at 54 %). The pipeline is also persisted in a VkPipelineCache file (<app support dir>/shader_cache.bin): only the first boot
+// (or the first boot after a new shader build / a GPU driver update) pays the ~90 s compile, every other boot takes a few seconds.
+// Timeout: kBootStageTimeout (15 s) for every stage, INCLUDING the GPU stage when the pipeline cache is valid (warm boot). A cold boot
+// (no valid cache) cannot finish in 15 s by nature, so for that one the GPU stage gets kColdBootTimeout instead; the native side reports
+// which case it is (vulkanInitIsCold()). A timed-out GPU stage shows the error with RETRY; RETRY re-attaches to the still-running native
+// thread instead of starting a second one.
 // init_vulkan itself stops at the first failing Vulkan call and returns false with the exact VkResult (vulkanLastInitError()).
 //
 // Failure: a missing shader / a timeout / an exception shows the error with RETRY and CONTINUE ANYWAY (the app then uses the
@@ -24,6 +28,7 @@
 // =============================================================================
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -31,6 +36,7 @@ import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:path_provider/path_provider.dart';
 
 import 'accent_state.dart';
 import 'constants.dart';
@@ -44,6 +50,10 @@ import 'vulkan_bridge.dart';
 /// Longest an ASYNC boot stage may take (media engine, grading worker + test grade) before the boot gives up on it (was 30 s for the test
 /// grade and 90 s for the GPU stage, i.e. up to a minute and a half on the loading screen).
 const Duration kBootStageTimeout = Duration(seconds: 15);
+
+/// Longest the GPU stage may take on a COLD boot (no valid pipeline cache: first install, new shader build, new GPU driver): the one-time
+/// shader compile is about 90 s on the NUU N20, so 15 s cannot apply to it. [ASSUMED] 4 minutes; the stage still fails (RETRY) after that.
+const Duration kColdBootTimeout = Duration(seconds: 240);
 
 class BootState {
   final double progress; // 0..1
@@ -96,6 +106,99 @@ class EngineBoot {
     return null;
   }
 
+  /// Where the VkPipelineCache file lives. The app SUPPORT directory is used on purpose (not the cache directory): Android may empty the
+  /// cache directory when storage is low or the user taps "Clear cache", which would silently bring the 90 s compile back.
+  /// [ASSUMED] switch to getApplicationCacheDirectory() here if you prefer the OS to be allowed to purge it.
+  static Future<String> _cacheDirPath() async {
+    try {
+      final d = await getApplicationSupportDirectory();
+      if (!d.existsSync()) d.createSync(recursive: true);
+      return d.path;
+    } catch (e) {
+      debugPrint('EngineBoot: no cache directory ($e): the pipeline will not be cached');
+      return '';
+    }
+  }
+
+  /// GPU stage. Starts the native init thread, then polls it every 100 ms. Returns a non-fatal note (or null); throws on failure / timeout.
+  static Future<String?> _bootVulkan(Uint8List bytes) async {
+    final int prec = gEnginePrecision;
+    final sw = Stopwatch()..start();
+
+    if (!vulkanHasAsyncInit) {
+      // Older native lib without init_vulkan_async: the old blocking call (the screen may pause). Kept so the app still starts.
+      _emit(0.55, 'Building the GPU pipeline (a few seconds, the screen may pause)');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final bool ok = initVulkan(bytes, prec);
+      if (!ok) {
+        final why = vulkanLastInitError();
+        throw StateError(why.isNotEmpty ? why : 'init_vulkan returned failure (no detail from this native build).');
+      }
+      vulkanSetFlareHalfRes(gFlareHalfRes);
+      return null;
+    }
+
+    final String cacheDir = await _cacheDirPath();
+    _emit(0.32, 'Starting the GPU engine');
+    if (!startVulkanInit(bytes, prec, cacheDir)) {
+      final why = vulkanLastInitError();
+      throw StateError(why.isNotEmpty ? why : 'The GPU engine thread could not be started.');
+    }
+
+    final done = Completer<bool>();
+    bool coldKnown = false;
+    final Timer poll = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (done.isCompleted) return;
+      final int st = vulkanInitState();
+      if (st == 1 || isVulkanReady()) {
+        done.complete(true);
+        return;
+      }
+      if (st == -1) {
+        done.complete(false);
+        return;
+      }
+      final bool cold = vulkanInitIsCold();
+      final Duration limit = cold ? kColdBootTimeout : kBootStageTimeout;
+      if (sw.elapsed > limit) {
+        done.completeError(TimeoutException(
+            cold
+                ? 'The GPU pipeline did not finish compiling within ${limit.inSeconds} s (no pipeline cache on this boot).'
+                : 'The GPU pipeline did not finish within ${limit.inSeconds} s. Tap RETRY to keep waiting for it.',
+            limit));
+        return;
+      }
+      // the bar creeps from 33 % towards 85 % while the native thread works (a cold compile takes ~90 s, a warm start a few seconds)
+      final double t = sw.elapsedMilliseconds / 1000.0;
+      final double scale = cold ? 60.0 : 4.0;
+      final double p = 0.33 + 0.52 * (1.0 - math.exp(-t / scale));
+      if (!coldKnown && sw.elapsedMilliseconds > 400) {
+        coldKnown = true;
+        _emit(p, cold ? 'Compiling the GPU shaders for the first time (one-time, up to ~90 s)' : 'Loading the GPU pipeline');
+      } else {
+        _emit(p, state.value.message);
+      }
+    });
+
+    final bool ok;
+    try {
+      ok = await done.future;
+    } finally {
+      poll.cancel();
+    }
+    sw.stop();
+    final String initLog = vulkanLastInitLog();
+    debugPrint('EngineBoot: init_vulkan ${ok ? 'ok' : 'FAILED'} in ${sw.elapsedMilliseconds} ms. $initLog');
+    if (!ok) {
+      final why = vulkanLastInitError();
+      throw StateError(why.isNotEmpty ? why : 'init_vulkan returned failure (no detail from this native build).');
+    }
+    vulkanSetFlareHalfRes(gFlareHalfRes);
+    return sw.elapsed > kBootStageTimeout
+        ? 'GPU setup took ${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (one-time). $initLog'
+        : null;
+  }
+
   static Future<void> _run() async {
     gpuOk = false;
     state.value = const BootState(progress: 0.0, message: 'Starting');
@@ -118,23 +221,8 @@ class EngineBoot {
       }
 
       // ---- Vulkan pipeline ---------------------------------------------------------------------------------------
-      // Called directly on this (UI) isolate. Paint the message first: once the native call starts nothing can repaint until it returns.
-      _emit(0.55, 'Building the GPU pipeline (a few seconds, the screen may pause)');
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      final prec = gEnginePrecision;
-      final sw = Stopwatch()..start();
-      final bool vkOk = initVulkan(bytes, prec);
-      sw.stop();
-      final String initLog = vulkanLastInitLog();
-      debugPrint('EngineBoot: init_vulkan ${vkOk ? 'ok' : 'FAILED'} in ${sw.elapsedMilliseconds} ms. $initLog');
-      if (!vkOk) {
-        final why = vulkanLastInitError();
-        throw StateError(why.isNotEmpty ? why : 'init_vulkan returned failure (no detail from this native build).');
-      }
-      vulkanSetFlareHalfRes(gFlareHalfRes);
-      final String? slowNote = sw.elapsed > kBootStageTimeout
-          ? 'GPU setup took ${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s. $initLog'
-          : null;
+      // Batch 17B: runs on a native thread; the UI isolate only polls. Nothing here blocks, so the loading screen keeps animating.
+      final String? slowNote = await _bootVulkan(bytes);
 
       // ---- grading worker + test grade -----------------------------------------------------------------------------
       _emit(0.88, 'Starting the grading worker');
