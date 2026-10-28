@@ -3592,6 +3592,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         selectedCurveChannel: _selectedCurveChannel,
                         onChannelChanged: (ch) => setState(() => _selectedCurveChannel = ch),
                         onChanged: _onSliderChanged,
+                        onEnded: () { // batch 17A: Curves Opacity slider now lives in the Curves tab
+                          setState(() {});
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
                         onResetCurve: () {
                           _pushUndoSnapshot();
                           setState(() {});

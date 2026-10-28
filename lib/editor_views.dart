@@ -1554,9 +1554,7 @@ class EditorViews {
       _fxToggle(cur, 'Z axis active', Fx.esAxisZ, onChanged, onEnded),
       _fxRow(c, cur, 'Edge Softness Opacity', Fx.opEdgeSoft, 0.0, 1.0, onChanged, onEnded),
 
-      _hdr('CURVES OPACITY'),
-      _note('The curves are drawn in the CURVES tab; this is the opacity of that effect (on top of the layer opacity).'),
-      _fxRow(c, cur, 'Curves Opacity', Fx.opCurves, 0.0, 1.0, onChanged, onEnded),
+      // Batch 17A: Curves Opacity moved to the CURVES tab (directly under the curve editor).
       _hdr('GRADIENT MAP OPACITY & BLEND'),
       _note('The gradient map itself is picked in the GRADIENT MAPS tab; this is its opacity and custom blend (Default keeps the effect as it was).'),
       _fxRow(c, cur, 'Gradient Map Opacity', Fx.opGradMap, 0.0, 1.0, onChanged, onEnded),
@@ -1602,6 +1600,7 @@ class EditorViews {
     required ValueChanged<int> onChannelChanged,
     required VoidCallback onChanged,
     required VoidCallback onResetCurve,
+    VoidCallback? onEnded, // batch 17A: for the Curves Opacity slider (null = the slider still moves, nothing is committed on release)
   }) {
     final int ch = selectedCurveChannel.clamp(0, 3);
     const colors = [Colors.white, Colors.redAccent, Colors.greenAccent, Colors.blueAccent];
@@ -1679,6 +1678,10 @@ class EditorViews {
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        _hdr('CURVES OPACITY'),
+        _note('Opacity of the curves effect (on top of the layer opacity). The curves have no custom blend slot.'),
+        _fxRow(context, cur, 'Curves Opacity', Fx.opCurves, 0.0, 1.0, onChanged, onEnded ?? () {}),
       ],
     );
   }
