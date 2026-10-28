@@ -10,6 +10,13 @@
 #include <mutex>
 #include <functional>
 #include <chrono>
+#include <thread>
+#include <atomic>
+#include <string>
+#include <cstdint>
+#include <cstdlib>
+#include <dirent.h>
+#include <unistd.h>
 
 #define LOG_TAG "ShaderlyVulkan"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -45,6 +52,7 @@ struct VulkanContext {
     VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline computePipeline = VK_NULL_HANDLE;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;   // batch 17B: persisted to <cache_dir>/shader_cache.bin
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
@@ -1520,6 +1528,114 @@ static void initLog(const char* stage, long long ms) {
     LOGI("init_vulkan: %s took %lld ms", stage, ms);
 }
 
+// -----------------------------------------------------------------------------------------------------------------
+// Batch 17B: background init state + persistent VkPipelineCache.
+//
+// The driver compiles the whole grade shader inside vkCreateComputePipelines (about 90 s on the first boot). Two things fix the boot ANR:
+//   1. VkPipelineCache persisted in <cache_dir>/shader_cache.bin: every boot after the first one skips the compile.
+//   2. init_vulkan_async() runs init_vulkan on a native std::thread, so the UI thread never blocks (even on the very first boot).
+// These atomics are the ONLY state Dart reads while the init thread runs (they never take pipelineMutex, which the init thread holds
+// for the whole init). gInitError / gInitLog may only be read once the state is no longer "running".
+// -----------------------------------------------------------------------------------------------------------------
+static std::atomic<bool> gInitRunning{false};      // a background init thread exists and has not finished
+static std::atomic<bool> gInitDone{false};         // the last background init finished (success or failure)
+static std::atomic<int32_t> gInitResult{0};        // 1 = ok, 0 = failed; valid when gInitDone
+static std::atomic<bool> gInitCold{true};          // true = no valid cache for this shader / GPU / driver: the compile will be slow (set before the compile starts)
+
+// Our own small header in front of the raw driver blob, so a cache written for an OLDER shader build is never trusted:
+//   u32 magic | u32 version | u64 fnv1a64(SPIR-V) | u64 blobSize | driver blob (vkGetPipelineCacheData)
+static constexpr uint32_t kCacheMagic = 0x43444853u;   // "SHDC"
+static constexpr uint32_t kCacheVersion = 1u;
+static constexpr size_t kCacheHeaderBytes = 4 + 4 + 8 + 8;
+static constexpr size_t kCacheMaxBytes = 128u * 1024u * 1024u;   // sanity limit for a file we are about to hand to the driver
+
+static uint64_t fnv1a64(const uint8_t* d, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; i++) { h ^= d[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+static bool readWholeFile(const std::string& path, std::vector<uint8_t>& out) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    bool ok = false;
+    if (fseek(f, 0, SEEK_END) == 0) {
+        long sz = ftell(f);
+        if (sz > 0 && (size_t)sz <= kCacheMaxBytes && fseek(f, 0, SEEK_SET) == 0) {
+            out.resize((size_t)sz);
+            ok = fread(out.data(), 1, (size_t)sz, f) == (size_t)sz;
+        }
+    }
+    fclose(f);
+    if (!ok) out.clear();
+    return ok;
+}
+
+// Writes <path>.tmp then renames it over <path>: a crash / kill in the middle can never leave a half-written cache behind.
+static bool writeFileAtomic(const std::string& path, const std::vector<uint8_t>& data) {
+    std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+    ok = (fflush(f) == 0) && ok;
+    fclose(f);
+    if (!ok || rename(tmp.c_str(), path.c_str()) != 0) { remove(tmp.c_str()); return false; }
+    return true;
+}
+
+// The first 32 bytes of the driver blob are VkPipelineCacheHeaderVersionOne: headerSize, headerVersion, vendorID, deviceID, UUID[16].
+// Vulkan says the driver must reject a foreign blob; checking it here as well costs nothing and protects against buggy drivers.
+static bool driverBlobMatchesDevice(const uint8_t* blob, size_t n, const VkPhysicalDeviceProperties& p) {
+    if (n < 16 + VK_UUID_SIZE) return false;
+    uint32_t headerSize, headerVersion, vendorId, deviceId;
+    std::memcpy(&headerSize, blob + 0, 4);
+    std::memcpy(&headerVersion, blob + 4, 4);
+    std::memcpy(&vendorId, blob + 8, 4);
+    std::memcpy(&deviceId, blob + 12, 4);
+    if (headerSize < 16 + VK_UUID_SIZE || headerSize > n) return false;
+    if (headerVersion != (uint32_t)VK_PIPELINE_CACHE_HEADER_VERSION_ONE) return false;
+    if (vendorId != p.vendorID || deviceId != p.deviceID) return false;
+    return std::memcmp(blob + 16, p.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+}
+
+// Loads the cache file. true = [blob] holds a driver blob that is valid for THIS shader, GPU and driver.
+static bool loadPipelineCacheBlob(const std::string& path, uint64_t shaderHash, const VkPhysicalDeviceProperties& props, std::vector<uint8_t>& blob) {
+    blob.clear();
+    std::vector<uint8_t> file;
+    if (!readWholeFile(path, file)) return false;
+    if (file.size() <= kCacheHeaderBytes) return false;
+    uint32_t magic, version;
+    uint64_t hash, size;
+    std::memcpy(&magic, file.data() + 0, 4);
+    std::memcpy(&version, file.data() + 4, 4);
+    std::memcpy(&hash, file.data() + 8, 8);
+    std::memcpy(&size, file.data() + 16, 8);
+    if (magic != kCacheMagic || version != kCacheVersion) return false;
+    if (hash != shaderHash) { LOGI("pipeline cache: written for a different shader build, ignoring it"); return false; }
+    if (size != file.size() - kCacheHeaderBytes) return false;
+    if (!driverBlobMatchesDevice(file.data() + kCacheHeaderBytes, (size_t)size, props)) { LOGI("pipeline cache: written for another GPU / driver, ignoring it"); return false; }
+    blob.assign(file.begin() + kCacheHeaderBytes, file.end());
+    return true;
+}
+
+static bool savePipelineCacheFile(const std::string& path, uint64_t shaderHash) {
+    if (gVk.pipelineCache == VK_NULL_HANDLE || path.empty()) return false;
+    size_t n = 0;
+    if (vkGetPipelineCacheData(gVk.device, gVk.pipelineCache, &n, nullptr) != VK_SUCCESS || n == 0 || n > kCacheMaxBytes) return false;
+    std::vector<uint8_t> file(kCacheHeaderBytes + n);
+    VkResult r = vkGetPipelineCacheData(gVk.device, gVk.pipelineCache, &n, file.data() + kCacheHeaderBytes);
+    if (r != VK_SUCCESS) return false;   // VK_INCOMPLETE = the cache grew between the two calls: skip this save, the next boot just compiles again
+    file.resize(kCacheHeaderBytes + n);
+    const uint64_t blobSize = (uint64_t)n;
+    std::memcpy(file.data() + 0, &kCacheMagic, 4);
+    std::memcpy(file.data() + 4, &kCacheVersion, 4);
+    std::memcpy(file.data() + 8, &shaderHash, 8);
+    std::memcpy(file.data() + 16, &blobSize, 8);
+    const bool ok = writeFileAtomic(path, file);
+    LOGI("pipeline cache: %s %zu bytes to %s", ok ? "saved" : "FAILED to save", n, path.c_str());
+    return ok;
+}
+
 // Frees everything init_vulkan may have created, in reverse order, so a failed boot leaves a clean slate and RETRY starts from nothing
 // (before this, a failed init leaked the instance / device and the next attempt created a second one). Caller holds pipelineMutex.
 static void teardownAfterFailedInit() {
@@ -1532,6 +1648,7 @@ static void teardownAfterFailedInit() {
         if (gVk.descriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(gVk.device, gVk.descriptorPool, nullptr); gVk.descriptorPool = VK_NULL_HANDLE; }
         gVk.descriptorSet = VK_NULL_HANDLE;
         if (gVk.computePipeline != VK_NULL_HANDLE) { vkDestroyPipeline(gVk.device, gVk.computePipeline, nullptr); gVk.computePipeline = VK_NULL_HANDLE; }
+        if (gVk.pipelineCache != VK_NULL_HANDLE) { vkDestroyPipelineCache(gVk.device, gVk.pipelineCache, nullptr); gVk.pipelineCache = VK_NULL_HANDLE; }
         if (gVk.pipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(gVk.device, gVk.pipelineLayout, nullptr); gVk.pipelineLayout = VK_NULL_HANDLE; }
         if (gVk.descriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(gVk.device, gVk.descriptorSetLayout, nullptr); gVk.descriptorSetLayout = VK_NULL_HANDLE; }
         if (gVk.shaderModule != VK_NULL_HANDLE) { vkDestroyShaderModule(gVk.device, gVk.shaderModule, nullptr); gVk.shaderModule = VK_NULL_HANDLE; }
@@ -1577,7 +1694,10 @@ const char* get_last_init_log() { return gInitLog; }
 // records the exact VkResult (get_last_init_error), frees everything created so far and returns 0 immediately. Nothing here loops or
 // retries. The Time Slice ring is NOT created here: ensureTimeSliceRing() only runs from process_timeslice_ingest, i.e. when Time Slice
 // is switched on in the editor (the boot test grade is 64 x 64 with Time Slice off, so the display buffer is one tiny frame).
-int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
+// Batch 17B: [cache_dir] (nullptr / "" = no cache) is a writable directory; the pipeline cache lives in <cache_dir>/shader_cache.bin. A missing,
+// broken or foreign cache file is never an error: the pipeline is simply compiled (slow) and the file is written afterwards. This function is
+// synchronous; the app calls it through init_vulkan_async() (below) so the UI thread never waits for it.
+int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision, const char* cache_dir) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
     if (gVk.isInitialized) return 1;
@@ -1763,8 +1883,50 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     }
     lap("layouts");
 
-    // THE expensive call: the driver compiles the whole grade shader here. It is synchronous and cannot be interrupted from outside;
-    // the time it took is recorded in the init log so a slow compile is visible on the boot screen.
+    // ---- Batch 17B: VkPipelineCache, loaded from disk when a valid file exists --------------------------------------------------------
+    std::string cachePath;
+    uint64_t shaderHash = 0;
+    std::vector<uint8_t> cacheBlob;
+    bool warm = false;   // a valid cache for this shader / GPU / driver was found: the compile below should be (almost) instant
+    if (cache_dir != nullptr && cache_dir[0] != '\0') {
+        cachePath = std::string(cache_dir) + "/shader_cache.bin";
+        shaderHash = fnv1a64(shaderBytes, (size_t)length);
+        VkPhysicalDeviceProperties cacheProps{};
+        vkGetPhysicalDeviceProperties(gVk.physicalDevice, &cacheProps);
+        warm = loadPipelineCacheBlob(cachePath, shaderHash, cacheProps, cacheBlob);
+    }
+    {
+        VkPipelineCacheCreateInfo cacheInfo{};
+        cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        cacheInfo.initialDataSize = warm ? cacheBlob.size() : 0;
+        cacheInfo.pInitialData = warm ? cacheBlob.data() : nullptr;
+        VkResult cr = vkCreatePipelineCache(gVk.device, &cacheInfo, nullptr, &gVk.pipelineCache);
+        if (cr != VK_SUCCESS && warm) {
+            // the driver refused the saved blob: start from an empty cache instead
+            LOGE("vkCreatePipelineCache with saved data failed (%s), retrying empty", vkResultName(cr));
+            warm = false;
+            cacheBlob.clear();
+            cacheInfo.initialDataSize = 0;
+            cacheInfo.pInitialData = nullptr;
+            cr = vkCreatePipelineCache(gVk.device, &cacheInfo, nullptr, &gVk.pipelineCache);
+        }
+        if (cr != VK_SUCCESS) {
+            // not fatal: no cache, the pipeline is compiled and nothing is saved
+            LOGE("vkCreatePipelineCache failed (%s): compiling without a cache", vkResultName(cr));
+            gVk.pipelineCache = VK_NULL_HANDLE;
+            warm = false;
+        }
+    }
+    gInitCold.store(!warm);   // Dart reads this to pick the boot timeout: warm = seconds, cold = the one-time ~90 s compile
+    {
+        char line[64];
+        snprintf(line, sizeof(line), "pipeline cache %s; ", warm ? "HIT" : "MISS");
+        strncat(gInitLog, line, sizeof(gInitLog) - strlen(gInitLog) - 1);
+    }
+    lap("pipeline cache load");
+
+    // THE expensive call (only on a cache miss): the driver compiles the whole grade shader here. It is synchronous and cannot be interrupted
+    // from outside; the time it took is recorded in the init log so a slow compile is visible on the boot screen.
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = gVk.pipelineLayout;
@@ -1772,7 +1934,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pipelineInfo.stage.module = gVk.shaderModule;
     pipelineInfo.stage.pName = "main";
-    r = vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
+    r = vkCreateComputePipelines(gVk.device, gVk.pipelineCache, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
     if (r != VK_SUCCESS || gVk.computePipeline == VK_NULL_HANDLE) {
         gVk.computePipeline = VK_NULL_HANDLE;
         initFail("vkCreateComputePipelines", r);
@@ -1780,6 +1942,16 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
         return 0;
     }
     lap("pipeline compile");
+
+    // Batch 17B: write the cache after the pipeline exists. Skipped when the cache was valid and nothing new was added (no pointless rewrite).
+    if (gVk.pipelineCache != VK_NULL_HANDLE && !cachePath.empty()) {
+        size_t nowBytes = 0;
+        const bool haveSize = vkGetPipelineCacheData(gVk.device, gVk.pipelineCache, &nowBytes, nullptr) == VK_SUCCESS;
+        if (haveSize && (!warm || nowBytes != cacheBlob.size())) {
+            savePipelineCacheFile(cachePath, shaderHash);
+            lap("pipeline cache save");
+        }
+    }
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1854,6 +2026,93 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     LOGI("Vulkan Pipeline with Hardware Samplers & 3D LUT Texture Initialized.");
     return 1;
 }
+
+// -----------------------------------------------------------------------------------------------------------------
+// Batch 17B: non-blocking boot.
+//
+// init_vulkan_async() copies the SPIR-V and the cache directory, starts init_vulkan on a native std::thread and returns at once, so the UI
+// isolate keeps animating the loading screen (no more ANR on the first boot, when the empty cache means a ~90 s shader compile). Dart then
+// polls is_vulkan_ready() / vulkan_init_state(). Rules:
+//   * only one init thread at a time: a second call while one runs (the RETRY button) just returns 1 and the caller keeps waiting for it,
+//   * after a FAILED init a new call starts a fresh attempt, after a successful one it returns 1 at once,
+//   * process_image & co. take pipelineMutex, which the init thread holds, so a grade request that arrives early waits for the init
+//     (it runs in the grade worker isolate, never on the UI thread).
+// Return value: 1 = started / already running / already initialised, 0 = could not start (thread creation failed, invalid arguments).
+// -----------------------------------------------------------------------------------------------------------------
+struct InitJob {
+    std::vector<uint8_t> shader;
+    std::string cacheDir;
+    int32_t precision;
+};
+
+int32_t init_vulkan_async(const uint8_t* shaderBytes, int32_t length, int32_t precision, const char* cache_dir) {
+    if (shaderBytes == nullptr || length < 20 || (length % 4) != 0) {
+        // same text the synchronous path gives; nothing is running, so writing the error buffer here is safe
+        if (!gInitRunning.load()) {
+            char m[96];
+            snprintf(m, sizeof(m), "The shader file is not valid SPIR-V (%d bytes).", (int)length);
+            gInitError[0] = '\0';
+            initFailMsg(m);
+            gInitResult.store(0);
+            gInitDone.store(true);
+        }
+        return 0;
+    }
+
+    bool expected = false;
+    if (!gInitRunning.compare_exchange_strong(expected, true)) return 1;   // a thread is already running: keep waiting for it
+    if (gInitDone.load() && gInitResult.load() == 1) {                     // already initialised
+        gInitRunning.store(false);
+        return 1;
+    }
+
+    gInitDone.store(false);
+    gInitResult.store(0);
+    gInitCold.store(true);
+
+    InitJob* job = new InitJob();
+    job->shader.assign(shaderBytes, shaderBytes + length);   // Dart frees its buffer as soon as this function returns
+    job->cacheDir = (cache_dir != nullptr) ? cache_dir : "";
+    job->precision = precision;
+
+    try {
+        std::thread([job]() {
+            int32_t res = 0;
+            try {
+                res = init_vulkan(job->shader.data(), (int32_t)job->shader.size(), job->precision, job->cacheDir.c_str());
+            } catch (...) {
+                initFailMsg("init_vulkan threw an exception on the background thread.");
+                res = 0;
+            }
+            delete job;
+            gInitResult.store(res == 1 ? 1 : 0);
+            gInitDone.store(true, std::memory_order_release);   // the result (and gInitError / gInitLog) are published BEFORE this flag
+            gInitRunning.store(false);
+        }).detach();
+    } catch (...) {
+        delete job;
+        gInitError[0] = '\0';
+        initFailMsg("Could not start the background thread for the GPU pipeline.");
+        gInitResult.store(0);
+        gInitDone.store(true);
+        gInitRunning.store(false);
+        return 0;
+    }
+    return 1;
+}
+
+// true once the background init (init_vulkan_async) finished SUCCESSFULLY. Never blocks, never takes pipelineMutex.
+bool is_vulkan_ready() { return gInitDone.load(std::memory_order_acquire) && gInitResult.load() == 1; }
+
+// 0 = running / not started, 1 = finished OK, -1 = finished with an error (get_last_init_error() then has the text). Never blocks.
+int32_t vulkan_init_state() {
+    if (!gInitDone.load(std::memory_order_acquire)) return 0;
+    return gInitResult.load() == 1 ? 1 : -1;
+}
+
+// 1 = no valid pipeline cache was found (the shader is being compiled: slow, once), 0 = cache hit (fast). Valid a few ms after the init
+// thread started; before that it reads 1 (the conservative answer). Never blocks.
+int32_t vulkan_init_is_cold() { return gInitCold.load() ? 1 : 0; }
 
 void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
                    uint8_t* outputBytes, int32_t outWidth, int32_t outHeight,
@@ -2190,6 +2449,10 @@ void cleanup_processor() {
         vkDestroyPipeline(gVk.device, gVk.computePipeline, nullptr);
         gVk.computePipeline = VK_NULL_HANDLE;
     }
+    if (gVk.pipelineCache != VK_NULL_HANDLE) {   // batch 17B
+        vkDestroyPipelineCache(gVk.device, gVk.pipelineCache, nullptr);
+        gVk.pipelineCache = VK_NULL_HANDLE;
+    }
     if (gVk.pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(gVk.device, gVk.pipelineLayout, nullptr);
         gVk.pipelineLayout = VK_NULL_HANDLE;
@@ -2220,7 +2483,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_example_aereality_VulkanBridge_initVulkan(JNIEnv* env, jobject thiz, jbyteArray shaderBytes, jint precisionMode) {
     jsize len = env->GetArrayLength(shaderBytes);
     jbyte* buf = env->GetByteArrayElements(shaderBytes, nullptr);
-    int32_t res = init_vulkan(reinterpret_cast<const uint8_t*>(buf), len, precisionMode);
+    int32_t res = init_vulkan(reinterpret_cast<const uint8_t*>(buf), len, precisionMode, nullptr);   // batch 17B: no cache dir through this legacy JNI entry
     env->ReleaseByteArrayElements(shaderBytes, buf, JNI_ABORT);
     return res == 1 ? JNI_TRUE : JNI_FALSE;
 }
