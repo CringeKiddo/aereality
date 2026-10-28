@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <algorithm>
 #include <memory>
 #include <mutex>
@@ -1472,6 +1473,82 @@ static bool runMotionPipeline(int32_t w, int32_t h, int32_t gw, int32_t gh, bool
 
 } // namespace
 
+// -----------------------------------------------------------------------------------------------------------------
+// Batch 17A: boot diagnostics. init_vulkan records WHAT failed (stage + exact VkResult name and number) and HOW LONG each stage took in
+// gInitError / gInitLog. Dart reads them through get_last_init_error() / get_last_init_log() and shows them on the boot screen, because
+// there is no logcat on the phone. Written only while pipelineMutex is held by init_vulkan.
+// -----------------------------------------------------------------------------------------------------------------
+static char gInitError[600] = "";
+static char gInitLog[900] = "";
+
+static const char* vkResultName(VkResult r) {
+    switch (r) {
+        case VK_SUCCESS: return "VK_SUCCESS";
+        case VK_NOT_READY: return "VK_NOT_READY";
+        case VK_TIMEOUT: return "VK_TIMEOUT";
+        case VK_INCOMPLETE: return "VK_INCOMPLETE";
+        case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+        case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+        case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+        case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
+        case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
+        case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
+        case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
+        case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
+        case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
+        case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
+        case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
+        default: return "VkResult (see number)";
+    }
+}
+
+static void initFail(const char* stage, VkResult r) {
+    snprintf(gInitError, sizeof(gInitError), "%s failed: %s (%d)", stage, vkResultName(r), (int)r);
+    LOGE("init_vulkan: %s", gInitError);
+}
+
+static void initFailMsg(const char* msg) {
+    snprintf(gInitError, sizeof(gInitError), "%s", msg);
+    LOGE("init_vulkan: %s", gInitError);
+}
+
+static void initLog(const char* stage, long long ms) {
+    char line[96];
+    snprintf(line, sizeof(line), "%s %lldms; ", stage, ms);
+    strncat(gInitLog, line, sizeof(gInitLog) - strlen(gInitLog) - 1);
+    LOGI("init_vulkan: %s took %lld ms", stage, ms);
+}
+
+// Frees everything init_vulkan may have created, in reverse order, so a failed boot leaves a clean slate and RETRY starts from nothing
+// (before this, a failed init leaked the instance / device and the next attempt created a second one). Caller holds pipelineMutex.
+static void teardownAfterFailedInit() {
+    if (gVk.device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(gVk.device);
+        cleanupBuffers();
+        if (gVk.computeFence != VK_NULL_HANDLE) { vkDestroyFence(gVk.device, gVk.computeFence, nullptr); gVk.computeFence = VK_NULL_HANDLE; }
+        if (gVk.commandPool != VK_NULL_HANDLE) { vkDestroyCommandPool(gVk.device, gVk.commandPool, nullptr); gVk.commandPool = VK_NULL_HANDLE; }
+        gVk.commandBuffer = VK_NULL_HANDLE;
+        if (gVk.descriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(gVk.device, gVk.descriptorPool, nullptr); gVk.descriptorPool = VK_NULL_HANDLE; }
+        gVk.descriptorSet = VK_NULL_HANDLE;
+        if (gVk.computePipeline != VK_NULL_HANDLE) { vkDestroyPipeline(gVk.device, gVk.computePipeline, nullptr); gVk.computePipeline = VK_NULL_HANDLE; }
+        if (gVk.pipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(gVk.device, gVk.pipelineLayout, nullptr); gVk.pipelineLayout = VK_NULL_HANDLE; }
+        if (gVk.descriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(gVk.device, gVk.descriptorSetLayout, nullptr); gVk.descriptorSetLayout = VK_NULL_HANDLE; }
+        if (gVk.shaderModule != VK_NULL_HANDLE) { vkDestroyShaderModule(gVk.device, gVk.shaderModule, nullptr); gVk.shaderModule = VK_NULL_HANDLE; }
+        if (gVk.lutImageView != VK_NULL_HANDLE) { vkDestroyImageView(gVk.device, gVk.lutImageView, nullptr); gVk.lutImageView = VK_NULL_HANDLE; }
+        if (gVk.lutImage != VK_NULL_HANDLE) { vkDestroyImage(gVk.device, gVk.lutImage, nullptr); gVk.lutImage = VK_NULL_HANDLE; }
+        if (gVk.lutMemory != VK_NULL_HANDLE) { vkFreeMemory(gVk.device, gVk.lutMemory, nullptr); gVk.lutMemory = VK_NULL_HANDLE; }
+        if (gVk.linearSampler != VK_NULL_HANDLE) { vkDestroySampler(gVk.device, gVk.linearSampler, nullptr); gVk.linearSampler = VK_NULL_HANDLE; }
+        if (gVk.lutSampler != VK_NULL_HANDLE) { vkDestroySampler(gVk.device, gVk.lutSampler, nullptr); gVk.lutSampler = VK_NULL_HANDLE; }
+        vkDestroyDevice(gVk.device, nullptr);
+        gVk.device = VK_NULL_HANDLE;
+    }
+    gVk.computeQueue = VK_NULL_HANDLE;
+    gVk.physicalDevice = VK_NULL_HANDLE;
+    if (gVk.instance != VK_NULL_HANDLE) { vkDestroyInstance(gVk.instance, nullptr); gVk.instance = VK_NULL_HANDLE; }
+    gVk.isInitialized = false;
+}
+
 extern "C" {
 
 // 0 = last render OK, 1 = GPU error (CPU fallback was used), 2 = device lost, 3 = GPU timeout
@@ -1492,10 +1569,38 @@ int64_t get_last_render_us() { return gLastRenderUs; }
 // 1 = pre-compute the flare beam at half resolution (pass 10, ~4x less flare work), 0 = per-pixel flare.
 void set_flare_half_res(int32_t on) { gFlareHalfEnabled = (on != 0); }
 
+// Text of the last init_vulkan failure ("" = none) and the per-stage timings of the last run. Valid until the next init_vulkan call.
+const char* get_last_init_error() { return gInitError; }
+const char* get_last_init_log() { return gInitLog; }
+
+// Batch 17A: returns 1 = ready (or already initialised), 0 = failed. EVERY Vulkan call that can fail is checked; the first failure
+// records the exact VkResult (get_last_init_error), frees everything created so far and returns 0 immediately. Nothing here loops or
+// retries. The Time Slice ring is NOT created here: ensureTimeSliceRing() only runs from process_timeslice_ingest, i.e. when Time Slice
+// is switched on in the editor (the boot test grade is 64 x 64 with Time Slice off, so the display buffer is one tiny frame).
 int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precision) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
     if (gVk.isInitialized) return 1;
+
+    gInitError[0] = '\0';
+    gInitLog[0] = '\0';
+    // a previous attempt that failed has already torn itself down; this also catches a half-built state left by anything else
+    teardownAfterFailedInit();
+
+    if (shaderBytes == nullptr || length < 20 || (length % 4) != 0) {
+        char m[96];
+        snprintf(m, sizeof(m), "The shader file is not valid SPIR-V (%d bytes).", (int)length);
+        initFailMsg(m);
+        return 0;
+    }
+
+    using Clock = std::chrono::steady_clock;
+    auto t0 = Clock::now();
+    auto lap = [&](const char* stage) {
+        auto t1 = Clock::now();
+        initLog(stage, (long long)std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+        t0 = t1;
+    };
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -1509,22 +1614,37 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    if (vkCreateInstance(&createInfo, nullptr, &gVk.instance) != VK_SUCCESS) {
-        LOGE("Failed to create Vulkan instance.");
+    VkResult r = vkCreateInstance(&createInfo, nullptr, &gVk.instance);
+    if (r != VK_SUCCESS) {
+        gVk.instance = VK_NULL_HANDLE;
+        initFail("vkCreateInstance", r);
         return 0;
     }
 
     uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
-    if (deviceCount == 0) return 0;
+    r = vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, nullptr);
+    if (r != VK_SUCCESS || deviceCount == 0) {
+        if (r != VK_SUCCESS) initFail("vkEnumeratePhysicalDevices", r);
+        else initFailMsg("This phone reports no Vulkan GPU (0 physical devices).");
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
-    vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, devices.data());
+    r = vkEnumeratePhysicalDevices(gVk.instance, &deviceCount, devices.data());
+    if ((r != VK_SUCCESS && r != VK_INCOMPLETE) || deviceCount == 0) {
+        initFail("vkEnumeratePhysicalDevices (list)", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
     gVk.physicalDevice = devices[0];
     {
-        // Batch 12 step B: the pipeline layout now uses 13 storage buffers (+1 sampler) in one stage. Log the device limit so a failure is explainable.
+        // Batch 12 step B: the pipeline layout uses 13 storage buffers (+1 sampler) in one stage. Log the device limit so a failure is explainable.
         VkPhysicalDeviceProperties devProps{};
         vkGetPhysicalDeviceProperties(gVk.physicalDevice, &devProps);
+        char line[200];
+        snprintf(line, sizeof(line), "GPU \"%s\", maxStorageBuffers/stage %u; ", devProps.deviceName, devProps.limits.maxPerStageDescriptorStorageBuffers);
+        strncat(gInitLog, line, sizeof(gInitLog) - strlen(gInitLog) - 1);
         LOGI("maxPerStageDescriptorStorageBuffers = %u (need 13)", devProps.limits.maxPerStageDescriptorStorageBuffers);
         if (devProps.limits.maxPerStageDescriptorStorageBuffers < 13) {
             LOGE("Device allows only %u storage buffers per stage; the pipeline needs 13 - Vulkan grading may fail.", devProps.limits.maxPerStageDescriptorStorageBuffers);
@@ -1536,11 +1656,18 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(gVk.physicalDevice, &queueFamilyCount, queueFamilies.data());
 
+    bool foundCompute = false;
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
         if (queueFamilies[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
             gVk.computeQueueFamilyIndex = i;
+            foundCompute = true;
             break;
         }
+    }
+    if (!foundCompute) {
+        initFailMsg("This GPU has no compute queue.");
+        teardownAfterFailedInit();
+        return 0;
     }
 
     float queuePriority = 1.0f;
@@ -1557,24 +1684,41 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
-    if (vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device) != VK_SUCCESS) {
-        LOGE("Failed to create logical device.");
+    r = vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device);
+    if (r != VK_SUCCESS) {
+        gVk.device = VK_NULL_HANDLE;
+        initFail("vkCreateDevice", r);
+        teardownAfterFailedInit();
         return 0;
     }
+    lap("instance+device");
 
     vkGetDeviceQueue(gVk.device, gVk.computeQueueFamilyIndex, 0, &gVk.computeQueue);
 
+    // createHardwareSamplers() logs its own failures and leaves the handle null; check them here so a failure stops the boot.
+    // (It allocates only the 32 x 32 x 32 LUT image, ~0.5 MB, never the Time Slice ring.)
     createHardwareSamplers();
+    if (gVk.linearSampler == VK_NULL_HANDLE || gVk.lutSampler == VK_NULL_HANDLE ||
+        gVk.lutImage == VK_NULL_HANDLE || gVk.lutMemory == VK_NULL_HANDLE || gVk.lutImageView == VK_NULL_HANDLE) {
+        initFailMsg("Creating the samplers / 3D LUT image failed (vkCreateSampler, vkCreateImage, vkAllocateMemory or vkCreateImageView; see logcat tag ShaderlyVulkan).");
+        teardownAfterFailedInit();
+        return 0;
+    }
+    lap("samplers+lut");
 
     VkShaderModuleCreateInfo shaderModuleInfo{};
     shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     shaderModuleInfo.codeSize = length;
     shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(shaderBytes);
 
-    if (vkCreateShaderModule(gVk.device, &shaderModuleInfo, nullptr, &gVk.shaderModule) != VK_SUCCESS) {
-        LOGE("Failed to create shader module.");
+    r = vkCreateShaderModule(gVk.device, &shaderModuleInfo, nullptr, &gVk.shaderModule);
+    if (r != VK_SUCCESS) {
+        gVk.shaderModule = VK_NULL_HANDLE;
+        initFail("vkCreateShaderModule", r);
+        teardownAfterFailedInit();
         return 0;
     }
+    lap("shader module");
 
     VkDescriptorSetLayoutBinding bindings[14]{};
     for (int b = 0; b < 14; b++) {
@@ -1588,7 +1732,13 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 14;
     layoutInfo.pBindings = bindings;
-    vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
+    r = vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
+    if (r != VK_SUCCESS) {
+        gVk.descriptorSetLayout = VK_NULL_HANDLE;
+        initFail("vkCreateDescriptorSetLayout", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1601,8 +1751,17 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineLayoutInfo.pSetLayouts = &gVk.descriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-    vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
+    r = vkCreatePipelineLayout(gVk.device, &pipelineLayoutInfo, nullptr, &gVk.pipelineLayout);
+    if (r != VK_SUCCESS) {
+        gVk.pipelineLayout = VK_NULL_HANDLE;
+        initFail("vkCreatePipelineLayout", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
+    lap("layouts");
 
+    // THE expensive call: the driver compiles the whole grade shader here. It is synchronous and cannot be interrupted from outside;
+    // the time it took is recorded in the init log so a slow compile is visible on the boot screen.
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = gVk.pipelineLayout;
@@ -1610,7 +1769,14 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pipelineInfo.stage.module = gVk.shaderModule;
     pipelineInfo.stage.pName = "main";
-    vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
+    r = vkCreateComputePipelines(gVk.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gVk.computePipeline);
+    if (r != VK_SUCCESS || gVk.computePipeline == VK_NULL_HANDLE) {
+        gVk.computePipeline = VK_NULL_HANDLE;
+        initFail("vkCreateComputePipelines", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
+    lap("pipeline compile");
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1623,32 +1789,63 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = 1;
-    vkCreateDescriptorPool(gVk.device, &poolInfo, nullptr, &gVk.descriptorPool);
+    r = vkCreateDescriptorPool(gVk.device, &poolInfo, nullptr, &gVk.descriptorPool);
+    if (r != VK_SUCCESS) {
+        gVk.descriptorPool = VK_NULL_HANDLE;
+        initFail("vkCreateDescriptorPool", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     VkDescriptorSetAllocateInfo setAllocInfo{};
     setAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     setAllocInfo.descriptorPool = gVk.descriptorPool;
     setAllocInfo.descriptorSetCount = 1;
     setAllocInfo.pSetLayouts = &gVk.descriptorSetLayout;
-    vkAllocateDescriptorSets(gVk.device, &setAllocInfo, &gVk.descriptorSet);
+    r = vkAllocateDescriptorSets(gVk.device, &setAllocInfo, &gVk.descriptorSet);
+    if (r != VK_SUCCESS) {
+        gVk.descriptorSet = VK_NULL_HANDLE;
+        initFail("vkAllocateDescriptorSets", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     VkCommandPoolCreateInfo cmdPoolInfo{};
     cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cmdPoolInfo.queueFamilyIndex = gVk.computeQueueFamilyIndex;
     cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    vkCreateCommandPool(gVk.device, &cmdPoolInfo, nullptr, &gVk.commandPool);
+    r = vkCreateCommandPool(gVk.device, &cmdPoolInfo, nullptr, &gVk.commandPool);
+    if (r != VK_SUCCESS) {
+        gVk.commandPool = VK_NULL_HANDLE;
+        initFail("vkCreateCommandPool", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdAllocInfo.commandPool = gVk.commandPool;
     cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
-    vkAllocateCommandBuffers(gVk.device, &cmdAllocInfo, &gVk.commandBuffer);
+    r = vkAllocateCommandBuffers(gVk.device, &cmdAllocInfo, &gVk.commandBuffer);
+    if (r != VK_SUCCESS) {
+        gVk.commandBuffer = VK_NULL_HANDLE;
+        initFail("vkAllocateCommandBuffers", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
 
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = 0;
-    vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
+    r = vkCreateFence(gVk.device, &fenceInfo, nullptr, &gVk.computeFence);
+    if (r != VK_SUCCESS) {
+        gVk.computeFence = VK_NULL_HANDLE;
+        initFail("vkCreateFence", r);
+        teardownAfterFailedInit();
+        return 0;
+    }
+    lap("pool+commands");
 
     gVk.isInitialized = true;
     LOGI("Vulkan Pipeline with Hardware Samplers & 3D LUT Texture Initialized.");
