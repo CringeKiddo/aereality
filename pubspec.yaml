@@ -20,6 +20,9 @@ dependencies:
   file_picker: ^8.0.0
   path_provider: ^2.1.2
 
+  # Settings that survive a restart (batch 16: preview quality, grade paused frame only, fast flares, theme)
+  shared_preferences: ^2.2.2
+
   # Bundled music only (pinned: audio plugins are native builds)
   audioplayers: 6.1.0
 
