@@ -1666,6 +1666,54 @@ static void teardownAfterFailedInit() {
     gVk.isInitialized = false;
 }
 
+// -----------------------------------------------------------------------------
+// Batch 18B: NV12 export helpers.
+//   runYuvPack: pass 29 (RGBA8 in outBuffer -> NV12 planes behind it in the same buffer), banded. Needs w % 4 == 0 and h % 2 == 0.
+//   cpuRgbaToNv12: the same BT.709 limited-range conversion on the CPU (used when the GPU path failed, and for Time Slice frames that come back as RGBA8).
+// -----------------------------------------------------------------------------
+static bool runYuvPack(int32_t w, int32_t h) {
+    if (w < 4 || h < 2 || (w & 3) != 0 || (h & 1) != 0) return false;
+    const int32_t gw = w >> 2, gh = h >> 1;                      // one invocation = a 4 x 2 pixel block
+    const int32_t chunk = std::max<int32_t>(16, ((1000000 / std::max<int32_t>(gw, 1)) / 16) * 16);
+    for (int32_t y = 0; y < gh;) {
+        const int32_t rows = std::min(chunk, gh - y);
+        if (!submitAndWait([&]() { recordPass(29, gw, gh, 0.0f, y, rows, w, h); })) return false;
+        y += rows;
+    }
+    return true;
+}
+
+static void cpuRgbaToNv12(const uint8_t* rgba, uint8_t* out, int32_t w, int32_t h) {
+    uint8_t* yPlane = out;
+    uint8_t* uvPlane = out + static_cast<size_t>(w) * static_cast<size_t>(h);
+    auto yccOf = [](const uint8_t* p, float& y, float& cb, float& cr) {
+        const float r = p[0] / 255.0f, g = p[1] / 255.0f, b = p[2] / 255.0f;
+        const float yl = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        y = 16.0f + 219.0f * yl;
+        cb = 128.0f + 224.0f * (b - yl) / 1.8556f;
+        cr = 128.0f + 224.0f * (r - yl) / 1.5748f;
+    };
+    auto toByte = [](float v) -> uint8_t { return static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, v + 0.5f))); };
+    for (int32_t by = 0; by < h; by += 2) {
+        for (int32_t bx = 0; bx < w; bx += 2) {
+            float cbSum = 0.0f, crSum = 0.0f;
+            for (int32_t dy = 0; dy < 2; ++dy) {
+                for (int32_t dx = 0; dx < 2; ++dx) {
+                    const int32_t x = bx + dx, yy = by + dy;
+                    if (x >= w || yy >= h) continue;
+                    float Y, cb, cr;
+                    yccOf(rgba + (static_cast<size_t>(yy) * w + x) * 4, Y, cb, cr);
+                    yPlane[static_cast<size_t>(yy) * w + x] = toByte(Y);
+                    cbSum += cb;
+                    crSum += cr;
+                }
+            }
+            uvPlane[static_cast<size_t>(by / 2) * w + bx] = toByte(cbSum * 0.25f);
+            uvPlane[static_cast<size_t>(by / 2) * w + bx + 1] = toByte(crSum * 0.25f);
+        }
+    }
+}
+
 extern "C" {
 
 // 0 = last render OK, 1 = GPU error (CPU fallback was used), 2 = device lost, 3 = GPU timeout
@@ -2257,6 +2305,73 @@ int32_t process_timeslice_release() {
 
 // C2 debug: complete pass 23 runs since start. Must grow by exactly 1 per graded / emitted frame (proves the dither runs once per frame).
 int32_t get_pass23_count() { return gPass23Count; }
+
+// -----------------------------------------------------------------------------
+// Batch 18B: VIDEO EXPORT ENTRY POINTS (NV12). process_image / process_image_16 / the Time Slice entry points are NOT changed.
+//   process_image_nv12: the same grade as process_image (passes 0..6 + 23), then pass 29 on the GPU, and only the NV12 bytes (1.5 per pixel instead of 4)
+//   are read back into outputNv12 (w * h * 3 / 2 bytes, Y plane then interleaved UV, BT.709 limited range). The caller renders AT the export size.
+//   Returns 0 = GPU path ok, 1 = the GPU path failed and the CPU fallback grade + CPU conversion produced the frame (the picture is the simplified
+//   CPU grade, same as process_image's fallback), -1 = invalid size (needs w % 4 == 0, h % 2 == 0).
+//   convert_rgba_to_nv12: CPU conversion of an RGBA8 frame (Time Slice wipe frames come back from the ring as RGBA8). No GPU, no lock.
+// -----------------------------------------------------------------------------
+int32_t process_image_nv12(const uint8_t* inputBytes, int32_t w, int32_t h, uint8_t* outputNv12,
+                           const float* uniforms, int32_t uniformCount,
+                           const float* lutTable, int32_t lutCount) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    if (w <= 0 || h <= 0 || (w & 3) != 0 || (h & 1) != 0) return -1;
+
+    const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const size_t rgbaBytes = pixelCount * sizeof(uint32_t);
+    const size_t nv12Bytes = pixelCount * 3 / 2;
+
+    if (gVk.isInitialized && ensureBuffersCapacity(pixelCount)) {
+        void* mappedInput = nullptr;
+        vkMapMemory(gVk.device, gVk.inMemory, 0, rgbaBytes, 0, &mappedInput);
+        std::memcpy(mappedInput, inputBytes, rgbaBytes);
+        VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
+        vkUnmapMemory(gVk.device, gVk.inMemory);
+
+        void* mappedUbo = nullptr;
+        const size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(kUboFloats * sizeof(float)));
+        vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
+        std::memcpy(mappedUbo, uniforms, uboCopyBytes);
+        VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
+        vkUnmapMemory(gVk.device, gVk.uboMemory);
+
+        if (lutTable != nullptr && lutCount > 0) uploadLutTo3DTexture(lutTable, lutCount);
+
+        gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
+        findTextWarpRows(uniforms, uniformCount);
+        findBatch6Passes(uniforms, uniformCount);
+        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);
+
+        if (runGpuPipeline(w, h) && runYuvPack(w, h)) {
+            // RGBA8 sits in words [0, P); the NV12 planes start right behind it, at byte P * 4
+            void* mappedOutput = nullptr;
+            vkMapMemory(gVk.device, gVk.outMemory, 0, rgbaBytes + nv12Bytes, 0, &mappedOutput);
+            VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
+            vkInvalidateMappedMemoryRanges(gVk.device, 1, &outRange);
+            std::memcpy(outputNv12, static_cast<const uint8_t*>(mappedOutput) + rgbaBytes, nv12Bytes);
+            vkUnmapMemory(gVk.device, gVk.outMemory);
+            return 0;
+        }
+        if (gLastRenderStatus == 0) gLastRenderStatus = 1;
+    }
+
+    // GPU path unavailable / failed: same fallback process_image uses, then the CPU conversion
+    std::vector<uint32_t> graded(pixelCount);
+    executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes), graded.data(), w, h, uniforms);
+    cpuRgbaToNv12(reinterpret_cast<const uint8_t*>(graded.data()), outputNv12, w, h);
+    return 1;
+}
+
+void convert_rgba_to_nv12(const uint8_t* rgba, int32_t w, int32_t h, uint8_t* outputNv12) {
+    if (rgba == nullptr || outputNv12 == nullptr || w <= 0 || h <= 0) return;
+    cpuRgbaToNv12(rgba, outputNv12, w, h);
+}
+
 
 void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHeight,
                       uint16_t* outputBytes, int32_t outWidth, int32_t outHeight,
