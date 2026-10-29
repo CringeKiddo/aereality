@@ -43,6 +43,7 @@ import 'app_theme.dart'; // batch 16: theme manager
 import 'motion_s_screen.dart'; // batch 9: Motion S (full screen, opened from the main menu)
 import 'time_slice_slots.dart'; // batch 12 step C2: wipe scheduler + packing
 import 'cut_detector.dart'; // batch 12: CutDetector (cut scan + detection for the Time Slice wipe scheduler)
+import 'video_proxy.dart'; // batch 18A: media probe + H.264 proxy for files the native player cannot use
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -914,7 +915,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           projectId: p.id,
                                         ),
                                       ),
-                                    ).then((_) => _load());
+                                    ).then((_) => Future<void>.delayed(const Duration(milliseconds: 350), _load)); // 18A: not during the pop animation
                                   },
                                 ),
                               ),
@@ -1030,7 +1031,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                               builder: (_) => ProjectScreen(initialProject: p.data, projectName: p.name, projectId: p.id),
                             ),
                           );
-                          _load();
+                          Future<void>.delayed(const Duration(milliseconds: 350), _load); // 18A: the list is parsed after the pop animation, not during it
                         },
                       ),
                     );
@@ -1280,7 +1281,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   late String _activeSessionId;
 
   VideoPlayerController? _controller;
-  bool _isPlaying = false;
+  // batch 18A: _isPlaying is backed by a ValueNotifier so the play / pause icon repaints ON ITS OWN the instant it is assigned (no whole-screen
+  // rebuild in between). Every existing read and write of _isPlaying keeps working unchanged.
+  final ValueNotifier<bool> _playingNotifier = ValueNotifier<bool>(false);
+  bool get _isPlaying => _playingNotifier.value;
+  set _isPlaying(bool v) => _playingNotifier.value = v;
   // batch 16 playback state (see _togglePlayPause / _onControllerValue / live playback below)
   bool _playTransition = false; // a play / pause / end handler is running: the controller listener ignores values meanwhile
   bool _gradeStale = false; // the graded picture on screen is older than the video position (play started / video ended): show the video until a fresh grade lands
@@ -1290,6 +1295,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   double? _adaptJump; // set by the scrubber while playing: the Adaptive loop continues from there
   img.Image? _cachedRawImage;
   bool _isFullScreen = false;
+
+  // ---- batch 18A: media opening / proxy / seeking ----
+  int _loadGen = 0; // every _loadMedia call (and dispose) bumps it: an older, slower load notices and drops what it opened
+  bool _preparingMedia = false; // the video is being opened / converted: the editor shows a note and play is disabled
+  String _preparingNote = '';
+  bool _usingProxy = false; // the player plays a temporary H.264 copy; frames and export still read the ORIGINAL file
+  bool _proxyTried = false; // a proxy was already attempted for this media (never loop)
+  int _mediaW = 0; // true size of the ORIGINAL video (crop maths); the player may be playing a smaller proxy
+  int _mediaH = 0;
+  /// false: a scrub leaves the video PAUSED on the frame that was picked (Task 3). true: the video plays on after the scrub ends.
+  static const bool _kResumeAfterScrub = false;
+  bool _scrubWasPlaying = false;
+  double? _seekPending; // latest seek target (seconds): drags only ever queue ONE seek behind the one in flight
+  bool _seekRunning = false;
+  Future<void>? _seekLoop;
 
   late TabController _tabController;
   int _selectedCurveChannel = 0;
@@ -1368,20 +1388,41 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   @override
   void dispose() {
+    _loadGen++; // batch 18A: a media load that is still running notices and drops whatever it opened
     _playbackTimer?.cancel();
     _adaptiveActive = false; // batch 17B: a running Adaptive loop ends (it also checks mounted)
     _pbGen++;
     _rebuildThrottle?.cancel();
+    _seekPending = null;
+    // batch 18A: release the player first and without waiting (it used to be pause() + dispose(), both unawaited, after the notifiers)
+    final VideoPlayerController? c = _controller;
+    _controller = null;
+    if (c != null) {
+      c.removeListener(_onControllerValue);
+      unawaited(_releaseController(c));
+    }
     _previewTick.dispose();
     _posNotifier.dispose();
     _tabController.dispose();
-    _controller?.removeListener(_onControllerValue);
-    _controller?.pause();
-    _controller?.dispose();
-    _controller = null;
     _processedStaticImage?.dispose();
+    _processedStaticImage = null;
+    // big pixel buffers: drop the references now instead of waiting for the screen object to be collected
+    _cachedRawImage = null;
+    _videoFrameRgba = null;
+    _imgFrameRgba = null;
+    _pbBuf = null;
+    _pbNextBuf = null;
+    _lastExportSource = null;
     _tsReleaseRing(); // batch 12 C2: give the Time Slice ring memory back
+    // NOT released on purpose: the Vulkan pipeline, shader and GPU buffers (created once by EngineBoot, they are what makes the next
+    // project open fast) and the GradeWorker / TimeSliceWorker isolates.
     super.dispose();
+  }
+
+  Future<void> _releaseController(VideoPlayerController c) async {
+    try {
+      await c.dispose(); // dispose stops playback and frees the decoder and the texture
+    } catch (_) {}
   }
 
   void _pushUndoSnapshot() {
@@ -1595,10 +1636,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _loadMedia(String path) async {
+  Future<void> _loadMedia(String path, {bool forceProxy = false}) async {
     if (path.isEmpty) return;
+    final int gen = ++_loadGen;
     final ext = path.split('.').last.toLowerCase();
     final isImg = ['png', 'jpg', 'jpeg', 'webp'].contains(ext);
+    final Stopwatch sw = Stopwatch()..start();
 
     _playbackTimer?.cancel();
     _adaptiveActive = false; // batch 17B
@@ -1609,14 +1652,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _videoFrameRgba = null;
     _imgFrameKey = '';
     _lastGradeSig = '';
+    _seekPending = null;
     Music.onVideoPause();
-    if (_controller != null) {
-      _controller!.removeListener(_onControllerValue);
-      await _controller!.pause();
-      await _controller!.dispose();
-      _controller = null;
-    }
+    // batch 18A: the old player is taken off the screen at once and released in the background (it used to be awaited here: pause + dispose
+    // blocked the whole media switch). It is released AFTER the frame that removes its VideoPlayer widget.
+    final VideoPlayerController? old = _controller;
+    _controller = null;
+    if (old != null) old.removeListener(_onControllerValue);
     _gradeStale = false;
+    if (!forceProxy) {
+      _proxyTried = false;
+      _usingProxy = false;
+    }
 
     setState(() {
       _project.mediaPath = path;
@@ -1624,12 +1671,20 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       _processedStaticImage?.dispose();
       _processedStaticImage = null;
       _isPlaying = false;
+      _preparingMedia = !isImg;
+      _preparingNote = 'Opening video…';
       _currentTimelinePosition = 0.0;
       _posNotifier.value = 0.0;
     });
+    if (old != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_releaseController(old)));
+    }
 
     if (isImg) {
+      _mediaW = 0;
+      _mediaH = 0;
       final fileBytes = await File(path).readAsBytes();
+      if (gen != _loadGen || !mounted) return;
       final decoded = img.decodeImage(fileBytes);
       if (decoded != null) {
         _cachedRawImage = decoded;
@@ -1639,34 +1694,244 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     } else {
       _cachedRawImage = null;
-      _controller = VideoPlayerController.file(File(path))
-        ..initialize().then((_) {
-          if (!mounted) return;
-          final vw = _controller!.value.size.width.toInt();
-          final vh = _controller!.value.size.height.toInt();
-          _updateDimensions(vw, vh);
-          _videoDurationSeconds = _controller!.value.duration.inMilliseconds / 1000.0;
-          if (_videoDurationSeconds <= 0.0) _videoDurationSeconds = 1.0;
+      await _openVideo(path, gen, forceProxy: forceProxy);
+    }
+    debugPrint('18A open: media ready in ${sw.elapsedMilliseconds} ms (proxy=$_usingProxy)');
 
-          _controller!.pause();
-          _isPlaying = false;
-          _controller!.addListener(_onControllerValue); // batch 16: the play icon / end of video follow the player
+    // batch 18A: the save used to run right here, so on a project with many saved projects the load-all / encode-all / write-all of
+    // saved_projects.json (on the UI isolate) competed with the video opening and the first frame. It now runs a moment later; it still runs
+    // (the project is created / moved to the top of the list), and it is not cancelled when the screen closes.
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 1500), _autoSaveProject));
+  }
 
-          setState(() {});
-          _applyGrade(forceExtract: true);
+  /// Opens [path] in the native player. mp4 / mov: no extra process. webm / mkv / anything else: one cheap ffmpeg probe first, then the
+  /// same attempt with the duration check and a seek test. If the player rejects the file (or [forceProxy]) an H.264 proxy is built and
+  /// the player plays that instead.
+  Future<void> _openVideo(String path, int gen, {required bool forceProxy}) async {
+    bool stale() => gen != _loadGen || !mounted;
 
-          _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-            final c = _controller;
-            if (c != null && c.value.isInitialized && c.value.isPlaying && mounted && !_playTransition && !_adaptiveActive) {
-              // batch 16: the old "seek to 0 and play again" loop is gone from here; the end of the video is handled by
-              // _onControllerValue (pause cleanly and stay on the last frame)
-              _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds)); // no setState: only the scrubber repaints
-            }
-          });
-        });
+    MediaProbe probe = MediaProbe.unknown;
+    VideoPlayerController? c;
+    bool proxied = false;
+
+    if (!forceProxy) {
+      if (VideoProxy.looksNativeSafe(path)) {
+        c = await _tryNativeController(path, null, gen);
+      } else {
+        probe = await VideoProxy.probe(path);
+        if (stale()) return;
+        c = await _tryNativeController(path, probe, gen, selfTest: true);
+      }
+      if (stale()) {
+        if (c != null) unawaited(_releaseController(c));
+        return;
+      }
     }
 
-    _autoSaveProject();
+    if (c == null) {
+      // the native player cannot use this file: silent H.264 proxy
+      _proxyTried = true;
+      if (!probe.ok) {
+        probe = await VideoProxy.probe(path);
+        if (stale()) return;
+      }
+      if (mounted) setState(() => _preparingNote = 'Preparing a compatible copy of this video (first time only)…');
+      final String? proxyPath = await VideoProxy.ensureProxy(path, probe);
+      if (stale()) return;
+      if (proxyPath != null) {
+        c = await _tryNativeController(proxyPath, null, gen);
+        proxied = c != null;
+        if (stale()) {
+          if (c != null) unawaited(_releaseController(c));
+          return;
+        }
+      }
+    }
+
+    if (c == null) {
+      if (mounted) {
+        setState(() => _preparingMedia = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This video could not be opened (not even after converting it). Try another file.')),
+        );
+      }
+      return;
+    }
+    await _adoptController(c, probe, proxied, gen);
+  }
+
+  /// Initialises a player on [playPath] and checks it is really usable. Returns it, or null (it is disposed) when it is not:
+  /// init failed / timed out, no picture size, a duration under 0.3 s, a duration that disagrees with the file ([probe]), or - for
+  /// containers that are often unseekable - a seek to the middle that does not land there.
+  Future<VideoPlayerController?> _tryNativeController(String playPath, MediaProbe? probe, int gen, {bool selfTest = false}) async {
+    final VideoPlayerController c = VideoPlayerController.file(File(playPath));
+    try {
+      await c.initialize().timeout(const Duration(seconds: 12));
+      if (gen != _loadGen || !mounted) {
+        await c.dispose();
+        return null;
+      }
+      final v = c.value;
+      final double d = v.duration.inMilliseconds / 1000.0;
+      if (!v.isInitialized || v.hasError || v.size.width < 2 || v.size.height < 2) {
+        throw StateError('player is not usable (initialized=${v.isInitialized}, size=${v.size}, error=${v.errorDescription})');
+      }
+      if (d < 0.3) throw StateError('player reports a duration of ${d.toStringAsFixed(2)} s');
+      final double? pd = probe?.durationSec;
+      if (pd != null && pd > 0.5 && (d - pd).abs() > math.max(1.0, pd * 0.05)) {
+        throw StateError('player duration ${d.toStringAsFixed(1)} s, file says ${pd.toStringAsFixed(1)} s');
+      }
+      if (selfTest) {
+        final int targetMs = (d * 500).round();
+        await c.seekTo(Duration(milliseconds: targetMs)).timeout(const Duration(seconds: 6));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        final Duration? real = await c.position; // asks the player (value.position is only the value we just set)
+        final int realMs = real?.inMilliseconds ?? 0;
+        if ((realMs - targetMs).abs() > math.max(2000, (d * 100).round())) {
+          throw StateError('seek to $targetMs ms landed at $realMs ms (file is not seekable)');
+        }
+        await c.seekTo(Duration.zero);
+      }
+      return c;
+    } catch (e) {
+      debugPrint('18A: native player rejected $playPath: $e');
+      try {
+        await c.dispose();
+      } catch (_) {}
+      return null;
+    }
+  }
+
+  /// Makes a validated player the project's player: paused at 0, duration and true size stored, first frame graded.
+  Future<void> _adoptController(VideoPlayerController c, MediaProbe probe, bool proxied, int gen) async {
+    if (gen != _loadGen || !mounted) {
+      unawaited(_releaseController(c));
+      return;
+    }
+    final Size sz = c.value.size;
+    _usingProxy = proxied;
+    // the crop maths (preview frames + export) works in the ORIGINAL video's pixels, even when the player plays a smaller proxy
+    _mediaW = (proxied && probe.hasSize) ? probe.width! : sz.width.toInt();
+    _mediaH = (proxied && probe.hasSize) ? probe.height! : sz.height.toInt();
+    _videoDurationSeconds = c.value.duration.inMilliseconds / 1000.0; // validated above: >= 0.3 s and matching the file when it could be checked
+
+    try {
+      await c.setLooping(false);
+      await c.setVolume(1.0);
+      await c.pause(); // a project always opens PAUSED
+      await c.seekTo(Duration.zero);
+    } catch (_) {}
+    if (gen != _loadGen || !mounted) {
+      unawaited(_releaseController(c));
+      return;
+    }
+
+    _controller = c;
+    _isPlaying = false;
+    c.addListener(_onControllerValue); // batch 16: the play icon / end of video follow the player
+    _updateDimensions(_mediaW, _mediaH);
+    _setPos(0.0);
+    setState(() {
+      _preparingMedia = false;
+      _preparingNote = '';
+    });
+    _applyGrade(forceExtract: true);
+    _startPlaybackTimer();
+  }
+
+  void _startPlaybackTimer() {
+    _playbackTimer?.cancel();
+    _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      final c = _controller;
+      if (c != null && c.value.isInitialized && c.value.isPlaying && mounted && !_playTransition && !_adaptiveActive && !_scrubbing) {
+        // batch 16: the old "seek to 0 and play again" loop is gone from here; the end of the video is handled by
+        // _onControllerValue (pause cleanly and stay on the last frame)
+        _setPos(math.min(c.value.position.inMilliseconds / 1000.0, _videoDurationSeconds)); // no setState: only the scrubber repaints
+      }
+    });
+  }
+
+  /// The native player failed AFTER it had opened the file (a decoder that dies on play, HEVC at high quality ...): rebuild the player on
+  /// an H.264 proxy. Runs at most once per media.
+  Future<void> _recoverWithProxy(String why) async {
+    if (_proxyTried || _preparingMedia || _project.isImage || _project.mediaPath.isEmpty) return;
+    _proxyTried = true;
+    debugPrint('18A: the player failed ($why): switching to an H.264 proxy');
+    await _loadMedia(_project.mediaPath, forceProxy: true);
+  }
+
+  // ---------------------------------------------------------------------------------------------------
+  // SEEKING / SCRUBBING (batch 18A)
+  // A drag fires dozens of seeks per second. They used to be sent one after the other without waiting, so the player was always several
+  // seeks behind. Now only ONE seek is in flight and only the LATEST target waits behind it; _seekTo()'s future completes when the
+  // player has landed on the last target.
+  // ---------------------------------------------------------------------------------------------------
+  Future<void> _seekTo(double sec) {
+    _seekPending = sec;
+    if (_seekRunning) return _seekLoop!;
+    _seekLoop = _runSeekLoop();
+    return _seekLoop!;
+  }
+
+  Future<void> _runSeekLoop() async {
+    _seekRunning = true;
+    try {
+      while (_seekPending != null && mounted) {
+        final double s = _seekPending!;
+        _seekPending = null;
+        final c = _controller;
+        if (c == null || !c.value.isInitialized) break;
+        final int ms = (s * 1000).round().clamp(0, (_videoDurationSeconds * 1000).round()).toInt();
+        await c.seekTo(Duration(milliseconds: ms));
+      }
+    } catch (e) {
+      debugPrint('seek failed: $e');
+    } finally {
+      _seekRunning = false;
+    }
+  }
+
+  void _onScrubStart() {
+    _scrubbing = true;
+    _scrubWasPlaying = _isPlaying;
+    if (_isPlaying) unawaited(_pauseForScrub());
+  }
+
+  /// Touching the timeline while the video plays pauses it at once (icon first, player second).
+  Future<void> _pauseForScrub() async {
+    final c = _controller;
+    final bool adaptive = _adaptiveMode;
+    _isPlaying = false; // the icon flips now, before anything is awaited
+    if (!adaptive) _gradeStale = true; // Smooth: the native video shows the frames while scrubbing (Adaptive keeps its graded frame)
+    Music.onVideoPause();
+    _endPlaybackSession(); // stops the Adaptive loop (generation bump) and drops its chunk buffers
+    if (c == null) return;
+    try {
+      await c.pause();
+      await c.setVolume(1.0); // Adaptive may have muted the sound
+    } catch (e) {
+      debugPrint('pause for scrub failed: $e');
+    }
+  }
+
+  void _onScrubUpdate(double val) {
+    _setPos(val);
+    unawaited(_seekTo(val));
+    if (gPreviewEngine == PreviewEngine.adaptive) {
+      _applyGrade(forceExtract: true); // Adaptive: the frame under the thumb is graded while scrubbing
+    } // Smooth: nothing is graded until the thumb is released
+  }
+
+  Future<void> _onScrubEnd(double val) async {
+    _setPos(val);
+    final bool resume = _kResumeAfterScrub && _scrubWasPlaying;
+    _scrubWasPlaying = false;
+    await _seekTo(val); // wait until the player really is on the frame
+    _scrubbing = false; // sharpen after the scrub
+    if (!mounted) return;
+    _setPos(val);
+    _applyGrade(forceExtract: true); // the exact frame under the thumb, full quality
+    if (resume) await _togglePlayPause();
   }
 
   Future<ui.Image> _rgbaToImage(Uint8List px, int w, int h) {
@@ -2121,20 +2386,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   static const int kAdaptResyncFrames = 24;
 
   bool _controllerAtEnd(VideoPlayerController c) {
-    final d = c.value.duration;
-    return d > Duration.zero && c.value.position >= d - _kEndSlack;
+    // batch 18A: the VALIDATED duration, not the player's raw value. A player that claimed 0.1 s made "position >= duration - 120 ms" true
+    // at position 0: every pause looked like the end of the video and parked it at the start, and play always restarted from 0.
+    final Duration d = Duration(milliseconds: (_videoDurationSeconds * 1000).round());
+    return d >= const Duration(seconds: 1) && c.value.position >= d - _kEndSlack;
   }
 
   Future<void> _togglePlayPause() async {
     final c = _controller;
-    if (c == null || !c.value.isInitialized || _playTransition) return;
+    // batch 18A: play needs an initialised player AND a valid duration (the controller is only set once both are true)
+    if (c == null || !c.value.isInitialized || _preparingMedia || _videoDurationSeconds < 0.3 || _playTransition) return;
     _playTransition = true;
     try {
       if (_isPlaying) {
         // ---- pause ----
         final bool wasAdaptive = _adaptiveActive;
         final double shown = _adaptShownPos;
-        setState(() => _isPlaying = false); // the icon flips instantly
+        _isPlaying = false; // the icon flips instantly (batch 18A: notifier-backed, no whole-screen rebuild first)
+        _previewTick.value++;
         _pbGen++; // the adaptive loop stops at its next check (_isPlaying is false and its generation is gone)
         await c.pause();
         if (wasAdaptive) {
@@ -2149,7 +2418,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         // ---- play ----
         final bool restart = _controllerAtEnd(c);
         final bool adaptive = _adaptiveMode;
-        setState(() => _isPlaying = true); // the icon flips instantly
+        _isPlaying = true; // the icon flips instantly (batch 18A: notifier-backed, no whole-screen rebuild first)
+        _previewTick.value++;
         // Smooth: the graded frame on screen belongs to the old position, the native video shows until a fresh grade lands after the pause.
         // Adaptive: the graded frame on screen IS the first frame of the session (except after the end, where play restarts at 0).
         _gradeStale = !adaptive || restart;
@@ -2179,6 +2449,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _onControllerValue() {
     final c = _controller;
+    // batch 18A: the player opened the file but failed later (decoder error): silently continue on an H.264 proxy
+    if (c != null && mounted && c.value.hasError && !_usingProxy && !_proxyTried && !_preparingMedia && !_project.isImage) {
+      unawaited(_recoverWithProxy(c.value.errorDescription ?? 'player error'));
+      return;
+    }
     if (c == null || !mounted || _playTransition || !c.value.isInitialized) return;
     if (_adaptiveActive) return; // Adaptive: the loop is the clock, the controller is only the sound (it may end / pause on its own)
     if (_isPlaying && !c.value.isPlaying) {
@@ -2217,7 +2492,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _onPlaybackEnded(VideoPlayerController c, {bool keepPicture = false}) async {
     _playTransition = true;
     try {
-      final d = c.value.duration;
+      final d = Duration(milliseconds: (_videoDurationSeconds * 1000).round()); // batch 18A: validated duration
       // one frame before the very end: the texture keeps a real picture there (a seek to the exact end can show black or jump)
       final Duration last = d > const Duration(milliseconds: 80) ? d - const Duration(milliseconds: 40) : Duration.zero;
       setState(() {
@@ -2244,9 +2519,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       sw = _cachedRawImage!.width;
       sh = _cachedRawImage!.height;
     } else {
-      final sz = _controller!.value.size;
-      sw = sz.width.toInt();
-      sh = sz.height.toInt();
+      if (_mediaW > 0 && _mediaH > 0) {
+        sw = _mediaW; // batch 18A: the ORIGINAL video's size (the player may be playing a smaller proxy)
+        sh = _mediaH;
+      } else {
+        final sz = _controller!.value.size;
+        sw = sz.width.toInt();
+        sh = sz.height.toInt();
+      }
     }
     return _cropRect(sw, sh, _getAspectRatioValue(_project.aspectRatio));
   }
@@ -3268,7 +3548,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
             onTap: _togglePlayPause, // flips the icon instantly, then plays / pauses; the controller listener keeps it in sync
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-              child: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 28),
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _playingNotifier, // batch 18A: only the icon repaints, the moment _isPlaying changes
+                builder: (context, playing, _) => Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: accent, size: 28),
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -3294,23 +3577,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   value: pos.clamp(0.0, _videoDurationSeconds).toDouble(),
                   min: 0.0,
                   max: _videoDurationSeconds,
-                  onChangeStart: (_) => _scrubbing = true,
-                  onChanged: (val) {
-                    _setPos(val);
-                    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt()));
-                    if (_adaptiveActive) {
-                      _adaptJump = val; // Adaptive playing: the loop continues from the thumb
-                    } else if (gPreviewEngine == PreviewEngine.adaptive) {
-                      _applyGrade(forceExtract: true); // Adaptive, paused: the frame under the thumb is graded while scrubbing
-                    } // Smooth: nothing is graded until the thumb is released
-                  },
-                  onChangeEnd: (val) {
-                    _scrubbing = false; // sharpen after the scrub
-                    if (_adaptiveActive) _adaptJump = val;
-                    _controller?.seekTo(Duration(milliseconds: (val * 1000).toInt())).then((_) {
-                      _applyGrade(forceExtract: true);
-                    });
-                  },
+                  // batch 18A: touching the timeline pauses the video, drags seek one target at a time, and releasing the thumb leaves the
+                  // video paused ON the chosen frame (see _onScrubStart / _onScrubUpdate / _onScrubEnd).
+                  onChangeStart: (_) => _onScrubStart(),
+                  onChanged: (val) => _onScrubUpdate(val),
+                  onChangeEnd: (val) => _onScrubEnd(val),
                 ),
               ),
             ),
@@ -3512,6 +3783,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ),
 
                                   _buildTextSuiteBoundingBoxOverlay(constraints),
+
+                                  if (_preparingMedia)
+                                    Positioned(
+                                      left: 12,
+                                      right: 12,
+                                      bottom: 12,
+                                      child: IgnorePointer(
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                                          child: Text(
+                                            _preparingNote,
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                               ),
