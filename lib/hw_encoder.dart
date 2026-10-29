@@ -14,8 +14,6 @@
 // Master 80 Mbps). If the chip refuses that bitrate the test retries at 20 and 8 Mbps and the returned choice says which one worked.
 // =============================================================================
 
-import 'dart:async';
-
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:flutter/foundation.dart';
 
@@ -61,7 +59,7 @@ class HwEncoder {
         final String cmd = '-hide_banner -y -f rawvideo -pixel_format nv12 -video_size ${w}x$h -framerate ${fps.toStringAsFixed(3)} -i /dev/zero '
             '-frames:v 8 -pix_fmt $pf -c:v $enc -b:v ${mbps}M -g ${(fps * 2).round()} -f null -';
         try {
-          final dynamic session = await FFmpegKit.execute(cmd).timeout(const Duration(seconds: 30));
+          final dynamic session = await FFmpegKit.execute(cmd); // same call every other file uses (execute is synchronous in 0.6.2, so it has no .timeout)
           final dynamic rc = await session.getReturnCode();
           if (ReturnCode.isSuccess(rc)) {
             found = HwEncoderChoice(encoder: enc, pixFmt: pf, bitrateMbps: mbps, hevc: hevc);
@@ -74,13 +72,10 @@ class HwEncoder {
           } catch (_) {}
           lastFailure = '$enc ${w}x$h ${mbps}M $pf -> rc=$rc ${tail.replaceAll('\n', ' | ')}';
           // the wrapper itself is not in this FFmpeg build: no point trying other bitrates / formats
-          if (tail.contains('Unknown encoder') || tail.contains('Encoder not found') || tail.contains('not found')) {
+          if (tail.contains('Unknown encoder') || tail.contains('Encoder not found')) {
             lastFailure = '$enc is not available in this FFmpeg build';
             break outer;
           }
-        } on TimeoutException {
-          lastFailure = '$enc test encode timed out after 30 s';
-          break outer; // a hung encoder session: do not start more of them
         } catch (e) {
           lastFailure = '$enc test encode failed: $e';
         }
