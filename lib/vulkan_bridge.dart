@@ -161,6 +161,30 @@ typedef _ProcessImage16Dart = void Function(
   int lutSize,
 );
 
+// Batch 18B: NV12 video export entry points (see process_image_nv12 / convert_rgba_to_nv12 in vulkan_processor.cpp)
+typedef _ProcessNv12C = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Pointer<ffi.Uint8> outNv12,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  ffi.Int32 lutSize,
+);
+typedef _ProcessNv12Dart = int Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  int w,
+  int h,
+  ffi.Pointer<ffi.Uint8> outNv12,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  int lutSize,
+);
+typedef _RgbaToNv12C = ffi.Void Function(ffi.Pointer<ffi.Uint8> rgba, ffi.Int32 w, ffi.Int32 h, ffi.Pointer<ffi.Uint8> outNv12);
+typedef _RgbaToNv12Dart = void Function(ffi.Pointer<ffi.Uint8> rgba, int w, int h, ffi.Pointer<ffi.Uint8> outNv12);
+
 // ==========================================
 // VULKAN BRIDGE IMPLEMENTATION
 // ==========================================
@@ -185,6 +209,8 @@ class VulkanBridge {
   static _TsEmitDart? _tsEmitFn;
   static _TsReleaseDart? _tsReleaseFn; // batch 12 step C2
   static _P23CountDart? _p23CountFn;
+  static _ProcessNv12Dart? _processNv12Fn; // batch 18B (video export, NV12)
+  static _RgbaToNv12Dart? _rgbaToNv12Fn;
   static _InitTextDart? _initErrorFn; // batch 17A
   static _InitTextDart? _initLogFn;
 
@@ -256,6 +282,13 @@ class VulkanBridge {
           } catch (_) {
             _tsReleaseFn = null; // C1 native lib: no release / counter
             _p23CountFn = null;
+          }
+          try {
+            _processNv12Fn = _lib!.lookupFunction<_ProcessNv12C, _ProcessNv12Dart>('process_image_nv12');
+            _rgbaToNv12Fn = _lib!.lookupFunction<_RgbaToNv12C, _RgbaToNv12Dart>('convert_rgba_to_nv12');
+          } catch (_) {
+            _processNv12Fn = null; // native lib without the batch 18B NV12 export: the export falls back to RGBA frames + FFmpeg conversion
+            _rgbaToNv12Fn = null;
           }
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
@@ -499,6 +532,80 @@ Uint8List processImage(
   }
 
   return _cpuFallbackGrade(inBytes, inW, inH, uniforms);
+}
+
+// ==========================================
+// NV12 VIDEO EXPORT (batch 18B)
+// ==========================================
+
+/// True when the native library has the GPU RGB -> NV12 export entry points.
+bool vulkanNv12Available() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._processNv12Fn != null && VulkanBridge._rgbaToNv12Fn != null;
+}
+
+/// Grades one RGBA8 frame of size [w] x [h] (the EXPORT size: the GPU renders at it) and returns it as NV12 (w * h * 3 / 2 bytes: Y plane, then interleaved
+/// UV; BT.709, limited range). The RGB -> YUV conversion runs on the GPU (pass 29); only the NV12 bytes are read back.
+/// Returns null when the native entry point is missing or the size is not valid (w % 4 == 0 and h % 2 == 0 are required).
+/// Check [vulkanLastRenderStatus] afterwards: 0 = GPU, 1 = GPU failed and the CPU fallback made the frame.
+Uint8List? processImageNv12(
+  Uint8List inBytes,
+  int w,
+  int h,
+  Float32List uniforms, {
+  Float32List? lutTable,
+}) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._processNv12Fn;
+  if (fn == null || w <= 0 || h <= 0 || (w & 3) != 0 || (h & 1) != 0 || inBytes.length < w * h * 4) return null;
+
+  final outLen = w * h * 3 ~/ 2;
+  final inPtr = calloc<ffi.Uint8>(w * h * 4);
+  final outPtr = calloc<ffi.Uint8>(outLen);
+  final uPtr = calloc<ffi.Float>(uniforms.length);
+  ffi.Pointer<ffi.Float>? lutPtr;
+  try {
+    inPtr.asTypedList(w * h * 4).setAll(0, inBytes.length == w * h * 4 ? inBytes : Uint8List.sublistView(inBytes, 0, w * h * 4));
+    uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    int lutSize = 0;
+    if (lutTable != null && lutTable.isNotEmpty) {
+      lutPtr = calloc<ffi.Float>(lutTable.length);
+      lutPtr.asTypedList(lutTable.length).setAll(0, lutTable);
+      lutSize = lutTable.length;
+    }
+    final int rc = fn(inPtr, w, h, outPtr, uPtr, uniforms.length, lutPtr ?? ffi.Pointer.fromAddress(0), lutSize);
+    if (rc < 0) return null;
+    return Uint8List.fromList(outPtr.asTypedList(outLen)); // one copy out of native memory
+  } catch (e) {
+    debugPrint('processImageNv12 error: $e');
+    return null;
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+    calloc.free(uPtr);
+    if (lutPtr != null) calloc.free(lutPtr);
+  }
+}
+
+/// CPU conversion of an RGBA8 frame to NV12 (same matrix and range as the GPU pass). Used for the frames that come back RGBA from the Time Slice ring.
+Uint8List? rgbaToNv12(Uint8List rgba, int w, int h) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._rgbaToNv12Fn;
+  if (fn == null || w <= 0 || h <= 0 || rgba.length < w * h * 4) return null;
+  final outLen = w * h * 3 ~/ 2;
+  final inPtr = calloc<ffi.Uint8>(w * h * 4);
+  final outPtr = calloc<ffi.Uint8>(outLen);
+  try {
+    inPtr.asTypedList(w * h * 4).setAll(0, rgba.length == w * h * 4 ? rgba : Uint8List.sublistView(rgba, 0, w * h * 4));
+    fn(inPtr, w, h, outPtr);
+    return Uint8List.fromList(outPtr.asTypedList(outLen));
+  } catch (e) {
+    debugPrint('rgbaToNv12 error: $e');
+    return null;
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+  }
 }
 
 Uint16List processImage16(

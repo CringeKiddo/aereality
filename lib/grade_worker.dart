@@ -93,14 +93,17 @@ class GradeWorker {
   }
 
   /// Grades one frame. [rgba] is w*h*4 bytes. Never blocks the calling isolate while the GPU works.
+  /// [nv12] (batch 18B, video export): the result bytes are NV12 (w * h * 3 / 2: Y plane + interleaved UV, BT.709 limited range) instead of RGBA8,
+  /// converted on the GPU. [w] / [h] are then the EXPORT size and must satisfy w % 4 == 0, h % 2 == 0.
   Future<GradeResult> grade({
     required Uint8List rgba,
     required int w,
     required int h,
     required Float32List uniforms,
     Float32List? lut,
+    bool nv12 = false,
   }) async {
-    final r = await _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut);
+    final r = await _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
     if (kGradeHashDebug) {
       debugPrint('GRADEHASH n=${_gradeHashCounter++} t=${uniforms[0].toStringAsFixed(4)} ${w}x$h fnv1a=${_fnv1a32(r.rgba).toRadixString(16).padLeft(8, '0')}');
       debugPrint('P23COUNT ${vulkanPass23Count()}'); // C2 debug (own line so the GRADEHASH diff stays clean): +1 per graded frame
@@ -114,10 +117,11 @@ class GradeWorker {
     required int h,
     required Float32List uniforms,
     Float32List? lut,
+    bool nv12 = false,
   }) async {
     await _ensureStarted();
     final send = _send;
-    if (send == null || _broken) return _inline(rgba, w, h, uniforms, lut);
+    if (send == null || _broken) return _inline(rgba, w, h, uniforms, lut, nv12);
 
     final id = _nextId++;
     final c = Completer<GradeResult>();
@@ -129,6 +133,7 @@ class GradeWorker {
       h,
       TransferableTypedData.fromList([uniforms.buffer.asUint8List(uniforms.offsetInBytes, uniforms.lengthInBytes)]),
       lut == null ? null : TransferableTypedData.fromList([lut.buffer.asUint8List(lut.offsetInBytes, lut.lengthInBytes)]),
+      nv12, // batch 18B: [6] true = the worker answers with NV12 bytes (GPU RGB -> YUV) instead of RGBA8
     ]);
     try {
       return await c.future;
@@ -136,12 +141,17 @@ class GradeWorker {
       // Worker failed for this frame: do it inline once so the caller still gets a picture.
       debugPrint('GradeWorker: $e - inline fallback');
       _pending.remove(id);
-      return _inline(rgba, w, h, uniforms, lut);
+      return _inline(rgba, w, h, uniforms, lut, nv12);
     }
   }
 
-  GradeResult _inline(Uint8List rgba, int w, int h, Float32List u, Float32List? lut) {
+  GradeResult _inline(Uint8List rgba, int w, int h, Float32List u, Float32List? lut, [bool nv12 = false]) {
     final sw = Stopwatch()..start();
+    if (nv12) {
+      final out = processImageNv12(rgba, w, h, u, lutTable: lut);
+      if (out == null) throw StateError('NV12 grade is not available (native library too old or invalid export size ${w}x$h)');
+      return GradeResult(out, vulkanLastRenderStatus(), sw.elapsedMicroseconds);
+    }
     final out = processImage(rgba, w, h, w, h, u, lutTable: lut);
     return GradeResult(out, vulkanLastRenderStatus(), sw.elapsedMicroseconds);
   }
@@ -175,9 +185,12 @@ void _workerMain(SendPort toMain) {
       final int h = msg[3] as int;
       final Float32List uniforms = (msg[4] as TransferableTypedData).materialize().asFloat32List();
       final Float32List? lut = msg[5] == null ? null : (msg[5] as TransferableTypedData).materialize().asFloat32List();
+      final bool nv12 = msg.length > 6 && msg[6] == true; // batch 18B
 
       final sw = Stopwatch()..start();
-      final out = processImage(rgba, w, h, w, h, uniforms, lutTable: lut);
+      final Uint8List? res = nv12 ? processImageNv12(rgba, w, h, uniforms, lutTable: lut) : processImage(rgba, w, h, w, h, uniforms, lutTable: lut);
+      if (res == null) throw StateError('NV12 grade failed (native entry point missing or invalid size ${w}x$h)');
+      final Uint8List out = res;
       final status = vulkanLastRenderStatus();
       toMain.send([id, TransferableTypedData.fromList([out]), status, sw.elapsedMicroseconds]);
     } catch (e) {

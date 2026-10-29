@@ -18,6 +18,11 @@ import 'cpu_safe.dart';
 import 'vulkan_bridge.dart';
 import 'export_matrix.dart';
 import 'export_clock.dart';
+import 'hw_encoder.dart'; // batch 18B: hardware H.264 / HEVC (MediaCodec) detection
+
+/// Batch 18B: true = H.264 / HEVC 8-bit exports try the phone's hardware encoder first (h264_mediacodec / hevc_mediacodec, proven by a real test
+/// encode) and fall back to libx264 / libx265 when it is not available. false = always software.
+const bool kExportUseHardwareEncoder = true;
 
 class ExportSuite {
   static const MethodChannel _mediaChannel = MethodChannel('com.aereality/media');
@@ -106,6 +111,7 @@ class ExportSuite {
     dynamic onExportComplete,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
+    Future<void> Function(int w, int h, bool nv12)? configureRender, // batch 18B: render size + frame format of the video export (0, 0 = back to the source size)
     double? videoDurationMs,
     double? videoFps,
     int? videoWidth,
@@ -129,13 +135,14 @@ class ExportSuite {
       // No silent defaults: a missing duration/size used to fall back to 5000 ms @ 1080p
       // (= 150 frames) and a missing renderer produced all-black frames.
       if (renderFrameToRgba == null ||
+          configureRender == null ||
           videoDurationMs == null ||
           videoWidth == null ||
           videoHeight == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Export is not connected: renderFrameToRgba, videoDurationMs, videoWidth and videoHeight must be passed to showExportSheet.',
+              'Export is not connected: renderFrameToRgba, configureRender, videoDurationMs, videoWidth and videoHeight must be passed to showExportSheet.',
             ),
             backgroundColor: Colors.red,
           ),
@@ -152,6 +159,7 @@ class ExportSuite {
         lutSize: lutSize,
         renderFrameToRgba: renderFrameToRgba,
         prepareFrames: prepareFrames,
+        configureRender: configureRender,
         videoDurationMs: videoDurationMs,
         videoFps: videoFps ?? 30.0,
         videoWidth: videoWidth,
@@ -362,6 +370,7 @@ class ExportSuite {
     dynamic lutSize,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
+    required Future<void> Function(int w, int h, bool nv12) configureRender,
     required double videoDurationMs,
     required double videoFps,
     required int videoWidth,
@@ -675,6 +684,7 @@ class ExportSuite {
                                 getActiveLut: getActiveLut,
                                 renderFrameToRgba: renderFrameToRgba,
                                 prepareFrames: prepareFrames,
+                                configureRender: configureRender,
                                 videoDurationMs: videoDurationMs,
                                 videoFps: selectedFps,
                                 videoWidth: videoWidth,
@@ -941,7 +951,14 @@ class ExportSuite {
   }
 
   // ===========================================================================
-  // VIDEO ENCODING EXECUTION - ROLLING 30-FRAME GPU SCRATCH PIPELINE
+  // VIDEO ENCODING EXECUTION - ROLLING 30-FRAME GPU PIPELINE (batch 18B)
+  //
+  //   source batch (ONE ffmpeg decode, already cropped + scaled to the EXPORT size)
+  //     -> per frame: grade at the export size on the GPU, GPU converts RGB -> NV12 (pass 29), only NV12 comes back (1.5 bytes / pixel)
+  //     -> NV12 batch file -> ONE ffmpeg call encodes it straight into the FINAL codec (no lossless mezzanine, no second encode)
+  //     -> parts are joined with a stream copy (+ audio).
+  //   H.264 / HEVC 8-bit: hardware encoder (MediaCodec) when it passes a real test encode, otherwise libx264 / libx265.
+  //   VP9 / AV1: software, multithreaded.
   // ===========================================================================
   static Future<void> executeVideoExport({
     required BuildContext context,
@@ -951,6 +968,7 @@ class ExportSuite {
     dynamic getActiveLut,
     Future<Uint8List> Function(double timestampMs)? renderFrameToRgba,
     Future<void> Function(double startMs, int frameCount, double fps)? prepareFrames,
+    required Future<void> Function(int w, int h, bool nv12) configureRender,
     required double videoDurationMs,
     required double videoFps,
     required int videoWidth,
@@ -965,6 +983,7 @@ class ExportSuite {
   }) async {
     Directory? sessionTempDir;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
+    ExportNotes.clear();
 
     try {
       StageTimer.reset();
@@ -993,47 +1012,79 @@ class ExportSuite {
       if (!ExportMatrix.isBitDepthValid(_matrixKey(container), codec, bitDepth)) {
         throw Exception('$bitDepth is not valid for $codec in $container.');
       }
-      // CPU-safety probe: a ~1 s test encode with the real encoder settings BEFORE the long render, so an encoder that
-      // executes an instruction this phone lacks (SIGILL) fails in a second, and the next launch steps it down.
-      await CpuSafe.ensureLoaded();
-      final String? guardedEncoder = CpuSafe.encoderForCodec(codec);
-      final bool probeTenBit = bitDepth.startsWith('10') || bitDepth.startsWith('16');
-      onProgress(0.01, 'Checking encoder compatibility...');
-      await CpuSafe.verifyConversion(tenBit: probeTenBit);   // FFmpeg's own colour conversion (every codec incl. ProRes)
-      String depth = bitDepth;
-      if (guardedEncoder != null) {
-        final depthOk = await CpuSafe.verifyEncoder(guardedEncoder, tenBit: probeTenBit, chroma444: bitDepth.startsWith('16'));
-        if (!depthOk && ExportMatrix.isBitDepthValid(_matrixKey(container), codec, '8-bit')) {
-          depth = '8-bit';
-          final note = 'This phone cannot encode $bitDepth with $codec. Exporting 8-bit instead.';
-          onProgress(0.02, note);
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note), duration: const Duration(seconds: 5)));
-          }
-        }
-      }
-      final expectedBytes = videoWidth * videoHeight * 4;
 
+      // ---- 1. Export size: the GPU renders AT this size (it used to render at the source size and let FFmpeg scale down) ----
       final targetDims = _calculateDimensions(resolution, videoWidth, videoHeight);
-      final outW = targetDims['w']!;
-      final outH = targetDims['h']!;
+      final int outW = (targetDims['w']! + 3) & ~3; // the NV12 pass handles 4 pixels per row per invocation
+      final int outH = (targetDims['h']! + 1) & ~1;
+      final bool nv12 = vulkanNv12Available(); // GPU RGB -> YUV; false only for a native library without batch 18B
+      await configureRender(outW, outH, nv12);
+      final int expectedBytes = nv12 ? outW * outH * 3 ~/ 2 : outW * outH * 4;
 
       final totalFrames = ((videoDurationMs / 1000.0) * videoFps).round().clamp(1, 999999);
       final frameIntervalMs = 1000.0 / videoFps;
 
-      final bool isHevcExport = codec.contains('HEVC') || codec.contains('H.265');
+      final bool isProRes = codec.contains('ProRes');
+      final bool isHevc = codec.contains('HEVC') || codec.contains('H.265');
+      final bool isAv1 = codec.contains('AV1');
+      final bool isVp9 = codec.contains('VP9');
+      final bool isH264 = !isProRes && !isHevc && !isAv1 && !isVp9;
 
-      CrashLog.note('plan: $totalFrames frames -> ${outW}x$outH');
+      // ---- 2. Encoder choice (printed at the start of the export) ----
+      String depth = bitDepth;
+      await CpuSafe.ensureLoaded();
+      HwEncoderChoice? hw;
+      String hwNote = '';
+      if (kExportUseHardwareEncoder && nv12 && (isH264 || isHevc) && bitDepth.startsWith('8')) {
+        onProgress(0.01, 'Checking the hardware ${isHevc ? 'HEVC' : 'H.264'} encoder...');
+        hw = await HwEncoder.pick(
+          hevc: isHevc,
+          w: outW,
+          h: outH,
+          fps: videoFps,
+          wantedMbps: _hardwareMbps(bitrateProfile, outW, outH, videoFps),
+        );
+        if (hw == null) hwNote = HwEncoder.lastFailure;
+      }
+
+      if (hw == null) {
+        // CPU-safety probe: a ~1 s test encode with the real encoder settings BEFORE the long render, so an encoder that
+        // executes an instruction this phone lacks (SIGILL) fails in a second, and the next launch steps it down.
+        final String? guardedEncoder = CpuSafe.encoderForCodec(codec);
+        final bool probeTenBit = bitDepth.startsWith('10') || bitDepth.startsWith('16');
+        onProgress(0.01, 'Checking encoder compatibility...');
+        await CpuSafe.verifyConversion(tenBit: probeTenBit); // FFmpeg's own colour conversion (every codec incl. ProRes)
+        if (guardedEncoder != null) {
+          final depthOk = await CpuSafe.verifyEncoder(guardedEncoder, tenBit: probeTenBit, chroma444: bitDepth.startsWith('16'));
+          if (!depthOk && ExportMatrix.isBitDepthValid(_matrixKey(container), codec, '8-bit')) {
+            depth = '8-bit';
+            final note = 'This phone cannot encode $bitDepth with $codec. Exporting 8-bit instead.';
+            onProgress(0.02, note);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note), duration: const Duration(seconds: 5)));
+            }
+          }
+        }
+      }
+
+      final int threads = _encoderThreads();
+      final String encoderLine = hw != null
+          ? 'Using ${hw.label}'
+          : 'Using ${_softwareLabel(codec)}${(isH264 || isHevc) && kExportUseHardwareEncoder && bitDepth.startsWith('8') ? ' (hardware encoder not used: ${hwNote.isEmpty ? 'not available' : hwNote})' : ''}'
+              '${isVp9 || isAv1 ? ', $threads threads' : ''}';
+      onProgress(0.02, encoderLine);
+      CrashLog.note(encoderLine);
+      debugPrint('EXPORT: $encoderLine');
+      CrashLog.note('plan: $totalFrames frames -> ${outW}x$outH, frames to the encoder as ${nv12 ? 'NV12 (GPU converted)' : 'RGBA8 (FFmpeg converts)'}');
 
       const batchSize = 30;
       final totalBatches = (totalFrames / batchSize).ceil();
       final List<String> partVideoPaths = [];
       Future<void>? pendingEncode; // encode of the previous batch, running while the next batch is decoded + rendered
+      final String partExt = hw != null ? 'ts' : container.toLowerCase(); // hardware parts: MPEG-TS (parameter sets repeat in the stream, joins cleanly)
+      final String rawExt = nv12 ? 'nv12' : 'rgba';
 
-      // Pass 1: Rolling 30-frame GPU scratch rendering.
-      // Each batch is written to ONE raw file. The rawvideo demuxer does not expand
-      // "frame_%04d.rgba" patterns (that is image2's job), so the old command opened a
-      // literal file named "frame_%04d.rgba", which does not exist.
+      // Pass 1: rolling 30-frame GPU pipeline. Each batch is written to ONE raw file (the rawvideo demuxer does not expand frame_%04d patterns).
       for (int b = 0; b < totalBatches; b++) {
         final startFrame = b * batchSize;
         final endFrame = (startFrame + batchSize).clamp(0, totalFrames);
@@ -1042,28 +1093,31 @@ class ExportSuite {
         // Decode this whole batch of source frames in ONE ffmpeg call (instead of one ffmpeg process per frame).
         final prep = prepareFrames;
         if (prep != null) {
-          CrashLog.note('batch $b source decode START ($currentBatchCount frames)');
+          CrashLog.note('batch $b/$totalBatches source decode START (frames ${startFrame + 1}..$endFrame)'); // one flushed note per batch, not per frame
           await StageTimer.time('batch: decode source', () => prep(startFrame * frameIntervalMs, currentBatchCount, videoFps));
-          CrashLog.note('batch $b source decode DONE');
         }
 
-        final rawFile = File('${sessionTempDir.path}/batch_$b.rgba');
+        final rawFile = File('${sessionTempDir.path}/batch_$b.$rawExt');
         final raf = await rawFile.open(mode: FileMode.write);
+        int renderUsTotal = 0;
+        int renderUsMax = 0;
         try {
           for (int f = 0; f < currentBatchCount; f++) {
             final globalFrameIdx = startFrame + f;
             final timeMs = globalFrameIdx * frameIntervalMs;
 
-            CrashLog.note('frame ${globalFrameIdx + 1}/$totalFrames (batch $b) render START t=${timeMs.round()}ms');
+            final frameWatch = Stopwatch()..start();
             final bytes = await render(timeMs);
+            final us = frameWatch.elapsedMicroseconds;
+            renderUsTotal += us;
+            if (us > renderUsMax) renderUsMax = us;
             if (bytes.length != expectedBytes) {
               throw Exception(
                 'Frame $globalFrameIdx returned ${bytes.length} bytes, expected $expectedBytes '
-                '(${videoWidth}x$videoHeight RGBA8).',
+                '(${outW}x$outH ${nv12 ? 'NV12' : 'RGBA8'}).',
               );
             }
             await StageTimer.time('frame: write raw to disk', () => raf.writeFrom(bytes));
-            CrashLog.note('frame ${globalFrameIdx + 1}/$totalFrames written');
 
             final progressRatio = (globalFrameIdx / totalFrames) * 0.70;
             onProgress(progressRatio, 'Rendering frames (${globalFrameIdx + 1}/$totalFrames)...');
@@ -1072,40 +1126,30 @@ class ExportSuite {
         } finally {
           await raf.close();
         }
+        // ONE log line per batch (the per-frame disk-flushing notes are gone)
+        ExportNotes.add('batch $b: frames ${startFrame + 1}..$endFrame rendered, avg ${(renderUsTotal / currentBatchCount / 1000).toStringAsFixed(0)} ms/frame, '
+            'max ${(renderUsMax / 1000).toStringAsFixed(0)} ms');
+        ExportNotes.flush();
 
-        // Encode batch part
-        // HEVC: batches are stored as lossless FFV1 (pure FFmpeg core, no external codec library) and the real
-        // HEVC encode runs ONCE over the whole clip afterwards. That means a single encoder start / stop instead
-        // of one per 30 frames, no forced keyframe every second, and a guarded fallback chain (see _encodeHevcFinal).
-        final partExt = isHevcExport ? 'mkv' : container.toLowerCase();
+        // Encode batch part straight into the FINAL codec (no FFV1 mezzanine, no second encode).
         final partFile = File('${sessionTempDir.path}/part_${b.toString().padLeft(4, '0')}.$partExt');
-
-        final ffmpegBatchCmd = isHevcExport
-            ? _buildMezzanineCmd(
-                inputFile: rawFile.path,
-                outputFile: partFile.path,
-                fps: videoFps,
-                inW: videoWidth,
-                inH: videoHeight,
-                outW: outW,
-                outH: outH,
-              )
-            : _buildBatchEncodeCmd(
+        final ffmpegBatchCmd = _buildBatchEncodeCmd(
           inputFile: rawFile.path,
           outputFile: partFile.path,
           fps: videoFps,
-          inW: videoWidth,
-          inH: videoHeight,
           outW: outW,
           outH: outH,
+          nv12: nv12,
+          hw: hw,
           codec: codec,
           bitDepth: depth,
           bitrateProfile: bitrateProfile,
           container: container,
+          threads: threads,
         );
 
         // At most ONE encode in flight: wait for the previous batch's encode, then start this one WITHOUT waiting, so the
-        // GPU (next batch) and the CPU encoder work at the same time instead of taking turns.
+        // GPU (next batch) and the encoder work at the same time instead of taking turns.
         if (pendingEncode != null) {
           await pendingEncode;
           pendingEncode = null;
@@ -1116,17 +1160,18 @@ class ExportSuite {
         final File rawRef = rawFile;
         final File partRef = partFile;
         pendingEncode = () async {
-          CrashLog.note('batch $bIdx encode START: ffmpeg $encCmd');
+          if (bIdx == 0) CrashLog.note('first batch encode START: ffmpeg $encCmd');
           final session = await StageTimer.time('batch: encode', () => FFmpegKit.execute(encCmd));
           final rc = await session.getReturnCode();
-          CrashLog.note('batch $bIdx encode RETURNED rc=$rc');
+          ExportNotes.add('batch $bIdx encode rc=$rc');
           if (!ReturnCode.isSuccess(rc) || !partRef.existsSync() || partRef.lengthSync() == 0) {
             final logTail = await _sessionLogTail(session);
             debugPrint('FFmpeg cmd: $encCmd\n$logTail');
+            CrashLog.note('batch $bIdx encode FAILED rc=$rc: ffmpeg $encCmd');
             throw Exception('FFmpeg batch $bIdx failed (rc: $rc)\n$logTail');
           }
           try {
-            rawRef.deleteSync(); // immediate disk cleanup of the raw RGBA batch
+            rawRef.deleteSync(); // immediate disk cleanup of the raw batch
           } catch (_) {}
         }();
         pendingEncode.ignore(); // an error is still thrown by the await above / below; this only silences "unhandled"
@@ -1136,8 +1181,9 @@ class ExportSuite {
         await pendingEncode; // last batch must be finished before the parts are joined
         pendingEncode = null;
       }
+      ExportNotes.flush();
 
-      // Pass 2: Concatenate parts & remux original audio
+      // Pass 2: concatenate parts (stream copy) & remux original audio
       onProgress(0.75, 'Joining parts...');
       final concatListFile = File('${sessionTempDir.path}/concat_list.txt');
       final concatContent = partVideoPaths.map((p) => "file '$p'").join('\n');
@@ -1146,40 +1192,30 @@ class ExportSuite {
       final ext = container.toLowerCase();
       final tempFinalFile = File('${sessionTempDir.path}/temp_master_$timestamp.$ext');
 
-      // -map is required: without it ffmpeg may pick the ORIGINAL video's picture stream
-      // from the audio source instead of the graded concat output.
+      // -map is required: without it ffmpeg may pick the ORIGINAL video's picture stream from the audio source instead of the graded concat output.
       // Audio codec must match the container (WebM/MKV -> opus, MP4/MOV -> aac).
-      final fastStart = (container == 'MP4' || container == 'MOV') ? '-movflags +faststart' : '';
+      final bool isMp4Family = container == 'MP4' || container == 'MOV';
+      final fastStart = isMp4Family ? '-movflags +faststart' : '';
+      // Hardware parts are MPEG-TS: the file tags (hvc1 for HEVC in MP4 / MOV, BT.709 limited range) are written here, at the join.
+      final String hvcTag = (hw != null && hw.hevc && isMp4Family) ? '-tag:v hvc1 ' : '';
+      final String colorTags = hw != null ? '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709 ' : '';
       String concatCmd;
       if (audioSourcePath != null && File(audioSourcePath).existsSync()) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
         concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -i "$audioSourcePath" '
-            '-map 0:v:0 -map 1:a:0? -c:v copy -c:a $audioCodec -b:a 320k -shortest $fastStart "${tempFinalFile.path}"';
+            '-map 0:v:0 -map 1:a:0? -c:v copy $hvcTag$colorTags-c:a $audioCodec -b:a 320k -shortest $fastStart "${tempFinalFile.path}"';
       } else {
-        concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -c copy $fastStart "${tempFinalFile.path}"';
+        concatCmd = '-y -f concat -safe 0 -i "${concatListFile.path}" -c copy $hvcTag$colorTags$fastStart "${tempFinalFile.path}"';
       }
 
-      if (isHevcExport) {
-        // Single-pass HEVC encode (+ audio) over the lossless parts.
-        await _encodeHevcFinal(
-          concatList: concatListFile,
-          audioSourcePath: audioSourcePath,
-          outFile: tempFinalFile,
-          container: container,
-          bitDepth: depth,
-          bitrateProfile: bitrateProfile,
-          onProgress: onProgress,
-        );
-      } else {
-        CrashLog.note('concat START: ffmpeg $concatCmd');
-        final concatSession = await StageTimer.time('final: concat + audio', () => FFmpegKit.execute(concatCmd));
-        final concatRc = await concatSession.getReturnCode();
+      CrashLog.note('concat START: ffmpeg $concatCmd');
+      final concatSession = await StageTimer.time('final: concat + audio', () => FFmpegKit.execute(concatCmd));
+      final concatRc = await concatSession.getReturnCode();
 
-        if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
-          final logTail = await _sessionLogTail(concatSession);
-          debugPrint('FFmpeg concat cmd: $concatCmd\n$logTail');
-          throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
-        }
+      if (!ReturnCode.isSuccess(concatRc) || !tempFinalFile.existsSync() || tempFinalFile.lengthSync() == 0) {
+        final logTail = await _sessionLogTail(concatSession);
+        debugPrint('FFmpeg concat cmd: $concatCmd\n$logTail');
+        throw Exception('Stream concatenation failed (rc: $concatRc)\n$logTail');
       }
 
       // Pass 3: save to Movies/Shaderly
@@ -1204,7 +1240,7 @@ class ExportSuite {
       ));
 
       CrashLog.note('saved to MediaStore: $finalUri');
-      final timingReport = StageTimer.summary();
+      final timingReport = '$encoderLine\n${StageTimer.summary()}';
       CrashLog.note(timingReport);
       CrashLog.end('video export finished');
       onProgress(1.0, 'Export complete!');
@@ -1221,6 +1257,7 @@ class ExportSuite {
         await StageTimer.showReport(context, timingReport);
       }
     } catch (e) {
+      ExportNotes.flush();
       CrashLog.end('FAILED with a Dart exception: $e');
       rethrow;
     } finally {
@@ -1228,6 +1265,10 @@ class ExportSuite {
       // Release the decoded source batch (it can be hundreds of MB on disk)
       try {
         await prepareFrames?.call(0, 0, videoFps);
+      } catch (_) {}
+      // Back to the source-size, RGBA preview / image-export behaviour
+      try {
+        await configureRender(0, 0, false);
       } catch (_) {}
       // Purge session scratch directory
       try {
@@ -1239,22 +1280,65 @@ class ExportSuite {
   }
 
   // ===========================================================================
-  // MASTER MATRIX FFMPEG COMMAND GENERATOR
-  // Supports: H.264, HEVC, AV1, VP9, ProRes HQ/4444 + 8-bit, 10-bit HDR, 16-bit
+  // ENCODER HELPERS
+  // ===========================================================================
+  static int _profileMbps(String bitrateProfile) {
+    if (bitrateProfile.contains('Master')) return 80;
+    if (bitrateProfile.contains('Ultra')) return 50;
+    if (bitrateProfile.contains('High')) return 25;
+    if (bitrateProfile.contains('Standard')) return 12;
+    return 0;
+  }
+
+  /// Hardware encoders are bitrate controlled (no CRF). The profile's Mbps, or for "Lossless" a high bitrate for the size (0.3 bit / pixel / frame, 12..100 Mbps).
+  static int _hardwareMbps(String bitrateProfile, int w, int h, double fps) {
+    final int p = _profileMbps(bitrateProfile);
+    if (p > 0) return p;
+    return ((w * h * fps * 0.30) / 1000000.0).round().clamp(12, 100).toInt();
+  }
+
+  /// Threads for the software VP9 / AV1 encoders: all cores, at most 8.
+  static int _encoderThreads() {
+    final int n = Platform.numberOfProcessors;
+    if (n < 2) return 2;
+    return n > 8 ? 8 : n;
+  }
+
+  static String _softwareLabel(String codec) {
+    if (codec.contains('ProRes')) return 'ProRes (prores_ks, software)';
+    if (codec.contains('HEVC') || codec.contains('H.265')) return 'Software HEVC (libx265)';
+    if (codec.contains('AV1')) return 'Software AV1 (libsvtav1)';
+    if (codec.contains('VP9')) return 'Software VP9 (libvpx-vp9)';
+    return 'Software H.264 (libx264)';
+  }
+
+  // ===========================================================================
+  // MASTER MATRIX FFMPEG COMMAND GENERATOR (one batch of raw frames -> a part in the FINAL codec)
+  // Input is NV12 from the GPU (nv12 = true, no colour conversion in FFmpeg) or RGBA8 (nv12 = false, only for a native library without batch 18B).
   // ===========================================================================
   static String _buildBatchEncodeCmd({
     required String inputFile,
     required String outputFile,
     required double fps,
-    required int inW,
-    required int inH,
     required int outW,
     required int outH,
+    required bool nv12,
+    required HwEncoderChoice? hw,
     required String codec,
     required String bitDepth,
     required String bitrateProfile,
     required String container,
+    required int threads,
   }) {
+    const sdrTags = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
+    final String input = '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format ${nv12 ? 'nv12' : 'rgba'} -video_size ${outW}x$outH -framerate $fps -i "$inputFile"';
+
+    // ---- Hardware H.264 / HEVC (MediaCodec): the NV12 frames go in untouched, -b:v rate control, MPEG-TS part ----
+    if (hw != null) {
+      return '$input -an -c:v ${hw.encoder} -b:v ${hw.bitrateMbps}M -pix_fmt ${hw.pixFmt} -g ${(fps * 2).round()} $sdrTags '
+          '-muxdelay 0 -muxpreload 0 -f mpegts "$outputFile"';
+    }
+
     final is10Bit = bitDepth.startsWith('10');
     final is16Bit = bitDepth.startsWith('16');
     final isProRes = codec.contains('ProRes');
@@ -1262,10 +1346,8 @@ class ExportSuite {
     final isAv1 = codec.contains('AV1');
     final isVp9 = codec.contains('VP9');
 
-    // 1. Bit depth & colour metadata
+    // 1. Bit depth
     String pixFmt;
-    String colorMetadata;
-    const sdrTags = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
     if (is10Bit) {
       pixFmt = '-pix_fmt yuv420p10le';
     } else if (is16Bit) {
@@ -1274,7 +1356,6 @@ class ExportSuite {
     } else {
       pixFmt = '-pix_fmt yuv420p';
     }
-    colorMetadata = sdrTags;
 
     // 2. Codec, speed preset and default quality
     String cOption;
@@ -1296,17 +1377,16 @@ class ExportSuite {
       cOption = '-c:v libx265$hvcTag';
       speed = '-preset veryfast';
       rate = '-crf 20';
-      // Crash-safe x265 profile for Android: no worker thread pools (the pool / thread-affinity setup is what
-      // brings the encoder down on mobile CPUs as soon as the lookahead window fills), a single frame thread,
-      // and a lookahead that is always larger than the B-frame count. Slower than a threaded encode, but stable.
-      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()}';
+      // Batch 18B: the single-thread locks (pools=none, frame-threads=1) are gone, x265 uses its own thread pool and frame threads again.
+      codecExtra = '-x265-params log-level=error:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()}';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
-      speed = '-preset 6';
+      speed = '-preset 10 -svtav1-params lp=$threads'; // lp = SVT-AV1's level of parallelism (logical processors it may use)
       rate = '-crf 24';
     } else if (isVp9) {
       cOption = '-c:v libvpx-vp9';
-      speed = '-deadline good -cpu-used 4 -row-mt 1';
+      // realtime deadline + cpu-used 6 + row multithreading on 4 tile columns, all cores
+      speed = '-deadline realtime -cpu-used 6 -row-mt 1 -tile-columns 2 -threads $threads';
       rate = '-crf 22 -b:v 0';
       extraFilters = ',unsharp=5:5:0.3:5:5:0.0';
     } else {
@@ -1317,23 +1397,13 @@ class ExportSuite {
     }
 
     // 3. Bitrate / quality profile (ProRes ignores it).
-    // Note: -preset medium is only valid for x264/x265. The old code passed it to
-    // SVT-AV1 and VP9 for the Lossless profile, which makes ffmpeg abort.
+    // Note: -preset medium is only valid for x264/x265. Passing it to SVT-AV1 or VP9 makes ffmpeg abort.
     if (!isProRes) {
       if (bitrateProfile.contains('Lossless')) {
         rate = isHevc ? '-crf 12' : (isVp9 ? '-crf 14 -b:v 0' : '-crf 14');
-        if (!isAv1 && !isVp9 && !isHevc) speed = '-preset medium';   // HEVC stays on the crash-safe veryfast preset
+        if (!isAv1 && !isVp9 && !isHevc) speed = '-preset medium';
       } else {
-        int mbps = 0;
-        if (bitrateProfile.contains('Master')) {
-          mbps = 80;
-        } else if (bitrateProfile.contains('Ultra')) {
-          mbps = 50;
-        } else if (bitrateProfile.contains('High')) {
-          mbps = 25;
-        } else if (bitrateProfile.contains('Standard')) {
-          mbps = 12;
-        }
+        final int mbps = _profileMbps(bitrateProfile);
         if (mbps > 0) {
           rate = isAv1
               ? '-b:v ${mbps}M'
@@ -1342,124 +1412,14 @@ class ExportSuite {
       }
     }
 
-    // RGB -> YUV with the matrix the file is tagged with (default swscale uses BT.601 even when the tags say 709).
-    // 'format=' right after the scale makes the conversion happen HERE, before unsharp (which cannot run on RGB).
+    // 4. Filter chain. NV12 input: only the pixel-format change (nv12 -> the encoder's format, a plane interleave, no scaling).
+    //    RGBA input (fallback): RGB -> YUV with the matrix the file is tagged with, at the size that is already the export size.
     final String pixName = pixFmt.replaceFirst('-pix_fmt ', '');
-    const String matrix = 'bt709';
-    final scaleFilter = 'scale=$outW:$outH:flags=lanczos+accurate_rnd:out_color_matrix=$matrix:out_range=tv,'
-        'format=$pixName$extraFilters';
+    final String vf = nv12
+        ? 'format=$pixName$extraFilters'
+        : 'scale=out_color_matrix=bt709:out_range=tv:flags=bicubic,format=$pixName$extraFilters';
 
-    return '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
-        '-i "$inputFile" -vf "$scaleFilter" $cOption $speed $codecExtra $pixFmt $colorMetadata $rate "$outputFile"';
-  }
-
-  // ===========================================================================
-  // HEVC: LOSSLESS MEZZANINE + ONE SINGLE-PASS x265 ENCODE (no fallbacks)
-  // ===========================================================================
-  /// rgba batch -> scaled, lossless FFV1 (bgr0) part. FFV1 is built into FFmpeg itself, so this step never
-  /// touches x265.
-  static String _buildMezzanineCmd({
-    required String inputFile,
-    required String outputFile,
-    required double fps,
-    required int inW,
-    required int inH,
-    required int outW,
-    required int outH,
-  }) {
-    return '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format rgba -video_size ${inW}x$inH -framerate $fps '
-        '-i "$inputFile" -vf "scale=$outW:$outH:flags=lanczos,format=bgr0" '
-        '-c:v ffv1 -level 3 -g 1 -slicecrc 0 -an "$outputFile"';
-  }
-
-  static int _profileMbps(String bitrateProfile) {
-    if (bitrateProfile.contains('Master')) return 80;
-    if (bitrateProfile.contains('Ultra')) return 50;
-    if (bitrateProfile.contains('High')) return 25;
-    if (bitrateProfile.contains('Standard')) return 12;
-    return 0;
-  }
-
-  static String _hevcFinalCmd({
-    required String concatList,
-    required String? audioSourcePath,
-    required String outFile,
-    required String container,
-    required String bitDepth,
-    required String bitrateProfile,
-  }) {
-    final is10 = bitDepth.startsWith('10');
-    final is16 = bitDepth.startsWith('16');
-    final c = container.toUpperCase();
-    final isMp4Family = c == 'MP4' || c == 'MOV';
-    final lossless = bitrateProfile.contains('Lossless');
-    final mbps = _profileMbps(bitrateProfile);
-
-    String pixFmt;
-    String colorMetadata;
-    String matrix;
-    matrix = 'bt709';
-    colorMetadata = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
-    pixFmt = is10 ? 'yuv420p10le' : (is16 ? 'yuv444p10le' : 'yuv420p');
-
-    String rate;
-    if (lossless) {
-      rate = '-crf 12';
-    } else if (mbps > 0) {
-      rate = '-b:v ${mbps}M -maxrate ${(mbps * 1.2).round()}M -bufsize ${mbps * 2}M';
-    } else {
-      rate = '-crf 20';
-    }
-
-    // hvc1 is only valid in MP4 / MOV. Crash-safe x265 profile: no worker thread pools, one frame thread,
-    // lookahead always larger than the B-frame count.
-    final video = '-c:v libx265${isMp4Family ? ' -tag:v hvc1' : ''} -preset veryfast '
-        '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()} $rate';
-
-    final fastStart = isMp4Family ? '-movflags +faststart' : '';
-    final hasAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
-    final audioIn = hasAudio ? '-i "$audioSourcePath" ' : '';
-    final audioOpts = hasAudio
-        ? '-map 0:v:0 -map 1:a:0? -c:a ${ExportMatrix.getAudioCodec(container)} -b:a 320k -shortest'
-        : '-map 0:v:0 -an';
-
-    // RGB -> YUV with the SAME matrix that the file is tagged with (the old default was BT.601 while the
-    // tags said BT.709, which shifted colours in players).
-    return '-y ${CpuSafe.ffArgs()}-f concat -safe 0 -i "$concatList" $audioIn'
-        '-vf "scale=out_color_matrix=$matrix:out_range=tv:flags=accurate_rnd,format=$pixFmt" '
-        '$video $colorMetadata $audioOpts $fastStart "$outFile"';
-  }
-
-  static Future<void> _encodeHevcFinal({
-    required File concatList,
-    required String? audioSourcePath,
-    required File outFile,
-    required String container,
-    required String bitDepth,
-    required String bitrateProfile,
-    required Function(double, String) onProgress,
-  }) async {
-    onProgress(0.80, 'Encoding HEVC (x265)...');
-    final cmd = _hevcFinalCmd(
-      concatList: concatList.path,
-      audioSourcePath: audioSourcePath,
-      outFile: outFile.path,
-      container: container,
-      bitDepth: bitDepth,
-      bitrateProfile: bitrateProfile,
-    );
-
-    // If the app dies inside this call, the crash report shown on the next launch ends with these lines.
-    CrashLog.note('HEVC final encode START: ffmpeg $cmd');
-    final session = await StageTimer.time('final: HEVC encode', () => FFmpegKit.execute(cmd));
-    final rc = await session.getReturnCode();
-    CrashLog.note('HEVC final encode RETURNED rc=$rc size=${outFile.existsSync() ? outFile.lengthSync() : -1}');
-
-    if (!ReturnCode.isSuccess(rc) || !outFile.existsSync() || outFile.lengthSync() < 2048) {
-      final tail = await _sessionLogTail(session);
-      debugPrint('FFmpeg HEVC final cmd: $cmd\n$tail');
-      throw Exception('HEVC encode failed (rc: $rc)\n$tail');
-    }
+    return '$input -vf "$vf" $cOption $speed $codecExtra $pixFmt $sdrTags $rate "$outputFile"';
   }
 
   // ===========================================================================
@@ -1496,10 +1456,32 @@ class ExportSuite {
       w = (targetLongEdge * aspect).round();
     }
 
-    // Ensure even dimensions for YUV 4:2:0 subsampling
+    // Ensure even dimensions for YUV 4:2:0 subsampling (executeVideoExport rounds the width up to a multiple of 4 for the GPU NV12 pass)
     if (w % 2 != 0) w += 1;
     if (h % 2 != 0) h += 1;
 
     return {'w': w, 'h': h};
   }
+}
+
+// =============================================================================
+// Batch 18B: batched export notes. CrashLog.note() writes (and flushes) to disk on EVERY call; the export used to call it several times per frame.
+// Lines collected here are written by ONE CrashLog.note() per flush (the export flushes once per batch, and when something fails).
+// =============================================================================
+class ExportNotes {
+  ExportNotes._();
+  static final List<String> _lines = <String>[];
+
+  static void add(String line) {
+    _lines.add(line);
+    if (_lines.length >= 40) flush(); // never let it grow without a flush
+  }
+
+  static void flush() {
+    if (_lines.isEmpty) return;
+    CrashLog.note(_lines.join('\n'));
+    _lines.clear();
+  }
+
+  static void clear() => _lines.clear();
 }

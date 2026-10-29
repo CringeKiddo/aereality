@@ -34,6 +34,7 @@ class MediaProbe {
   final String? videoCodec; // 'h264', 'hevc', 'vp9', 'av1' ...
   final bool tenBit;
   final bool hasAudio;
+  final double? fps; // frames per second the stream header says (null = unknown)
 
   const MediaProbe({
     required this.ok,
@@ -43,6 +44,7 @@ class MediaProbe {
     this.videoCodec,
     this.tenBit = false,
     this.hasAudio = false,
+    this.fps,
   });
 
   static const MediaProbe unknown = MediaProbe(ok: false);
@@ -55,6 +57,10 @@ class VideoProxy {
 
   static final Map<String, Future<String?>> _inflight = {};
   static bool _purged = false;
+
+  /// Long edge of the proxy (batch 18B: 1920, was 1280). Sources up to 1080p are NOT scaled at all; 4K sources become 1080p proxies, because many phone
+  /// decoders cannot play 4K H.264 and the conversion would take minutes. 0 = never scale.
+  static const int maxLongEdge = 1920;
 
   /// mp4 / mov / m4v / 3gp: the native player is tried first with NO extra ffmpeg process (keeps opening a project fast).
   static bool looksNativeSafe(String path) {
@@ -101,6 +107,7 @@ class VideoProxy {
     String? codec;
     int? w;
     int? h;
+    double? fps;
     bool ten = false;
     for (final m in RegExp(r'Stream #\d+:\d+[^\n]*?: Video: ([A-Za-z0-9_]+)([^\n]*)').allMatches(log)) {
       final String rest = m.group(2) ?? '';
@@ -112,6 +119,8 @@ class VideoProxy {
         h = int.parse(dims.group(2)!);
       }
       ten = RegExp(r'p1[02](le|be)?').hasMatch(rest) || rest.contains('Main 10');
+      final fm = RegExp(r'(\d+(?:\.\d+)?) fps').firstMatch(rest);
+      if (fm != null) fps = double.tryParse(fm.group(1)!);
       break;
     }
 
@@ -128,7 +137,7 @@ class VideoProxy {
 
     final bool audio = RegExp(r'Stream #\d+:\d+[^\n]*?: Audio:').hasMatch(log);
     final bool ok = codec != null || dur != null;
-    return MediaProbe(ok: ok, durationSec: dur, width: w, height: h, videoCodec: codec, tenBit: ten, hasAudio: audio);
+    return MediaProbe(ok: ok, durationSec: dur, width: w, height: h, videoCodec: codec, tenBit: ten, hasAudio: audio, fps: fps);
   }
 
   // ---------------------------------------------------------------------------
@@ -145,11 +154,11 @@ class VideoProxy {
     return h.toRadixString(16).padLeft(8, '0');
   }
 
-  /// Long edge is capped at 1280 px (the proxy is only what the phone screen plays); sizes are always even for H.264.
+  /// Long edge is capped at [maxLongEdge]; sizes are always even for H.264.
   /// Without a known size nothing is scaled except the even-size fix.
   static String _scaleFilter(MediaProbe p) {
-    const int cap = 1280;
-    if (p.hasSize) {
+    final int cap = maxLongEdge;
+    if (cap > 0 && p.hasSize) {
       final int w = p.width!;
       final int h = p.height!;
       final int long = math.max(w, h);
@@ -179,28 +188,46 @@ class VideoProxy {
       final String key = _key(srcPath, src.lengthSync(), src.lastModifiedSync().millisecondsSinceEpoch);
       final File out = File('${dir.path}/p_$key.mp4');
       if (out.existsSync() && out.lengthSync() > 4096) {
-        debugPrint('VideoProxy: cached proxy ${out.path}');
-        return out.path;
+        // a cached proxy that is much shorter than its source (an earlier, broken conversion) is not trusted
+        if (await _looksComplete(out.path, probe.durationSec)) {
+          debugPrint('VideoProxy: cached proxy ${out.path}');
+          return out.path;
+        }
+        debugPrint('VideoProxy: cached proxy is too short, rebuilding');
+        try {
+          out.deleteSync();
+        } catch (_) {}
       }
       final File part = File('${dir.path}/p_$key.part.mp4');
 
       final String vf = _scaleFilter(probe);
       // Short GOP (every 12 frames): seeks and scrubbing land on the exact frame quickly. Ultrafast: this runs once, in the background.
       final String video = '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p -vf "$vf" -g 12';
+      // -fflags +genpts: WebM / MKV files with missing or broken timestamps get generated ones (without them ffmpeg can drop every frame but the first,
+      // which is a proxy that is "a single static image").
+      final String fpsArg = (probe.fps != null && probe.fps! >= 1 && probe.fps! <= 120) ? probe.fps!.toStringAsFixed(3) : '30';
       final List<String> attempts = [
-        '-hide_banner -y ${_cpuArgs()}-i "$srcPath" -map 0:v:0 -map 0:a:0? -sn -dn $video -c:a aac -b:a 128k -movflags +faststart "${part.path}"',
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -map 0:a:0? -sn -dn $video -c:a aac -b:a 128k -movflags +faststart "${part.path}"',
         // second try without sound: a source audio stream ffmpeg cannot convert must not cost the picture
-        '-hide_banner -y ${_cpuArgs()}-i "$srcPath" -map 0:v:0 -an -sn -dn $video -movflags +faststart "${part.path}"',
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video -movflags +faststart "${part.path}"',
+        // last try: constant frame rate with generated timestamps (accepted even if it cannot be checked against the source)
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video -vsync cfr -r $fpsArg -movflags +faststart "${part.path}"',
       ];
 
       final Stopwatch sw = Stopwatch()..start();
-      for (final String cmd in attempts) {
+      for (int ai = 0; ai < attempts.length; ai++) {
+        final String cmd = attempts[ai];
         try {
           if (part.existsSync()) part.deleteSync();
         } catch (_) {}
         final dynamic session = await FFmpegKit.execute(cmd);
         final dynamic rc = await session.getReturnCode();
-        final bool good = ReturnCode.isSuccess(rc) && part.existsSync() && part.lengthSync() > 4096;
+        bool good = ReturnCode.isSuccess(rc) && part.existsSync() && part.lengthSync() > 4096;
+        // the result must be about as long as the source (a one-frame "video" is not a proxy); the last attempt is accepted as it is
+        if (good && ai < attempts.length - 1 && !await _looksComplete(part.path, probe.durationSec)) {
+          debugPrint('VideoProxy: attempt $ai produced a too short video');
+          good = false;
+        }
         if (good) {
           if (out.existsSync()) out.deleteSync();
           part.renameSync(out.path);
@@ -218,6 +245,16 @@ class VideoProxy {
       debugPrint('VideoProxy._build failed: $e');
       return null;
     }
+  }
+
+  /// false when [path] is clearly shorter than the source ([srcDur] seconds, null = unknown) or shorter than half a second.
+  static Future<bool> _looksComplete(String path, double? srcDur) async {
+    final MediaProbe p = await probe(path);
+    final double? pd = p.durationSec;
+    if (pd == null) return true; // cannot be measured: do not reject a good file
+    if (pd < 0.5 && (srcDur == null || srcDur >= 0.5)) return false;
+    if (srcDur != null && srcDur >= 1.0 && pd < srcDur * 0.8) return false;
+    return true;
   }
 
   /// Keeps the newest [keepNewest] proxies, removes the rest and any half-written .part file from an older run. Runs once per app start.

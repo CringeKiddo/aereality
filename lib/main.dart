@@ -1654,8 +1654,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     _lastGradeSig = '';
     _seekPending = null;
     Music.onVideoPause();
-    // batch 18A: the old player is taken off the screen at once and released in the background (it used to be awaited here: pause + dispose
-    // blocked the whole media switch). It is released AFTER the frame that removes its VideoPlayer widget.
+    // batch 18A: the old player is taken off the screen at once and released in the background, AFTER the frame that removes its VideoPlayer widget.
     final VideoPlayerController? old = _controller;
     _controller = null;
     if (old != null) old.removeListener(_onControllerValue);
@@ -1694,19 +1693,30 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
     } else {
       _cachedRawImage = null;
-      await _openVideo(path, gen, forceProxy: forceProxy);
+      try {
+        await _openVideo(path, gen, forceProxy: forceProxy);
+      } catch (e, st) {
+        // batch 18B (Task 8): an exception anywhere in probe / proxy / player setup used to leave the editor in "Opening video…" for good
+        debugPrint('18B: opening the video failed: $e\n$st');
+        if (mounted && gen == _loadGen) {
+          setState(() => _preparingMedia = false);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('This video could not be opened: $e')));
+        }
+      } finally {
+        // batch 18B (Task 8): whatever happened above, the UI is told that the load is over (an explicit setState, nothing waits for a button tap)
+        if (mounted && gen == _loadGen && _preparingMedia) setState(() => _preparingMedia = false);
+      }
     }
-    debugPrint('18A open: media ready in ${sw.elapsedMilliseconds} ms (proxy=$_usingProxy)');
+    debugPrint('18B open: media ready in ${sw.elapsedMilliseconds} ms (proxy=$_usingProxy)');
 
-    // batch 18A: the save used to run right here, so on a project with many saved projects the load-all / encode-all / write-all of
-    // saved_projects.json (on the UI isolate) competed with the video opening and the first frame. It now runs a moment later; it still runs
-    // (the project is created / moved to the top of the list), and it is not cancelled when the screen closes.
+    // batch 18A: the save runs a moment later so it does not compete with the video opening and the first frame (it still runs, and is not
+    // cancelled when the screen closes).
     unawaited(Future<void>.delayed(const Duration(milliseconds: 1500), _autoSaveProject));
   }
 
   /// Opens [path] in the native player. mp4 / mov: no extra process. webm / mkv / anything else: one cheap ffmpeg probe first, then the
   /// same attempt with the duration check and a seek test. If the player rejects the file (or [forceProxy]) an H.264 proxy is built and
-  /// the player plays that instead.
+  /// a NEW VideoPlayerController is initialised on the proxy file; only that controller is shown (the rejected one is disposed).
   Future<void> _openVideo(String path, int gen, {required bool forceProxy}) async {
     bool stale() => gen != _loadGen || !mounted;
 
@@ -1735,10 +1745,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         probe = await VideoProxy.probe(path);
         if (stale()) return;
       }
-      if (mounted) setState(() => _preparingNote = 'Preparing a compatible copy of this video (first time only)…');
+      setState(() => _preparingNote = 'Preparing a compatible copy of this video (first time only)…');
       final String? proxyPath = await VideoProxy.ensureProxy(path, probe);
       if (stale()) return;
       if (proxyPath != null) {
+        // batch 18B (Tasks 7 + 8): the conversion has finished -> say so, then initialise a fresh controller on the PROXY file and wait for it
+        setState(() => _preparingNote = 'Opening the converted video…');
         c = await _tryNativeController(proxyPath, null, gen);
         proxied = c != null;
         if (stale()) {
@@ -1749,12 +1761,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
 
     if (c == null) {
-      if (mounted) {
-        setState(() => _preparingMedia = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('This video could not be opened (not even after converting it). Try another file.')),
-        );
-      }
+      setState(() => _preparingMedia = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This video could not be opened (not even after converting it). Try another file.')),
+      );
       return;
     }
     await _adoptController(c, probe, proxied, gen);
@@ -1766,7 +1776,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<VideoPlayerController?> _tryNativeController(String playPath, MediaProbe? probe, int gen, {bool selfTest = false}) async {
     final VideoPlayerController c = VideoPlayerController.file(File(playPath));
     try {
-      await c.initialize().timeout(const Duration(seconds: 12));
+      await c.initialize().timeout(const Duration(seconds: 8)); // a hanging decoder (high-quality HEVC) must not hold the editor for long
       if (gen != _loadGen || !mounted) {
         await c.dispose();
         return null;
@@ -1790,11 +1800,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         if ((realMs - targetMs).abs() > math.max(2000, (d * 100).round())) {
           throw StateError('seek to $targetMs ms landed at $realMs ms (file is not seekable)');
         }
-        await c.seekTo(Duration.zero);
+        await c.seekTo(Duration.zero).timeout(const Duration(seconds: 4));
       }
       return c;
     } catch (e) {
-      debugPrint('18A: native player rejected $playPath: $e');
+      debugPrint('18B: native player rejected $playPath: $e');
       try {
         await c.dispose();
       } catch (_) {}
@@ -1802,7 +1812,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
-  /// Makes a validated player the project's player: paused at 0, duration and true size stored, first frame graded.
+  /// Makes a validated player the project's player. The controller is published and the UI is rebuilt FIRST; the player calls that can be slow
+  /// (pause / seek on a decoder that is still starting) run afterwards with timeouts, so nothing in here can keep the editor on "Opening video…".
   Future<void> _adoptController(VideoPlayerController c, MediaProbe probe, bool proxied, int gen) async {
     if (gen != _loadGen || !mounted) {
       unawaited(_releaseController(c));
@@ -1813,21 +1824,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     // the crop maths (preview frames + export) works in the ORIGINAL video's pixels, even when the player plays a smaller proxy
     _mediaW = (proxied && probe.hasSize) ? probe.width! : sz.width.toInt();
     _mediaH = (proxied && probe.hasSize) ? probe.height! : sz.height.toInt();
-    _videoDurationSeconds = c.value.duration.inMilliseconds / 1000.0; // validated above: >= 0.3 s and matching the file when it could be checked
-
-    try {
-      await c.setLooping(false);
-      await c.setVolume(1.0);
-      await c.pause(); // a project always opens PAUSED
-      await c.seekTo(Duration.zero);
-    } catch (_) {}
-    if (gen != _loadGen || !mounted) {
-      unawaited(_releaseController(c));
-      return;
-    }
+    _videoDurationSeconds = c.value.duration.inMilliseconds / 1000.0; // validated: >= 0.3 s and matching the file when it could be checked
 
     _controller = c;
-    _isPlaying = false;
+    _isPlaying = false; // a project always opens PAUSED
     c.addListener(_onControllerValue); // batch 16: the play icon / end of video follow the player
     _updateDimensions(_mediaW, _mediaH);
     _setPos(0.0);
@@ -1837,6 +1837,60 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     });
     _applyGrade(forceExtract: true);
     _startPlaybackTimer();
+    unawaited(_settleController(c, gen));
+    unawaited(_firstFrameWatchdog(gen));
+  }
+
+  /// Paused, at 0, sound on. Every call has a timeout: a player that never answers is simply left as it is.
+  Future<void> _settleController(VideoPlayerController c, int gen) async {
+    try {
+      await c.setLooping(false).timeout(const Duration(seconds: 2));
+      await c.setVolume(1.0).timeout(const Duration(seconds: 2));
+      await c.pause().timeout(const Duration(seconds: 3));
+      if (!_isPlaying && gen == _loadGen) await c.seekTo(Duration.zero).timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('18B: settling the player: $e');
+    }
+    if (mounted && gen == _loadGen) setState(() {}); // a rebuild once the player has settled
+  }
+
+  /// Task 8: if no graded frame is on screen shortly after the player was adopted (the first preview extraction was dropped or failed while FFmpeg
+  /// was busy), the extraction is retried and the UI rebuilt, instead of waiting for the user to toggle something.
+  Future<void> _firstFrameWatchdog(int gen) async {
+    for (final int ms in const [700, 1600, 3200, 6000]) {
+      await Future<void>.delayed(Duration(milliseconds: ms));
+      if (!mounted || gen != _loadGen) return;
+      if (_processedStaticImage != null || _isPlaying) return; // a frame is on screen (or the video plays): nothing to repair
+      debugPrint('18B: no preview frame after ${ms} ms, retrying the extraction');
+      _applyGrade(forceExtract: true);
+      setState(() {});
+    }
+  }
+
+  /// Task 7: after play was pressed, the position must advance. If it does not (a decoder that accepted the file but never produces frames),
+  /// the player is rebuilt on an H.264 proxy once; if it already is one, the video is paused and the user is told.
+  Future<void> _checkPlaybackProgress(VideoPlayerController c, int gen) async {
+    final Duration start = c.value.position;
+    await Future<void>.delayed(const Duration(milliseconds: 2200));
+    if (!mounted || gen != _loadGen || !identical(c, _controller) || !_isPlaying || _adaptiveActive) return;
+    final Duration? now = await c.position;
+    if (!mounted || gen != _loadGen || !identical(c, _controller) || !_isPlaying) return;
+    if (now != null && (now - start).inMilliseconds > 150) return; // it is moving
+    if (c.value.isBuffering) return;
+    debugPrint('18B: playback did not advance (start=$start now=$now)');
+    if (!_usingProxy && !_proxyTried && !_project.isImage) {
+      await _recoverWithProxy('playback did not advance');
+    } else {
+      _isPlaying = false;
+      _previewTick.value++;
+      try {
+        await c.pause();
+      } catch (_) {}
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This video does not play on this phone. Try exporting it or another file.')));
+        setState(() {});
+      }
+    }
   }
 
   void _startPlaybackTimer() {
@@ -2437,6 +2491,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
           unawaited(_adaptiveLoop(c, _pbGen, startFrame)); // the loop is the clock; the controller starts with its first graded frame
         } else {
           await c.play(); // Smooth: the native video is the clock and plays untouched, nothing is graded until the pause
+          unawaited(_checkPlaybackProgress(c, _loadGen)); // batch 18B (Task 7): the position must advance, else recover
         }
       }
     } catch (e) {
@@ -2570,6 +2625,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       getActiveLut: _getActiveLutTable,
       renderFrameToRgba: _renderFrameForExport,
       prepareFrames: _prepareExportFrames,
+      configureRender: _configureExportRender, // batch 18B
       videoDurationMs: _videoDurationSeconds * 1000.0,
       videoFps: 30.0,
       videoWidth: size[0],
@@ -2579,6 +2635,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Uint8List? _lastExportSource;
+
+  // ---------------------------------------------------------------------------------------------------
+  // batch 18B: RENDER SIZE + FRAME FORMAT OF A VIDEO EXPORT
+  // ExportSuite calls _configureExportRender(w, h, nv12) before the first frame and (0, 0, false) when it is done.
+  //   * w x h = the chosen export resolution: the batch decode scales to it and the GPU grades AT it (it used to render at the source size and let
+  //     FFmpeg scale down, so the resolution setting never reduced the GPU work).
+  //   * nv12 = the GPU converts RGB -> YUV (pass 29) and the frame that comes back is NV12 (w * h * 3 / 2 bytes) instead of RGBA8.
+  // With (0, 0, false) everything behaves as before: source size, RGBA8 (image export, preview).
+  // ---------------------------------------------------------------------------------------------------
+  int _expW = 0;
+  int _expH = 0;
+  bool _expNv12 = false;
+
+  Future<void> _configureExportRender(int w, int h, bool nv12) async {
+    _expW = w;
+    _expH = h;
+    _expNv12 = nv12;
+  }
+
+  List<int> _exportRenderSize() => (_expW > 0 && _expH > 0) ? [_expW, _expH] : _exportSize();
 
   // ---------------------------------------------------------------------------------------------------
   // BATCH SOURCE DECODE FOR EXPORT
@@ -2611,7 +2687,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
     if (frameCount <= 0 || _project.isImage) return;
 
-    final size = _exportSize();
+    final size = _exportRenderSize(); // batch 18B: the EXPORT size (the batch is decoded straight at it)
     final w = size[0];
     final h = size[1];
     final tempDir = await getTemporaryDirectory();
@@ -2882,7 +2958,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   }
 
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
-    final size = _exportSize();
+    final size = _exportRenderSize(); // batch 18B: the export size for a video export, the source size otherwise
     final w = size[0];
     final h = size[1];
     Uint8List? raw;
@@ -2890,7 +2966,13 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (!_project.isImage) {
       // batch 12 C2: a frame inside a Time Slice wipe comes from the ring (pass 22 + the single dither of pass 23); every other frame takes the normal path below
       final tsOut = await _tsExportFrame(timestampMs, w, h);
-      if (tsOut != null) return tsOut;
+      if (tsOut != null) {
+        if (!_expNv12) return tsOut;
+        // batch 18B: the ring returns RGBA8; the export wants NV12 (same matrix and range as the GPU pass, converted on the CPU for these frames only)
+        final Uint8List? conv = rgbaToNv12(tsOut, w, h);
+        if (conv == null) throw Exception('RGBA -> NV12 conversion of a Time Slice frame failed');
+        return conv;
+      }
     }
 
     if (_project.isImage) {
@@ -2911,7 +2993,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         if (rawFile.existsSync()) rawFile.deleteSync();
 
         final t = (timestampMs / 1000.0).toStringAsFixed(3);
-        CrashLog.note('  decode source frame (ffmpeg -ss $t) [slow path]');
+        ExportNotes.add('  decode source frame (ffmpeg -ss $t) [slow path]'); // batch 18B: batched, no disk flush per frame
         await FFmpegKit.execute(
           '-hide_banner -y -ss $t -i "${_project.mediaPath}" -frames:v 1 '
           '-vf "${_exportCropFilter()}scale=$w:$h" -f rawvideo -pix_fmt rgba "${rawFile.path}"',
@@ -2934,12 +3016,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
     uniforms[0] = timestampMs / 1000.0;
-    CrashLog.note('  vulkan processImage ${w}x$h');
     final gradeWatch = Stopwatch()..start();
     // Worker isolate: the UI isolate keeps running during the GPU work (no freeze, no "not responding").
-    final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+    // batch 18B: with _expNv12 the result is NV12 (GPU RGB -> YUV), w * h * 3 / 2 bytes.
+    final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable(), nv12: _expNv12);
     StageTimer.add('frame: grade (Vulkan, incl. copies)', gradeWatch.elapsedMicroseconds);
-    CrashLog.note('  vulkan done, gpu status=${res.gpuStatus} (0 = ok), native ${res.micros ~/ 1000} ms');
+    // batch 18B: the per-frame "vulkan processImage / vulkan done" disk-flushing notes are gone (ExportSuite logs one line per batch);
+    // only a GPU problem is written at once, because it is exactly what the crash report needs
+    if (res.gpuStatus != 0) {
+      CrashLog.note('  GPU status ${res.gpuStatus} at t=${timestampMs.round()} ms (0 = ok, 1 = GPU error: CPU fallback frame), native ${res.micros ~/ 1000} ms');
+    }
     return res.rgba;
   }
 
