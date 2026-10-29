@@ -138,7 +138,7 @@ layout(std430, binding = 13) buffer DisplayBuffer { vec4 display_px[]; };
 // Ring frames are the PRE-dither pass 6 output, so slices are never dithered twice. Without Time Slice the buffer is P long, as in step B.
 
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14)
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B)
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -3999,6 +3999,57 @@ void executeMotionPass(ivec2 coord, int width, int height) {
     executeMotionDilate(coord, width, height);
 }
 
+// =============================================================================
+// PASS 29 (batch 18B): RGB -> YCbCr 4:2:0 (NV12) for the video export. Runs AFTER pass 23, only when the host asks for it (process_image_nv12).
+//   Reads the finished RGBA8 image that pass 23 wrote to out_pixels[0 .. P) (P = imgW * imgH words) and writes the NV12 planes BEHIND it in the same
+//   buffer (the output buffer is 8 bytes per pixel, the RGBA8 image uses 4, NV12 needs 1.5 more):
+//        Y plane  : words [P, P + P/4)          (imgW bytes per row, 4 pixels per word)
+//        UV plane : words [P + P/4, P + 3P/8)   (interleaved U V, imgW bytes per row, one pair per 2x2 pixels)
+//   Colour: BT.709 matrix, LIMITED (tv) range, i.e. Y 16..235 and Cb / Cr 16..240, the same thing the export tags in the file (-colorspace bt709
+//   -color_range tv). Chroma is the average of the four pixels' Cb / Cr (box filter, what swscale does by default).
+//   Dispatch grid = (imgW / 4) x (imgH / 2): one invocation = a 4 x 2 block, so every word it writes is written by exactly ONE invocation
+//   (no atomics, no races). The host guarantees imgW % 4 == 0 and imgH % 2 == 0. u_passWidth / u_passHeight = the GRID, u_srcW / u_srcH = the image.
+// =============================================================================
+vec3 yccFromPacked709(uint p) {
+    vec3 c = vec3(float(p & 255u), float((p >> 8u) & 255u), float((p >> 16u) & 255u)) * (1.0 / 255.0);
+    float yl = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    return vec3(16.0 + 219.0 * yl,
+                128.0 + 224.0 * (c.b - yl) / 1.8556,
+                128.0 + 224.0 * (c.r - yl) / 1.5748);
+}
+
+uint yccByte(float v) { return uint(clamp(v + 0.5, 0.0, 255.0)); }
+
+void executeYuvPack(ivec2 coord, int imgW, int imgH) {
+    int x0 = coord.x * 4;
+    int y0 = coord.y * 2;
+    int total = imgW * imgH;
+    int yBase = total;
+    int uvBase = total + (total >> 2);
+    int rowWords = imgW >> 2;
+
+    vec3 v[8];
+    for (int r = 0; r < 2; r++) {
+        uint yw = 0u;
+        for (int k = 0; k < 4; k++) {
+            vec3 t = yccFromPacked709(out_pixels[(y0 + r) * imgW + x0 + k]);
+            v[r * 4 + k] = t;
+            yw |= yccByte(t.x) << uint(8 * k);
+        }
+        out_pixels[yBase + (y0 + r) * rowWords + coord.x] = yw;
+    }
+
+    uint uvw = 0u;
+    for (int j = 0; j < 2; j++) {
+        int a = 2 * j;
+        float cb = 0.25 * (v[a].y + v[a + 1].y + v[4 + a].y + v[4 + a + 1].y);
+        float cr = 0.25 * (v[a].z + v[a + 1].z + v[4 + a].z + v[4 + a + 1].z);
+        uvw |= yccByte(cb) << uint(16 * j);
+        uvw |= yccByte(cr) << uint(16 * j + 8);
+    }
+    out_pixels[uvBase + coord.y * rowWords + coord.x] = uvw;
+}
+
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_bandY);
     int width = u_passWidth;
@@ -4011,6 +4062,12 @@ void main() {
     }
 
     if (coord.x >= width || coord.y >= height) return;
+
+    // Batch 18B: NV12 pack for the video export (reads out_pixels, writes behind it; never touches the grade globals below)
+    if (u_passIndex == 29) {
+        executeYuvPack(coord, u_srcW, u_srcH);
+        return;
+    }
 
     // Motion S (batch 9): passes 18..21 never touch the grade globals below
     if (u_passIndex >= 18 && u_passIndex <= 21) {
