@@ -174,8 +174,17 @@ class VideoProxy {
 
   /// Returns the path of a playable H.264 / yuv420p / 8-bit copy of [srcPath] (from the cache when it exists), or null when ffmpeg failed.
   /// Never throws. Calls for the same file share one running conversion.
+  ///
+  /// The caller waits at most [proxyTimeout] (15 s): after that this returns null and the caller falls back, so the UI never hangs. The conversion itself is NOT
+  /// abandoned: it keeps running in the background and fills the cache, so opening the same video again a little later finds the finished proxy at once.
+  static const Duration proxyTimeout = Duration(seconds: 15);
+
   static Future<String?> ensureProxy(String srcPath, MediaProbe probe) {
-    return _inflight.putIfAbsent(srcPath, () => _build(srcPath, probe).whenComplete(() => _inflight.remove(srcPath)));
+    final Future<String?> work = _inflight.putIfAbsent(srcPath, () => _build(srcPath, probe).whenComplete(() => _inflight.remove(srcPath)));
+    return work.timeout(proxyTimeout, onTimeout: () {
+      debugPrint('VideoProxy: no proxy after ${proxyTimeout.inSeconds} s, continuing without it (the conversion keeps running in the background)');
+      return null;
+    });
   }
 
   static Future<String?> _build(String srcPath, MediaProbe probe) async {
@@ -202,7 +211,9 @@ class VideoProxy {
 
       final String vf = _scaleFilter(probe);
       // Short GOP (every 12 frames): seeks and scrubbing land on the exact frame quickly. Ultrafast: this runs once, in the background.
-      final String video = '-c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p -vf "$vf" -g 12';
+      // Import fix (task 5): the plainest, safest libx264 command - ultrafast preset, 8-bit yuv420p, no extra encoder options. -vf only makes the size even / caps 4K,
+      // -g 12 keeps the seeks exact (both are encoder-independent).
+      final String video = '-c:v libx264 -preset ultrafast -pix_fmt yuv420p -vf "$vf" -g 12';
       // -fflags +genpts: WebM / MKV files with missing or broken timestamps get generated ones (without them ffmpeg can drop every frame but the first,
       // which is a proxy that is "a single static image").
       final String fpsArg = (probe.fps != null && probe.fps! >= 1 && probe.fps! <= 120) ? probe.fps!.toStringAsFixed(3) : '30';

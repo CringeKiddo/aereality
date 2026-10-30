@@ -31,6 +31,8 @@ import 'editor_views.dart';
 import 'vfx_slots.dart';
 import 'vfx_suite.dart';
 import 'export_suite.dart';
+import 'native_encoder.dart';
+import 'surface_grade_worker.dart';
 import 'crash_log.dart';
 import 'cpu_safe.dart';
 import 'grade_worker.dart';
@@ -2963,10 +2965,21 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final h = size[1];
     Uint8List? raw;
 
+    // Hardware encoder in zero-copy mode (ExportSuite started NativeEncoder before the first frame): the frame is graded AND presented to the encoder's Surface on
+    // the GPU, nothing comes back. The empty list returned below is only a "frame done" token; ExportSuite must NOT write it anywhere (it checks session.surface).
+    final NativeEncoderSession? hwEnc = NativeEncoder.active;
+    final bool surfaceOut = hwEnc != null && hwEnc.surface && !_project.isImage;
+
     if (!_project.isImage) {
       // batch 12 C2: a frame inside a Time Slice wipe comes from the ring (pass 22 + the single dither of pass 23); every other frame takes the normal path below
       final tsOut = await _tsExportFrame(timestampMs, w, h);
       if (tsOut != null) {
+        if (surfaceOut) {
+          // the Time Slice emit left the finished frame in the native output buffer: present it as it is (no readback, no second grade)
+          final pr = await SurfaceGradeWorker.instance.presentCurrent(hwEnc!.windowHandle);
+          if (!pr.presented) throw Exception('Could not hand a Time Slice frame to the video encoder: ${pr.error}');
+          return Uint8List(0);
+        }
         if (!_expNv12) return tsOut;
         // batch 18B: the ring returns RGBA8; the export wants NV12 (same matrix and range as the GPU pass, converted on the CPU for these frames only)
         final Uint8List? conv = rgbaToNv12(tsOut, w, h);
@@ -3017,6 +3030,15 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
     uniforms[0] = timestampMs / 1000.0;
     final gradeWatch = Stopwatch()..start();
+    if (surfaceOut) {
+      final sr = await SurfaceGradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+      StageTimer.add('frame: grade + present (zero copy)', gradeWatch.elapsedMicroseconds);
+      if (!sr.presented) throw Exception('Could not hand a frame to the video encoder: ${sr.error}');
+      if (sr.gpuStatus != 0) {
+        CrashLog.note('  GPU status ${sr.gpuStatus} at t=${timestampMs.round()} ms (0 = ok, 1 = GPU error: CPU fallback frame), native ${sr.micros ~/ 1000} ms');
+      }
+      return Uint8List(0);
+    }
     // Worker isolate: the UI isolate keeps running during the GPU work (no freeze, no "not responding").
     // batch 18B: with _expNv12 the result is NV12 (GPU RGB -> YUV), w * h * 3 / 2 bytes.
     final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable(), nv12: _expNv12);

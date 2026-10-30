@@ -20,12 +20,19 @@ class MotionS {
   static const int size = 1024;
   static const int packBase = 5376;
 
-  /// Intermediate (processed video kept in app-support/motion_s) codec. false = HEVC (libx265) CRF 20, true = H.264 (libx264) CRF 14.
-  /// Flip this to true if HEVC decode / encode is too slow on the phone. Compile-time constant: change it here and rebuild.
-  static const bool useH264Intermediate = false;
+  /// Intermediate (processed video kept in app-support/motion_s) is encoded by the phone's HARDWARE encoder (MediaCodec, MediaCodecEncoder.kt), never by FFmpeg.
+  /// Codec: 'hevc' (default: better for smears and blurs at the same bitrate) or 'h264'. Runtime value: set by the PROCESS panel "Codec" chips,
+  /// saved / loaded by SettingsStore (app_settings.dart).
+  static String intermediateCodec = 'hevc';
 
-  /// Preset of the intermediate encode (libx265, or libx264 when useH264Intermediate). 'veryfast' (default) or 'fast'.
-  /// Runtime value: set by the PROCESS panel "Preset" chips, saved / loaded by AccentStore (accent_state.dart, key "motionPreset").
+  /// Bitrate of the intermediate in Mbps. One of [bitrateOptions]. Runtime value: PROCESS panel "Bitrate" chips, saved by SettingsStore.
+  static const List<int> bitrateOptions = [10, 15, 25, 30, 40, 50, 80];
+  static int bitrateMbps = 25;
+
+  static String sanitizeCodec(Object? v) => v == 'h264' ? 'h264' : 'hevc';
+  static int sanitizeBitrate(Object? v) => (v is num && bitrateOptions.contains(v.toInt())) ? v.toInt() : 25;
+
+  /// Legacy software-encoder preset (libx265 / libx264). The hardware encoder has no preset; the value is kept only so a saved accent.json still loads.
   static String x265Preset = 'veryfast';
 
   /// Any value that is not exactly 'fast' becomes 'veryfast' (bad file, corrupted storage, a future version's value).

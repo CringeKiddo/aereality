@@ -185,6 +185,50 @@ typedef _ProcessNv12Dart = int Function(
 typedef _RgbaToNv12C = ffi.Void Function(ffi.Pointer<ffi.Uint8> rgba, ffi.Int32 w, ffi.Int32 h, ffi.Pointer<ffi.Uint8> outNv12);
 typedef _RgbaToNv12Dart = void Function(ffi.Pointer<ffi.Uint8> rgba, int w, int h, ffi.Pointer<ffi.Uint8> outNv12);
 
+// Zero-copy hardware export: the finished frame goes GPU -> the MediaCodec input Surface (see "SURFACE EXPORT" below).
+typedef _AttachSurfaceC = ffi.Int32 Function(ffi.Pointer<ffi.Void> window, ffi.Int32 w, ffi.Int32 h, ffi.Int32 tenBit, ffi.Double fps);
+typedef _AttachSurfaceDart = int Function(ffi.Pointer<ffi.Void> window, int w, int h, int tenBit, double fps);
+typedef _RenderSurfaceC = ffi.Int32 Function(ffi.Pointer<ffi.Void> window);
+typedef _RenderSurfaceDart = int Function(ffi.Pointer<ffi.Void> window);
+typedef _VoidC = ffi.Void Function();
+typedef _VoidDart = void Function();
+typedef _ProcessToSurfaceC = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  ffi.Int32 lutSize,
+);
+typedef _ProcessToSurfaceDart = int Function(
+  ffi.Pointer<ffi.Uint8> inBytes,
+  int w,
+  int h,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+  ffi.Pointer<ffi.Float> lutTable,
+  int lutSize,
+);
+typedef _MotionToSurfaceC = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> frames,
+  ffi.Int32 w,
+  ffi.Int32 h,
+  ffi.Int32 frameCount,
+  ffi.Int32 centerIdx,
+  ffi.Pointer<ffi.Float> uniforms,
+  ffi.Int32 numUniforms,
+);
+typedef _MotionToSurfaceDart = int Function(
+  ffi.Pointer<ffi.Uint8> frames,
+  int w,
+  int h,
+  int frameCount,
+  int centerIdx,
+  ffi.Pointer<ffi.Float> uniforms,
+  int numUniforms,
+);
+
 // ==========================================
 // VULKAN BRIDGE IMPLEMENTATION
 // ==========================================
@@ -213,6 +257,16 @@ class VulkanBridge {
   static _RgbaToNv12Dart? _rgbaToNv12Fn;
   static _InitTextDart? _initErrorFn; // batch 17A
   static _InitTextDart? _initLogFn;
+
+  // Zero-copy surface export (hardware encoder). All null when the native lib is older than this file.
+  static _GetStatusDart? _surfaceSupportedFn;
+  static _AttachSurfaceDart? _attachSurfaceFn;
+  static _VoidDart? _detachSurfaceFn;
+  static _RenderSurfaceDart? _renderSurfaceFn;
+  static _GetStatusDart? _surfaceTenBitFn;
+  static _ProcessToSurfaceDart? _processToSurfaceFn;
+  static _MotionToSurfaceDart? _motionToSurfaceFn;
+  static _InitTextDart? _surfaceErrorFn;
 
   static bool _isVulkanInitialized = false;
 
@@ -289,6 +343,28 @@ class VulkanBridge {
           } catch (_) {
             _processNv12Fn = null; // native lib without the batch 18B NV12 export: the export falls back to RGBA frames + FFmpeg conversion
             _rgbaToNv12Fn = null;
+          }
+          try {
+            _surfaceSupportedFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('surface_output_supported');
+            _attachSurfaceFn = _lib!.lookupFunction<_AttachSurfaceC, _AttachSurfaceDart>('attach_android_surface');
+            _detachSurfaceFn = _lib!.lookupFunction<_VoidC, _VoidDart>('detach_android_surface');
+            _renderSurfaceFn = _lib!.lookupFunction<_RenderSurfaceC, _RenderSurfaceDart>('render_to_android_surface');
+            _surfaceTenBitFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('surface_is_ten_bit');
+            _processToSurfaceFn = _lib!.lookupFunction<_ProcessToSurfaceC, _ProcessToSurfaceDart>('process_image_to_surface');
+            _surfaceErrorFn = _lib!.lookupFunction<_InitTextC, _InitTextDart>('get_last_surface_error');
+          } catch (_) {
+            _surfaceSupportedFn = null; // native lib without the zero-copy surface export: the hardware encoder runs in buffer mode (NV12)
+            _attachSurfaceFn = null;
+            _detachSurfaceFn = null;
+            _renderSurfaceFn = null;
+            _surfaceTenBitFn = null;
+            _processToSurfaceFn = null;
+            _surfaceErrorFn = null;
+          }
+          try {
+            _motionToSurfaceFn = _lib!.lookupFunction<_MotionToSurfaceC, _MotionToSurfaceDart>('process_motion_to_surface');
+          } catch (_) {
+            _motionToSurfaceFn = null;
           }
         } catch (e) {
           debugPrint('VulkanBridge: Vulkan grading symbols lookup note: $e');
@@ -818,5 +894,137 @@ int vulkanPass23Count() {
     return VulkanBridge._p23CountFn?.call() ?? -1;
   } catch (_) {
     return -1;
+  }
+}
+
+
+// ==========================================
+// SURFACE EXPORT (zero copy, hardware encoder)
+// ==========================================
+// Flow: Kotlin starts the MediaCodec encoder and gives back the ANativeWindow* of its input Surface as a number (native_encoder.dart) ->
+// vulkanAttachSurface() builds a swapchain on it -> for every frame processImageToSurface() / processMotionToSurface() grades and presents it on the GPU
+// (no pixels come back to Dart) -> the encoder is finished -> vulkanDetachSurface().
+
+/// True when the driver can present to an encoder Surface (VK_KHR_android_surface + VK_KHR_swapchain) and the engine is ready. Otherwise the encoder runs in buffer mode.
+bool vulkanSurfaceExportAvailable() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return VulkanBridge._attachSurfaceFn != null && VulkanBridge._processToSurfaceFn != null && (VulkanBridge._surfaceSupportedFn?.call() ?? 0) == 1;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Builds the swapchain on the encoder Surface. [windowHandle] = the ANativeWindow* number from Kotlin, [w] x [h] = the export size, [fps] = export frame rate.
+/// 0 = ready, negative = not possible ([vulkanLastSurfaceError] says why).
+int vulkanAttachSurface(int windowHandle, int w, int h, {bool tenBit = false, double fps = 30.0}) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._attachSurfaceFn;
+  if (fn == null || windowHandle == 0) return -100;
+  try {
+    return fn(ffi.Pointer<ffi.Void>.fromAddress(windowHandle), w, h, tenBit ? 1 : 0, fps);
+  } catch (e) {
+    debugPrint('vulkanAttachSurface error: $e');
+    return -101;
+  }
+}
+
+/// Destroys the swapchain. Call it AFTER the encoder was finished (queued frames are then not lost) and BEFORE Kotlin releases the window.
+void vulkanDetachSurface() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    VulkanBridge._detachSurfaceFn?.call();
+  } catch (e) {
+    debugPrint('vulkanDetachSurface error: $e');
+  }
+}
+
+/// true when the attached swapchain really is 10-bit (it falls back to 8-bit frames when the GPU cannot do the 10-bit blit).
+bool vulkanSurfaceIsTenBit() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return (VulkanBridge._surfaceTenBitFn?.call() ?? 0) == 1;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Text of the last surface failure ('' = none).
+String vulkanLastSurfaceError() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final p = VulkanBridge._surfaceErrorFn?.call();
+    return (p == null || p == ffi.nullptr) ? '' : p.toDartString();
+  } catch (_) {
+    return '';
+  }
+}
+
+/// Presents the frame that is CURRENTLY in the native output buffer (for example right after timeSliceEmit) to the attached Surface. 0 = presented.
+int vulkanRenderToSurface(int windowHandle) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._renderSurfaceFn;
+  if (fn == null || windowHandle == 0) return -100;
+  try {
+    return fn(ffi.Pointer<ffi.Void>.fromAddress(windowHandle));
+  } catch (e) {
+    debugPrint('vulkanRenderToSurface error: $e');
+    return -101;
+  }
+}
+
+/// Grades one RGBA8 frame of the EXPORT size and presents it to the attached Surface; nothing is read back.
+/// 0 = presented (GPU grade), 1 = presented but the simplified CPU fallback grade made the frame (see [vulkanLastRenderStatus]), negative = nothing was presented.
+int processImageToSurface(Uint8List inBytes, int w, int h, Float32List uniforms, {Float32List? lutTable}) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._processToSurfaceFn;
+  if (fn == null || w <= 0 || h <= 0 || inBytes.length < w * h * 4) return -100;
+  final inPtr = calloc<ffi.Uint8>(w * h * 4);
+  final uPtr = calloc<ffi.Float>(uniforms.length);
+  ffi.Pointer<ffi.Float>? lutPtr;
+  try {
+    inPtr.asTypedList(w * h * 4).setAll(0, inBytes.length == w * h * 4 ? inBytes : Uint8List.sublistView(inBytes, 0, w * h * 4));
+    uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    int lutSize = 0;
+    if (lutTable != null && lutTable.isNotEmpty) {
+      lutPtr = calloc<ffi.Float>(lutTable.length);
+      lutPtr.asTypedList(lutTable.length).setAll(0, lutTable);
+      lutSize = lutTable.length;
+    }
+    return fn(inPtr, w, h, uPtr, uniforms.length, lutPtr ?? ffi.Pointer.fromAddress(0), lutSize);
+  } catch (e) {
+    debugPrint('processImageToSurface error: $e');
+    return -101;
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(uPtr);
+    if (lutPtr != null) calloc.free(lutPtr);
+  }
+}
+
+/// True when the native library can render Motion S frames straight into the encoder Surface.
+bool vulkanMotionSurfaceAvailable() {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._motionToSurfaceFn != null && VulkanBridge._attachSurfaceFn != null;
+}
+
+/// Motion S frame -> attached encoder Surface (same inputs as [processMotion]). 0 = presented, otherwise [vulkanLastRenderStatus] / [vulkanLastSurfaceError] say why.
+int processMotionToSurface(Uint8List frames, int w, int h, int frameCount, int centerIdx, Float32List uniforms) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._motionToSurfaceFn;
+  final frameBytes = w * h * 4;
+  if (fn == null || frames.length < frameBytes * frameCount || centerIdx < 0 || centerIdx >= frameCount) return -100;
+  final inPtr = calloc<ffi.Uint8>(frames.length);
+  final uPtr = calloc<ffi.Float>(uniforms.length);
+  try {
+    inPtr.asTypedList(frames.length).setAll(0, frames);
+    uPtr.asTypedList(uniforms.length).setAll(0, uniforms);
+    return fn(inPtr, w, h, frameCount, centerIdx, uPtr, uniforms.length);
+  } catch (e) {
+    debugPrint('processMotionToSurface error: $e');
+    return -101;
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(uPtr);
   }
 }

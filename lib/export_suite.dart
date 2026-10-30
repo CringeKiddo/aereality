@@ -18,11 +18,13 @@ import 'cpu_safe.dart';
 import 'vulkan_bridge.dart';
 import 'export_matrix.dart';
 import 'export_clock.dart';
-import 'hw_encoder.dart'; // batch 18B: hardware H.264 / HEVC (MediaCodec) detection
+import 'native_encoder.dart';
 
-/// Batch 18B: true = H.264 / HEVC 8-bit exports try the phone's hardware encoder first (h264_mediacodec / hevc_mediacodec, proven by a real test
-/// encode) and fall back to libx264 / libx265 when it is not available. false = always software.
-const bool kExportUseHardwareEncoder = true;
+/// H.264 / HEVC (8-bit and 10-bit) are encoded by the phone's hardware encoder through Kotlin MediaCodec (NativeEncoder / MediaCodecEncoder.kt): no FFmpeg encode.
+/// true = the graded frames go GPU -> the encoder's Surface without touching the CPU. false = NV12 frames are sent to the encoder instead (slower, same picture);
+/// flip it if a phone's surface export ever looks softer than the NV12 one.
+/// VP9 / AV1 / ProRes / 4:4:4 stay on the software FFmpeg path (RGBA frames for VP9 / AV1).
+const bool kExportPreferSurface = true;
 
 class ExportSuite {
   static const MethodChannel _mediaChannel = MethodChannel('com.aereality/media');
@@ -380,9 +382,9 @@ class ExportSuite {
     String selectedRes = '1080p';
     String selectedCodec = 'H.264';
     String selectedBitDepth = '8-bit';
-    String selectedBitrate = 'High (25 Mbps)';
+    String selectedBitrate = '25 Mbps';
     String selectedContainer = 'MP4';
-    double selectedFps = const [24.0, 25.0, 30.0, 48.0, 50.0, 60.0].contains(videoFps) ? videoFps : 30.0;
+    double selectedFps = ExportChoices.fps.map((e) => e.toDouble()).contains(videoFps) ? videoFps : 30.0;
 
     bool isExporting = false;
     double exportProgress = 0.0;
@@ -464,7 +466,7 @@ class ExportSuite {
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: [24.0, 25.0, 30.0, 48.0, 50.0, 60.0].map((f) {
+                    children: ExportChoices.fps.map((e) => e.toDouble()).map((f) {
                       final selected = selectedFps == f;
                       return ChoiceChip(
                         label: Text('${f.toInt()} fps'),
@@ -622,11 +624,8 @@ class ExportSuite {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      'Standard (12 Mbps)',
-                      'High (25 Mbps)',
-                      'Ultra 4K (50 Mbps)',
+                      for (final m in ExportChoices.bitratesMbps) '$m Mbps',
                       'Lossless (CRF 14)',
-                      'Master (80 Mbps)'
                     ].map((br) {
                       final selected = selectedBitrate == br;
                       return ChoiceChip(
@@ -957,8 +956,9 @@ class ExportSuite {
   //     -> per frame: grade at the export size on the GPU, GPU converts RGB -> NV12 (pass 29), only NV12 comes back (1.5 bytes / pixel)
   //     -> NV12 batch file -> ONE ffmpeg call encodes it straight into the FINAL codec (no lossless mezzanine, no second encode)
   //     -> parts are joined with a stream copy (+ audio).
-  //   H.264 / HEVC 8-bit: hardware encoder (MediaCodec) when it passes a real test encode, otherwise libx264 / libx265.
-  //   VP9 / AV1: software, multithreaded.
+  //   H.264 / HEVC 8-bit / 10-bit: Kotlin MediaCodec hardware encoder (NativeEncoder). Frames go GPU -> encoder Surface (or NV12 buffers), ONE continuous MP4,
+  //     no parts, no concat, no FFmpeg encode. FFmpeg is only used to decode the source and, if needed, to copy the audio / container (-c copy).
+  //   VP9 / AV1: software FFmpeg, multithreaded, RGBA frames (no NV12 pass). ProRes and 4:4:4: software FFmpeg as before.
   // ===========================================================================
   static Future<void> executeVideoExport({
     required BuildContext context,
@@ -1017,37 +1017,148 @@ class ExportSuite {
       final targetDims = _calculateDimensions(resolution, videoWidth, videoHeight);
       final int outW = (targetDims['w']! + 3) & ~3; // the NV12 pass handles 4 pixels per row per invocation
       final int outH = (targetDims['h']! + 1) & ~1;
-      final bool nv12 = vulkanNv12Available(); // GPU RGB -> YUV; false only for a native library without batch 18B
-      await configureRender(outW, outH, nv12);
-      final int expectedBytes = nv12 ? outW * outH * 3 ~/ 2 : outW * outH * 4;
-
-      final totalFrames = ((videoDurationMs / 1000.0) * videoFps).round().clamp(1, 999999);
-      final frameIntervalMs = 1000.0 / videoFps;
 
       final bool isProRes = codec.contains('ProRes');
       final bool isHevc = codec.contains('HEVC') || codec.contains('H.265');
       final bool isAv1 = codec.contains('AV1');
       final bool isVp9 = codec.contains('VP9');
       final bool isH264 = !isProRes && !isHevc && !isAv1 && !isVp9;
+      // H.264 / HEVC at 8 or 10 bit = hardware (Kotlin MediaCodec). Everything else = software FFmpeg.
+      final bool hwPath = (isH264 || isHevc) && (bitDepth.startsWith('8') || bitDepth.startsWith('10'));
+      // VP9 / AV1 are back on RGBA frames (FFmpeg converts), exactly as before the NV12 pass existed; the NV12 pass stays for the other software encoders.
+      final bool nv12 = !hwPath && vulkanNv12Available() && !isVp9 && !isAv1;
+      if (!hwPath) await configureRender(outW, outH, nv12);
+      final int expectedBytes = nv12 ? outW * outH * 3 ~/ 2 : outW * outH * 4;
 
-      // ---- 2. Encoder choice (printed at the start of the export) ----
-      String depth = bitDepth;
-      await CpuSafe.ensureLoaded();
-      HwEncoderChoice? hw;
-      String hwNote = '';
-      if (kExportUseHardwareEncoder && nv12 && (isH264 || isHevc) && bitDepth.startsWith('8')) {
-        onProgress(0.01, 'Checking the hardware ${isHevc ? 'HEVC' : 'H.264'} encoder...');
-        hw = await HwEncoder.pick(
-          hevc: isHevc,
-          w: outW,
-          h: outH,
-          fps: videoFps,
-          wantedMbps: _hardwareMbps(bitrateProfile, outW, outH, videoFps),
+      final totalFrames = ((videoDurationMs / 1000.0) * videoFps).round().clamp(1, 999999);
+      final frameIntervalMs = 1000.0 / videoFps;
+
+      // ===================== HARDWARE PATH: H.264 / HEVC through Kotlin MediaCodec =====================
+      if (hwPath) {
+        final String ext = container.toLowerCase();
+        final int mbps = _hardwareMbps(bitrateProfile, outW, outH, videoFps);
+        final String codecName = isHevc ? 'HEVC' : 'H.264';
+        final bool wantAudio = audioSourcePath != null && File(audioSourcePath).existsSync();
+        final String hwFile = '${sessionTempDir.path}/hw_$timestamp.mp4';
+        onProgress(0.01, 'Starting the hardware $codecName encoder...');
+
+        NativeEncoderSession hwSession;
+        try {
+          hwSession = await NativeEncoder.start(NativeEncoderConfig(
+            codec: isHevc ? 'hevc' : 'h264',
+            width: outW,
+            height: outH,
+            fps: videoFps,
+            bitrateMbps: mbps,
+            tenBit: bitDepth.startsWith('10'),
+            outputPath: hwFile,
+            preferSurface: kExportPreferSurface,
+            audioPath: wantAudio ? audioSourcePath : null,
+            audioStartMs: 0,
+            audioDurationMs: videoDurationMs.round(),
+          ));
+        } on NativeEncoderException catch (e) {
+          throw Exception('This phone\'s hardware $codecName encoder could not start at ${outW}x$outH, ${videoFps.round()} fps: ${e.message} '
+              'Try a lower resolution or frame rate, or export with VP9 / AV1.');
+        }
+        final String depthUsed = hwSession.tenBit ? '10-bit' : '8-bit';
+        final String encoderLine = 'Using hardware $codecName (${hwSession.encoder}${hwSession.hardware ? '' : ', software MediaCodec'}), '
+            '${hwSession.surface ? 'zero-copy GPU surface' : 'NV12 buffers'}, $mbps Mbps, $depthUsed';
+        onProgress(0.02, encoderLine);
+        CrashLog.note(encoderLine);
+        for (final n in hwSession.notes) {
+          ExportNotes.add('encoder note: $n');
+        }
+        if (bitDepth.startsWith('10') && !hwSession.tenBit) {
+          final note = 'This phone cannot encode 10-bit $codecName in hardware. Exporting 8-bit instead.';
+          onProgress(0.02, note);
+          if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note), duration: const Duration(seconds: 5)));
+        }
+
+        await configureRender(outW, outH, !hwSession.surface); // surface: the render returns only a "frame done" token; buffer mode: NV12 frames
+        final int nv12Bytes = outW * outH * 3 ~/ 2;
+        const hwBatch = 30;
+        final int hwBatches = (totalFrames / hwBatch).ceil();
+        for (int b = 0; b < hwBatches; b++) {
+          final startFrame = b * hwBatch;
+          final endFrame = (startFrame + hwBatch).clamp(0, totalFrames);
+          final cnt = endFrame - startFrame;
+          final prep = prepareFrames;
+          if (prep != null) {
+            CrashLog.note('batch $b/$hwBatches source decode START (frames ${startFrame + 1}..$endFrame)');
+            await StageTimer.time('batch: decode source', () => prep(startFrame * frameIntervalMs, cnt, videoFps));
+          }
+          int usTotal = 0;
+          int usMax = 0;
+          for (int f = 0; f < cnt; f++) {
+            final idx = startFrame + f;
+            final watch = Stopwatch()..start();
+            final bytes = await render(idx * frameIntervalMs);
+            final us = watch.elapsedMicroseconds;
+            usTotal += us;
+            if (us > usMax) usMax = us;
+            if (!hwSession.surface) {
+              if (bytes.length != nv12Bytes) throw Exception('Frame $idx returned ${bytes.length} bytes, expected $nv12Bytes (${outW}x$outH NV12).');
+              if (!await StageTimer.time('frame: queue to encoder', () => NativeEncoder.queueNv12(bytes, idx))) {
+                throw Exception('The hardware encoder did not accept frame ${idx + 1}.');
+              }
+            }
+            onProgress((idx / totalFrames) * 0.88, 'Rendering frames (${idx + 1}/$totalFrames)...');
+          }
+          ExportNotes.add('batch $b: frames ${startFrame + 1}..$endFrame, avg ${(usTotal / cnt / 1000).toStringAsFixed(0)} ms/frame, max ${(usMax / 1000).toStringAsFixed(0)} ms');
+          ExportNotes.flush();
+        }
+
+        onProgress(0.90, 'Finishing the video...');
+        final NativeEncoderResult hwRes = await NativeEncoder.finish();
+        if (!hwRes.ok) throw Exception('The hardware encoder could not finish the video${hwRes.error == null ? '' : ': ${hwRes.error}'}');
+        CrashLog.note('hardware encode done: ${hwRes.frames}/$totalFrames frames, ${hwRes.bytes} bytes, audio ${hwRes.audio}, 10-bit=${hwRes.tenBit}');
+        if (hwRes.frames < totalFrames * 0.9) {
+          throw Exception('The hardware encoder dropped too many frames (${hwRes.frames} of $totalFrames).');
+        }
+
+        // FFmpeg is only used here for stream COPY: audio that is not AAC (Opus / Vorbis / MP3 sources) and the MKV container. No video is re-encoded.
+        final bool isMp4Family = container == 'MP4' || container == 'MOV';
+        final bool needAudioMux = wantAudio && !hwRes.audio.startsWith('copied');
+        final bool needRemux = container == 'MKV';
+        File tempFinalFile = File(hwRes.path);
+        if (needAudioMux || needRemux) {
+          onProgress(0.94, needAudioMux ? 'Adding the audio...' : 'Packing the video...');
+          final out = File('${sessionTempDir.path}/final_$timestamp.$ext');
+          final hvcTag = (isHevc && isMp4Family) ? '-tag:v hvc1 ' : '';
+          final fastStart = isMp4Family ? '-movflags +faststart ' : '';
+          final cmd = needAudioMux
+              ? '-y -i "${hwRes.path}" -i "$audioSourcePath" -map 0:v:0 -map 1:a:0? -c:v copy $hvcTag-c:a ${ExportMatrix.getAudioCodec(container)} -b:a 320k -shortest $fastStart"${out.path}"'
+              : '-y -i "${hwRes.path}" -c copy $hvcTag$fastStart"${out.path}"';
+          CrashLog.note('copy-mux START: ffmpeg $cmd');
+          final sess = await StageTimer.time('final: copy mux', () => FFmpegKit.execute(cmd));
+          final rc = await sess.getReturnCode();
+          if (!ReturnCode.isSuccess(rc) || !out.existsSync() || out.lengthSync() == 0) {
+            final tail = await _sessionLogTail(sess);
+            throw Exception('Could not pack the video (rc: $rc)\n$tail');
+          }
+          tempFinalFile = out;
+        }
+
+        await _saveFinishedVideo(
+          context: context,
+          tempFinalFile: tempFinalFile,
+          ext: ext,
+          resolution: resolution,
+          codec: codec,
+          depth: depthUsed,
+          container: container,
+          timestamp: timestamp,
+          encoderLine: encoderLine,
+          onProgress: onProgress,
         );
-        if (hw == null) hwNote = HwEncoder.lastFailure;
+        return;
       }
 
-      if (hw == null) {
+      // ---- 2. Software encoder (VP9 / AV1 / ProRes / 4:4:4): CPU-safety probe ----
+      String depth = bitDepth;
+      await CpuSafe.ensureLoaded();
+      {
         // CPU-safety probe: a ~1 s test encode with the real encoder settings BEFORE the long render, so an encoder that
         // executes an instruction this phone lacks (SIGILL) fails in a second, and the next launch steps it down.
         final String? guardedEncoder = CpuSafe.encoderForCodec(codec);
@@ -1068,10 +1179,7 @@ class ExportSuite {
       }
 
       final int threads = _encoderThreads();
-      final String encoderLine = hw != null
-          ? 'Using ${hw.label}'
-          : 'Using ${_softwareLabel(codec)}${(isH264 || isHevc) && kExportUseHardwareEncoder && bitDepth.startsWith('8') ? ' (hardware encoder not used: ${hwNote.isEmpty ? 'not available' : hwNote})' : ''}'
-              '${isVp9 || isAv1 ? ', $threads threads' : ''}';
+      final String encoderLine = 'Using ${_softwareLabel(codec)}${isVp9 || isAv1 ? ', $threads threads' : ''}';
       onProgress(0.02, encoderLine);
       CrashLog.note(encoderLine);
       debugPrint('EXPORT: $encoderLine');
@@ -1081,7 +1189,7 @@ class ExportSuite {
       final totalBatches = (totalFrames / batchSize).ceil();
       final List<String> partVideoPaths = [];
       Future<void>? pendingEncode; // encode of the previous batch, running while the next batch is decoded + rendered
-      final String partExt = hw != null ? 'ts' : container.toLowerCase(); // hardware parts: MPEG-TS (parameter sets repeat in the stream, joins cleanly)
+      final String partExt = container.toLowerCase();
       final String rawExt = nv12 ? 'nv12' : 'rgba';
 
       // Pass 1: rolling 30-frame GPU pipeline. Each batch is written to ONE raw file (the rawvideo demuxer does not expand frame_%04d patterns).
@@ -1140,7 +1248,6 @@ class ExportSuite {
           outW: outW,
           outH: outH,
           nv12: nv12,
-          hw: hw,
           codec: codec,
           bitDepth: depth,
           bitrateProfile: bitrateProfile,
@@ -1196,9 +1303,8 @@ class ExportSuite {
       // Audio codec must match the container (WebM/MKV -> opus, MP4/MOV -> aac).
       final bool isMp4Family = container == 'MP4' || container == 'MOV';
       final fastStart = isMp4Family ? '-movflags +faststart' : '';
-      // Hardware parts are MPEG-TS: the file tags (hvc1 for HEVC in MP4 / MOV, BT.709 limited range) are written here, at the join.
-      final String hvcTag = (hw != null && hw.hevc && isMp4Family) ? '-tag:v hvc1 ' : '';
-      final String colorTags = hw != null ? '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709 ' : '';
+      const String hvcTag = '';   // software parts carry their own tags (hvc1 is set per part in _buildBatchEncodeCmd)
+      const String colorTags = '';
       String concatCmd;
       if (audioSourcePath != null && File(audioSourcePath).existsSync()) {
         final audioCodec = ExportMatrix.getAudioCodec(container);
@@ -1262,6 +1368,12 @@ class ExportSuite {
       rethrow;
     } finally {
       vulkanSetBandBudgetMs(40);
+      // an export that stopped half way must not leave a MediaCodec / Surface open (after a normal finish nothing is active)
+      if (NativeEncoder.active != null) {
+        try {
+          await NativeEncoder.cancel();
+        } catch (_) {}
+      }
       // Release the decoded source batch (it can be hundreds of MB on disk)
       try {
         await prepareFrames?.call(0, 0, videoFps);
@@ -1279,18 +1391,60 @@ class ExportSuite {
     }
   }
 
+
+  // Shared last step of the hardware path: save to Movies/Shaderly and report.
+  static Future<void> _saveFinishedVideo({
+    required BuildContext context,
+    required File tempFinalFile,
+    required String ext,
+    required String resolution,
+    required String codec,
+    required String depth,
+    required String container,
+    required int timestamp,
+    required String encoderLine,
+    required Function(double, String) onProgress,
+  }) async {
+    onProgress(0.97, 'Saving video...');
+    final cleanCodec = codec.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
+    final cleanBitDepth = depth.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_');
+    final fileName = 'Shaderly_${resolution}_${cleanCodec}_${cleanBitDepth}_$timestamp.$ext';
+    final mimeType = container == 'WEBM'
+        ? 'video/webm'
+        : container == 'MOV'
+            ? 'video/quicktime'
+            : container == 'MKV'
+                ? 'video/x-matroska'
+                : 'video/mp4';
+    final finalUri = await StageTimer.time('save to Movies', () => saveToMovies(
+          sourcePath: tempFinalFile.path,
+          fileName: fileName,
+          mimeType: mimeType,
+        ));
+    CrashLog.note('saved to MediaStore: $finalUri');
+    final timingReport = '$encoderLine\n${StageTimer.summary()}';
+    CrashLog.note(timingReport);
+    CrashLog.end('video export finished');
+    onProgress(1.0, 'Export complete!');
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved to Movies/Shaderly: $fileName'), backgroundColor: const Color(0xFF00E5FF)),
+      );
+    }
+    if (kShowExportTiming && context.mounted) {
+      await StageTimer.showReport(context, timingReport);
+    }
+  }
+
   // ===========================================================================
   // ENCODER HELPERS
   // ===========================================================================
   static int _profileMbps(String bitrateProfile) {
-    if (bitrateProfile.contains('Master')) return 80;
-    if (bitrateProfile.contains('Ultra')) return 50;
-    if (bitrateProfile.contains('High')) return 25;
-    if (bitrateProfile.contains('Standard')) return 12;
-    return 0;
+    final m = RegExp(r'(\d+)\s*Mbps').firstMatch(bitrateProfile); // '10 Mbps' ... '80 Mbps'; 'Lossless (CRF 14)' has none -> 0
+    return m == null ? 0 : int.parse(m.group(1)!);
   }
 
-  /// Hardware encoders are bitrate controlled (no CRF). The profile's Mbps, or for "Lossless" a high bitrate for the size (0.3 bit / pixel / frame, 12..100 Mbps).
+  /// The hardware encoder is bitrate controlled (no CRF). The profile's Mbps, or for "Lossless" a high bitrate for the size (0.3 bit / pixel / frame, 12..100 Mbps).
   static int _hardwareMbps(String bitrateProfile, int w, int h, double fps) {
     final int p = _profileMbps(bitrateProfile);
     if (p > 0) return p;
@@ -1323,7 +1477,6 @@ class ExportSuite {
     required int outW,
     required int outH,
     required bool nv12,
-    required HwEncoderChoice? hw,
     required String codec,
     required String bitDepth,
     required String bitrateProfile,
@@ -1332,12 +1485,6 @@ class ExportSuite {
   }) {
     const sdrTags = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
     final String input = '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format ${nv12 ? 'nv12' : 'rgba'} -video_size ${outW}x$outH -framerate $fps -i "$inputFile"';
-
-    // ---- Hardware H.264 / HEVC (MediaCodec): the NV12 frames go in untouched, -b:v rate control, MPEG-TS part ----
-    if (hw != null) {
-      return '$input -an -c:v ${hw.encoder} -b:v ${hw.bitrateMbps}M -pix_fmt ${hw.pixFmt} -g ${(fps * 2).round()} $sdrTags '
-          '-muxdelay 0 -muxpreload 0 -f mpegts "$outputFile"';
-    }
 
     final is10Bit = bitDepth.startsWith('10');
     final is16Bit = bitDepth.startsWith('16');
@@ -1377,8 +1524,8 @@ class ExportSuite {
       cOption = '-c:v libx265$hvcTag';
       speed = '-preset veryfast';
       rate = '-crf 20';
-      // Batch 18B: the single-thread locks (pools=none, frame-threads=1) are gone, x265 uses its own thread pool and frame threads again.
-      codecExtra = '-x265-params log-level=error:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()}';
+      // pools=none + frame-threads=1 are REQUIRED: without them libx265 dies with SIGILL on the Unisoc S6603L1 CPU (do not remove).
+      codecExtra = '-x265-params log-level=error:pools=none:frame-threads=1:bframes=3:rc-lookahead=20${CpuSafe.x265AsmSuffix()}';
     } else if (isAv1) {
       cOption = '-c:v libsvtav1';
       speed = '-preset 10 -svtav1-params lp=$threads'; // lp = SVT-AV1's level of parallelism (logical processors it may use)

@@ -17,6 +17,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'accent_state.dart';
+import 'app_settings.dart';
 import 'constants.dart';
 import 'editor_views.dart' show SmoothSliderRow;
 import 'export_clock.dart';
@@ -899,17 +900,23 @@ class _MotionSScreenState extends State<MotionSScreen> {
                   ],
                 ),
               ),
-            _chips('Preset', const ['Fast', 'Very Fast'], MotionS.x265Preset == 'fast' ? 0 : 1, (i) {
+            _chips('Codec', const ['HEVC', 'H.264'], MotionS.sanitizeCodec(MotionS.intermediateCodec) == 'hevc' ? 0 : 1, (i) {
               if (_phase == _Phase.processing) return; // locked while a process runs
-              MotionS.x265Preset = i == 0 ? 'fast' : 'veryfast';
-              AccentStore.save();
+              MotionS.intermediateCodec = i == 0 ? 'hevc' : 'h264';
+              SettingsStore.save();
+              setState(() {});
+            }),
+            _chips('Bitrate (Mbps)', [for (final b in MotionS.bitrateOptions) '$b'], MotionS.bitrateOptions.indexOf(MotionS.sanitizeBitrate(MotionS.bitrateMbps)), (i) {
+              if (_phase == _Phase.processing) return; // locked while a process runs
+              MotionS.bitrateMbps = MotionS.bitrateOptions[i];
+              SettingsStore.save();
               setState(() {});
             }),
             _plateButton('START PROCESS', Icons.auto_awesome_rounded, accent, _nativeOk ? _startProcess : null, filled: true),
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text(
-                'Renders the WHOLE video on the GPU in the background and stores it as a lossless file (large: roughly 1 GB per minute of 1080p). It is only exported if you say yes afterwards.',
+                'Renders the WHOLE video on the GPU in the background and stores it with the phone\'s hardware encoder (HEVC by default) at the bitrate above; higher bitrate = cleaner smears and blurs, bigger file. It is only exported if you say yes afterwards.',
                 style: TextStyle(color: Colors.white30, fontSize: 10.5),
               ),
             ),

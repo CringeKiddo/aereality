@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'constants.dart';
+import 'motion_slots.dart';
 
 /// Batch 17B: how the editor preview behaves while the video PLAYS.
 ///  * smooth   - "Smooth (Native)": the native video plays at full speed, NOTHING is graded during playback, the frame is graded when you pause.
@@ -40,6 +41,8 @@ class SettingsStore {
   static const String _kEngine = 'shaderly.previewEngine'; // batch 17B: 'smooth' | 'adaptive'
   static const String _kFlare = 'shaderly.fastFlares';
   static const String _kTheme = 'shaderly.themeId';
+  static const String _kMotionBitrate = 'shaderly.motionBitrateMbps'; // Motion S intermediate bitrate (hardware encoder)
+  static const String _kMotionCodec = 'shaderly.motionCodec'; // 'hevc' | 'h264'
 
   static SharedPreferences? _prefs;
 
@@ -71,6 +74,8 @@ class SettingsStore {
       gGradeActiveFrameOnly = gPreviewEngine == PreviewEngine.smooth; // keep the legacy global in step
       gFlareHalfRes = p.getBool(_kFlare) ?? gFlareHalfRes;
       savedThemeId = p.getString(_kTheme);
+      MotionS.bitrateMbps = MotionS.sanitizeBitrate(p.getInt(_kMotionBitrate));
+      MotionS.intermediateCodec = MotionS.sanitizeCodec(p.getString(_kMotionCodec));
     } catch (e) {
       debugPrint('SettingsStore.load failed: $e');
     }
@@ -85,6 +90,8 @@ class SettingsStore {
       await p.setBool(_kGradeOnly, gGradeActiveFrameOnly);
       await p.setString(_kEngine, gPreviewEngine == PreviewEngine.adaptive ? 'adaptive' : 'smooth');
       await p.setBool(_kFlare, gFlareHalfRes);
+      await p.setInt(_kMotionBitrate, MotionS.sanitizeBitrate(MotionS.bitrateMbps));
+      await p.setString(_kMotionCodec, MotionS.sanitizeCodec(MotionS.intermediateCodec));
     } catch (e) {
       debugPrint('SettingsStore.save failed: $e');
     }

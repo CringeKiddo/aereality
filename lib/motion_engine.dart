@@ -6,9 +6,10 @@
 //                         export already do), grades them when a project is the source (GradeWorker = the existing grade path),
 //                         renders Motion S on Vulkan (MotionWorker -> process_motion) and writes the finished frames.
 //  * Start Process      : processAll() renders EVERY frame on Vulkan in a worker isolate (UI stays free), writes batches of raw frames,
-//                         stores each batch as HEVC CRF 20 in MP4 at MotionS.x265Preset (H.264 CRF 14 when MotionS.useH264Intermediate) and joins them. Nothing leaves a
-//                         half-processed file behind: the result only appears (renamed) when the last frame is done; cancel deletes everything.
-//                         ffmpeg is used ONLY to decode source frames and to store finished frames. No ffmpeg motion blur anywhere.
+//                         hands every finished frame to the phone's HARDWARE encoder (NativeEncoder / MediaCodecEncoder.kt: HEVC by default, H.264 optional, at
+//                         MotionS.bitrateMbps) - zero-copy GPU -> Surface when the driver allows it, NV12 buffers otherwise - as ONE continuous MP4 (no parts, no join).
+//                         Nothing leaves a half-processed file behind: the result only appears (renamed) when the last frame is done; cancel deletes everything.
+//                         ffmpeg is used ONLY to decode source frames (no FFmpeg encode, no x265 / x264). No ffmpeg motion blur anywhere.
 //  * MotionExportFeed   : renderFrameToRgba / prepareFrames callbacks for ExportSuite.showExportSheet (the live export path), reading
 //                         the processed video back frame by frame.
 //
@@ -31,6 +32,7 @@ import 'crash_log.dart';
 import 'grade_worker.dart';
 import 'models.dart';
 import 'motion_slots.dart';
+import 'native_encoder.dart';
 import 'motion_worker.dart';
 import 'project_uniforms.dart';
 import 'vulkan_bridge.dart';
@@ -322,7 +324,7 @@ class MotionEngine {
   // ---------------------------------------------------------------------------------------------------------------
   // START PROCESS: every frame, on Vulkan, in the worker isolate
   // ---------------------------------------------------------------------------------------------------------------
-  /// Returns the processed video (HEVC CRF 20 / MP4, or H.264 CRF 14 / MP4 when MotionS.useH264Intermediate) or null when cancelled / failed ([lastError] says why).
+  /// Returns the processed video (hardware HEVC / H.264 in MP4, see MotionS.intermediateCodec / bitrateMbps) or null when cancelled / failed ([lastError] says why).
   String? lastError;
 
   Future<MotionProcessResult?> processAll({
@@ -353,30 +355,57 @@ class MotionEngine {
 
     // batch size from a ~190 MB source window
     final batch = (((190 * 1024 * 1024) ~/ fb) - back - fwd).clamp(4, 24).toInt();
-    final partFiles = <File>[];
     final rawCache = <int, Uint8List>{};
     final gradedCache = <int, Uint8List>{};
     final started = DateTime.now();
-    CrashLog.begin('Motion S process', {'frames': total, 'size': '${w}x$h', 'fps': fps, 'mode': MotionS.modeOf(settings), 'graded': src.graded});
+    final tmpOut = File('${work.path}/final.mp4');
+    CrashLog.begin('Motion S process', {'frames': total, 'size': '${w}x$h', 'fps': fps, 'mode': MotionS.modeOf(settings), 'graded': src.graded, 'codec': MotionS.intermediateCodec, 'mbps': MotionS.bitrateMbps});
     vulkanSetBandBudgetMs(24); // shorter GPU submits: the phone UI stays fluid while this runs
     int done = 0;
     bool failed = false;
+    bool encoderOpen = false;
+    NativeEncoderSession? session;
     try {
-      // FFmpeg's own colour conversion is part of decoding / storing here too: run the existing CPU-safety probe first (once per level)
+      // Decoding still uses FFmpeg's colour conversion (swscale): run the existing CPU-safety probe first (once per level).
       try {
         await CpuSafe.verifyConversion(tenBit: false);
       } catch (e) {
         lastError = e.toString().replaceFirst('Exception: ', '');
         return null;
       }
-      // The intermediate is now a real x265 / x264 encode (it used to be FFV1, which is FFmpeg core). Run the existing CPU-safety probe
-      // for that encoder first: a SIGILL then happens in ~1 s instead of mid-render, and CpuSafe steps the encoder down on the next launch.
-      try {
-        await CpuSafe.verifyEncoder(MotionS.useH264Intermediate ? 'x264' : 'x265', tenBit: false);
-      } catch (e) {
-        lastError = e.toString().replaceFirst('Exception: ', '');
+
+      // ENCODING: the phone's hardware encoder (MediaCodec) - no x265 / x264 / FFmpeg encode at all. One continuous encode of the whole video:
+      // no parts, no concat join. HEVC by default (best for smears / blurs); if this phone has no HEVC encoder it silently uses H.264.
+      String codec = MotionS.sanitizeCodec(MotionS.intermediateCodec);
+      for (int attempt = 0; attempt < 2 && session == null; attempt++) {
+        try {
+          session = await NativeEncoder.start(NativeEncoderConfig(
+            codec: codec,
+            width: w,
+            height: h,
+            fps: fps,
+            bitrateMbps: MotionS.sanitizeBitrate(MotionS.bitrateMbps),
+            outputPath: tmpOut.path,
+            preferSurface: vulkanMotionSurfaceAvailable(),
+          ));
+        } catch (e) {
+          CrashLog.note('Motion S encoder start ($codec) failed: $e');
+          if (codec == 'hevc') {
+            codec = 'h264';
+          } else {
+            lastError = 'The phone\'s hardware video encoder could not start: ${e.toString().replaceFirst('Exception: ', '')}';
+            return null;
+          }
+        }
+      }
+      if (session == null) {
+        lastError = 'The phone\'s hardware video encoder could not start.';
         return null;
       }
+      encoderOpen = true;
+      final bool viaSurface = session.surface;
+      CrashLog.note('Motion S encoder: ${session.encoder} ($codec, ${viaSurface ? 'zero-copy surface' : 'NV12 buffers'}, hardware=${session.hardware})');
+
       for (int b0 = 0; b0 < total && !failed; b0 += batch) {
         if (cancelled()) break;
         final b1 = math.min(total, b0 + batch);
@@ -390,8 +419,6 @@ class MotionEngine {
           break;
         }
         final raf = await srcFile.open(mode: FileMode.read);
-        final outRaw = File('${work.path}/out_batch.rgba');
-        final outRaf = await outRaw.open(mode: FileMode.write);
         try {
           Future<Uint8List> rawAt(int idx) async {
             idx = idx.clamp(0, total - 1).toInt();
@@ -425,14 +452,27 @@ class MotionEngine {
             }
             final u = MotionS.pack(s: settings, plan: plan, w: w, h: h, timeSeconds: i / fps);
             CrashLog.note('Motion S frame ${i + 1}/$total render START');
-            final res = await MotionWorker.instance.run(frames: slotFrames, w: w, h: h, center: plan.centerSlot, uniforms: u);
+            final res = await MotionWorker.instance.run(frames: slotFrames, w: w, h: h, center: plan.centerSlot, uniforms: u, toSurface: viaSurface);
             CrashLog.note('Motion S frame ${i + 1}/$total RETURNED status=${res.gpuStatus} native ${res.micros ~/ 1000} ms');
             if (res.gpuStatus == 2 || res.gpuStatus == 3) {
               lastError = 'The GPU stopped answering (status ${res.gpuStatus}). Try a lower processing size or fewer samples.';
               failed = true;
               break;
             }
-            await outRaf.writeFrom(res.rgba);
+            if (viaSurface) {
+              if (res.gpuStatus != 0) {
+                lastError = 'A frame could not be handed to the video encoder (${vulkanLastSurfaceError().isEmpty ? 'GPU status ${res.gpuStatus}' : vulkanLastSurfaceError()}).';
+                failed = true;
+                break;
+              }
+            } else {
+              final nv12 = rgbaToNv12(res.rgba, w, h);
+              if (nv12 == null || !await NativeEncoder.queueNv12(nv12, i)) {
+                lastError = 'The video encoder did not accept frame ${i + 1}.';
+                failed = true;
+                break;
+              }
+            }
             done++;
             // keep only the frames the next outputs can still need
             rawCache.removeWhere((k, _) => k < i + 1 - back - 1);
@@ -440,53 +480,37 @@ class MotionEngine {
             final p = done / total;
             final elapsed = DateTime.now().difference(started).inSeconds;
             final eta = done > 2 ? ((elapsed / done) * (total - done)).round() : -1;
-            onProgress(p * 0.97, 'Motion S ${i + 1}/$total${eta >= 0 ? '  -  about ${_fmtSec(eta)} left' : ''}');
+            onProgress(p * 0.98, 'Motion S ${i + 1}/$total${eta >= 0 ? '  -  about ${_fmtSec(eta)} left' : ''}');
           }
-          await outRaf.flush();
         } finally {
-          await outRaf.close();
           await raf.close();
           try {
             srcFile.deleteSync();
           } catch (_) {}
         }
         if (failed || cancelled()) break;
-
-        // store this batch as HEVC / H.264 in MP4 (see _storeBatch)
-        final part = File('${work.path}/part_${(b0 ~/ batch).toString().padLeft(4, '0')}.mp4');
-        final ok = await _storeBatch(outRaw, part, fps, w, h);
-        try {
-          outRaw.deleteSync();
-        } catch (_) {}
-        if (!ok) {
-          lastError = 'Could not store the processed frames (ffmpeg ${MotionS.useH264Intermediate ? 'H.264' : 'HEVC'} failed).';
-          failed = true;
-          break;
-        }
-        partFiles.add(part);
       }
 
       if (failed || cancelled() || done < total) {
         if (!failed && cancelled()) lastError = null;
-        return null;
+        return null; // the encoder is cancelled in finally
       }
 
-      onProgress(0.98, 'Joining the processed video...');
-      final list = File('${work.path}/parts.txt');
-      list.writeAsStringSync(partFiles.map((f) => "file '${f.path}'").join('\n'));
-      final stamp = DateTime.now().millisecondsSinceEpoch;
-      final tmpOut = File('${work.path}/final.mp4');
-      // hvc1 tag on the copied HEVC stream so every player / FFmpeg build reads the MP4 the same way (H.264 needs no tag)
-      final joinTag = MotionS.useH264Intermediate ? '' : ' -tag:v hvc1';
-      final cmd = '-y ${CpuSafe.ffArgs()}-f concat -safe 0 -i "${list.path}" -c copy$joinTag "${tmpOut.path}"';
-      CrashLog.note('Motion S join START: ffmpeg $cmd');
-      final session = await FFmpegKit.execute(cmd);
-      final rc = await session.getReturnCode();
-      CrashLog.note('Motion S join RETURNED rc=$rc');
-      if (!ReturnCode.isSuccess(rc) || !tmpOut.existsSync() || tmpOut.lengthSync() < 1024) {
-        lastError = 'Could not join the processed parts.';
+      onProgress(0.99, 'Finishing the processed video...');
+      final enc = await NativeEncoder.finish();
+      encoderOpen = false;
+      if (!enc.ok || !tmpOut.existsSync() || tmpOut.lengthSync() < 1024) {
+        lastError = 'Could not finish the processed video${enc.error == null ? '' : ': ${enc.error}'}.';
         return null;
       }
+      if (enc.frames < total) {
+        CrashLog.note('Motion S: encoder wrote ${enc.frames} of $total frames');
+        if (enc.frames < total * 0.95) {
+          lastError = 'The video encoder dropped too many frames (${enc.frames} of $total).';
+          return null;
+        }
+      }
+      final stamp = DateTime.now().millisecondsSinceEpoch;
       final finalFile = File('${outDir.path}/motion_s_$stamp.mp4');
       try {
         tmpOut.renameSync(finalFile.path);
@@ -500,43 +524,17 @@ class MotionEngine {
       lastError = 'Processing stopped: $e';
       return null;
     } finally {
+      if (encoderOpen) {
+        try {
+          await NativeEncoder.cancel();
+        } catch (_) {}
+      }
       vulkanSetBandBudgetMs(40);
       CrashLog.end(lastError == null ? 'finished' : 'stopped: $lastError');
       try {
         if (work.existsSync()) work.deleteSync(recursive: true);
       } catch (_) {}
     }
-  }
-
-  /// Stores one batch of finished RGBA frames as the intermediate video part.
-  ///   HEVC (default): libx265, CRF 20, preset MotionS.x265Preset ('veryfast' / 'fast'), multithreaded (-threads 0), yuv420p, hvc1 tag.
-  ///   H.264 (MotionS.useH264Intermediate): libx264, CRF 14, same preset, multithreaded, yuv420p.
-  /// RGB -> YUV uses the SAME matrix the stream is tagged with (BT.709, limited range), like the export's own conversion, so the
-  /// export's read-back (which converts YUV -> RGB using the tags) returns the same colours. B-frames are off: every part then has
-  /// exactly the frames it was given and no start offset, so the stream copy join cannot drift or drop a frame (the export reads
-  /// this file by frame index). Keyframe interval is the encoder default (250); a part is at most 24 frames, so each part starts
-  /// with its own keyframe anyway.
-  Future<bool> _storeBatch(File raw, File part, double fps, int w, int h) async {
-    const colorTags = '-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709';
-    const vf = 'format=bgr0,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd,format=yuv420p';
-    final preset = MotionS.sanitizePreset(MotionS.x265Preset);
-    final String video;
-    if (MotionS.useH264Intermediate) {
-      video = '-c:v libx264 -preset $preset -crf 14 -bf 0 -threads 0 ${CpuSafe.x264Args()} -pix_fmt yuv420p';
-    } else {
-      // Multithreaded: no pools= / frame-threads= override (x265 sizes its pool and frame threads from the CPU), -threads 0 = FFmpeg decides.
-      // B-frames stay OFF (bframes=0), lookahead stays larger than the B-frame count, CpuSafe's asm level is still applied.
-      video = '-c:v libx265 -tag:v hvc1 -preset $preset -crf 20 -threads 0 '
-          '-x265-params log-level=error:bframes=0:rc-lookahead=20${CpuSafe.x265AsmSuffix()} -pix_fmt yuv420p';
-    }
-    final cmd = '-y ${CpuSafe.ffArgs()}-f rawvideo -pixel_format rgba -video_size ${w}x$h -framerate $fps '
-        '-i "${raw.path}" -vf "$vf" $video $colorTags -an "${part.path}"';
-    // CpuSafe finds the encoder of a crashed step by the codec name in this START line: keep libx265 / libx264 in it.
-    CrashLog.note('Motion S store START: ffmpeg $cmd');
-    final session = await FFmpegKit.execute(cmd);
-    final rc = await session.getReturnCode();
-    CrashLog.note('Motion S store RETURNED rc=$rc');
-    return ReturnCode.isSuccess(rc) && part.existsSync() && part.lengthSync() > 256;
   }
 
   static String _fmtSec(int s) {
