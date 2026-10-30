@@ -171,14 +171,16 @@ class MediaCodecEncoder(private val cfg: EncoderConfig) {
             }
             // first with an explicit profile (High / Main, better quality than the default Baseline), then without
             for (withProfile in listOf(true, false)) {
-                try {
-                    configureAndStart(info, ten, withProfile)
-                    startDrain()
-                    return
-                } catch (t: Throwable) {
-                    last = t
-                    Log.w(TAG, "configure failed (ten=$ten profile=$withProfile on ${info.name}): ${t.message}")
-                    releaseCodecQuietly()
+                for (clamp in listOf(false, true)) {
+                    try {
+                        configureAndStart(info, ten, withProfile, clamp)
+                        startDrain()
+                        return
+                    } catch (t: Throwable) {
+                        last = t
+                        Log.w(TAG, "configure failed (ten=$ten profile=$withProfile clamp=$clamp on ${info.name}): ${t.message}")
+                        releaseCodecQuietly()
+                    }
                 }
             }
             if (ten) notes.add("10-bit encoder start failed (${last?.message}); falling back to 8-bit.")
@@ -186,20 +188,21 @@ class MediaCodecEncoder(private val cfg: EncoderConfig) {
         throw IllegalStateException("No ${cfg.codec.uppercase()} encoder could start at ${cfg.width}x${cfg.height}: ${last?.message ?: "none available"}")
     }
 
-    private fun configureAndStart(info: MediaCodecInfo, ten: Boolean, withProfile: Boolean) {
+    private fun configureAndStart(info: MediaCodecInfo, ten: Boolean, withProfile: Boolean, clampBitrate: Boolean) {
         val caps = info.getCapabilitiesForType(mime)
         val vc = caps.videoCapabilities
-        if (!vc.isSizeSupported(cfg.width, cfg.height)) {
-            throw IllegalArgumentException("${info.name} does not support ${cfg.width}x${cfg.height}")
-        }
+        // The Java capability lists (media_codecs.xml) are often more conservative than the encoder really is (many phones list 1080p but encode 2K / 4K fine).
+        // So size / bitrate are NOT used as a gate: the real configure() below decides. Only if it fails is the bitrate clamped to the listed range and tried again.
         var bitrate = cfg.bitrateMbps.coerceAtLeast(1) * 1_000_000
-        val range = vc.bitrateRange
-        if (bitrate > range.upper) { notes.add("Bitrate limited to ${range.upper / 1_000_000} Mbps by this encoder."); bitrate = range.upper }
-        if (bitrate < range.lower) bitrate = range.lower
-        bitrateUsed = bitrate
-        if (!vc.areSizeAndRateSupported(cfg.width, cfg.height, cfg.fps)) {
-            notes.add("This encoder may not sustain ${cfg.width}x${cfg.height} at ${cfg.fps} fps in real time (offline export still works).")
+        if (clampBitrate) {
+            val range = vc.bitrateRange
+            if (bitrate > range.upper) { notes.add("Bitrate limited to ${range.upper / 1_000_000} Mbps by this encoder."); bitrate = range.upper }
+            if (bitrate < range.lower) bitrate = range.lower
         }
+        bitrateUsed = bitrate
+        try {
+            if (!vc.isSizeSupported(cfg.width, cfg.height)) notes.add("This encoder's list says ${cfg.width}x${cfg.height} is above its profile; trying it anyway.")
+        } catch (_: Throwable) {}
 
         val f = MediaFormat.createVideoFormat(mime, cfg.width, cfg.height)
         f.setInteger(MediaFormat.KEY_COLOR_FORMAT,
