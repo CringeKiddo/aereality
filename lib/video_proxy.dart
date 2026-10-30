@@ -179,6 +179,16 @@ class VideoProxy {
   /// abandoned: it keeps running in the background and fills the cache, so opening the same video again a little later finds the finished proxy at once.
   static const Duration proxyTimeout = Duration(seconds: 15);
 
+  /// true while a conversion of [srcPath] is still running (after ensureProxy gave up waiting).
+  static bool isConverting(String srcPath) => _inflight.containsKey(srcPath);
+
+  /// Keeps waiting for a running conversion (at most [limit]); null when none runs, it failed, or the limit passed.
+  static Future<String?> awaitConversion(String srcPath, {Duration limit = const Duration(minutes: 4)}) {
+    final Future<String?>? w = _inflight[srcPath];
+    if (w == null) return Future<String?>.value(null);
+    return w.timeout(limit, onTimeout: () => null);
+  }
+
   static Future<String?> ensureProxy(String srcPath, MediaProbe probe) {
     final Future<String?> work = _inflight.putIfAbsent(srcPath, () => _build(srcPath, probe).whenComplete(() => _inflight.remove(srcPath)));
     return work.timeout(proxyTimeout, onTimeout: () {

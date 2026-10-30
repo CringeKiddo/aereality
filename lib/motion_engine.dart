@@ -33,6 +33,7 @@ import 'grade_worker.dart';
 import 'models.dart';
 import 'motion_slots.dart';
 import 'native_encoder.dart';
+import 'surface_grade_worker.dart';
 import 'motion_worker.dart';
 import 'project_uniforms.dart';
 import 'vulkan_bridge.dart';
@@ -554,10 +555,17 @@ class MotionEngine {
 // no grade is applied (the frames already contain it).
 // =============================================================================
 class MotionExportFeed {
-  MotionExportFeed({required this.path, required this.width, required this.height});
+  MotionExportFeed({required this.path, required this.width, required this.height})
+      : _w = width,
+        _h = height;
   final String path;
-  final int width;
+  final int width; // size of the processed video
   final int height;
+
+  // Size / format the export asks for (configure): the processed video is scaled to it when the user picks another resolution.
+  int _w;
+  int _h;
+  bool _nv12 = false;
 
   File? _batchFile;
   RandomAccessFile? _raf;
@@ -567,6 +575,16 @@ class MotionExportFeed {
   int _frames = 0;
   int _frameBytes = 0;
   Uint8List? _last;
+
+  /// configureRender callback of ExportSuite.showExportSheet: (0, 0) = back to the processed size. [nv12] = buffer-mode hardware encoder (frames returned as NV12).
+  /// In zero-copy surface mode the frames are presented to the encoder from here and render() returns an empty "frame done" token.
+  Future<void> configure(int w, int h, bool nv12) async {
+    await release();
+    _w = (w <= 0 || h <= 0) ? width : w;
+    _h = (w <= 0 || h <= 0) ? height : h;
+    _nv12 = nv12 && w > 0 && h > 0;
+    _last = null;
+  }
 
   Future<void> release() async {
     try {
@@ -587,9 +605,10 @@ class MotionExportFeed {
     if (frameCount <= 0) return;
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/motion_s_export_batch.rgba');
-    final fb = width * height * 4;
+    final fb = _w * _h * 4;
+    final scale = (_w == width && _h == height) ? '' : ',scale=$_w:$_h';
     final cmd = '-hide_banner -y ${CpuSafe.ffArgs()}-ss ${(startMs / 1000.0).toStringAsFixed(4)} -i "$path" -an -sn -dn '
-        '-vf "fps=$fps,scale=$width:$height" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"';
+        '-vf "fps=$fps$scale" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"';
     CrashLog.note('  Motion S export decode: ffmpeg $cmd');
     await FFmpegKit.execute(cmd);
     if (!file.existsSync() || file.lengthSync() < fb) {
@@ -609,7 +628,24 @@ class MotionExportFeed {
 
   /// renderFrameToRgba callback.
   Future<Uint8List> render(double timestampMs) async {
-    final fb = width * height * 4;
+    final rgba = await _readRgba(timestampMs);
+    final enc = NativeEncoder.active;
+    if (enc != null && enc.surface) {
+      // zero-copy hardware export: the processed frame already contains the grade, it only has to reach the encoder's Surface
+      final r = await SurfaceGradeWorker.instance.presentRgba(rgba: rgba, w: _w, h: _h);
+      if (!r.presented) throw Exception('Could not hand a Motion S frame to the video encoder: ${r.error}');
+      return Uint8List(0);
+    }
+    if (_nv12) {
+      final nv = rgbaToNv12(rgba, _w, _h);
+      if (nv == null) throw Exception('Could not convert a Motion S frame for the video encoder.');
+      return nv;
+    }
+    return rgba;
+  }
+
+  Future<Uint8List> _readRgba(double timestampMs) async {
+    final fb = _w * _h * 4;
     final raf = _raf;
     if (raf != null && _frames > 0 && _frameBytes == fb) {
       int idx = ((timestampMs - _startMs) * _fps / 1000.0).round();
@@ -630,7 +666,7 @@ class MotionExportFeed {
       if (f.existsSync()) f.deleteSync();
     } catch (_) {}
     await FFmpegKit.execute('-hide_banner -y ${CpuSafe.ffArgs()}-ss ${(timestampMs / 1000.0).toStringAsFixed(3)} -i "$path" -frames:v 1 '
-        '-vf "scale=$width:$height" -f rawvideo -pix_fmt rgba "${f.path}"');
+        '-vf "scale=$_w:$_h" -f rawvideo -pix_fmt rgba "${f.path}"');
     Uint8List? out;
     if (f.existsSync() && f.lengthSync() == fb) out = await f.readAsBytes();
     try {

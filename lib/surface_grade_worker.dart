@@ -96,6 +96,24 @@ class SurfaceGradeWorker {
     });
   }
 
+  /// Presents an already finished RGBA frame (no grade), e.g. a Motion S export frame.
+  Future<SurfaceGradeResult> presentRgba({required Uint8List rgba, required int w, required int h}) async {
+    await _ensureStarted();
+    final send = _send;
+    if (send == null || _broken) {
+      final rc = presentRgbaToSurface(rgba, w, h);
+      return SurfaceGradeResult(rc, vulkanLastRenderStatus(), 0, rc >= 0 ? '' : vulkanLastSurfaceError());
+    }
+    final id = _nextId++;
+    final c = Completer<SurfaceGradeResult>();
+    _pending[id] = c;
+    send.send([id, 2, TransferableTypedData.fromList([rgba]), w, h, null, null, 0]);
+    return c.future.timeout(const Duration(seconds: 60), onTimeout: () {
+      _pending.remove(id);
+      return const SurfaceGradeResult(-200, 3, 0, 'The GPU did not answer within 60 s.');
+    });
+  }
+
   /// Presents the frame that is currently in the native output buffer (used right after a Time Slice emit). [windowHandle] = ANativeWindow* from Kotlin.
   Future<SurfaceGradeResult> presentCurrent(int windowHandle) async {
     await _ensureStarted();
@@ -146,6 +164,8 @@ void _workerMain(SendPort toMain) {
       int rc;
       if (kind == 1) {
         rc = vulkanRenderToSurface(msg[7] as int);
+      } else if (kind == 2) {
+        rc = presentRgbaToSurface((msg[2] as TransferableTypedData).materialize().asUint8List(), msg[3] as int, msg[4] as int);
       } else {
         final Uint8List rgba = (msg[2] as TransferableTypedData).materialize().asUint8List();
         final int w = msg[3] as int;

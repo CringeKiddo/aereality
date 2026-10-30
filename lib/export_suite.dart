@@ -1113,6 +1113,8 @@ class ExportSuite {
         final NativeEncoderResult hwRes = await NativeEncoder.finish();
         if (!hwRes.ok) throw Exception('The hardware encoder could not finish the video${hwRes.error == null ? '' : ': ${hwRes.error}'}');
         CrashLog.note('hardware encode done: ${hwRes.frames}/$totalFrames frames, ${hwRes.bytes} bytes, audio ${hwRes.audio}, 10-bit=${hwRes.tenBit}');
+        final String hwTiming = hwRes.notes.where((n) => n.startsWith('surface path')).join('\n');
+        if (hwTiming.isNotEmpty) CrashLog.note(hwTiming);
         if (hwRes.frames < totalFrames * 0.9) {
           throw Exception('The hardware encoder dropped too many frames (${hwRes.frames} of $totalFrames).');
         }
@@ -1149,7 +1151,7 @@ class ExportSuite {
           depth: depthUsed,
           container: container,
           timestamp: timestamp,
-          encoderLine: encoderLine,
+          encoderLine: hwTiming.isEmpty ? encoderLine : '$encoderLine\n$hwTiming',
           onProgress: onProgress,
         );
         return;
@@ -1573,34 +1575,39 @@ class ExportSuite {
   // DIMENSION CALCULATOR (Aspect Ratio Preserving)
   // ===========================================================================
   static Map<String, int> _calculateDimensions(String resName, int srcW, int srcH) {
-    int targetLongEdge;
+    // The names are the usual video names: they describe the SHORT edge (720p = 720, 1080p = 1080, 2K = 1440 "QHD", 4K = 2160), so the same name gives the same
+    // quality for 16:9, 4:5, 9:16 or 1:1. (They used to be the LONG edge: a 1440x1808 4:5 clip exported at "2K" became 2048x2560.)
+    // Exporting at the size the video already has returns the source size EXACTLY (no rescale, no 2K -> 4K "stacking").
+    final int shortSrc = srcW < srcH ? srcW : srcH;
+    int targetShort;
     switch (resName) {
       case '720p':
-        targetLongEdge = 1280;
+        targetShort = 720;
         break;
       case '1080p':
-        targetLongEdge = 1920;
+        targetShort = 1080;
         break;
       case '2K':
-        targetLongEdge = 2560;
+        targetShort = 1440;
         break;
       case '4K':
-        targetLongEdge = 3840;
+        targetShort = 2160;
         break;
       case 'Native':
       default:
-        targetLongEdge = srcW > srcH ? srcW : srcH;
+        targetShort = shortSrc;
         break;
     }
 
-    final aspect = srcW / srcH;
     int w, h;
-    if (aspect >= 1.0) {
-      w = targetLongEdge;
-      h = (targetLongEdge / aspect).round();
+    if ((targetShort - shortSrc).abs() <= 8) {
+      // "same quality as the source" (within a few pixels, e.g. a 1436-wide phone clip exported as 2K): keep the source size
+      w = srcW;
+      h = srcH;
     } else {
-      h = targetLongEdge;
-      w = (targetLongEdge * aspect).round();
+      final double sc = targetShort / shortSrc;
+      w = (srcW * sc).round();
+      h = (srcH * sc).round();
     }
 
     // Ensure even dimensions for YUV 4:2:0 subsampling (executeVideoExport rounds the width up to a multiple of 4 for the GPU NV12 pass)

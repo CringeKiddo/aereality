@@ -355,6 +355,7 @@ class _MotionSScreenState extends State<MotionSScreen> {
       project: ProjectData(mediaPath: r.path), // only the processed frames matter: renderFrameToRgba supplies them
       renderFrameToRgba: feed.render,
       prepareFrames: feed.prepare,
+      configureRender: feed.configure,
       videoDurationMs: r.durationMs,
       videoFps: r.fps,
       videoWidth: r.width,

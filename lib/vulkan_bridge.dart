@@ -210,6 +210,8 @@ typedef _ProcessToSurfaceDart = int Function(
   ffi.Pointer<ffi.Float> lutTable,
   int lutSize,
 );
+typedef _PresentRgbaC = ffi.Int32 Function(ffi.Pointer<ffi.Uint8> rgba, ffi.Int32 w, ffi.Int32 h);
+typedef _PresentRgbaDart = int Function(ffi.Pointer<ffi.Uint8> rgba, int w, int h);
 typedef _MotionToSurfaceC = ffi.Int32 Function(
   ffi.Pointer<ffi.Uint8> frames,
   ffi.Int32 w,
@@ -267,6 +269,8 @@ class VulkanBridge {
   static _ProcessToSurfaceDart? _processToSurfaceFn;
   static _MotionToSurfaceDart? _motionToSurfaceFn;
   static _InitTextDart? _surfaceErrorFn;
+  static _InitTextDart? _surfaceTimingFn;
+  static _PresentRgbaDart? _presentRgbaFn;
 
   static bool _isVulkanInitialized = false;
 
@@ -352,6 +356,7 @@ class VulkanBridge {
             _surfaceTenBitFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('surface_is_ten_bit');
             _processToSurfaceFn = _lib!.lookupFunction<_ProcessToSurfaceC, _ProcessToSurfaceDart>('process_image_to_surface');
             _surfaceErrorFn = _lib!.lookupFunction<_InitTextC, _InitTextDart>('get_last_surface_error');
+            _surfaceTimingFn = _lib!.lookupFunction<_InitTextC, _InitTextDart>('get_surface_timing');
           } catch (_) {
             _surfaceSupportedFn = null; // native lib without the zero-copy surface export: the hardware encoder runs in buffer mode (NV12)
             _attachSurfaceFn = null;
@@ -360,9 +365,11 @@ class VulkanBridge {
             _surfaceTenBitFn = null;
             _processToSurfaceFn = null;
             _surfaceErrorFn = null;
+            _surfaceTimingFn = null;
           }
           try {
             _motionToSurfaceFn = _lib!.lookupFunction<_MotionToSurfaceC, _MotionToSurfaceDart>('process_motion_to_surface');
+            _presentRgbaFn = _lib!.lookupFunction<_PresentRgbaC, _PresentRgbaDart>('present_rgba_to_surface');
           } catch (_) {
             _motionToSurfaceFn = null;
           }
@@ -949,6 +956,17 @@ bool vulkanSurfaceIsTenBit() {
   }
 }
 
+/// Where the time of the running / last surface export went (average per frame: waiting for the encoder, GPU copy, present). '' when unknown.
+String vulkanSurfaceTiming() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final p = VulkanBridge._surfaceTimingFn?.call();
+    return (p == null || p == ffi.nullptr) ? '' : p.toDartString();
+  } catch (_) {
+    return '';
+  }
+}
+
 /// Text of the last surface failure ('' = none).
 String vulkanLastSurfaceError() {
   VulkanBridge._ensureLibraryLoaded();
@@ -999,6 +1017,23 @@ int processImageToSurface(Uint8List inBytes, int w, int h, Float32List uniforms,
     calloc.free(inPtr);
     calloc.free(uPtr);
     if (lutPtr != null) calloc.free(lutPtr);
+  }
+}
+
+/// Presents an already finished RGBA8 frame (w * h * 4 bytes of the export size) to the attached Surface without grading it. 0 = presented.
+int presentRgbaToSurface(Uint8List rgba, int w, int h) {
+  VulkanBridge._ensureLibraryLoaded();
+  final fn = VulkanBridge._presentRgbaFn;
+  if (fn == null || w <= 0 || h <= 0 || rgba.length < w * h * 4) return -100;
+  final p = calloc<ffi.Uint8>(w * h * 4);
+  try {
+    p.asTypedList(w * h * 4).setAll(0, rgba.length == w * h * 4 ? rgba : Uint8List.sublistView(rgba, 0, w * h * 4));
+    return fn(p, w, h);
+  } catch (e) {
+    debugPrint('presentRgbaToSurface error: $e');
+    return -101;
+  } finally {
+    calloc.free(p);
   }
 }
 

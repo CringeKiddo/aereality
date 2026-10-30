@@ -1748,8 +1748,14 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         if (stale()) return;
       }
       setState(() => _preparingNote = 'Preparing a compatible copy of this video (first time only)…');
-      final String? proxyPath = await VideoProxy.ensureProxy(path, probe);
+      String? proxyPath = await VideoProxy.ensureProxy(path, probe);
       if (stale()) return;
+      if (proxyPath == null && VideoProxy.isConverting(path)) {
+        // not finished after the first 15 s (large / AV1 / VP9 file): the screen stays responsive, the copy keeps being made and the video opens by itself when ready
+        setState(() => _preparingNote = 'Large video - still preparing a compatible copy. It opens automatically when it is ready…');
+        proxyPath = await VideoProxy.awaitConversion(path);
+        if (stale()) return;
+      }
       if (proxyPath != null) {
         // batch 18B (Tasks 7 + 8): the conversion has finished -> say so, then initialise a fresh controller on the PROXY file and wait for it
         setState(() => _preparingNote = 'Opening the converted video…');

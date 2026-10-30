@@ -181,6 +181,7 @@ class NativeEncoder {
     } catch (e) {
       r = {'ok': false, 'error': e.toString()};
     }
+    final String timing = s?.surface == true ? vulkanSurfaceTiming() : ''; // read BEFORE the swapchain is destroyed (it resets the counters)
     if (s?.surface == true) vulkanDetachSurface();
     try {
       await _ch.invokeMethod('releaseWindow');
@@ -196,7 +197,7 @@ class NativeEncoder {
       (r['audio'] ?? 'none').toString(),
       r['tenBit'] == true,
       (r['encoder'] ?? '').toString(),
-      [...((r['notes'] as List?) ?? const []).map((e) => e.toString()), ...?s?.notes],
+      [...((r['notes'] as List?) ?? const []).map((e) => e.toString()), ...?s?.notes, if (timing.isNotEmpty) timing],
     );
   }
 
