@@ -1,6 +1,9 @@
 #include <jni.h>
 #include <android/log.h>
+#define VK_USE_PLATFORM_ANDROID_KHR 1
 #include <vulkan/vulkan.h>
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
 #include <vector>
 #include <cmath>
 #include <cstring>
@@ -384,7 +387,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  gVk.inBuffer, gVk.inMemory);
 
     createBuffer(gVk.device, gVk.physicalDevice, pixelBufferSize,
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,   // TRANSFER_SRC: the surface export copies outBuffer -> swapchain image
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.outBuffer, gVk.outMemory);
 
@@ -1636,9 +1639,346 @@ static bool savePipelineCacheFile(const std::string& path, uint64_t shaderHash) 
     return ok;
 }
 
+// =============================================================================
+// ZERO-COPY VIDEO EXPORT: Vulkan -> Android Surface (the input Surface of a MediaCodec encoder)
+//
+//   The grade / Motion S pipeline finishes with RGBA8 words in outBuffer. For a surface export those words are NOT read back to the CPU:
+//   renderToAndroidSurface() copies outBuffer -> a swapchain image of the encoder's ANativeWindow on the GPU (vkCmdCopyBufferToImage, or a
+//   copy + vkCmdBlitImage into an A2B10G10R10 image for a 10-bit encoder) and presents it. MediaCodec then reads the image directly.
+//
+//   WSI extensions (VK_KHR_surface, VK_KHR_android_surface, VK_KHR_swapchain) are optional: init_vulkan enables them only when the driver has
+//   them, and retries without them if creation fails, so the normal grading path can never be broken by this block.
+//   Timestamps: the swapchain gives the encoder system-clock timestamps. MediaCodecEncoder.kt rewrites them to exact CFR times when it muxes.
+//   All functions here are called with gVk.pipelineMutex held (the exported wrappers take it).
+// =============================================================================
+static bool gWsiInstance = false;   // VK_KHR_surface + VK_KHR_android_surface enabled on the instance
+static bool gWsiDevice = false;     // VK_KHR_swapchain enabled on the device
+static bool gWsiTiming = false;     // VK_GOOGLE_display_timing enabled too: every present carries an exact CFR time (see renderToAndroidSurface)
+static char gSurfError[200] = {0};  // text of the last surface failure, read through get_last_surface_error()
+
+struct SurfaceTarget {
+    ANativeWindow* window = nullptr;          // owned by Kotlin (NativeSurface.windowRelease); Vulkan holds its own reference through VkSurfaceKHR
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    std::vector<VkImage> images;
+    std::vector<VkSemaphore> renderSems;      // one per swapchain image (present waits on it)
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    uint32_t w = 0, h = 0;
+    bool tenBit = false;                      // true = swapchain is A2B10G10R10 (RGBA8 staging image + blit)
+    VkImage stageImage = VK_NULL_HANDLE;      // RGBA8 staging image, 10-bit path only
+    VkDeviceMemory stageMemory = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    VkSemaphore acquireSem = VK_NULL_HANDLE;
+    uint64_t frames = 0;                      // frames presented so far (present id / CFR index)
+    uint64_t t0ns = 0;                        // CLOCK_MONOTONIC at attach
+    uint64_t frameNs = 33333333;              // 1e9 / fps
+};
+static SurfaceTarget gSurf;
+
+static void surfFailMsg(const char* m) {
+    snprintf(gSurfError, sizeof(gSurfError), "%s", m);
+    LOGE("surface export: %s", gSurfError);
+}
+static void surfFail(const char* what, VkResult r) {
+    snprintf(gSurfError, sizeof(gSurfError), "%s failed (VkResult %d)", what, (int)r);
+    LOGE("surface export: %s", gSurfError);
+}
+
+static bool instanceHasExtension(const char* name) {
+    uint32_t n = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr) != VK_SUCCESS || n == 0) return false;
+    std::vector<VkExtensionProperties> v(n);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &n, v.data()) != VK_SUCCESS) return false;
+    for (const auto& e : v) if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
+static bool deviceHasExtension(VkPhysicalDevice pd, const char* name) {
+    uint32_t n = 0;
+    if (vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, nullptr) != VK_SUCCESS || n == 0) return false;
+    std::vector<VkExtensionProperties> v(n);
+    if (vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, v.data()) != VK_SUCCESS) return false;
+    for (const auto& e : v) if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
+// Frees swapchain, surface, sync objects, staging image. Safe at any time and when nothing is attached. Caller holds pipelineMutex (or is tearing down).
+static void destroySurfaceTarget() {
+    if (gVk.device != VK_NULL_HANDLE) {
+        if (gSurf.swapchain != VK_NULL_HANDLE || gSurf.fence != VK_NULL_HANDLE) vkDeviceWaitIdle(gVk.device);
+        if (gSurf.fence != VK_NULL_HANDLE) vkDestroyFence(gVk.device, gSurf.fence, nullptr);
+        if (gSurf.acquireSem != VK_NULL_HANDLE) vkDestroySemaphore(gVk.device, gSurf.acquireSem, nullptr);
+        for (VkSemaphore s : gSurf.renderSems) if (s != VK_NULL_HANDLE) vkDestroySemaphore(gVk.device, s, nullptr);
+        if (gSurf.cmd != VK_NULL_HANDLE && gVk.commandPool != VK_NULL_HANDLE) vkFreeCommandBuffers(gVk.device, gVk.commandPool, 1, &gSurf.cmd);
+        if (gSurf.stageImage != VK_NULL_HANDLE) vkDestroyImage(gVk.device, gSurf.stageImage, nullptr);
+        if (gSurf.stageMemory != VK_NULL_HANDLE) vkFreeMemory(gVk.device, gSurf.stageMemory, nullptr);
+        if (gSurf.swapchain != VK_NULL_HANDLE) vkDestroySwapchainKHR(gVk.device, gSurf.swapchain, nullptr);
+    }
+    if (gSurf.surface != VK_NULL_HANDLE && gVk.instance != VK_NULL_HANDLE) vkDestroySurfaceKHR(gVk.instance, gSurf.surface, nullptr);
+    gSurf = SurfaceTarget();
+}
+
+// Returns 0 = ready, < 0 = not possible (gSurfError says why). Always leaves a clean state on failure.
+static int32_t createSurfaceTarget(ANativeWindow* window, uint32_t w, uint32_t h, bool wantTenBit, double fps) {
+    destroySurfaceTarget();
+    gSurfError[0] = '\0';
+    if (!gVk.isInitialized) { surfFailMsg("The GPU engine is not initialised."); return -1; }
+    if (!gWsiInstance || !gWsiDevice) { surfFailMsg("This GPU driver has no Vulkan window-system support (VK_KHR_android_surface / VK_KHR_swapchain)."); return -2; }
+    if (window == nullptr || w == 0 || h == 0) { surfFailMsg("No encoder surface / size was given."); return -1; }
+
+    VkAndroidSurfaceCreateInfoKHR sci{};
+    sci.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+    sci.window = window;
+    VkResult r = vkCreateAndroidSurfaceKHR(gVk.instance, &sci, nullptr, &gSurf.surface);
+    if (r != VK_SUCCESS) { gSurf.surface = VK_NULL_HANDLE; surfFail("vkCreateAndroidSurfaceKHR", r); return -3; }
+
+    VkBool32 supported = VK_FALSE;
+    r = vkGetPhysicalDeviceSurfaceSupportKHR(gVk.physicalDevice, gVk.computeQueueFamilyIndex, gSurf.surface, &supported);
+    if (r != VK_SUCCESS || !supported) { surfFailMsg("The GPU queue that grades the frames cannot present to the encoder surface."); destroySurfaceTarget(); return -4; }
+
+    VkSurfaceCapabilitiesKHR caps{};
+    r = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gVk.physicalDevice, gSurf.surface, &caps);
+    if (r != VK_SUCCESS) { surfFail("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", r); destroySurfaceTarget(); return -5; }
+    if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) { surfFailMsg("The encoder surface does not accept transfer writes."); destroySurfaceTarget(); return -5; }
+    if (caps.currentExtent.width != 0xFFFFFFFFu && (caps.currentExtent.width != w || caps.currentExtent.height != h)) {
+        char m[160];
+        snprintf(m, sizeof(m), "The encoder surface is %ux%u but the export is %ux%u.", caps.currentExtent.width, caps.currentExtent.height, w, h);
+        surfFailMsg(m);
+        destroySurfaceTarget();
+        return -6;
+    }
+
+    uint32_t fc = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(gVk.physicalDevice, gSurf.surface, &fc, nullptr);
+    std::vector<VkSurfaceFormatKHR> fmts(fc);
+    if (fc > 0) vkGetPhysicalDeviceSurfaceFormatsKHR(gVk.physicalDevice, gSurf.surface, &fc, fmts.data());
+    auto hasFmt = [&](VkFormat f) {
+        for (const auto& x : fmts) if (x.format == f && x.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return true;
+        return false;
+    };
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    bool ten = false;
+    if (wantTenBit && hasFmt(VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        VkFormatProperties dstP{}, srcP{};
+        vkGetPhysicalDeviceFormatProperties(gVk.physicalDevice, VK_FORMAT_A2B10G10R10_UNORM_PACK32, &dstP);
+        vkGetPhysicalDeviceFormatProperties(gVk.physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, &srcP);
+        if ((dstP.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) && (srcP.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT)) {
+            fmt = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+            ten = true;
+        }
+    }
+    if (fmt == VK_FORMAT_UNDEFINED && hasFmt(VK_FORMAT_R8G8B8A8_UNORM)) fmt = VK_FORMAT_R8G8B8A8_UNORM;
+    if (fmt == VK_FORMAT_UNDEFINED) { surfFailMsg("The encoder surface offers no RGBA8 format."); destroySurfaceTarget(); return -7; }
+
+    uint32_t imageCount = std::max<uint32_t>(caps.minImageCount, 3u);
+    if (caps.maxImageCount > 0) imageCount = std::min(imageCount, caps.maxImageCount);
+    VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    const VkCompositeAlphaFlagBitsKHR alphaPref[4] = {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+                                                      VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR};
+    for (VkCompositeAlphaFlagBitsKHR a : alphaPref) if (caps.supportedCompositeAlpha & a) { alpha = a; break; }
+
+    VkSwapchainCreateInfoKHR sc{};
+    sc.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    sc.surface = gSurf.surface;
+    sc.minImageCount = imageCount;
+    sc.imageFormat = fmt;
+    sc.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    sc.imageExtent = {w, h};
+    sc.imageArrayLayers = 1;
+    sc.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    sc.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    sc.preTransform = caps.currentTransform;
+    sc.compositeAlpha = alpha;
+    sc.presentMode = VK_PRESENT_MODE_FIFO_KHR;   // FIFO is always available; a full encoder queue simply makes the next present wait (natural back-pressure)
+    sc.clipped = VK_TRUE;
+    r = vkCreateSwapchainKHR(gVk.device, &sc, nullptr, &gSurf.swapchain);
+    if (r != VK_SUCCESS) { gSurf.swapchain = VK_NULL_HANDLE; surfFail("vkCreateSwapchainKHR", r); destroySurfaceTarget(); return -8; }
+
+    uint32_t ic = 0;
+    vkGetSwapchainImagesKHR(gVk.device, gSurf.swapchain, &ic, nullptr);
+    gSurf.images.resize(ic);
+    r = vkGetSwapchainImagesKHR(gVk.device, gSurf.swapchain, &ic, gSurf.images.data());
+    if ((r != VK_SUCCESS && r != VK_INCOMPLETE) || ic == 0) { surfFail("vkGetSwapchainImagesKHR", r); destroySurfaceTarget(); return -9; }
+    gSurf.images.resize(ic);
+
+    VkSemaphoreCreateInfo semi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    bool ok = vkCreateSemaphore(gVk.device, &semi, nullptr, &gSurf.acquireSem) == VK_SUCCESS &&
+              vkCreateFence(gVk.device, &fi, nullptr, &gSurf.fence) == VK_SUCCESS;
+    gSurf.renderSems.assign(ic, VK_NULL_HANDLE);
+    for (uint32_t i = 0; ok && i < ic; ++i) ok = vkCreateSemaphore(gVk.device, &semi, nullptr, &gSurf.renderSems[i]) == VK_SUCCESS;
+    if (ok) {
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = gVk.commandPool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        ok = vkAllocateCommandBuffers(gVk.device, &cai, &gSurf.cmd) == VK_SUCCESS;
+    }
+    if (!ok) { surfFailMsg("Could not create the surface synchronisation objects."); destroySurfaceTarget(); return -10; }
+
+    if (ten) {
+        VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ii.extent = {w, h, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bool stageOk = vkCreateImage(gVk.device, &ii, nullptr, &gSurf.stageImage) == VK_SUCCESS;
+        if (stageOk) {
+            VkMemoryRequirements mr{};
+            vkGetImageMemoryRequirements(gVk.device, gSurf.stageImage, &mr);
+            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            mai.allocationSize = mr.size;
+            mai.memoryTypeIndex = findMemoryType(gVk.physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            stageOk = vkAllocateMemory(gVk.device, &mai, nullptr, &gSurf.stageMemory) == VK_SUCCESS &&
+                      vkBindImageMemory(gVk.device, gSurf.stageImage, gSurf.stageMemory, 0) == VK_SUCCESS;
+        }
+        if (!stageOk) {
+            // 10-bit staging is not possible: use plain RGBA8 frames (the encoder is still 10-bit, the picture is the same 8-bit grade)
+            if (gSurf.stageMemory != VK_NULL_HANDLE) { vkFreeMemory(gVk.device, gSurf.stageMemory, nullptr); gSurf.stageMemory = VK_NULL_HANDLE; }
+            if (gSurf.stageImage != VK_NULL_HANDLE) { vkDestroyImage(gVk.device, gSurf.stageImage, nullptr); gSurf.stageImage = VK_NULL_HANDLE; }
+            surfFailMsg("10-bit staging image failed; recreate with 8-bit frames.");
+            destroySurfaceTarget();
+            return createSurfaceTarget(window, w, h, false, fps);
+        }
+    }
+
+    gSurf.window = window;
+    gSurf.format = fmt;
+    gSurf.w = w;
+    gSurf.h = h;
+    gSurf.tenBit = ten;
+    gSurf.frames = 0;
+    gSurf.t0ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    gSurf.frameNs = (uint64_t)(1.0e9 / std::max(1.0, std::min(fps, 240.0)));
+    gSurfError[0] = '\0';
+    LOGI("surface export: swapchain %ux%u, %u images, format %d%s", w, h, ic, (int)fmt, ten ? " (10-bit)" : "");
+    return 0;
+}
+
+// renderToAndroidSurface: presents the RGBA8 frame that is CURRENTLY in outBuffer (w * h words, w / h = the attached size) to [window].
+// No CPU readback: GPU copy -> swapchain image -> present. Returns 0 = presented, < 0 = failed (get_last_surface_error()). Caller holds pipelineMutex.
+static int32_t renderToAndroidSurface(ANativeWindow* window) {
+    if (!gVk.isInitialized || window == nullptr || gSurf.swapchain == VK_NULL_HANDLE || gSurf.window != window || gVk.outBuffer == VK_NULL_HANDLE) {
+        surfFailMsg("No encoder surface is attached.");
+        return -1;
+    }
+    uint32_t idx = 0;
+    VkResult r = vkAcquireNextImageKHR(gVk.device, gSurf.swapchain, 3000000000ull, gSurf.acquireSem, VK_NULL_HANDLE, &idx);
+    if ((r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) || idx >= gSurf.images.size()) { surfFail("vkAcquireNextImageKHR", r); return -3; }
+
+    VkCommandBuffer cmd = gSurf.cmd;
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+
+    auto imgBarrier = [&](VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags sa, VkAccessFlags da,
+                          VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = sa;
+        b.dstAccessMask = da;
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+    };
+
+    // the compute passes wrote outBuffer (an earlier, fenced submit): make that visible to the transfer read
+    VkBufferMemoryBarrier bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = gVk.outBuffer;
+    bb.offset = 0;
+    bb.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &bb, 0, nullptr);
+
+    VkBufferImageCopy region{};   // bufferOffset 0, bufferRowLength 0 / imageHeight 0 = tightly packed w * h words
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {gSurf.w, gSurf.h, 1};
+
+    const VkImage dst = gSurf.images[idx];
+    if (!gSurf.tenBit) {
+        imgBarrier(dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyBufferToImage(cmd, gVk.outBuffer, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        imgBarrier(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    } else {
+        imgBarrier(gSurf.stageImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyBufferToImage(cmd, gVk.outBuffer, gSurf.stageImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        imgBarrier(gSurf.stageImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        imgBarrier(dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {(int32_t)gSurf.w, (int32_t)gSurf.h, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[1] = {(int32_t)gSurf.w, (int32_t)gSurf.h, 1};
+        vkCmdBlitImage(cmd, gSurf.stageImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+        imgBarrier(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    }
+    if (vkEndCommandBuffer(cmd) != VK_SUCCESS) { surfFailMsg("vkEndCommandBuffer failed"); return -4; }
+
+    vkResetFences(gVk.device, 1, &gSurf.fence);
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores = &gSurf.acquireSem;
+    si.pWaitDstStageMask = &waitStage;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores = &gSurf.renderSems[idx];
+    r = vkQueueSubmit(gVk.computeQueue, 1, &si, gSurf.fence);
+    if (r != VK_SUCCESS) { surfFail("vkQueueSubmit (surface copy)", r); return -5; }
+    r = vkWaitForFences(gVk.device, 1, &gSurf.fence, VK_TRUE, 5000000000ull);
+    if (r != VK_SUCCESS) { surfFail("vkWaitForFences (surface copy)", r); return -6; }
+
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores = &gSurf.renderSems[idx];
+    pi.swapchainCount = 1;
+    pi.pSwapchains = &gSurf.swapchain;
+    pi.pImageIndices = &idx;
+    // Exact constant-frame-rate times: the encoder's rate control then sees index / fps instead of wall-clock times (an encoder that sizes its bitrate from
+    // input times would otherwise starve the picture when frames are rendered faster / slower than real time = soft output).
+    VkPresentTimeGOOGLE presentTime{};
+    VkPresentTimesInfoGOOGLE timesInfo{VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE};
+    if (gWsiTiming) {
+        presentTime.presentID = (uint32_t)(gSurf.frames & 0xFFFFFFFFu);
+        presentTime.desiredPresentTime = gSurf.t0ns + gSurf.frames * gSurf.frameNs;
+        timesInfo.swapchainCount = 1;
+        timesInfo.pTimes = &presentTime;
+        pi.pNext = &timesInfo;
+    }
+    r = vkQueuePresentKHR(gVk.computeQueue, &pi);
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { surfFail("vkQueuePresentKHR", r); return -7; }
+    gSurf.frames++;
+    return 0;
+}
+
 // Frees everything init_vulkan may have created, in reverse order, so a failed boot leaves a clean slate and RETRY starts from nothing
 // (before this, a failed init leaked the instance / device and the next attempt created a second one). Caller holds pipelineMutex.
 static void teardownAfterFailedInit() {
+    destroySurfaceTarget();
+    gWsiInstance = false;
+    gWsiDevice = false;
+    gWsiTiming = false;
     if (gVk.device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(gVk.device);
         cleanupBuffers();
@@ -1782,7 +2122,23 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
+    // Zero-copy video export (Vulkan -> MediaCodec input Surface): the window-system extensions are OPTIONAL. If the driver lacks them, or creating the
+    // instance with them fails, the instance is created exactly as before and surface export reports "not supported" (the app then uses buffer mode).
+    const char* wsiInstExts[2] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME};
+    gWsiInstance = instanceHasExtension(wsiInstExts[0]) && instanceHasExtension(wsiInstExts[1]);
+    if (gWsiInstance) {
+        createInfo.enabledExtensionCount = 2;
+        createInfo.ppEnabledExtensionNames = wsiInstExts;
+    }
     VkResult r = vkCreateInstance(&createInfo, nullptr, &gVk.instance);
+    if (r != VK_SUCCESS && gWsiInstance) {
+        LOGE("vkCreateInstance with WSI extensions failed (%d): retrying without", (int)r);
+        gWsiInstance = false;
+        createInfo.enabledExtensionCount = 0;
+        createInfo.ppEnabledExtensionNames = nullptr;
+        gVk.instance = VK_NULL_HANDLE;
+        r = vkCreateInstance(&createInfo, nullptr, &gVk.instance);
+    }
     if (r != VK_SUCCESS) {
         gVk.instance = VK_NULL_HANDLE;
         initFail("vkCreateInstance", r);
@@ -1852,7 +2208,30 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
+    const char* wsiDevExts[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME};
+    gWsiDevice = gWsiInstance && deviceHasExtension(gVk.physicalDevice, wsiDevExts[0]);
+    gWsiTiming = gWsiDevice && deviceHasExtension(gVk.physicalDevice, wsiDevExts[1]);
+    if (gWsiDevice) {
+        deviceCreateInfo.enabledExtensionCount = gWsiTiming ? 2 : 1;
+        deviceCreateInfo.ppEnabledExtensionNames = wsiDevExts;
+    }
     r = vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device);
+    if (r != VK_SUCCESS && gWsiTiming) {
+        LOGE("vkCreateDevice with VK_GOOGLE_display_timing failed (%d): retrying without it", (int)r);
+        gWsiTiming = false;
+        deviceCreateInfo.enabledExtensionCount = 1;
+        gVk.device = VK_NULL_HANDLE;
+        r = vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device);
+    }
+    if (r != VK_SUCCESS && gWsiDevice) {
+        LOGE("vkCreateDevice with VK_KHR_swapchain failed (%d): retrying without", (int)r);
+        gWsiDevice = false;
+        gWsiTiming = false;
+        deviceCreateInfo.enabledExtensionCount = 0;
+        deviceCreateInfo.ppEnabledExtensionNames = nullptr;
+        gVk.device = VK_NULL_HANDLE;
+        r = vkCreateDevice(gVk.physicalDevice, &deviceCreateInfo, nullptr, &gVk.device);
+    }
     if (r != VK_SUCCESS) {
         gVk.device = VK_NULL_HANDLE;
         initFail("vkCreateDevice", r);
@@ -2373,6 +2752,95 @@ void convert_rgba_to_nv12(const uint8_t* rgba, int32_t w, int32_t h, uint8_t* ou
 }
 
 
+// -----------------------------------------------------------------------------
+// ZERO-COPY VIDEO EXPORT entry points (see the block above createSurfaceTarget). Nothing else in this file changed behaviour.
+//   surface_output_supported: 1 when the driver has VK_KHR_android_surface + VK_KHR_swapchain AND the engine is ready, else 0.
+//   attach_android_surface:   nativeWindow = the ANativeWindow* of the encoder's input Surface (Kotlin: NativeSurface.windowFromSurface), w x h = export size,
+//                             tenBit = 1 asks for a 10-bit swapchain, fps = the export frame rate (exact present times when VK_GOOGLE_display_timing exists). 0 = ready, < 0 = not possible (get_last_surface_error()). The app then uses buffer mode.
+//   surface_is_ten_bit:       1 when the attached swapchain really is 10-bit (it can fall back to 8-bit frames).
+//   detach_android_surface:   destroys the swapchain / surface. Call it AFTER the encoder has been finished (so no queued frame is lost) and BEFORE Kotlin releases the window.
+//   render_to_android_surface: presents the frame that is currently in the output buffer (e.g. right after process_timeslice_emit).
+//   process_image_to_surface: grade one RGBA8 frame (same passes as process_image) and present it. 0 = GPU grade presented, 1 = presented but the CPU fallback grade
+//                             made the frame (same simplified grade as process_image's fallback), < 0 = nothing was presented.
+// -----------------------------------------------------------------------------
+int32_t surface_output_supported() { return (gWsiInstance && gWsiDevice && gVk.isInitialized) ? 1 : 0; }
+
+const char* get_last_surface_error() { return gSurfError; }
+
+int32_t attach_android_surface(void* nativeWindow, int32_t w, int32_t h, int32_t tenBit, double fps) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    return createSurfaceTarget(static_cast<ANativeWindow*>(nativeWindow), (uint32_t)std::max<int32_t>(w, 0), (uint32_t)std::max<int32_t>(h, 0), tenBit != 0, fps);
+}
+
+int32_t surface_is_ten_bit() { return (gSurf.swapchain != VK_NULL_HANDLE && gSurf.tenBit) ? 1 : 0; }
+
+void detach_android_surface() {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    destroySurfaceTarget();
+}
+
+int32_t render_to_android_surface(void* nativeWindow) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    return renderToAndroidSurface(static_cast<ANativeWindow*>(nativeWindow));
+}
+
+int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h,
+                                 const float* uniforms, int32_t uniformCount,
+                                 const float* lutTable, int32_t lutCount) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    gLastRenderStatus = 0;
+    if (inputBytes == nullptr || uniforms == nullptr || w <= 0 || h <= 0 || gSurf.swapchain == VK_NULL_HANDLE ||
+        (int32_t)gSurf.w != w || (int32_t)gSurf.h != h) {
+        surfFailMsg("process_image_to_surface: no attached encoder surface of this size.");
+        return -1;
+    }
+    const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const size_t rgbaBytes = pixelCount * sizeof(uint32_t);
+
+    bool gpuOk = false;
+    if (gVk.isInitialized && ensureBuffersCapacity(pixelCount)) {
+        void* mappedInput = nullptr;
+        vkMapMemory(gVk.device, gVk.inMemory, 0, rgbaBytes, 0, &mappedInput);
+        std::memcpy(mappedInput, inputBytes, rgbaBytes);
+        VkMappedMemoryRange inRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.inMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &inRange);
+        vkUnmapMemory(gVk.device, gVk.inMemory);
+
+        void* mappedUbo = nullptr;
+        const size_t uboCopyBytes = std::min(size_t(uniformCount * sizeof(float)), size_t(kUboFloats * sizeof(float)));
+        vkMapMemory(gVk.device, gVk.uboMemory, 0, uboCopyBytes, 0, &mappedUbo);
+        std::memcpy(mappedUbo, uniforms, uboCopyBytes);
+        VkMappedMemoryRange uboRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.uboMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
+        vkUnmapMemory(gVk.device, gVk.uboMemory);
+
+        if (lutTable != nullptr && lutCount > 0) uploadLutTo3DTexture(lutTable, lutCount);
+
+        gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
+        findTextWarpRows(uniforms, uniformCount);
+        findBatch6Passes(uniforms, uniformCount);
+        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);
+        gpuOk = runGpuPipeline(w, h);   // the finished RGBA8 frame is now in outBuffer
+    }
+    if (!gpuOk) {
+        // same fallback process_image uses; the pixels are put into outBuffer so the present path is identical
+        if (!gVk.isInitialized || gVk.outBuffer == VK_NULL_HANDLE) return -2;
+        std::vector<uint32_t> graded(pixelCount);
+        executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes), graded.data(), w, h, uniforms);
+        void* mappedOut = nullptr;
+        if (vkMapMemory(gVk.device, gVk.outMemory, 0, rgbaBytes, 0, &mappedOut) != VK_SUCCESS || mappedOut == nullptr) return -2;
+        std::memcpy(mappedOut, graded.data(), rgbaBytes);
+        VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
+        vkFlushMappedMemoryRanges(gVk.device, 1, &outRange);
+        vkUnmapMemory(gVk.device, gVk.outMemory);
+        if (gLastRenderStatus == 0) gLastRenderStatus = 1;
+    }
+    const int32_t rc = renderToAndroidSurface(gSurf.window);
+    if (rc != 0) return rc < 0 ? rc : -3;
+    return gpuOk ? 0 : 1;
+}
+
+
 void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHeight,
                       uint16_t* outputBytes, int32_t outWidth, int32_t outHeight,
                       const float* uniforms, int32_t uniformCount,
@@ -2432,19 +2900,25 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
 // Motion S (batch 9): one output frame. frames = frameCount packed 8-bit RGBA frames (w * h * 4 bytes each), centerIdx = the frame being
 // rendered, uniforms = the FULL uniform buffer (kUboFloats floats) with the Motion S block filled in (see class MotionS). On any problem the
 // centre frame is returned unchanged and get_last_render_status() reports it.
-void process_motion(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCount, int32_t centerIdx,
-                    uint8_t* outputBytes, const float* uniforms, int32_t uniformCount) {
+// toSurface = true: the finished frame is NOT read back; it is copied GPU -> GPU into the attached encoder Surface (outputBytes is unused / may be null).
+static void processMotionImpl(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCount, int32_t centerIdx,
+                              uint8_t* outputBytes, const float* uniforms, int32_t uniformCount, bool toSurface) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
     gLastRenderStatus = 0;
     const size_t px = (size_t)std::max(w, 0) * (size_t)std::max(h, 0);
     const size_t frameBytes = px * 4;
-    if (frames == nullptr || outputBytes == nullptr || w <= 0 || h <= 0 || frameCount < 1 || centerIdx < 0 || centerIdx >= frameCount) {
+    if (frames == nullptr || (outputBytes == nullptr && !toSurface) || w <= 0 || h <= 0 || frameCount < 1 || centerIdx < 0 || centerIdx >= frameCount) {
+        gLastRenderStatus = 1;
+        return;
+    }
+    if (toSurface && (gSurf.swapchain == VK_NULL_HANDLE || (int32_t)gSurf.w != w || (int32_t)gSurf.h != h)) {
+        snprintf(gSurfError, sizeof(gSurfError), "Motion S surface frame: no attached surface of %dx%d", (int)w, (int)h);
         gLastRenderStatus = 1;
         return;
     }
     const uint8_t* curFrame = frames + (size_t)centerIdx * frameBytes;
     auto fallback = [&]() {
-        std::memcpy(outputBytes, curFrame, frameBytes);
+        if (!toSurface) std::memcpy(outputBytes, curFrame, frameBytes);
         if (gLastRenderStatus == 0) gLastRenderStatus = 1;
     };
     if (uniforms == nullptr || uniformCount < (int32_t)kUboFloats || !gVk.isInitialized || !ensureBuffersCapacity(px)) {
@@ -2512,6 +2986,12 @@ void process_motion(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCo
         return;
     }
 
+    // 4a. zero-copy: the render pass wrote w * h packed RGBA words into outBuffer; copy them straight into the encoder Surface
+    if (toSurface) {
+        if (renderToAndroidSurface(gSurf.window) != 0 && gLastRenderStatus == 0) gLastRenderStatus = 1;
+        return;
+    }
+
     // 4. read back (render pass wrote w * h packed 8-bit RGBA words)
     void* mappedOut = nullptr;
     vkMapMemory(gVk.device, gVk.outMemory, 0, frameBytes, 0, &mappedOut);
@@ -2521,9 +3001,23 @@ void process_motion(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCo
     vkUnmapMemory(gVk.device, gVk.outMemory);
 }
 
+void process_motion(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCount, int32_t centerIdx,
+                    uint8_t* outputBytes, const float* uniforms, int32_t uniformCount) {
+    processMotionImpl(frames, w, h, frameCount, centerIdx, outputBytes, uniforms, uniformCount, false);
+}
+
+// Zero-copy variant for the hardware encoder: 0 = frame presented, 1 = failed (get_last_render_status() / get_last_surface_error() say why).
+int32_t process_motion_to_surface(const uint8_t* frames, int32_t w, int32_t h, int32_t frameCount, int32_t centerIdx,
+                                  const float* uniforms, int32_t uniformCount) {
+    processMotionImpl(frames, w, h, frameCount, centerIdx, nullptr, uniforms, uniformCount, true);
+    return gLastRenderStatus == 0 ? 0 : 1;
+}
+
 void cleanup_processor() {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
     if (!gVk.isInitialized) return;
+
+    destroySurfaceTarget();
 
     cleanupBuffers();
 
@@ -2644,6 +3138,25 @@ Java_com_example_aereality_VulkanBridge_processImage(JNIEnv* env, jobject thiz,
 JNIEXPORT void JNICALL
 Java_com_example_aereality_VulkanBridge_destroyVulkan(JNIEnv* env, jobject thiz) {
     cleanup_processor();
+}
+
+// Zero-copy export: MediaCodecEncoder.kt (object NativeSurface) turns the encoder's input Surface into an ANativeWindow*. The returned number is the
+// pointer (it holds one reference); Dart passes it to attach_android_surface(), and Kotlin gives the reference back with windowRelease().
+JNIEXPORT jlong JNICALL
+Java_com_aereality_NativeSurface_windowFromSurface(JNIEnv* env, jclass, jobject surface) {
+    if (surface == nullptr) return 0;
+    ANativeWindow* w = ANativeWindow_fromSurface(env, surface);
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(w));
+}
+
+JNIEXPORT void JNICALL
+Java_com_aereality_NativeSurface_windowRelease(JNIEnv*, jclass, jlong handle) {
+    if (handle != 0) ANativeWindow_release(reinterpret_cast<ANativeWindow*>(static_cast<intptr_t>(handle)));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_aereality_NativeSurface_ping(JNIEnv*, jclass) {
+    return JNI_TRUE;
 }
 
 } // extern "C"
