@@ -1653,8 +1653,15 @@ static bool savePipelineCacheFile(const std::string& path, uint64_t shaderHash) 
 // =============================================================================
 static bool gWsiInstance = false;   // VK_KHR_surface + VK_KHR_android_surface enabled on the instance
 static bool gWsiDevice = false;     // VK_KHR_swapchain enabled on the device
+static constexpr bool kUseDisplayTiming = false;   // exact present times via VK_GOOGLE_display_timing: off by default (unproven; turn on only if a surface export looks soft)
 static bool gWsiTiming = false;     // VK_GOOGLE_display_timing enabled too: every present carries an exact CFR time (see renderToAndroidSurface)
 static char gSurfError[200] = {0};  // text of the last surface failure, read through get_last_surface_error()
+// Where the time of a surface export goes (microseconds summed over all presented frames); read through get_surface_timing().
+static uint64_t gSurfAcqUs = 0, gSurfCopyUs = 0, gSurfPresUs = 0, gSurfTimedFrames = 0, gSurfUpUs = 0, gSurfGradeUs = 0, gSurfGradeFrames = 0;
+static char gSurfTimingText[420] = {0};
+static inline uint64_t surfNowUs() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 struct SurfaceTarget {
     ANativeWindow* window = nullptr;          // owned by Kotlin (NativeSurface.windowRelease); Vulkan holds its own reference through VkSurfaceKHR
@@ -1854,6 +1861,7 @@ static int32_t createSurfaceTarget(ANativeWindow* window, uint32_t w, uint32_t h
     gSurf.w = w;
     gSurf.h = h;
     gSurf.tenBit = ten;
+    gSurfAcqUs = gSurfCopyUs = gSurfPresUs = gSurfTimedFrames = gSurfUpUs = gSurfGradeUs = gSurfGradeFrames = 0;
     gSurf.frames = 0;
     gSurf.t0ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     gSurf.frameNs = (uint64_t)(1.0e9 / std::max(1.0, std::min(fps, 240.0)));
@@ -1870,7 +1878,9 @@ static int32_t renderToAndroidSurface(ANativeWindow* window) {
         return -1;
     }
     uint32_t idx = 0;
+    const uint64_t tAcq0 = surfNowUs();
     VkResult r = vkAcquireNextImageKHR(gVk.device, gSurf.swapchain, 3000000000ull, gSurf.acquireSem, VK_NULL_HANDLE, &idx);
+    gSurfAcqUs += surfNowUs() - tAcq0;   // long = the encoder is the bottleneck (it has not freed an input buffer yet)
     if ((r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) || idx >= gSurf.images.size()) { surfFail("vkAcquireNextImageKHR", r); return -3; }
 
     VkCommandBuffer cmd = gSurf.cmd;
@@ -1935,6 +1945,7 @@ static int32_t renderToAndroidSurface(ANativeWindow* window) {
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) { surfFailMsg("vkEndCommandBuffer failed"); return -4; }
 
     vkResetFences(gVk.device, 1, &gSurf.fence);
+    const uint64_t tCopy0 = surfNowUs();
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.waitSemaphoreCount = 1;
@@ -1948,6 +1959,8 @@ static int32_t renderToAndroidSurface(ANativeWindow* window) {
     if (r != VK_SUCCESS) { surfFail("vkQueueSubmit (surface copy)", r); return -5; }
     r = vkWaitForFences(gVk.device, 1, &gSurf.fence, VK_TRUE, 5000000000ull);
     if (r != VK_SUCCESS) { surfFail("vkWaitForFences (surface copy)", r); return -6; }
+    gSurfCopyUs += surfNowUs() - tCopy0;
+    const uint64_t tPres0 = surfNowUs();
 
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
@@ -1968,6 +1981,8 @@ static int32_t renderToAndroidSurface(ANativeWindow* window) {
     }
     r = vkQueuePresentKHR(gVk.computeQueue, &pi);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { surfFail("vkQueuePresentKHR", r); return -7; }
+    gSurfPresUs += surfNowUs() - tPres0;
+    gSurfTimedFrames++;
     gSurf.frames++;
     return 0;
 }
@@ -2210,7 +2225,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     const char* wsiDevExts[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME};
     gWsiDevice = gWsiInstance && deviceHasExtension(gVk.physicalDevice, wsiDevExts[0]);
-    gWsiTiming = gWsiDevice && deviceHasExtension(gVk.physicalDevice, wsiDevExts[1]);
+    gWsiTiming = gWsiDevice && kUseDisplayTiming && deviceHasExtension(gVk.physicalDevice, wsiDevExts[1]);
     if (gWsiDevice) {
         deviceCreateInfo.enabledExtensionCount = gWsiTiming ? 2 : 1;
         deviceCreateInfo.ppEnabledExtensionNames = wsiDevExts;
@@ -2772,6 +2787,16 @@ int32_t attach_android_surface(void* nativeWindow, int32_t w, int32_t h, int32_t
     return createSurfaceTarget(static_cast<ANativeWindow*>(nativeWindow), (uint32_t)std::max<int32_t>(w, 0), (uint32_t)std::max<int32_t>(h, 0), tenBit != 0, fps);
 }
 
+const char* get_surface_timing() {
+    const uint64_t n = gSurfTimedFrames ? gSurfTimedFrames : 1;
+    const uint64_t g = gSurfGradeFrames ? gSurfGradeFrames : 1;
+    snprintf(gSurfTimingText, sizeof(gSurfTimingText),
+             "surface path, %llu frames, average per frame: upload %.1f ms | GRADE (GPU passes) %.1f ms | wait for encoder %.1f ms | GPU copy %.1f ms | present %.1f ms",
+             (unsigned long long)gSurfTimedFrames, gSurfUpUs / 1000.0 / g, gSurfGradeUs / 1000.0 / g,
+             gSurfAcqUs / 1000.0 / n, gSurfCopyUs / 1000.0 / n, gSurfPresUs / 1000.0 / n);
+    return gSurfTimingText;
+}
+
 int32_t surface_is_ten_bit() { return (gSurf.swapchain != VK_NULL_HANDLE && gSurf.tenBit) ? 1 : 0; }
 
 void detach_android_surface() {
@@ -2798,6 +2823,8 @@ int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h
     const size_t rgbaBytes = pixelCount * sizeof(uint32_t);
 
     bool gpuOk = false;
+    const uint64_t tUp0 = surfNowUs();
+    uint64_t tGrade0 = tUp0;
     if (gVk.isInitialized && ensureBuffersCapacity(pixelCount)) {
         void* mappedInput = nullptr;
         vkMapMemory(gVk.device, gVk.inMemory, 0, rgbaBytes, 0, &mappedInput);
@@ -2820,7 +2847,11 @@ int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h
         findTextWarpRows(uniforms, uniformCount);
         findBatch6Passes(uniforms, uniformCount);
         findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);
+        tGrade0 = surfNowUs();
+        gSurfUpUs += tGrade0 - tUp0;
         gpuOk = runGpuPipeline(w, h);   // the finished RGBA8 frame is now in outBuffer
+        gSurfGradeUs += surfNowUs() - tGrade0;
+        gSurfGradeFrames++;
     }
     if (!gpuOk) {
         // same fallback process_image uses; the pixels are put into outBuffer so the present path is identical
@@ -2838,6 +2869,25 @@ int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h
     const int32_t rc = renderToAndroidSurface(gSurf.window);
     if (rc != 0) return rc < 0 ? rc : -3;
     return gpuOk ? 0 : 1;
+}
+
+// A frame that is ALREADY finished (the Motion S export reads processed frames from the intermediate video): copy it into the output buffer and present it. No grade.
+int32_t present_rgba_to_surface(const uint8_t* rgba, int32_t w, int32_t h) {
+    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+    if (rgba == nullptr || w <= 0 || h <= 0 || gSurf.swapchain == VK_NULL_HANDLE || (int32_t)gSurf.w != w || (int32_t)gSurf.h != h) {
+        surfFailMsg("present_rgba_to_surface: no attached encoder surface of this size.");
+        return -1;
+    }
+    const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const size_t rgbaBytes = pixelCount * sizeof(uint32_t);
+    if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount) || gVk.outBuffer == VK_NULL_HANDLE) return -2;
+    void* mappedOut = nullptr;
+    if (vkMapMemory(gVk.device, gVk.outMemory, 0, rgbaBytes, 0, &mappedOut) != VK_SUCCESS || mappedOut == nullptr) return -2;
+    std::memcpy(mappedOut, rgba, rgbaBytes);
+    VkMappedMemoryRange outRange{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, gVk.outMemory, 0, VK_WHOLE_SIZE};
+    vkFlushMappedMemoryRanges(gVk.device, 1, &outRange);
+    vkUnmapMemory(gVk.device, gVk.outMemory);
+    return renderToAndroidSurface(gSurf.window);
 }
 
 
