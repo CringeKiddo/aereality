@@ -25,6 +25,9 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Hardware H.264 / HEVC encoder (MediaCodecEncoder.kt): the channel "com.aereality/encoder" used by native_encoder.dart
+        EncoderBridge.register(flutterEngine.dartExecutor.binaryMessenger)
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "saveToMovies", "saveToDownloads" -> {   // "saveToDownloads" kept as an alias; both save to Movies/Shaderly
@@ -104,6 +107,11 @@ class MainActivity: FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onDestroy() {
+        EncoderBridge.shutdown()   // never leave a MediaCodec / Surface behind when the activity goes away
+        super.onDestroy()
     }
 
     // Saves exported videos / images into the ROOT Movies folder: /storage/emulated/0/Movies/Shaderly
