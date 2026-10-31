@@ -163,32 +163,70 @@ class MediaCodecEncoder(private val cfg: EncoderConfig) {
         }
         val tries = if (tenAllowed) listOf(true, false) else listOf(false)
         var last: Throwable? = null
+        val errors = LinkedHashSet<String>()
+        var lastInfo: MediaCodecInfo? = null
         for (ten in tries) {
             val info = pick(mime, ten, cfg.codec)
             if (info == null) {
                 if (ten) notes.add("This phone's encoder has no 10-bit ${cfg.codec.uppercase()} profile; falling back to 8-bit.")
                 continue
             }
-            // first with an explicit profile (High / Main, better quality than the default Baseline), then without
-            for (withProfile in listOf(true, false)) {
+            lastInfo = info
+            // 1. profile + the HIGHEST level the encoder lists for it (a too low default level is the usual reason a big picture is refused),
+            // 2. profile only, 3. nothing set; each with the bitrate as asked and then clamped to the listed range.
+            for (mode in 0..2) {
                 for (clamp in listOf(false, true)) {
                     try {
-                        configureAndStart(info, ten, withProfile, clamp)
+                        configureAndStart(info, ten, withProfile = mode <= 1, withLevel = mode == 0, clampBitrate = clamp)
                         startDrain()
                         return
                     } catch (t: Throwable) {
                         last = t
-                        Log.w(TAG, "configure failed (ten=$ten profile=$withProfile clamp=$clamp on ${info.name}): ${t.message}")
+                        errors.add("${t.javaClass.simpleName}: ${t.message}")
+                        Log.w(TAG, "configure failed (ten=$ten mode=$mode clamp=$clamp on ${info.name}): ${t.message}")
                         releaseCodecQuietly()
                     }
                 }
             }
             if (ten) notes.add("10-bit encoder start failed (${last?.message}); falling back to 8-bit.")
         }
-        throw IllegalStateException("No ${cfg.codec.uppercase()} encoder could start at ${cfg.width}x${cfg.height}: ${last?.message ?: "none available"}")
+        val hint = try { lastInfo?.let { probeLargest(it) } ?: "" } catch (_: Throwable) { "" }
+        throw IllegalStateException("No ${cfg.codec.uppercase()} encoder could start at ${cfg.width}x${cfg.height} (${lastInfo?.name ?: "no encoder"}): " +
+            "${errors.take(2).joinToString(" | ").ifEmpty { last?.message ?: "none available" }}${if (hint.isNotEmpty()) " $hint" else ""}")
     }
 
-    private fun configureAndStart(info: MediaCodecInfo, ten: Boolean, withProfile: Boolean, clampBitrate: Boolean) {
+    /** After a failure: the biggest size (same shape) this encoder DOES accept, so the message can say what to pick instead. */
+    private fun probeLargest(info: MediaCodecInfo): String {
+        for (f in doubleArrayOf(0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4)) {
+            val w = ((cfg.width * f).toInt() / 2) * 2
+            val h = ((cfg.height * f).toInt() / 2) * 2
+            if (w < 64 || h < 64) break
+            if (tryConfigure(info, w, h)) return "This phone's encoder does accept ${w}x${h}."
+        }
+        return ""
+    }
+
+    private fun tryConfigure(info: MediaCodecInfo, w: Int, h: Int): Boolean {
+        var c: MediaCodec? = null
+        return try {
+            val f = MediaFormat.createVideoFormat(mime, w, h)
+            f.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                if (cfg.useSurface) MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface else MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            f.setInteger(MediaFormat.KEY_BIT_RATE, 8_000_000)
+            f.setInteger(MediaFormat.KEY_FRAME_RATE, Math.round(cfg.fps).toInt().coerceAtLeast(1))
+            f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            c = MediaCodec.createByCodecName(info.name)
+            c.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            if (cfg.useSurface) c.createInputSurface().release()
+            true
+        } catch (_: Throwable) {
+            false
+        } finally {
+            try { c?.release() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun configureAndStart(info: MediaCodecInfo, ten: Boolean, withProfile: Boolean, withLevel: Boolean, clampBitrate: Boolean) {
         val caps = info.getCapabilitiesForType(mime)
         val vc = caps.videoCapabilities
         // The Java capability lists (media_codecs.xml) are often more conservative than the encoder really is (many phones list 1080p but encode 2K / 4K fine).
@@ -231,6 +269,11 @@ class MediaCodecEncoder(private val cfg: EncoderConfig) {
                 else -> MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
             }
             f.setInteger(MediaFormat.KEY_PROFILE, profile)
+            if (withLevel) {
+                // highest level the encoder itself lists for this profile
+                val lvl = caps.profileLevels.filter { it.profile == profile }.maxOfOrNull { it.level }
+                if (lvl != null) f.setInteger(MediaFormat.KEY_LEVEL, lvl)
+            }
         }
 
         val c = MediaCodec.createByCodecName(info.name)
