@@ -2,7 +2,8 @@
 // AEReality / Shaderly - Motion S screen (batch 9)
 //
 // Full screen opened from the main-menu "Motion S" button (it is NOT a tab). Source = a saved project (its grade is applied first) or a
-// plain video file (raw). Three modes: SMEAR, MAIN, DUPLICATE, each with its own settings, plus shared settings and the optional
+// plain video file (raw). Two modes: SMEAR (directional / radial accumulation smear of the frame, no flow) and DUPLICATE (echo; the old MAIN
+// motion blur mode was removed), each with its own settings, plus shared settings and the optional
 // Glitch Edge effect. Preview is paused by default, deliberately low fps / low quality (batch 2 rule: playing / scrubbing = lower
 // quality, paused = sharpen). START PROCESS renders every frame on Vulkan in a worker isolate, with the ExportClockPanel as progress,
 // a Cancel button, and then asks (immediately, no hold) whether to export through the live export path (ExportSuite).
@@ -699,10 +700,10 @@ class _MotionSScreenState extends State<MotionSScreen> {
         icon: Icons.blur_linear_rounded,
         child: _chips(
           'Each mode has its own settings below',
-          const ['SMEAR', 'MAIN', 'DUPLICATE'],
-          m - 1,
+          const ['SMEAR', 'DUPLICATE'],
+          m == MotionS.modeDuplicate ? 1 : 0,
           (i) {
-            _s[MotionS.mode] = (i + 1).toDouble();
+            _s[MotionS.mode] = (i == 0 ? MotionS.modeSmear : MotionS.modeDuplicate).toDouble();
             _settingChanged();
           },
         ),
@@ -717,36 +718,17 @@ class _MotionSScreenState extends State<MotionSScreen> {
           child: Column(children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: Text('Trails follow the real motion of the picture: shakes, zooms and spins all smear the way they move.', style: TextStyle(color: Colors.white38, fontSize: 11)),
+              child: Text('Directional light smear: every pixel gathers the brightest picture along the trail, so streaks stay solid and sharp. The trail comes from the angle / length below (it does not read the motion of the video), so it is the same on every frame.', style: TextStyle(color: Colors.white38, fontSize: 11)),
             ),
-            _sl('Smear length (max, of frame)', MotionS.smLength, 0.0, 0.4),
-            _sl('Smear speed (response)', MotionS.smSpeed, 0.1, 4.0),
-            _sl('Smear falloff', MotionS.smFalloff, 0.0, 1.0),
-            _sl('Smear line sharpness', MotionS.sharp, 0.0, 1.0),
-            _sl('Trailing samples', MotionS.smSamples, 8.0, 96.0),
-            _sl('Highlight bias', MotionS.highlightBias, 0.0, 1.0),
+            _sl('Smear length (of frame)', MotionS.smLength, 0.0, 0.6),
+            _sl(_s[MotionS.smRadial] > 0.5 ? 'Smear angle (0 zoom, 90 spin)' : 'Smear angle (0 right, 90 up)', MotionS.smAngle, 0.0, 360.0),
+            _switchRow('Radial trails', MotionS.smRadial, hint: 'Trails run from the frame centre (zoom) or around it (spin) instead of in one straight direction.'),
+            _sl('Highlight threshold (0 = all pixels)', MotionS.smHiThresh, 0.0, 1.0),
+            _sl('Chromatic dispersion', MotionS.smDisp, 0.0, 0.6),
+            _sl('Streak sharpness', MotionS.sharp, 0.0, 1.0),
+            _sl('Trailing samples (minimum)', MotionS.smSamples, 8.0, 96.0),
+            _sl('Trail falloff', MotionS.smFalloff, 0.0, 1.0),
             _sl('Head strength (keeps the picture)', MotionS.smHead, 0.0, 1.0),
-            _sl('Trail reach (grid cells)', MotionS.dilate, 0.0, 6.0),
-            _sl('Angle override', MotionS.smAngle, 0.0, 360.0),
-            _sl('Angle override amount', MotionS.smAngleLock, 0.0, 1.0),
-            _sl('Blur amount (keep low)', MotionS.smBlur, 0.0, 1.0),
-          ]),
-        ),
-      if (m == MotionS.modeMain)
-        ShelfPanel(
-          title: 'MAIN  (classic motion blur)',
-          icon: Icons.motion_photos_on_rounded,
-          child: Column(children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: Text('After Effects style: sub-frame samples across the shutter interval, along each pixel\'s own motion.', style: TextStyle(color: Colors.white38, fontSize: 11)),
-            ),
-            _sl('Shutter angle', MotionS.shutterAngle, 0.0, 720.0),
-            _sl('Shutter phase', MotionS.shutterPhase, -360.0, 360.0),
-            _sl('Sample count (sub-frames)', MotionS.mainSamples, 8.0, 96.0),
-            _sl('Shutter softness', MotionS.shutterSoft, 0.0, 1.0),
-            _sl('Edge bleed', MotionS.mainBleed, 0.0, 1.0),
-            _sl('Blur amount (keep low)', MotionS.mainBlur, 0.0, 1.0),
           ]),
         ),
       if (m == MotionS.modeDuplicate)
@@ -805,12 +787,7 @@ class _MotionSScreenState extends State<MotionSScreen> {
           ),
           _sl('Blend with original', MotionS.origMix, 0.0, 1.0),
           _sl('Protect detail (line art)', MotionS.protect, 0.0, 1.0),
-          if (m != MotionS.modeDuplicate) ...[
-            _sl('Intensity', MotionS.intensity, 0.0, 3.0),
-            _sl('Motion threshold (ignore small moves)', MotionS.threshold, 0.0, 0.02),
-            _sl('Threshold softness', MotionS.thresholdKnee, 1.0, 8.0),
-            _sl('Max length (never runs away)', MotionS.maxLen, 0.0, 0.4),
-          ],
+          if (m != MotionS.modeDuplicate) _sl('Trail brightness', MotionS.intensity, 0.0, 3.0),
           SmoothSliderRow(
             title: 'Preview quality',
             val: _previewQ,

@@ -1,6 +1,10 @@
 // =============================================================================
 // AEReality / Shaderly - Batch 9: Motion S slot table, defaults, frame plan and uniform packing
 //
+// SMEAR REWRITE: Smear is now a directional / radial ACCUMULATION smear of the current frame only (no flow, no neighbour frames), driven by
+// smLength / smAngle / smRadial / smHiThresh / smDisp / sharp / smSamples. The Main (motion blur) mode was removed from the UI and the shader;
+// modeMain stays as a constant so an old save that holds mode 2 still loads (it renders as Smear).
+//
 // UNIFORM LAYOUT: Motion S owns floats 5376..6399 of the uniform buffer (shader: motionS[1024], pass 18..21).
 // Time Slice keeps 6400..7423 (reserved2[1024], unread). 7424..8191 is free headroom. Total buffer = Vfx.uboFloats = 8192.
 //
@@ -54,7 +58,12 @@ class MotionS {
   static const int smSamples = 26, smBlur = 27, mainSamples = 42, mainBlur = 43;
 
   // ---- Smear ----
+  // smAngle (deg, 0 = right, 90 = up; radial: 0 = zoom burst, 90 = spin), smLength (fraction of the frame diagonal; radial: of the radius * 2),
+  // smFalloff (trail brightness decay), smHead (how much of the untouched picture stays), sharp (24) = streak sharpness, smSamples (26) = trailing samples.
+  // smAngleLock (33) and smSpeed (36) belonged to the old flow-based smear: kept as slots so old saves load, no longer read by the shader.
   static const int smAngle = 32, smAngleLock = 33, smFalloff = 34, smHead = 35, smSpeed = 36, smLength = 37;
+  // new (Smear rewrite)
+  static const int smRadial = 38, smHiThresh = 39, smDisp = 40;
 
   // ---- Main (classic shutter) ----
   static const int shutterAngle = 48, shutterPhase = 49, shutterSoft = 50, mainBleed = 51;
@@ -102,6 +111,9 @@ class MotionS {
     f[smHead] = 0.1;
     f[smSpeed] = 1.0;
     f[smLength] = 0.18;
+    f[smRadial] = 0.0; // 0 linear, 1 radial (zoom / spin)
+    f[smHiThresh] = 0.0; // 0 = every pixel leaves a trail; raise it so only the highlights do [ASSUMED default]
+    f[smDisp] = 0.06; // RGB split along the trail, fraction of the trail length [ASSUMED default]
 
     f[shutterAngle] = 180.0;
     f[shutterPhase] = -90.0;
@@ -139,10 +151,18 @@ class MotionS {
       final v = src[i];
       if (!v.isNaN && !v.isInfinite) d[i] = v;
     }
+    d[smRadial] = d[smRadial] >= 0.5 ? 1.0 : 0.0;
+    d[smHiThresh] = d[smHiThresh].clamp(0.0, 1.0).toDouble();
+    d[smDisp] = d[smDisp].clamp(0.0, 0.6).toDouble();
+    d[smLength] = d[smLength].clamp(0.0, 0.6).toDouble();
     return d;
   }
 
-  static int modeOf(List<double> s) => s[mode].round().clamp(1, 3).toInt();
+  /// 1 = Smear, 3 = Duplicate. The removed Main mode (2) maps to Smear.
+  static int modeOf(List<double> s) {
+    final m = s[mode].round().clamp(1, 3).toInt();
+    return m == modeMain ? modeSmear : m;
+  }
 
   // ---------------------------------------------------------------------------------------------------------------
   // FRAME PLAN: which frames (relative to the output frame) the effect needs, and where they sit in the upload.
@@ -157,13 +177,7 @@ class MotionS {
     bool needPrev = false;
 
     if (m == modeSmear) {
-      needFlow = true;
-      needPrev = true;
-    } else if (m == modeMain) {
-      needFlow = true;
-      needPrev = true;
-      final end = (s[shutterPhase] + s[shutterAngle]) / 360.0;
-      needFwd = end > 0.02;
+      // Smear only reads the current frame: no neighbour frames, no flow passes (18..20 are skipped natively when needFlow is false)
     } else {
       ghosts = s[dupCount].round().clamp(0, maxGhosts).toInt();
       final sp = s[dupSpacing].round().clamp(1, 4).toInt();
@@ -250,10 +264,7 @@ class MotionS {
     // per-mode samples / blur -> shared slots
     if (m == modeSmear) {
       u[b + samples] = s[smSamples].roundToDouble().clamp(4.0, 96.0).toDouble();
-      u[b + blurAmt] = s[smBlur];
-    } else if (m == modeMain) {
-      u[b + samples] = s[mainSamples].roundToDouble().clamp(4.0, 96.0).toDouble();
-      u[b + blurAmt] = s[mainBlur];
+      u[b + blurAmt] = 0.0; // the old perpendicular blur is gone from Smear
     } else {
       u[b + samples] = 8.0;
       u[b + blurAmt] = 0.0;
