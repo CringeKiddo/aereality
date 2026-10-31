@@ -88,6 +88,11 @@ double gPreviewScale = 1.0;
 // Global Vulkan Engine Compute Precision (1 = FP32 for full 32-bit linear precision)
 int gEnginePrecision = 1;
 
+// Grading colour space (Settings > Grading colour space): 0 = Oklab (default, the original behaviour), 1 = Linear Rec.709.
+// Everything in the shader that used to be hard-wired to Oklab (basic grade, duotone, gradient map, lightness tonemappers) follows it.
+// Sent to the shader in uniform slot 7 (u_gradeSpace).
+int gGradeSpace = 0;
+
 // Global Toggle: Grade Active Scrub Frame only vs Continuous Frame Grading
 bool gGradeActiveFrameOnly = true;
 

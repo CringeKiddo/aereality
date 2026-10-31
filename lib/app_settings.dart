@@ -40,6 +40,7 @@ class SettingsStore {
   static const String _kGradeOnly = 'shaderly.gradePausedFrameOnly'; // legacy (batch 16), still written so it mirrors the engine
   static const String _kEngine = 'shaderly.previewEngine'; // batch 17B: 'smooth' | 'adaptive'
   static const String _kFlare = 'shaderly.fastFlares';
+  static const String _kGradeSpace = 'shaderly.gradeSpace'; // 0 = Oklab, 1 = Linear Rec.709
   static const String _kTheme = 'shaderly.themeId';
   static const String _kMotionBitrate = 'shaderly.motionBitrateMbps'; // Motion S intermediate bitrate (hardware encoder)
   static const String _kMotionCodec = 'shaderly.motionCodec'; // 'hevc' | 'h264'
@@ -73,6 +74,7 @@ class SettingsStore {
       }
       gGradeActiveFrameOnly = gPreviewEngine == PreviewEngine.smooth; // keep the legacy global in step
       gFlareHalfRes = p.getBool(_kFlare) ?? gFlareHalfRes;
+      gGradeSpace = (p.getInt(_kGradeSpace) ?? 0) == 1 ? 1 : 0;
       savedThemeId = p.getString(_kTheme);
       MotionS.bitrateMbps = MotionS.sanitizeBitrate(p.getInt(_kMotionBitrate));
       MotionS.intermediateCodec = MotionS.sanitizeCodec(p.getString(_kMotionCodec));
@@ -90,6 +92,7 @@ class SettingsStore {
       await p.setBool(_kGradeOnly, gGradeActiveFrameOnly);
       await p.setString(_kEngine, gPreviewEngine == PreviewEngine.adaptive ? 'adaptive' : 'smooth');
       await p.setBool(_kFlare, gFlareHalfRes);
+      await p.setInt(_kGradeSpace, gGradeSpace == 1 ? 1 : 0);
       await p.setInt(_kMotionBitrate, MotionS.sanitizeBitrate(MotionS.bitrateMbps));
       await p.setString(_kMotionCodec, MotionS.sanitizeCodec(MotionS.intermediateCodec));
     } catch (e) {

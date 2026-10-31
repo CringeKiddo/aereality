@@ -192,18 +192,18 @@ class EditorViews {
     final tonemappers = [
       {
         'mode': 0.0,
-        'title': 'Linear (Off / Native Passthrough)',
-        'desc': 'Raw linear response.',
+        'title': 'Linear (Soft Shoulder)',
+        'desc': 'Untouched below the knee, hue-preserving roll-off above it.',
       },
       {
         'mode': 1.0,
         'title': 'Shaderly Tonemapper 1 (AgX Anime Punch)',
-        'desc': 'AgX, deeper blacks, smooth highlights.',
+        'desc': 'Official AgX with the Punchy look (power 1.35, sat 1.4); SDR white anchored.',
       },
       {
         'mode': 2.0,
         'title': 'Shaderly Tonemapper 2 (Khronos PBR Neutral+)',
-        'desc': 'Khronos PBR Neutral.',
+        'desc': 'Shaderly retune of Khronos Neutral: no black subtraction, smooth shoulder.',
       },
       {
         'mode': 3.0,
@@ -225,7 +225,31 @@ class EditorViews {
         'title': 'Obsidian Cel',
         'desc': 'Rich, deep shadows.',
       },
+      {
+        'mode': 7.0,
+        'title': 'ACES Filmic',
+        'desc': 'Hill fit of the ACES RRT + sRGB ODT (input / output matrices, 1/0.6 exposure).',
+      },
+      {
+        'mode': 8.0,
+        'title': 'Reinhard',
+        'desc': 'Classic global operator, L / (1 + L) per channel.',
+      },
+      {
+        'mode': 9.0,
+        'title': 'Reinhard Extended',
+        'desc': 'Luminance Reinhard with a white point (2.0), colour ratios kept.',
+      },
+      {
+        'mode': 10.0,
+        'title': 'Khronos PBR Neutral (Official)',
+        'desc': 'The unmodified Khronos algorithm, black offset included.',
+      },
     ];
+
+    // tonemapMode >= 0 = ON with that mode; < 0 = OFF, and -(mode + 1) remembers which one is selected (default OFF, Linear).
+    final bool tmOn = project.tonemapMode >= 0.0;
+    final double selMode = tmOn ? project.tonemapMode : (-project.tonemapMode - 1.0);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -233,13 +257,32 @@ class EditorViews {
         Text('COLOR SPACE & TONEMAPPING', style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1)),
         const SizedBox(height: 6),
         const Text(
-          'Select the display transform for your true 32-bit float linear grade.',
+          'The tonemapper is always the LAST scene-referred step (after every grade, glow and flare). Off = nothing is applied.',
           style: TextStyle(color: Colors.white54, fontSize: 11),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
+        Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: tmOn ? accent.withOpacity(0.10) : gPalette.value.control,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: tmOn ? accent : Colors.white.withOpacity(0.08), width: tmOn ? 1.5 : 1.0),
+          ),
+          child: SwitchListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            title: const Text('Tonemapper', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: Text(tmOn ? 'ON' : 'OFF', style: TextStyle(color: tmOn ? accent : Colors.white38, fontSize: 11)),
+            value: tmOn,
+            activeColor: accent,
+            onChanged: (val) {
+              project.tonemapMode = val ? selMode : (-selMode - 1.0);
+              onChanged();
+            },
+          ),
+        ),
         ...tonemappers.map((tm) {
-          final isSel = project.tonemapMode == tm['mode'];
-          return Container(
+          final isSel = selMode == tm['mode'];
+          return Opacity(opacity: tmOn ? 1.0 : 0.5, child: Container(
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
               color: isSel ? accent.withOpacity(0.14) : gPalette.value.card,
@@ -264,11 +307,12 @@ class EditorViews {
               ),
               trailing: isSel ? Icon(Icons.radio_button_checked, color: accent) : const Icon(Icons.radio_button_off, color: Colors.white24),
               onTap: () {
-                project.tonemapMode = tm['mode'] as double;
+                final double m = tm['mode'] as double;
+                project.tonemapMode = tmOn ? m : (-m - 1.0);
                 onChanged();
               },
             ),
-          );
+          ));
         }).toList(),
       ],
     );
@@ -1094,11 +1138,12 @@ class EditorViews {
             title: const Text('ADVANCED FLARE SETTINGS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
             children: [
               buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
-              buildSliderRow(context: context, title: 'Flare Softness (Hard Flat Edge to Soft Blurred Edge)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
-              buildSliderRow(context: context, title: 'Flare Spacing (Min Distance Between Flares)', val: cur.flareSpacing, min: 0.0, max: 0.5, onChanged: (v) { cur.flareSpacing = v; onChanged(); }, onEnded: onEnded),
-              buildSliderRow(context: context, title: 'Flare Thickness', val: cur.flareThickness, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThickness = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare Softness (Crisp Band to Soft Glow That Breaks Apart And Spreads)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare Spacing (Keep Only The Strongest Flare Within This Distance, 0 = Off)', val: cur.flareSpacing, min: 0.0, max: 0.5, onChanged: (v) { cur.flareSpacing = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare Thickness (Band Height, Relative To The Frame)', val: cur.flareThickness, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThickness = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare Falloff (Long Fade to Short)', val: cur.flareFalloff, min: 0.0, max: 1.0, onChanged: (v) { cur.flareFalloff = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare White Core', val: cur.flareCoreWhite, min: 0.0, max: 1.0, onChanged: (v) { cur.flareCoreWhite = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare Haze Veil (Wide Soft Glow Around The Flaring Light)', val: cur.flareHaze, min: 0.0, max: 1.0, onChanged: (v) { cur.flareHaze = v; onChanged(); }, onEnded: onEnded),
             ],
           ),
         ),

@@ -11,6 +11,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'constants.dart'; // gGradeSpace
 import 'gradient_map.dart';
 import 'models.dart';
 import 'time_slice_slots.dart';
@@ -34,6 +35,7 @@ Float32List packProjectUniforms(
     uniforms[4] = imgH;
     uniforms[5] = hasLut ? 1.0 : 0.0;
     uniforms[6] = lutOpacity;
+    uniforms[7] = gGradeSpace == 1 ? 1.0 : 0.0; // grading colour space (Settings): 0 Oklab, 1 Linear Rec.709
     uniforms[12] = project.ditherStrength;
 
     // Offsets 13..25: Isolated Metallic Text Suite
@@ -265,6 +267,7 @@ Float32List packProjectUniforms(
       uniforms[offset + 181] = layer.flareFalloff;
       uniforms[offset + 182] = layer.flareSceneTint;
       uniforms[offset + 183] = layer.flareCoreWhite;
+      uniforms[offset + 185] = layer.flareHaze; // v5 flare: Haze Veil
     }
 
     MathOps.packLayers(uniforms, [for (final l in project.layers) l.mathOps]); // batch 14, kept in sync with main.dart

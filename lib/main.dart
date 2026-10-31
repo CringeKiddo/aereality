@@ -539,6 +539,45 @@ class _HomeScreenState extends State<HomeScreen> {
                                 style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 12),
                               ),
                             ),
+                            const Padding(
+                              padding: EdgeInsets.only(top: 12, bottom: 6),
+                              child: Text('GRADING COLOUR SPACE', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+                            ),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                ChoiceChip(
+                                  label: const Text('Oklab'),
+                                  selected: gGradeSpace == 0,
+                                  selectedColor: accent,
+                                  onSelected: (_) {
+                                    setModal(() => gGradeSpace = 0);
+                                    SettingsStore.save();
+                                    setState(() {});
+                                  },
+                                ),
+                                ChoiceChip(
+                                  label: const Text('Linear Rec.709'),
+                                  selected: gGradeSpace == 1,
+                                  selectedColor: accent,
+                                  onSelected: (_) {
+                                    setModal(() => gGradeSpace = 1);
+                                    SettingsStore.save();
+                                    setState(() {});
+                                  },
+                                ),
+                              ],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6, bottom: 2),
+                              child: Text(
+                                gGradeSpace == 0
+                                    ? 'Basic grade, Duotone, Gradient Map and the lightness tonemappers work in Oklab (perceptual).'
+                                    : 'Basic grade, Duotone, Gradient Map and the lightness tonemappers work directly in linear Rec.709 light. Slider feel changes: contrast is a power around mid grey, saturation and hue act on linear RGB.',
+                                style: const TextStyle(color: Colors.white38, fontSize: 11),
+                              ),
+                            ),
                           ]),
                           const SizedBox(height: 10),
                           shelf(3, 'PREVIEW', Icons.visibility_rounded, [
@@ -3202,6 +3241,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     uniforms[4] = imgH;
     uniforms[5] = _getActiveLutTable() != null ? 1.0 : 0.0;
     uniforms[6] = _lutLayer.lutOpacity;
+    uniforms[7] = gGradeSpace == 1 ? 1.0 : 0.0; // grading colour space (Settings): 0 Oklab, 1 Linear Rec.709
     uniforms[12] = _project.ditherStrength;
 
     // Offsets 13..25: Isolated Metallic Text Suite
@@ -3433,6 +3473,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 181] = layer.flareFalloff;
       uniforms[offset + 182] = layer.flareSceneTint;
       uniforms[offset + 183] = layer.flareCoreWhite;
+      uniforms[offset + 185] = layer.flareHaze; // v5 flare: Haze Veil
     }
 
     TimeSlice.packLayers(uniforms, [for (final l in _project.layers) l.timeSlice]); // batch 12 C2: Time Slice settings 6400..7039 (mirror in project_uniforms.dart)

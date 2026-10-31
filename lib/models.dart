@@ -346,7 +346,7 @@ class TimelineClipSegment {
     required this.startTime,
     required this.endTime,
     List<AdjustmentLayer>? layers,
-    this.tonemapMode = 0.0,
+    this.tonemapMode = -1.0, // negative = tonemapper OFF (-(mode+1) keeps the selected mode); default OFF
     this.isEnabled = true,
     this.deepTeal = 0.0,
     this.magicCurves = 0.0,
@@ -388,7 +388,7 @@ class TimelineClipSegment {
     layers: (json['layers'] as List<dynamic>?)
         ?.map((l) => AdjustmentLayer.fromJson(l))
         .toList() ?? [],
-    tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
+    tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? -1.0,
     isEnabled: json['isEnabled'] ?? true,
     deepTeal: (json['deepTeal'] as num?)?.toDouble() ?? 0.0,
     magicCurves: (json['magicCurves'] as num?)?.toDouble() ?? 0.0,
@@ -516,6 +516,7 @@ class AdjustmentLayer {
   double flareFalloff;    // 0..1 how fast the flare fades along its length
   double flareSceneTint;  // Colour Respect (v2.7): 0 = transparent white-ish haze .. 1 = colours taken from the video
   double flareCoreWhite;  // 0..1 hot white core
+  double flareHaze;       // 0..1 Haze Veil: wide soft glow around the flaring light (v5 flare)
   double lineArtStrength;
   double lineArtWidth;
   double lineArtPlacement;
@@ -622,7 +623,7 @@ class AdjustmentLayer {
     this.isEnabled = true,
     this.opacity = 1.0,
     this.blendMode = LayerBlendMode.normal,
-    this.blendLinear = false, // Default to AE Gamma space
+    this.blendLinear = true, // Default: Linear Light (the Gamma Space switch is OFF until turned on)
     this.brightness = 0.0,
     this.contrast = 1.0,
     this.saturation = 1.0,
@@ -684,11 +685,12 @@ class AdjustmentLayer {
     this.thinStreakFromEdge = false,
     this.flareOrigin = 0.0,
     this.flareThreshold = 0.25,
-    this.flareSpacing = 0.18,
-    this.flareThickness = 0.35,
+    this.flareSpacing = 0.0,
+    this.flareThickness = 0.60,
     this.flareFalloff = 0.50,
     this.flareSceneTint = 0.55,
     this.flareCoreWhite = 0.35,
+    this.flareHaze = 0.25,
     this.lineArtStrength = 0.0,
     this.lineArtWidth = 0.50,
     this.lineArtPlacement = 0.0,
@@ -958,6 +960,7 @@ class AdjustmentLayer {
       flareFalloff: flareFalloff,
       flareSceneTint: flareSceneTint,
       flareCoreWhite: flareCoreWhite,
+      flareHaze: flareHaze,
       lineArtStrength: lineArtStrength,
       lineArtWidth: lineArtWidth,
       lineArtPlacement: lineArtPlacement,
@@ -1128,6 +1131,7 @@ class AdjustmentLayer {
       'flareFalloff': flareFalloff,
       'flareSceneTint': flareSceneTint,
       'flareCoreWhite': flareCoreWhite,
+      'flareHaze': flareHaze,
       'lineArtStrength': lineArtStrength,
       'lineArtWidth': lineArtWidth,
       'lineArtPlacement': lineArtPlacement,
@@ -1233,7 +1237,7 @@ class AdjustmentLayer {
       isEnabled: json['isEnabled'] ?? true,
       opacity: (json['opacity'] as num?)?.toDouble() ?? 1.0,
       blendMode: safeBlendMode,
-      blendLinear: json['blendLinear'] ?? false,
+      blendLinear: json['blendLinear'] ?? true,
       brightness: (json['brightness'] as num?)?.toDouble() ?? 0.0,
       contrast: (json['contrast'] as num?)?.toDouble() ?? 1.0,
       saturation: (json['saturation'] as num?)?.toDouble() ?? 1.0,
@@ -1295,11 +1299,12 @@ class AdjustmentLayer {
       thinStreakFromEdge: json['thinStreakFromEdge'] == true,
       flareOrigin: (json['flareOrigin'] as num?)?.toDouble() ?? (json['thinStreakFromEdge'] == true ? 1.0 : 0.0),
       flareThreshold: (json['flareThreshold'] as num?)?.toDouble() ?? 0.25,
-      flareSpacing: (json['flareSpacing'] as num?)?.toDouble() ?? 0.18,
-      flareThickness: (json['flareThickness'] as num?)?.toDouble() ?? 0.35,
+      flareSpacing: (json['flareSpacing'] as num?)?.toDouble() ?? 0.0,
+      flareThickness: (json['flareThickness'] as num?)?.toDouble() ?? 0.60,
       flareFalloff: (json['flareFalloff'] as num?)?.toDouble() ?? 0.50,
       flareSceneTint: (json['flareSceneTint'] as num?)?.toDouble() ?? 0.55,
       flareCoreWhite: (json['flareCoreWhite'] as num?)?.toDouble() ?? 0.35,
+      flareHaze: (json['flareHaze'] as num?)?.toDouble() ?? 0.25,
       lineArtStrength: (json['lineArtStrength'] as num?)?.toDouble() ?? 0.0,
       lineArtWidth: (json['lineArtWidth'] as num?)?.toDouble() ?? 0.50,
       lineArtPlacement: (json['lineArtPlacement'] as num?)?.toDouble() ?? 0.0,
@@ -1853,7 +1858,7 @@ class ProjectData {
     this.aspectRatio = '16:9',
     List<AdjustmentLayer>? layers,
     this.activeLayerIndex = 0,
-    this.tonemapMode = 0.0,
+    this.tonemapMode = -1.0, // negative = tonemapper OFF (-(mode+1) keeps the selected mode); default OFF
     this.textSuiteEnabled = false,
     this.textBoxX = 0.07,
     this.textBoxY = 0.415,
@@ -1961,7 +1966,7 @@ class ProjectData {
               .toList() ??
           [],
       activeLayerIndex: json['activeLayerIndex'] ?? 0,
-      tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
+      tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? -1.0,
       textSuiteEnabled: json['textSuiteEnabled'] ?? false,
       textBoxX: (json['textBoxX'] as num?)?.toDouble() ?? 0.07,
       textBoxY: (json['textBoxY'] as num?)?.toDouble() ?? 0.415,
@@ -2035,7 +2040,7 @@ class CustomPresetItem {
     required this.accentColor,
     this.isBuiltIn = false,
     required this.layers,
-    this.tonemapMode = 0.0,
+    this.tonemapMode = -1.0, // negative = tonemapper OFF (-(mode+1) keeps the selected mode); default OFF
   });
 
   Map<String, dynamic> toJson() => {
@@ -2056,7 +2061,7 @@ class CustomPresetItem {
         layers: (json['layers'] as List<dynamic>)
             .map((l) => AdjustmentLayer.fromJson(l))
             .toList(),
-        tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? 0.0,
+        tonemapMode: (json['tonemapMode'] as num?)?.toDouble() ?? -1.0,
       );
 }
 
