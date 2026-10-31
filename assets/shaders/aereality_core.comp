@@ -310,7 +310,7 @@ struct LayerData {
     float flareSceneTint;   // 182  0 = source colour, 1 = fully tinted by the scene colour
     float flareCoreWhite;   // 183  hot white core in the brightest part of the band 0..1
     float dofPreview;       // 184  DOF focus-plane preview (1 = tint the in-focus zone)
-    float pad185;
+    float flareHaze;        // 185  Haze Veil: wide soft glow around the flaring light 0..1
     float pad186;
     float pad187;
     float pad188;
@@ -361,12 +361,12 @@ struct CurveData { float c[72]; };
 layout(std430, binding = 2) readonly buffer UniformBlock {
     float u_time;                  // 0
     float u_layerCount;            // 1
-    float u_tonemapMode;           // 2: 0 Linear, 1 AgX, 2 Khronos Neutral+, 3 Aurora Depth, 4 Sakura Silk, 5 Prism Blend, 6 Obsidian Cel
+    float u_tonemapMode;           // 2: NEGATIVE = tonemapper OFF (plain clamp). On: 0 Linear, 1 AgX, 2 Khronos Neutral+, 3 Aurora Depth, 4 Sakura Silk, 5 Prism Blend, 6 Obsidian Cel, 7 ACES, 8 Reinhard, 9 Reinhard Extended, 10 Khronos PBR Neutral (official)
     float u_imgWidth;              // 3
     float u_imgHeight;             // 4
     float u_hasLut;                // 5
     float u_lutOpacity;            // 6
-    float u_copiedChromaShift_unused; // 7
+    float u_gradeSpace;            // 7: grading colour space (Settings): 0 = Oklab, 1 = Linear Rec.709
     float u_copiedEdgeRays_unused; // 8
     float u_copiedProMist_unused;  // 9
     float u_copiedStarGlint_unused;// 10
@@ -544,6 +544,44 @@ vec2 oklabRotateHue(vec2 ab, float angleRadians) {
     float sinA = sin(angleRadians * 0.45);
     return vec2(ab.x * cosA - ab.y * sinA, ab.x * sinA + ab.y * cosA);
 }
+
+// =============================================================================
+// GRADING COLOUR SPACE (Settings > Grading colour space). One switch for everything that used to be hard-wired to Oklab.
+//   0 Oklab         : (L, a, b), perceptual lightness, chroma plane of Oklab (the original behaviour, unchanged)
+//   1 Linear Rec.709: (Y, a, b) with Y = linear luma, and (a, b) = coordinates of rgb - Y in the zero-luma plane of linear Rec.709.
+//                     The axes are oriented like Oklab a (red/green) and b (yellow/blue) and scaled (0.27) so a chroma value means about the
+//                     same as in Oklab for typical colours. Scaling (a, b) is the classic linear-light saturation, rotating them is a
+//                     luma-preserving hue rotation. Decoding pulls chroma toward Y if a channel would go negative (same idea as the Oklab path).
+// Everything written for "lab.x / lab.yz" keeps working in both spaces; lightness thresholds go through gsT / gsToP.
+// =============================================================================
+#define GS_LIN (u_gradeSpace > 0.5)
+const vec3 GS_A = vec3(0.904816, -0.299518, 0.302649);
+const vec3 GS_B = vec3(0.317603, 0.001313, -0.948223);
+const float GS_KC = 0.27;
+
+vec3 gsEncode(vec3 rgb) {
+    rgb = max(rgb, vec3(0.0));
+    if (!GS_LIN) return linearRgbToOklab(rgb);
+    float Y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 d = rgb - vec3(Y);
+    return vec3(Y, dot(d, GS_A) * GS_KC, dot(d, GS_B) * GS_KC);
+}
+
+vec3 gsDecode(vec3 g) {
+    if (!GS_LIN) return oklabToLinearRgb(g);
+    float Y = max(g.x, 0.0);
+    vec3 d = (GS_A * g.y + GS_B * g.z) / GS_KC;
+    vec3 rgb = vec3(Y) + d;
+    float mn = min(rgb.r, min(rgb.g, rgb.b));
+    if (mn < 0.0) rgb = vec3(Y) + d * (Y / max(Y - mn, 1e-6));
+    return max(rgb, vec3(0.0));
+}
+
+// Lightness threshold written for Oklab L -> the same grey level in this space (for a grey, Oklab L = cbrt(linear value)).
+float gsT(float t) { return GS_LIN ? t * t * t : t; }
+// Lightness on the Oklab-like perceptual scale (used only to drive masks written for Oklab L), and back.
+float gsToP(float y) { return GS_LIN ? pow(max(y, 0.0), 1.0 / 3.0) : y; }
+float gsFromP(float p) { return GS_LIN ? p * p * p : p; }
 
 // Colour wheel vector (x right, y up, |v| <= 1) -> zero-mean RGB push. Angle = hue (0 = red),
 // radius = amount, so the centre is neutral. Zero-mean means the wheel never changes brightness.
@@ -737,7 +775,7 @@ vec3 sampleBloomLevelF(float lvlF, vec2 uv, int width, int height) {
 // =============================================================================
 // TONEMAPPERS
 // =============================================================================
-vec3 agxCore(vec3 c, float sat) {
+vec3 agxCore(vec3 c, float sat, float power) {
     // GLSL mat3(vec3, vec3, vec3) is COLUMN-major. toRec2020 / outset / toSrgb below were already
     // listed as columns. The AgX *inset* was listed row-by-row (transposed), so neutral greys were
     // pushed off-axis - that was the pink, dark cast. It is now written as columns too.
@@ -763,9 +801,11 @@ vec3 agxCore(vec3 c, float sat) {
     c = 15.5 * x4 * x2 - 40.14 * x4 * c + 31.96 * x4 - 6.868 * x2 * c + 0.4298 * x2 + 0.1191 * c - 0.00232;
     c = clamp(c, 0.0, 1.0);
 
-    // gentle chroma restore (AgX desaturates highlights by design)
+    // AgX LOOK, applied exactly where Blender applies it: on the output of the contrast sigmoid, before the outset matrix.
+    // power = ASC-CDL style power, sat = saturation around Rec.709 luma. Base look = (1.0, 1.0); Blender's "Punchy" = (1.35, 1.4).
+    c = pow(c, vec3(power));
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    c = mix(vec3(l), c, sat);
+    c = vec3(l) + sat * (c - vec3(l));
 
     c = outset * c;
     c = pow(max(c, vec3(0.0)), vec3(2.2));
@@ -860,14 +900,19 @@ vec3 tmFitToGamut(vec3 c) {
 // the same hue-preserving shoulder the other tonemappers use, and gamut-fitted - the old version clipped every channel
 // at 1.0, which flattened glows / pushed exposure and swung skin toward yellow.
 vec3 tonemapAgx(vec3 c) {
-    const float AGX_SAT = 1.20;
+    // Official AgX (Troy Sobotka) with the official Punchy look (power 1.35, saturation 1.4). The old version used the Base look with a
+    // saturation of 1.2, which is why it read flat and washed out (shadows lifted, skin and blues pushed pale).
+    const float AGX_POWER = 1.35;
+    const float AGX_SAT = 1.40;
     const float WHITE_OUT = 0.965;
-    vec3 raw = agxCore(c, AGX_SAT);
-    float whiteEnc = linearToSrgb(luma(agxCore(vec3(1.0), AGX_SAT)));
+    vec3 raw = agxCore(c, AGX_SAT, AGX_POWER);
+    float whiteEnc = linearToSrgb(luma(agxCore(vec3(1.0), AGX_SAT, AGX_POWER)));
     float gain = WHITE_OUT / whiteEnc;
     vec3 e = linearToSrgb(raw);
     float ye = luma(e);
-    float lift = (ye >= whiteEnc) ? gain : 1.0 + (gain - 1.0) * smoothstep(0.42, whiteEnc, ye);
+    // True AgX maps SDR white (1.0) to only ~0.73 (it expects scene light far above 1.0). Video is display-referred, so the top of the
+    // curve is stretched so SDR white lands at WHITE_OUT; shadows and low mids are left exactly as AgX shaped them.
+    float lift = (ye >= whiteEnc) ? gain : 1.0 + (gain - 1.0) * smoothstep(0.20, whiteEnc, ye);
     e *= lift;
     float pk = tmMax3(e);
     if (pk > 0.93) e *= tmShoulder(pk, 0.93) / pk;
@@ -892,12 +937,18 @@ float tmDepthCurve(float L, float amt, float pivot, float skin) {
     return L + amt * p;
 }
 
-// Rebuild a colour from Oklab with a new lightness. Chroma follows lightness (constant *saturation*, so darker
+// The lightness tonemappers work on (P, a, b): P is lightness on the perceptual (Oklab L) scale in BOTH grading spaces, (a, b) is the chroma
+// plane of the chosen grading space (Settings > Grading colour space): Oklab, or linear Rec.709 where chroma scales with light.
+vec3 tmEnc(vec3 c) { vec3 g = gsEncode(c); g.x = gsToP(g.x); return g; }
+vec3 tmDec(vec3 g) { g.x = gsFromP(g.x); return gsDecode(g); }
+
+// Rebuild a colour with a new lightness. Chroma follows lightness (constant *saturation*, so darker
 // stays rich and lighter does not grey out); chromaMul adds or removes richness on top. Gamut-mapped by chroma reduction.
 vec3 tmRebuild(vec3 lab, float Lnew, float chromaMul) {
     float r = clamp(Lnew / max(lab.x, 1e-4), 0.0, 1.25);
+    if (GS_LIN) r = r * r * r;                               // linear light: chroma is proportional to the light itself
     float cm = mix(1.0, r, 0.85) * chromaMul;
-    return oklabToLinearRgb(vec3(Lnew, lab.yz * cm));
+    return tmDec(vec3(Lnew, lab.yz * cm));
 }
 
 // The lightness-curve modes cannot carry colour above white (L > 1 has no chroma), so once a pixel is over-driven
@@ -919,7 +970,7 @@ vec3 tmHdrBlend(vec3 labPath, vec3 c) {
 // hue and nothing flattens. Deeper toe, midtone separation, smooth top shoulder, tiny richness lift in the mids.
 vec3 tonemapAuroraDepth(vec3 c) {
     c = max(c, vec3(0.0));
-    vec3 lab = linearRgbToOklab(c);
+    vec3 lab = tmEnc(c);
     float L = lab.x;
     float skin = tmSkinMask(lab);
 
@@ -940,7 +991,7 @@ vec3 tonemapAuroraDepth(vec3 c) {
 // instead of clipping to flat pink/white, keeps warmth in the roll-off, then adds a soft depth curve.
 vec3 tonemapSakuraSilk(vec3 c) {
     c = max(c, vec3(0.0));
-    vec3 lab = linearRgbToOklab(c);
+    vec3 lab = tmEnc(c);
     float skin = tmSkinMask(lab);
 
     float n = mix(tmMax3(c), luma(c), 0.30);        // vivid colours are not over-compressed (no dulling)
@@ -954,7 +1005,7 @@ vec3 tonemapSakuraSilk(vec3 c) {
     o = mix(o, vec3(luma(o)), g);
     o = tmFitToGamut(o);
 
-    vec3 lab2 = linearRgbToOklab(o);
+    vec3 lab2 = tmEnc(o);
     float Ld = tmDepthCurve(lab2.x, mix(0.16, 0.08, skin), 0.62, skin);
     return tmFitToGamut(tmRebuild(lab2, Ld, 1.0 + 0.05 * skin));
 }
@@ -967,7 +1018,7 @@ vec3 tonemapSakuraSilk(vec3 c) {
 // blend took away in the shadows/mids, so the picture neither under- nor over-saturates.
 vec3 tonemapPrismBlend(vec3 c) {
     c = max(c, vec3(0.0));
-    vec3 labIn = linearRgbToOklab(c);
+    vec3 labIn = tmEnc(c);
     float skin = tmSkinMask(labIn);
     float pk = tmMax3(c);
 
@@ -977,7 +1028,7 @@ vec3 tonemapPrismBlend(vec3 c) {
     float w = 0.55 * smoothstep(0.55, 1.10, pk) * (1.0 - 0.50 * skin);
     vec3 o = mix(A, B, w);
 
-    vec3 labO = linearRgbToOklab(o);
+    vec3 labO = tmEnc(o);
     float Cin = length(labIn.yz);
     float Co = length(labO.yz);
     float lr = clamp(labO.x / max(labIn.x, 1e-4), 0.0, 1.20);
@@ -995,7 +1046,7 @@ vec3 tonemapPrismBlend(vec3 c) {
 // midtones and highlights where the artist put them, and rolls off only at the very top.
 vec3 tonemapObsidianCel(vec3 c) {
     c = max(c, vec3(0.0));
-    vec3 lab = linearRgbToOklab(c);
+    vec3 lab = tmEnc(c);
     float L = lab.x;
     float skin = tmSkinMask(lab);
 
@@ -1010,7 +1061,64 @@ vec3 tonemapObsidianCel(vec3 c) {
     return tmHdrBlend(tmFitToGamut(tmRebuild(lab, Lo, rich)), c);
 }
 
+// ---- 7: ACES filmic ---------------------------------------------------------
+// Stephen Hill's fit of the ACES RRT + sRGB ODT (the version three.js / most engines ship): sRGB -> AP1-ish input matrix, the rational
+// RRT+ODT curve, output matrix back to sRGB. The standard 1/0.6 pre-exposure that goes with this fit is included. Input / output are linear sRGB.
+vec3 tonemapACES(vec3 c) {
+    const mat3 ACES_IN = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));
+    const mat3 ACES_OUT = mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602));
+    c = max(c, vec3(0.0)) * (1.0 / 0.6);
+    c = ACES_IN * c;
+    vec3 a = c * (c + 0.0245786) - 0.000090537;
+    vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+    c = a / b;
+    c = ACES_OUT * c;
+    return clamp(c, vec3(0.0), vec3(1.0));
+}
+
+// ---- 8: Reinhard (global operator, Reinhard et al. 2002, eq. 3): Ld = L / (1 + L), applied per channel (as in three.js). ----
+vec3 tonemapReinhard(vec3 c) {
+    c = max(c, vec3(0.0));
+    return c / (vec3(1.0) + c);
+}
+
+// ---- 9: Reinhard Extended (eq. 4): Ld = L * (1 + L / Lwhite^2) / (1 + L), on LUMINANCE, colour ratios kept (no hue shifts).
+// Lwhite = the scene luminance that maps to pure white. 2.0 suits video (SDR white 1.0 -> 0.625, anything at 2.0 or above -> white).
+vec3 tonemapReinhardExtended(vec3 c) {
+    const float LWHITE = 2.0;
+    c = max(c, vec3(0.0));
+    float l = luma(c);
+    if (l < 1e-6) return c;
+    float lo = l * (1.0 + l / (LWHITE * LWHITE)) / (1.0 + l);
+    return tmFitToGamut(c * (lo / l));
+}
+
+// ---- 10: Khronos PBR Neutral, the OFFICIAL algorithm (Khronos, 2024), unmodified: black-level offset (x < 0.08: x - 6.25 x^2, else 0.04),
+// compression from 0.76, desaturation 0.15. (Mode 2, "Neutral+", is the Shaderly retune of it with no black subtraction.) ----
+vec3 tonemapKhronosNeutral(vec3 color) {
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    color = max(color, vec3(0.0));
+    float x = min(color.r, min(color.g, color.b));
+    float offset = (x < 0.08) ? (x - 6.25 * x * x) : 0.04;
+    color -= vec3(offset);
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) return max(color, vec3(0.0));
+    const float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return clamp(mix(color, vec3(newPeak), g), vec3(0.0), vec3(1.0));
+}
+
+// The master tonemap is the LAST scene-referred step (pass 6: after every grade, glow, flare and effect, right before the display encode).
+// mode < 0 = the tonemapper is switched OFF: nothing is applied except the final 0..1 clamp.
 vec3 applyToneMapping(vec3 linearCol, float mode) {
+    if (mode < -0.5) return clamp(linearCol, vec3(0.0), vec3(1.0));
+    if (mode > 9.5) return tonemapKhronosNeutral(linearCol);
+    if (mode > 8.5) return tonemapReinhardExtended(linearCol);
+    if (mode > 7.5) return tonemapReinhard(linearCol);
+    if (mode > 6.5) return tonemapACES(linearCol);
     if (mode > 5.5) return tonemapObsidianCel(linearCol);
     if (mode > 4.5) return tonemapPrismBlend(linearCol);
     if (mode > 3.5) return tonemapSakuraSilk(linearCol);
@@ -1532,174 +1640,123 @@ void detectDominantLight(int width, int height) {
 // -----------------------------------------------------------------------------
 vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 ambientNear, vec3 glowTint) {
     LayerData L = layers[li];
-            const int NT = 56;
-            float origin = clamp(L.thinStreakEdgeMode, 0.0, 1.0);
-            float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
-            float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;         // frame widths per side / inward from the edge
-            // v2.7: the old mapping topped out at 0.20 while a real highlight measures 0.5..3 here, so at ANY slider value
-            // every highlight flared. 0 -> 0.01, 0.25 -> ~0.07 (about the old default look), 0.5 -> 0.37, 1 -> 2.2.
-            float tFrac = clamp(L.flareThreshold, 0.0, 1.0);
-            float thrV = mix(0.01, 2.2, pow(tFrac, 2.6));
-            float spaceN = clamp(L.flareSpacing, 0.0, 0.5);
-            float thick = clamp(L.flareThickness, 0.0, 1.0);
-            float fall = clamp(L.flareFalloff, 0.0, 1.0);
-            float pk = mix(2.2, 6.5, fall);
-            const float pw = 1.25;
-            bool needEdge = origin > 0.02;
-            bool needLocal = origin < 0.98;
+    // =========================================================================================================================
+    // HAZE FLARE (v5). The old flare found every small local highlight, cut a band out of it relative to ITS OWN peak and normalised
+    // its strength, so every speck (hair shine, eye glint, line art) made a thin band whatever the settings - and because the bloom
+    // levels are measured in pixels, an export (more pixels) found even more of them than the preview.
+    // Now the flare is a real anamorphic smear of the light itself:
+    //   * the highlight field is read at a blur that is a FRACTION OF THE FRAME HEIGHT (Thickness x Softness), so preview, export,
+    //     4K all give the same picture, and small specks are blurred away to nothing: only big / strong light sources flare;
+    //   * that field is thresholded softly (Source Threshold), then smeared along the row with a smooth falloff (Length / Falloff);
+    //   * brightness follows the energy of the source (a dim source gives a dim flare, not a full-strength one);
+    //   * Softness widens the band, softens its edge and mixes in more haze until the band dissolves into a broad glow;
+    //   * Haze Veil adds the wide soft bloom around the flaring light.
+    // =========================================================================================================================
+    const int NT = 48;
+    float origin = clamp(L.thinStreakEdgeMode, 0.0, 1.0);
+    float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
+    float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;         // frame widths per side / inward from the edge
+    float tFrac = clamp(L.flareThreshold, 0.0, 1.0);
+    float thrV = 0.02 + 1.6 * pow(tFrac, 2.2);                        // minimum (blurred) source strength
+    float spaceN = clamp(L.flareSpacing, 0.0, 0.5);
+    float thick = clamp(L.flareThickness, 0.0, 1.0);
+    float fall = clamp(L.flareFalloff, 0.0, 1.0);
+    float hazeAmt = clamp(L.flareHaze, 0.0, 1.0);
+    float pk = mix(2.2, 6.5, fall);
+    const float pw = 1.25;
+    bool needEdge = origin > 0.02;
+    bool needLocal = origin < 0.98;
 
-            float sxA = needEdge ? 0.0 : max(uv.x - reach, 0.0);
-            float sxB = needEdge ? 1.0 : min(uv.x + reach, 1.0);
-            float spacingPx = max((sxB - sxA) * float(width) / float(NT), 1.0);
-            float bodyPx = max(float(height) * mix(0.004, 0.032, thick), 2.0);
-            float lvlSp = clamp(log2(max(spacingPx, 2.0) / 2.0) + 0.6, 0.0, 4.0);   // blur >= 1.5x tap spacing: no beads
-            float lvlBody = clamp(log2(bodyPx / 2.0), 0.0, 4.0);
-            float lvl = max(lvlSp, lvlBody);
-            float texPx = 2.0 * exp2(lvl);
-            float normK = min(spacingPx / texPx, 1.0);
-            // Source strength is normalised for the blur level (a small bright point keeps the same strength at any
-            // thickness), thrV is the minimum strength a source needs to flare.
-            float boost = pow(texPx * 0.125, 1.85);
-            float bodyUv = bodyPx / float(height);
-            float edgeW = mix(0.04, 0.38, soft);                             // hard: crisp edge, soft: wide blurred edge
-            // Soft mode: each tap also looks softO above and below its row, so the beam really spreads out vertically.
-            const float softMaxSpread = 0.08;                                // fraction of frame height at softness 1
-            float softO = soft * softMaxSpread;
-            bool useSoft = soft > 0.02;
-            float softMixK = smoothstep(0.05, 0.75, soft);                   // crisp -> feathered shape blend
-            float prStep = bodyUv * 0.75 + softO * 0.6;                      // local-peak search step (wider when soft)
-            int l2W = max(width >> 3, 1);
-            int l2H = max(height >> 3, 1);
-            int l4W = max(width >> 5, 1);
-            int l4H = max(height >> 5, 1);
+    // vertical size of the band (sigma, in pixels) as a fraction of the frame height
+    float H = float(height);
+    float sigmaT = max((0.010 + 0.050 * thick) * (1.0 + soft) * H, 2.5);
+    // bloom level whose own blur is about sigmaT (level n blurs about 2.5 * 2^n px); anything wider is made with extra vertical taps
+    float lvlF = clamp(log2(sigmaT / 2.5), 0.0, 4.0);
+    float sigLvl = 2.5 * exp2(lvlF);
+    float dvUv = (sigmaT > sigLvl) ? (sqrt(sigmaT * sigmaT - sigLvl * sigLvl) / 1.2247) / H : 0.0;   // 7-tap binomial: sigma = 1.2247 * spacing
+    float amp = sigmaT / (0.03 * H);                                  // a blurred source keeps a comparable strength at any thickness
+    float edgeSoft = mix(0.30, 0.85, soft);                           // gate width: crisp (hard) .. very gradual (soft)
 
-            vec3 lSum = vec3(0.0);
-            vec3 lMax = vec3(0.0);
-            vec3 eSum = vec3(0.0);
-            vec3 eMax = vec3(0.0);
-            for (int k = 0; k < NT; k++) {
-                float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
-                float at = abs(sx - uv.x) / reach;
-                float wLocal = needLocal ? flareProfile(at, pk, pw) : 0.0;
-                if (!needEdge && wLocal < 0.003) continue;
+    float sxA = needEdge ? 0.0 : max(uv.x - reach, 0.0);
+    float sxB = needEdge ? 1.0 : min(uv.x + reach, 1.0);
+    float spacingPx = max((sxB - sxA) * float(width) / float(NT), 1.0);
+    float normK = 2.0 * spacingPx / (2.5 * sigmaT);                  // taps -> integral, so the beam has the strength of the blurred source
 
-                vec2 tapUv = vec2(sx, uv.y);
-                vec3 sm = sampleBloomLevelF(lvl, tapUv, width, height);
-                float sl = luma(sm);
-                float sN = sl * boost;
-                vec3 smH = sm;          // colour used for the hue direction
-                float sNw = sN;         // vertically smeared strength (soft mode only)
-                if (useSoft) {
-                    vec3 smU = sampleBloomLevelF(lvl, vec2(sx, uv.y + softO), width, height);
-                    vec3 smD = sampleBloomLevelF(lvl, vec2(sx, uv.y - softO), width, height);
-                    vec3 smW = sm * 0.5 + (smU + smD) * 0.25;
-                    sNw = luma(smW) * boost;
-                    smH = mix(sm, smW, soft);
-                }
-                if (max(sN, sNw) < thrV * 0.35) continue;
+    vec3 lSum = vec3(0.0);
+    vec3 eSum = vec3(0.0);
+    for (int k = 0; k < NT; k++) {
+        float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
+        float at = abs(sx - uv.x) / reach;
+        float wLocal = needLocal ? flareProfile(at, pk, pw) : 0.0;
+        if (!needEdge && wLocal < 0.003) continue;
 
-                // compact sources only: a big bright area (hair, sky, a lit wall) is NOT a flare source
-                float f2 = luma(sampleBloom(2, tapUv, l2W, l2H).rgb);
-                float f4 = luma(sampleBloom(4, tapUv, l4W, l4H).rgb);
-                float compact = smoothstep(0.45, 0.80, 1.0 - f4 / max(f2, 1e-5));
-                if (useSoft) {
-                    // rows in the soft skirt are not on the source itself: accept the compactness of the rows around them
-                    for (int q = 0; q < 2; q++) {
-                        float oq = (q == 0) ? softO : -softO;
-                        vec2 tq = vec2(sx, uv.y + oq);
-                        float g2 = luma(sampleBloom(2, tq, l2W, l2H).rgb);
-                        float g4 = luma(sampleBloom(4, tq, l4W, l4H).rgb);
-                        compact = max(compact, smoothstep(0.45, 0.80, 1.0 - g4 / max(g2, 1e-5)));
-                    }
-                }
-                if (compact < 0.01) continue;
-
-                // local peak of this source's vertical profile -> band edge is placed relative to it
-                float pr = sN;
-                for (int j = 1; j <= 2; j++) {
-                    float o = prStep * float(j);
-                    pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
-                    pr = max(pr, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
-                }
-                if (pr < thrV) continue;
-                float v = sN / pr;
-                float s = smoothstep(0.45 - edgeW, 0.45 + edgeW, v) * smoothstep(thrV, thrV * 1.8, pr) * compact;
-                if (useSoft) {
-                    // Feathered shape: strength follows the smeared profile relative to the local peak, so it fades out
-                    // gradually over the whole spread instead of being cut at a threshold edge.
-                    float sSoft = smoothstep(0.02, 0.65, sNw / max(pr, 1e-5)) * smoothstep(thrV, thrV * 1.8, pr) * compact;
-                    s = mix(s, sSoft, softMixK);
-                }
-                if (s < 0.004) continue;
-
-                if (spaceN > 0.02) {
-                    // strongest source within +-Spacing of this row? (soft non-maximum suppression)
-                    float nb = 0.0;
-                    for (int j = 1; j <= 3; j++) {
-                        float o = spaceN * float(j) * 0.3333;
-                        nb = max(nb, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
-                        nb = max(nb, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
-                    }
-                    s *= smoothstep(0.55, 0.85, pr / max(pr, nb));
-                    if (s < 0.004) continue;
-                }
-
-                if (tFrac > 0.04) {
-                    // Threshold also RANKS the sources: at high settings a source must reach a share of the strongest one
-                    // within about +-22% of the frame height at this x, so only the dominant flares survive and the count
-                    // keeps dropping (also in "from edges" mode, where one row used to flare for every highlight on it).
-                    float rk = pr;
-                    for (int j = 1; j <= 4; j++) {
-                        float o = 0.055 * float(j);
-                        rk = max(rk, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y + o), width, height)) * boost);
-                        rk = max(rk, luma(sampleBloomLevelF(lvl, vec2(sx, uv.y - o), width, height)) * boost);
-                    }
-                    float need = 0.80 * smoothstep(0.10, 1.0, tFrac);
-                    s *= smoothstep(need * 0.80, need * 0.80 + 0.12, pr / max(rk, 1e-5));
-                    if (s < 0.004) continue;
-                }
-
-                vec3 hueC = smH / max(luma(smH), 1e-4);                        // colour direction of the source
-                float level = mix(1.0, clamp(pr / (thrV * 2.5), 0.6, 1.8), 0.25 + 0.5 * soft);
-                vec3 c = hueC * (level * s);
-                vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
-                if (needLocal) {
-                    vec3 cl = c * mix(vec3(1.0), spectral, 0.20) * wLocal;
-                    lSum += cl;
-                    lMax = max(lMax, cl);
-                }
-                if (needEdge) {
-                    eSum += c;
-                    eMax = max(eMax, c);
-                }
+        // blurred highlight field at this column: one read, or a 7-tap vertical binomial when the band is wider than level 4 can blur
+        vec3 V;
+        if (dvUv > 0.0) {
+            V = sampleBloomLevelF(lvlF, vec2(sx, uv.y), width, height) * (20.0 / 64.0);
+            for (int j = 1; j <= 3; j++) {
+                float wj = (j == 1) ? (15.0 / 64.0) : ((j == 2) ? (6.0 / 64.0) : (1.0 / 64.0));
+                V += (sampleBloomLevelF(lvlF, vec2(sx, uv.y + dvUv * float(j)), width, height)
+                    + sampleBloomLevelF(lvlF, vec2(sx, uv.y - dvUv * float(j)), width, height)) * wj;
             }
+        } else {
+            V = sampleBloomLevelF(lvlF, vec2(sx, uv.y), width, height);
+        }
+        V *= amp;
+        float A = luma(V);
+        float s = smoothstep(thrV * (1.0 - edgeSoft), thrV * (1.0 + edgeSoft), A);
+        if (s < 0.004) continue;
 
-            vec3 beamL = mix(lSum * normK, lMax, 0.50);
-            float dE = min(uv.x, 1.0 - uv.x) / reach;
-            vec3 beamE = mix(eSum * normK * 0.5, eMax, 0.75) * flareProfile(dE, pk, pw);
-            vec3 beam = beamL;
-            if (needEdge) beam = needLocal ? mix(beamL, beamE, origin) : beamE;
+        if (spaceN > 0.02) {
+            // keep only the strongest flare within +-Spacing of this row (a much stronger neighbour takes over)
+            float nbA = max(luma(sampleBloomLevelF(lvlF, vec2(sx, uv.y + spaceN), width, height)),
+                            luma(sampleBloomLevelF(lvlF, vec2(sx, uv.y - spaceN), width, height))) * amp;
+            s *= smoothstep(0.45, 0.85, A / max(max(A, nbA), 1e-5));
+            if (s < 0.004) continue;
+        }
 
-            vec3 st = beam;
-            float lst = luma(st);
-            if (lst > 1e-5) {
-                // COLOUR RESPECT (flareSceneTint): low = transparent haze, a pale white-ish veil with only a whisper of the
-                // source hue; high = a solid flare coloured by the video underneath (nearby scene colour).
-                float rc = clamp(L.flareSceneTint, 0.0, 1.0);
-                vec3 ah = clamp(ambientNear / max(luma(ambientNear), 1e-4), vec3(0.30), vec3(3.0));
-                ah = saturateColor(ah, 1.35);
-                ah /= max(luma(ah), 1e-4);
-                vec3 sceneC = mix(colorizeGlow(st, ambientCol, 1.0), ah * lst, 0.70);
-                vec3 hazeC = mix(vec3(lst), st, 0.15) * vec3(1.03, 1.00, 0.96);
-                float kc = smoothstep(0.0, 1.0, rc);
-                st = mix(hazeC, sceneC, kc);
-                st = saturateColor(st, mix(0.85, 1.20, kc));
-                st *= mix(0.45, 1.0, smoothstep(0.0, 0.80, rc));               // haze is see-through, coloured flares are solid
-                float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.50, 1.40, lst);
-                st = mix(st, vec3(luma(st)), core * 0.75);
-            }
-            st *= mix(vec3(1.0), glowTint, 0.65);
-            st = vec3(1.0) - exp(-st);                                         // filmic shoulder
+        vec3 c = V * s;
+        vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
+        if (needLocal) lSum += c * mix(vec3(1.0), spectral, 0.20) * wLocal;
+        if (needEdge) eSum += c;
+    }
+
+    vec3 beamL = lSum * normK;
+    float dE = min(uv.x, 1.0 - uv.x) / reach;
+    vec3 beamE = eSum * normK * 0.5 * flareProfile(dE, pk, pw);
+    vec3 beam = beamL;
+    if (needEdge) beam = needLocal ? mix(beamL, beamE, origin) : beamE;
+
+    vec3 st = beam;
+    float lst = luma(st);
+    if (lst > 1e-5) {
+        // COLOUR RESPECT (flareSceneTint): low = transparent haze, a pale white-ish veil with only a whisper of the
+        // source hue; high = a solid flare coloured by the video underneath (nearby scene colour).
+        float rc = clamp(L.flareSceneTint, 0.0, 1.0);
+        vec3 ah = clamp(ambientNear / max(luma(ambientNear), 1e-4), vec3(0.30), vec3(3.0));
+        ah = saturateColor(ah, 1.35);
+        ah /= max(luma(ah), 1e-4);
+        vec3 sceneC = mix(colorizeGlow(st, ambientCol, 1.0), ah * lst, 0.70);
+        vec3 hazeC = mix(vec3(lst), st, 0.15) * vec3(1.03, 1.00, 0.96);
+        float kc = smoothstep(0.0, 1.0, rc);
+        st = mix(hazeC, sceneC, kc);
+        st = saturateColor(st, mix(0.85, 1.20, kc));
+        st *= mix(0.45, 1.0, smoothstep(0.0, 0.80, rc));               // haze is see-through, coloured flares are solid
+        float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.50, 1.40, lst);
+        st = mix(st, vec3(luma(st)), core * 0.75);
+    }
+
+    if (hazeAmt > 0.01) {
+        // Haze Veil: the wide soft bloom around the flaring light (isotropic, from the 1/32 level; wider with Softness)
+        int w4 = max(width >> 5, 1);
+        int h4 = max(height >> 5, 1);
+        vec3 veil = gfWideTaps(uv, w4, h4, mix(1.2, 2.4, soft), 2) * amp;
+        float vg = smoothstep(thrV * 0.3, thrV * 1.0, luma(veil));
+        vec3 vc = mix(vec3(luma(veil)), veil, mix(0.25, 0.6, clamp(L.flareSceneTint, 0.0, 1.0)));
+        st += vc * vg * hazeAmt * 1.3;
+    }
+    st *= mix(vec3(1.0), glowTint, 0.65);
+    st = vec3(1.0) - exp(-st);                                         // filmic shoulder
 
     return st;
 }
@@ -2569,10 +2626,10 @@ vec3 fxDuotone(vec3 col, int li) {
     float mode = fx[li].f[41];
     vec3 over = max(col - 1.0, vec3(0.0));
     vec3 c = clamp(col, 0.0, 1.0);
-    vec3 labO = linearRgbToOklab(c);
+    vec3 labO = gsEncode(c);
     float t;
     if (mode < 0.5) t = linearToSrgb(luma(c));
-    else if (mode < 1.5) t = clamp(labO.x, 0.0, 1.0);
+    else if (mode < 1.5) t = clamp(gsToP(labO.x), 0.0, 1.0);   // "lightness" mode: perceptual scale in both grading spaces
     else t = linearToSrgb(max(c.r, max(c.g, c.b)));
     float k = clamp(fx[li].f[38], -1.0, 1.0);
     float cf = (k >= 0.0) ? (1.0 + k * 2.0) : (1.0 + k * 0.8);
@@ -2581,18 +2638,18 @@ vec3 fxDuotone(vec3 col, int li) {
     float bands = fx[li].f[44];
     if (bands > 1.5) t = floor(t * bands + 0.5) / bands;
     if (fx[li].f[43] > 0.5) t = 1.0 - t;
-    vec3 ls = linearRgbToOklab(fxUnpackCol(fx[li].f[34]));
-    vec3 lh = linearRgbToOklab(fxUnpackCol(fx[li].f[35]));
+    vec3 ls = gsEncode(fxUnpackCol(fx[li].f[34]));
+    vec3 lh = gsEncode(fxUnpackCol(fx[li].f[35]));
     vec3 lab;
     if (fx[li].f[36] >= 0.0) {
-        vec3 lm = linearRgbToOklab(fxUnpackCol(fx[li].f[36]));
+        vec3 lm = gsEncode(fxUnpackCol(fx[li].f[36]));
         float mp = clamp(fx[li].f[37], 0.05, 0.95);
         lab = (t < mp) ? mix(ls, lm, t / mp) : mix(lm, lh, (t - mp) / (1.0 - mp));
     } else {
         lab = mix(ls, lh, t);
     }
     lab.x = mix(lab.x, labO.x, clamp(fx[li].f[42], 0.0, 1.0));
-    vec3 outc = max(oklabToLinearRgb(lab), vec3(0.0));
+    vec3 outc = max(gsDecode(lab), vec3(0.0));
     float gain = clamp(luma(col) / max(luma(c), 1e-4), 1.0, 8.0);
     return mix(col, outc * gain, clamp(fx[li].f[40], 0.0, 1.0));
 }
@@ -2839,10 +2896,10 @@ vec3 gradientMapApply(vec3 col, GMapData G, ivec2 coord, vec2 uvN, int width, in
     vec3 over = max(col - 1.0, vec3(0.0));
     vec3 cc = clamp(col, 0.0, 1.0);
     vec3 mapped = srgbToLinear(gmapRamp(G, t));
-    vec3 labM = linearRgbToOklab(mapped);
-    vec3 labC = linearRgbToOklab(cc);
+    vec3 labM = gsEncode(mapped);
+    vec3 labC = gsEncode(cc);
     labM.x = mix(labM.x, labC.x, clamp(G.lumaKeep, 0.0, 1.0));
-    mapped = max(oklabToLinearRgb(labM), vec3(0.0));
+    mapped = max(gsDecode(labM), vec3(0.0));
     mapped *= clamp(luma(col) / max(luma(cc), 1e-4), 1.0, 8.0);   // keep HDR highlights the grade pushed above white
     return mix(col, mapped, clamp(G.strength, 0.0, 1.0));
 }
@@ -4603,23 +4660,38 @@ void main() {
         //     The old version added a constant to Oklab L, which lifted blacks like a gamma/lift.
         if (abs(L.brightness) > 0.001) layerColor *= exp2(L.brightness * 2.0);
 
-        // ---- OKLAB perceptual grading ----
-        vec3 lab = linearRgbToOklab(layerColor);
+        // ---- BASIC GRADE in the chosen grading space (Settings: Oklab or Linear Rec.709, see gsEncode) ----
+        vec3 lab = gsEncode(layerColor);
 
         // 10. Contrast, shadows / highlights, gamma
-        if (abs(L.contrast - 1.0) > 0.001) lab.x = (lab.x - 0.50) * L.contrast + 0.50;
+        if (abs(L.contrast - 1.0) > 0.001) {
+            if (GS_LIN) lab.x = 0.18 * pow(max(lab.x, 0.0) / 0.18, L.contrast);   // linear light: power around scene mid grey
+            else lab.x = (lab.x - 0.50) * L.contrast + 0.50;
+        }
         lab.x = max(lab.x, 0.0);
 
-        if (L.blackCrush > 0.01) lab.x = smoothstep(L.blackCrush * 0.08, 1.0, lab.x);
+        if (L.blackCrush > 0.01) {
+            // BLACK TOE: only the darkest part of the tonal range is pulled down toward black; everything above the knee is untouched.
+            // Shaped on the perceptual lightness scale (same look in both grading spaces). x' = x * (1 - a * (1 - x/K)^2) for x < K:
+            // identity and slope 1 at the knee K (C1, no kink), slope (1 - a) at black, monotone for a <= 1. a = 1 (slider 0.5) = black clips to a clean zero.
+            float bcA = clamp(L.blackCrush * 2.0, 0.0, 1.0);
+            float bcK = 0.18 + 0.22 * bcA;                    // toe width grows with the amount
+            float bcP = gsToP(lab.x);
+            if (bcP < bcK) {
+                float bcU = 1.0 - bcP / bcK;
+                bcP *= 1.0 - bcA * bcU * bcU;
+            }
+            lab.x = gsFromP(bcP);
+        }
 
-        lab.x += lab.x * (L.shadows * (1.0 - smoothstep(0.0, 0.45, lab.x)) * 0.30);
-        lab.x += lab.x * (L.highlights * smoothstep(0.55, 1.0, lab.x) * 0.30);
+        lab.x += lab.x * (L.shadows * (1.0 - smoothstep(0.0, gsT(0.45), lab.x)) * 0.30);
+        lab.x += lab.x * (L.highlights * smoothstep(gsT(0.55), 1.0, lab.x) * 0.30);
         if (abs(L.gamma - 1.0) > 0.001) lab.x = pow(max(lab.x, 0.0), 1.0 / max(L.gamma, 0.001));
 
         // 11. Mojo teal & orange
         if (L.mblMojoTealOrange > 0.01) {
-            float shadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
-            float warmMask = clamp((lab.x - 0.35) * 1.5, 0.0, 1.0);
+            float shadowMask = clamp(1.0 - gsToP(lab.x) * 1.8, 0.0, 1.0);
+            float warmMask = clamp((gsToP(lab.x) - 0.35) * 1.5, 0.0, 1.0);
             lab.z -= shadowMask * L.mblMojoTealOrange * 0.045;
             lab.y -= shadowMask * L.mblMojoTealOrange * 0.015;
             lab.y += warmMask * L.mblMojoTealOrange * 0.025;
@@ -4628,7 +4700,7 @@ void main() {
 
         // 12. Deep teal with skin shielding
         if (L.deepTeal > 0.01) {
-            float deepShadowMask = clamp(1.0 - lab.x * 1.8, 0.0, 1.0);
+            float deepShadowMask = clamp(1.0 - gsToP(lab.x) * 1.8, 0.0, 1.0);
             bool isSkin = (lab.y > 0.015 && lab.z > 0.015);
             float shield = isSkin ? 0.15 : 1.0;
             lab.z -= deepShadowMask * L.deepTeal * 0.055 * shield;
@@ -4644,15 +4716,22 @@ void main() {
 
         // 14. Cosmo skin protection
         if (L.cosmoCleanHighlight > 0.01) {
-            float faceMask = smoothstep(0.50, 0.85, lab.x) * (1.0 - lineEdge);
+            float faceMask = smoothstep(0.50, 0.85, gsToP(lab.x)) * (1.0 - lineEdge);
             lab.yz = mix(lab.yz, lab.yz * 0.85, faceMask * L.cosmoCleanHighlight * 0.40);
         }
 
         // 15. (removed in batch 4: curves are now the free-point Curves v2 block, applied at step 17)
         if (L.magicCurves > 0.01) {
-            float lx = clamp(lab.x, 0.0, 1.0);
-            float s = lx * lx * (3.0 - 2.0 * lx);
-            lab.x = mix(lab.x, s, L.magicCurves * 0.50);
+            if (GS_LIN) {
+                // linear light: the S-curve is shaped on the perceptual scale, then brought back to linear
+                float lp = clamp(gsToP(lab.x), 0.0, 1.0);
+                float sp = lp * lp * (3.0 - 2.0 * lp);
+                lab.x = gsFromP(mix(lp, sp, L.magicCurves * 0.50));
+            } else {
+                float lx = clamp(lab.x, 0.0, 1.0);
+                float s = lx * lx * (3.0 - 2.0 * lx);
+                lab.x = mix(lab.x, s, L.magicCurves * 0.50);
+            }
         }
 
         // 16. Saturation & hue rotation
@@ -4670,7 +4749,7 @@ void main() {
             float vh = atan(lab.z, lab.y);
             float skinV = smoothstep(0.30, 0.55, vh) * (1.0 - smoothstep(1.20, 1.50, vh))
                         * smoothstep(0.015, 0.040, cch) * (1.0 - smoothstep(0.13, 0.19, cch))
-                        * smoothstep(0.42, 0.62, lab.x);
+                        * smoothstep(0.42, 0.62, gsToP(lab.x));
             wv *= 1.0 - 0.65 * skinV;
             lab.yz *= 1.0 + boost * wv;
         }
@@ -4699,7 +4778,9 @@ void main() {
             bool cuOn = abs(L.hsCustomSat) > 0.002 || abs(L.hsCustomHue) > 0.002 || abs(L.hsCustomLum) > 0.002;
             float chroma16 = length(lab.yz);
             if ((hsOn || cuOn) && chroma16 > 1e-4) {
-                const float HS_C[8] = float[8](29.0, 65.0, 110.0, 142.0, 195.0, 264.0, 305.0, 340.0);
+                // band centres (degrees on the hue wheel of the chosen space): Oklab, and the same eight colours measured in the linear plane
+                const float HS_C_OK[8] = float[8](29.0, 65.0, 110.0, 142.0, 195.0, 264.0, 305.0, 340.0);
+                const float HS_C_LIN[8] = float[8](39.0, 62.0, 107.0, 151.0, 212.0, 269.0, 306.0, 354.0);
                 float hDeg = degrees(atan(lab.z, lab.y));
                 if (hDeg < 0.0) hDeg += 360.0;
                 float dSat = 0.0;
@@ -4707,11 +4788,11 @@ void main() {
                 float dLum = 0.0;
                 if (hsOn) {
                     int i0 = 7;
-                    for (int hb = 0; hb < 8; hb++) { if (hDeg >= HS_C[hb]) i0 = hb; }
+                    for (int hb = 0; hb < 8; hb++) { if (hDeg >= (GS_LIN ? HS_C_LIN[hb] : HS_C_OK[hb])) i0 = hb; }
                     int i1 = (i0 + 1) & 7;
-                    float span = HS_C[i1] - HS_C[i0];
+                    float span = (GS_LIN ? HS_C_LIN[i1] : HS_C_OK[i1]) - (GS_LIN ? HS_C_LIN[i0] : HS_C_OK[i0]);
                     if (span <= 0.0) span += 360.0;
-                    float dh = hDeg - HS_C[i0];
+                    float dh = hDeg - (GS_LIN ? HS_C_LIN[i0] : HS_C_OK[i0]);
                     if (dh < 0.0) dh += 360.0;
                     float tb = clamp(dh / span, 0.0, 1.0);
                     float hsEdge = (1.0 - clamp(L.hsSoftness, 0.0, 1.0)) * 0.45;
@@ -4745,7 +4826,7 @@ void main() {
             }
         }
 
-        layerColor = oklabToLinearRgb(lab);
+        layerColor = gsDecode(lab);
 
         // 17. CURVES v2 (batch 4): RGB composite + R / G / B, free monotone points, display-space like AE, never clips or inverts.
         {
