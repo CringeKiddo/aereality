@@ -56,6 +56,9 @@ class VideoProxy {
   VideoProxy._();
 
   static final Map<String, Future<String?>> _inflight = {};
+
+  /// Why the last conversion failed (ffmpeg's last lines), for the "could not be opened" message. '' = nothing failed.
+  static String lastFailure = '';
   static bool _purged = false;
 
   /// Long edge of the proxy (batch 18B: 1920, was 1280). Sources up to 1080p are NOT scaled at all; 4K sources become 1080p proxies, because many phone
@@ -199,8 +202,12 @@ class VideoProxy {
 
   static Future<String?> _build(String srcPath, MediaProbe probe) async {
     try {
+      lastFailure = '';
       final File src = File(srcPath);
-      if (!src.existsSync()) return null;
+      if (!src.existsSync()) {
+        lastFailure = 'the source file is not readable';
+        return null;
+      }
       final Directory dir = Directory('${(await getTemporaryDirectory()).path}/shaderly_proxy');
       if (!dir.existsSync()) dir.createSync(recursive: true);
 
@@ -257,6 +264,15 @@ class VideoProxy {
           return out.path;
         }
         debugPrint('VideoProxy: attempt failed (rc=$rc)');
+        try {
+          String tail = '';
+          try {
+            tail = ((await session.getOutput()) ?? '').toString();
+          } catch (_) {}
+          final lines = tail.split('\n').where((l) => l.trim().isNotEmpty).toList();
+          final last = lines.length > 3 ? lines.sublist(lines.length - 3).join(' / ') : lines.join(' / ');
+          lastFailure = 'attempt ${ai + 1} (rc=$rc): $last';
+        } catch (_) {}
       }
       try {
         if (part.existsSync()) part.deleteSync();

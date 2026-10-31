@@ -25,6 +25,7 @@ import 'package:image/image.dart' as img;
 
 import 'constants.dart';
 import 'models.dart';
+import 'project_uniforms.dart';
 import 'vulkan_bridge.dart';
 import 'touch_particles.dart';
 import 'editor_views.dart';
@@ -1719,8 +1720,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   /// Opens [path] in the native player. mp4 / mov: no extra process. webm / mkv / anything else: one cheap ffmpeg probe first, then the
   /// same attempt with the duration check and a seek test. If the player rejects the file (or [forceProxy]) an H.264 proxy is built and
   /// a NEW VideoPlayerController is initialised on the proxy file; only that controller is shown (the rejected one is disposed).
+  String _openDiag = ''; // why the native player refused the last file (shown if the video cannot be opened at all)
+
   Future<void> _openVideo(String path, int gen, {required bool forceProxy}) async {
     bool stale() => gen != _loadGen || !mounted;
+    _openDiag = '';
 
     MediaProbe probe = MediaProbe.unknown;
     VideoPlayerController? c;
@@ -1770,8 +1774,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     if (c == null) {
       setState(() => _preparingMedia = false);
+      final String why = [
+        if (VideoProxy.lastFailure.isNotEmpty) 'Conversion: ${VideoProxy.lastFailure}',
+        if (_openDiag.isNotEmpty) 'Player: $_openDiag',
+      ].join('\n');
+      CrashLog.note('video open failed: $why');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This video could not be opened (not even after converting it). Try another file.')),
+        SnackBar(
+          duration: const Duration(seconds: 20),
+          content: Text('This video could not be opened (not even after converting it). Try another file.${why.isEmpty ? '' : '\n$why'}'),
+        ),
       );
       return;
     }
@@ -1813,6 +1825,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return c;
     } catch (e) {
       debugPrint('18B: native player rejected $playPath: $e');
+      _openDiag = e.toString();
       try {
         await c.dispose();
       } catch (_) {}
@@ -2965,6 +2978,38 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  // ---------------------------------------------------------------------------------------------------
+  // NO-GRADE FAST PATH (export): when the project is exactly the default one (one untouched layer, no LUT, no text, default dither / tonemap) the GPU grade
+  // would only copy the picture through 4+ heavy full-resolution passes. The frame is then handed to the encoder as it was decoded (already at the export size).
+  // The check compares the packed uniform buffer with the one of a brand-new default project, so ANY change in ANY slider / layer / setting turns it off.
+  // Set to false to always run the full pipeline.
+  // ---------------------------------------------------------------------------------------------------
+  static const bool kExportSkipIdentityGrade = true;
+  Float32List? _identityBase;
+  int _identityW = -1;
+  int _identityH = -1;
+
+  bool _gradeIsIdentity(Float32List u, int w, int h) {
+    try {
+      if (u.length < 8 || u[5] > 0.5) return false; // a LUT is active
+      if (_identityBase == null || _identityW != w || _identityH != h) {
+        final base = ProjectData(mediaPath: '', layers: [AdjustmentLayer(id: 'identity', name: 'identity')]);
+        _identityBase = packProjectUniforms(base, w.toDouble(), h.toDouble(), timeSeconds: 0.0, hasLut: false, lutOpacity: u[6]);
+        _identityW = w;
+        _identityH = h;
+      }
+      final b = _identityBase!;
+      if (b.length != u.length) return false;
+      for (int i = 1; i < u.length; i++) {
+        if (i == 6) continue;
+        if ((u[i] - b[i]).abs() > 1e-5) return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
     final size = _exportRenderSize(); // batch 18B: the export size for a video export, the source size otherwise
     final w = size[0];
@@ -3036,6 +3081,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final uniforms = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
     uniforms[0] = timestampMs / 1000.0;
     final gradeWatch = Stopwatch()..start();
+    if (kExportSkipIdentityGrade && !_project.isImage && _gradeIsIdentity(uniforms, w, h)) {
+      if (surfaceOut) {
+        final pr = await SurfaceGradeWorker.instance.presentRgba(rgba: raw, w: w, h: h);
+        StageTimer.add('frame: no grade -> present (fast path)', gradeWatch.elapsedMicroseconds);
+        if (!pr.presented) throw Exception('Could not hand a frame to the video encoder: ${pr.error}');
+        return Uint8List(0);
+      }
+      if (_expNv12) {
+        final Uint8List? nv = rgbaToNv12(raw, w, h);
+        if (nv == null) throw Exception('RGBA -> NV12 conversion failed');
+        StageTimer.add('frame: no grade -> NV12 (fast path)', gradeWatch.elapsedMicroseconds);
+        return nv;
+      }
+      StageTimer.add('frame: no grade -> passthrough (fast path)', gradeWatch.elapsedMicroseconds);
+      return raw;
+    }
     if (surfaceOut) {
       final sr = await SurfaceGradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
       StageTimer.add('frame: grade + present (zero copy)', gradeWatch.elapsedMicroseconds);
