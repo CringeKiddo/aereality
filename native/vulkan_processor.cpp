@@ -1658,7 +1658,7 @@ static bool gWsiTiming = false;     // VK_GOOGLE_display_timing enabled too: eve
 static char gSurfError[200] = {0};  // text of the last surface failure, read through get_last_surface_error()
 // Where the time of a surface export goes (microseconds summed over all presented frames); read through get_surface_timing().
 static uint64_t gSurfAcqUs = 0, gSurfCopyUs = 0, gSurfPresUs = 0, gSurfTimedFrames = 0, gSurfUpUs = 0, gSurfGradeUs = 0, gSurfGradeFrames = 0;
-static char gSurfTimingText[420] = {0};
+static char gSurfTimingText[700] = {0};
 static inline uint64_t surfNowUs() {
     return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -2791,9 +2791,12 @@ const char* get_surface_timing() {
     const uint64_t n = gSurfTimedFrames ? gSurfTimedFrames : 1;
     const uint64_t g = gSurfGradeFrames ? gSurfGradeFrames : 1;
     snprintf(gSurfTimingText, sizeof(gSurfTimingText),
-             "surface path, %llu frames, average per frame: upload %.1f ms | GRADE (GPU passes) %.1f ms | wait for encoder %.1f ms | GPU copy %.1f ms | present %.1f ms",
+             "surface path, %llu frames, average per frame: upload %.1f ms | GRADE (GPU passes) %.1f ms | wait for encoder %.1f ms | GPU copy %.1f ms | present %.1f ms"
+             " || inside the grade (estimate): pass 0 primary grade %.0f ms | pass 6 master composite %.0f ms | pass 23 dither %.0f ms",
              (unsigned long long)gSurfTimedFrames, gSurfUpUs / 1000.0 / g, gSurfGradeUs / 1000.0 / g,
-             gSurfAcqUs / 1000.0 / n, gSurfCopyUs / 1000.0 / n, gSurfPresUs / 1000.0 / n);
+             gSurfAcqUs / 1000.0 / n, gSurfCopyUs / 1000.0 / n, gSurfPresUs / 1000.0 / n,
+             gNsPerPx[0] * (double)gSurf.w * (double)gSurf.h / 1e6, gNsPerPx[1] * (double)gSurf.w * (double)gSurf.h / 1e6,
+             gNsPerPx[7] * (double)gSurf.w * (double)gSurf.h / 1e6);
     return gSurfTimingText;
 }
 
