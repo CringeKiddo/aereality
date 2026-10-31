@@ -3514,11 +3514,11 @@ void executeSapphire(ivec2 coord, int width, int height) {
 }
 
 // =============================================================================
-// MOTION S (batch 9): Smear / Main / Duplicate + Glitch Edge.   Passes 18..21.
+// MOTION S (batch 9, Smear rewritten later): Smear / Duplicate + Glitch Edge.   Passes 18..21.  (Main / motion blur was removed.)
 //   18 MotionFlow    (grid)  block-matching residual on top of the global similarity transform estimated by the native side
 //   19 MotionSmooth  (grid)  confidence / similarity weighted 3x3 smoothing
 //   20 MotionDilate  (grid)  reach-limited neighbourhood max (lets a trail leave the moving edge)
-//   21 MotionRender  (full)  Smear / Main / Duplicate (+ Glitch Edge) -> out_pixels (8-bit RGBA)
+//   21 MotionRender  (full)  Smear / Duplicate (+ Glitch Edge) -> out_pixels (8-bit RGBA).  Smear no longer uses passes 18..20 (no flow); only Duplicate drift / ghost smear and Glitch Edge gating do.
 //   Parameters: motionS[i] (floats 5376..6399), slot numbers mirror class MotionS in motion_slots.dart.
 //   Frames: mo_frames (binding 11, N packed 8-bit RGBA frames), flow: mo_flow (binding 12, 3 planes x cells x 8 floats).
 //   Nothing here reads bloom L0..L4 / flare / temp composite, so the S_Glint scratch rule (L1, pass 15 .. pass 2) cannot be hit.
@@ -3742,118 +3742,110 @@ void executeMotionDilate(ivec2 cell, int gw, int gh) {
     moWrite(2, cell, gw, gh, bestB, bestF);
 }
 
-// ---- motion gate: threshold (no effect on tiny movement), gain, soft length limit ---------------------------------
-vec2 moShape(vec2 v, float gain, float maxLenPx, float thrPx, float knee) {
-    float m = length(v);
-    if (m < 1e-4) return vec2(0.0);
-    float g = smoothstep(thrPx, thrPx * knee + 1e-3, m);
-    float mm = m * gain;
-    float lim = max(maxLenPx, 1e-3);
-    float L = lim * (1.0 - exp(-mm / lim));
-    return v / m * L * g;
+// ---- SMEAR (rewritten): directional ACCUMULATION smear of the current frame ----------------------------------------
+// No flow, no frame differencing, no neighbour frames: the trail comes from the user's angle / length (or from the frame centre in radial mode),
+// so it is identical on every frame of the clip and cannot flicker or pop. Every pixel walks Seff steps along the trail, collects the picture
+// there and keeps the BRIGHTEST value per channel (lighten / max), which leaves solid, sharp light streaks instead of an averaged soup.
+//   linear : path(s) = q - dir * L * s                      dir = (cos a, -sin a)  (0 = right, 90 = up), the trail grows towards +dir
+//   radial : path(s) = c + Rot(-spin * m * s) * (q - c) * (1 - zoom * m * s)    c = frame centre, m = 2 * length
+//            zoom = cos a, spin = sin a  ->  a = 0 pure zoom burst (outward), 90 pure spin, in between = spiral.
+//            The trail length grows with the distance from the centre (m * r), exactly like a real zoom / spin, so the centre stays sharp.
+// s runs 0 (at the pixel) .. 1 (end of the trail).
+// Chromatic dispersion: R walks to s * (1 + d), B to s * (1 - d), G to s, so the colours part more and more towards the tail.
+// Highlight threshold: samples below the luma gate only leave a faint (15 %) trail, samples above it leave the full one.
+// [ASSUMED] below-gate share 15 %, gate softness +-0.08, sample spacing capped at 2.5..5 px (see moSmear), 160 steps maximum.
+float moTrailW(float s, float fe, float tailW) {
+    float v = max(1.0 - s, 0.0);
+    return pow(v, fe) * smoothstep(0.0, tailW, v);
 }
 
-// ---- SMEAR: one-sided trail gathered from where the moving content currently is -----------------------------------
-vec3 moSmear(vec2 q, vec3 pre, int cur, int w, int h, int gw, int gh, int C, float diag, float jit) {
-    vec3 vd = moFlowAt(2, q, gw, gh, C, 0);
-    float mag0 = length(vd.xy);
-    if (mag0 < 1e-3) return pre;
-    vec2 dir = vd.xy / mag0;
-    float angLock = clamp(MOS(33), 0.0, 1.0);
-    if (angLock > 0.001) {
-        float a = radians(MOS(32));
-        vec2 ad = vec2(cos(a), -sin(a));
-        if (dot(ad, dir) < 0.0) ad = -ad;
-        vec2 mx = mix(dir, ad, angLock);
-        float ml = length(mx);
-        dir = (ml > 1e-4) ? mx / ml : dir;
-    }
-    float gain = max(MOS(16), 0.0) * max(MOS(36), 0.0);
-    vec2 vs = moShape(dir * mag0, gain, max(MOS(37), 0.0) * diag, max(MOS(17), 0.0) * diag, max(MOS(18), 1.0));
-    float L = length(vs);
-    if (L < 0.5) return pre;
-    vec2 sdir = vs / L;
-    vec2 pdir = vec2(-sdir.y, sdir.x);
-    int S = clamp(int(MOS(22)), 4, 96);
-    float fe = mix(0.6, 6.0, clamp(MOS(34), 0.0, 1.0));
-    float hb = max(MOS(21), 0.0);
-    float blur = max(MOS(20), 0.0);
-    float need0 = 0.6 * min(L, mag0);
-    vec3 sumC = vec3(0.0);
-    vec3 bestCol = pre;
-    float bestScore = -1.0;
-    float sumW = 0.0;
-    float cover = 0.0;
-    for (int i = 0; i < S; i++) {
-        float s = (float(i) + jit) / float(S);
-        float wf = pow(max(1.0 - s, 0.0), fe);
-        vec2 sp = q - vs * s;
-        sp += pdir * ((moIGN(q + float(i) * 3.7) - 0.5) * blur * L * 0.15);
-        vec3 bs = moFlowAt(1, sp, gw, gh, C, 0);
-        float along = dot(bs.xy, sdir);
-        float need = s * need0;
-        float perp = length(bs.xy - sdir * along);
-        float valid = smoothstep(need * 0.5, need + 0.5, along) * (1.0 - smoothstep(0.35 * L + 1.5, 0.8 * L + 3.0, perp));
-        float wv = wf * valid;
-        if (wv <= 1e-4) continue;
-        vec3 c = moSample(cur, sp, w, h);
-        float lm = luma(c);
-        float wl = wv * (1.0 + hb * 4.0 * lm * lm);
-        sumC += c * wl;
-        sumW += wl;
-        cover = max(cover, wv);
-        float score = (lm + 0.02) * wv;
-        if (score > bestScore) { bestScore = score; bestCol = c; }
-    }
-    if (sumW < 1e-5) return pre;
-    vec3 soft = sumC / sumW;
-    vec3 trail = mix(soft, bestCol, clamp(MOS(24), 0.0, 1.0));
-    float head = clamp(MOS(35), 0.0, 1.0);
-    return mix(pre, trail, clamp(cover, 0.0, 1.0) * (1.0 - head));
+float moGate(vec3 c, float thr) {
+    if (thr <= 0.001) return 1.0;
+    float l = luma(c);
+    float lg = moLin ? sqrt(max(l, 0.0)) : l;   // the threshold is in display (perceptual) brightness
+    return mix(0.15, 1.0, smoothstep(thr - 0.08, thr + 0.08, lg));
 }
 
-// ---- MAIN: classic shutter (AE style): sub-frame samples across the exposure interval -----------------------------
-vec3 moMain(vec2 q, vec3 pre, int cur, int w, int h, int gw, int gh, int C, float diag, float jit) {
-    vec2 b1 = moFlowAt(1, q, gw, gh, C, 0).xy;
-    vec2 bd = moFlowAt(2, q, gw, gh, C, 0).xy;
-    float bleed = clamp(MOS(51), 0.0, 1.0);
-    vec2 vb = (length(bd) > length(b1)) ? mix(b1, bd, bleed) : b1;
-    vec2 vf;
-    if (MOS(10) > 0.5) {
-        vec2 f1 = moFlowAt(1, q, gw, gh, C, 4).xy;
-        vec2 fd = moFlowAt(2, q, gw, gh, C, 4).xy;
-        vf = (length(fd) > length(f1)) ? mix(f1, fd, bleed) : f1;
+// bilinear fetch with an optional sharpened weight: t is pulled towards 0 / 1, which is what a negative LOD bias does to a bilinear texture fetch
+// (crisper edges, still no stair-steps). The frames live in a storage buffer (binding 11), so there is no hardware sampler / LOD to bias.
+vec3 moSampleSharp(int slot, vec2 pos, int w, int h, float sharp) {
+    vec2 f = pos - 0.5;
+    ivec2 i0 = ivec2(floor(f));
+    vec2 t = f - vec2(i0);
+    t = mix(t, t * t * (3.0 - 2.0 * t), sharp);
+    vec3 a = moIn(moRgb(moLoadU(slot, i0, w, h)));
+    vec3 b = moIn(moRgb(moLoadU(slot, i0 + ivec2(1, 0), w, h)));
+    vec3 c = moIn(moRgb(moLoadU(slot, i0 + ivec2(0, 1), w, h)));
+    vec3 d = moIn(moRgb(moLoadU(slot, i0 + ivec2(1, 1), w, h)));
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
+// position on the trail at s. lin = dir * L (px), zoomK / spinK = radial strengths (already multiplied by m)
+vec2 moSmPos(vec2 q, float s, bool radial, vec2 lin, vec2 ctr, float zoomK, float spinK) {
+    if (!radial) return q - lin * s;
+    vec2 rv = q - ctr;
+    float sc = max(1.0 - zoomK * s, 0.02);
+    float th = -spinK * s;
+    float cs = cos(th);
+    float sn = sin(th);
+    return ctr + vec2(cs * rv.x - sn * rv.y, sn * rv.x + cs * rv.y) * sc;
+}
+
+vec3 moSmear(vec2 q, vec3 pre, int cur, int w, int h, float diag, float jit) {
+    float lenFrac = max(MOS(37), 0.0);
+    bool radial = MOS(38) > 0.5;
+    float ang = radians(MOS(32));
+    vec2 ctr = vec2(float(w), float(h)) * 0.5;
+    vec2 lin = vec2(0.0);
+    float zoomK = 0.0;
+    float spinK = 0.0;
+    float Lpx;
+    if (radial) {
+        float m = 2.0 * lenFrac;
+        zoomK = cos(ang) * m;
+        spinK = sin(ang) * m;
+        Lpx = m * length(q - ctr);
     } else {
-        vf = -vb;
+        Lpx = lenFrac * diag;
+        lin = vec2(cos(ang), -sin(ang)) * Lpx;
     }
-    float maxLen = max(MOS(19), 0.0) * diag;
-    float thr = max(MOS(17), 0.0) * diag;
-    float knee = max(MOS(18), 1.0);
+    if (Lpx < 0.75) return pre;
+
+    float sharp = clamp(MOS(24), 0.0, 1.0);
+    float disp = clamp(MOS(40), 0.0, 0.6);
+    float thr = clamp(MOS(39), 0.0, 1.0);
+    float fe = mix(0.4, 4.0, clamp(MOS(34), 0.0, 1.0));
     float gain = max(MOS(16), 0.0);
-    vb = moShape(vb, gain, maxLen, thr, knee);
-    vf = moShape(vf, gain, maxLen, thr, knee);
-    float lenSum = length(vb) + length(vf);
-    if (lenSum < 0.4) return pre;
-    float t0 = MOS(49) / 360.0;
-    float t1 = t0 + clamp(MOS(48), 0.0, 720.0) / 360.0;
     int S = clamp(int(MOS(22)), 4, 96);
-    float soft = clamp(MOS(50), 0.0, 1.0);
-    float blur = max(MOS(20), 0.0);
-    vec2 axis = (length(vb) >= length(vf)) ? vb : vf;
-    float al = length(axis);
-    vec2 pdir = (al > 1e-3) ? vec2(-axis.y, axis.x) / al : vec2(0.0, 1.0);
-    vec3 sum = vec3(0.0);
-    float ws = 0.0;
-    for (int i = 0; i < S; i++) {
-        float u = (float(i) + jit) / float(S);
-        float tau = mix(t0, t1, u);
-        vec2 pos = (tau >= 0.0) ? (q - vf * tau) : (q + vb * tau);
-        pos += pdir * ((moIGN(q + float(i) * 5.3) - 0.5) * blur * lenSum * 0.1);
-        float wg = mix(1.0, 1.05 - abs(2.0 * u - 1.0), soft);
-        sum += moSample(cur, pos, w, h) * wg;
-        ws += wg;
+    // "Trailing samples" is the minimum. A long trail also gets extra steps so that two neighbouring steps are never further apart than a few
+    // pixels: with a max blend a wider gap shows up as separate ghost copies of the picture ("popping textures"), not as a streak.
+    float gap = mix(5.0, 2.5, sharp);
+    int Seff = clamp(max(S, int(ceil(Lpx / gap))), 4, 160);
+    float tailW = mix(0.30, 0.03, sharp);   // soft end of the trail at low sharpness, a clean cut at high sharpness
+    float j = mix(jit, 0.5, sharp);          // per-pixel step jitter only while the lines are soft
+    float invS = 1.0 / float(Seff);
+    bool split = disp > 0.001;
+
+    vec3 acc = pre;
+    for (int i = 0; i < Seff; i++) {
+        float s = (float(i) + j) * invS;
+        if (!split) {
+            vec3 c = moSampleSharp(cur, moSmPos(q, s, radial, lin, ctr, zoomK, spinK), w, h, sharp);
+            acc = max(acc, c * (gain * moTrailW(s, fe, tailW) * moGate(c, thr)));
+        } else {
+            float sr = s * (1.0 + disp);
+            float sb = s * (1.0 - disp);
+            vec3 cr = moSampleSharp(cur, moSmPos(q, sr, radial, lin, ctr, zoomK, spinK), w, h, sharp);
+            vec3 cg = moSampleSharp(cur, moSmPos(q, s, radial, lin, ctr, zoomK, spinK), w, h, sharp);
+            vec3 cb = moSampleSharp(cur, moSmPos(q, sb, radial, lin, ctr, zoomK, spinK), w, h, sharp);
+            vec3 wgt = vec3(moTrailW(sr, fe, tailW) * moGate(cr, thr),
+                            moTrailW(s, fe, tailW) * moGate(cg, thr),
+                            moTrailW(sb, fe, tailW) * moGate(cb, thr)) * gain;
+            acc = max(acc, vec3(cr.r, cg.g, cb.b) * wgt);
+        }
     }
-    return sum / max(ws, 1e-4);
+    float head = clamp(MOS(35), 0.0, 1.0);   // how much of the untouched picture stays on top of the trail
+    return mix(acc, pre, head);
 }
 
 // ---- DUPLICATE: real echo frames with falloff, operator, tint, optional motion-path drift / smear -------------------
@@ -3958,10 +3950,8 @@ void executeMotionRender(ivec2 coord, int w, int h) {
     float jit = moIGN(q0 + fract(u_time * 1.7) * 91.0);
 
     vec3 res = pre;
-    if (mode == 1) {
-        res = moSmear(q, pre, slot, w, h, gw, gh, C, diag, jit);
-    } else if (mode == 2) {
-        res = moMain(q, pre, slot, w, h, gw, gh, C, diag, jit);
+    if (mode == 1 || mode == 2) {   // mode 2 (the removed Main / motion blur mode) in an old save now renders as Smear
+        res = moSmear(q, pre, slot, w, h, diag, jit);
     } else if (mode == 3) {
         res = moDup(q, pre, w, h, gw, gh, C);
     }
