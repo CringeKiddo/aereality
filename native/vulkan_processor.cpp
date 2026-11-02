@@ -117,6 +117,9 @@ struct VulkanContext {
     VkBuffer motionFlowBuffer = VK_NULL_HANDLE;
     VkDeviceMemory motionFlowMemory = VK_NULL_HANDLE;
     VkDeviceSize motionFlowBytes = 0;
+    VkBuffer motionVelBuffer = VK_NULL_HANDLE;      // batch 2B: velocity map (binding 14), one vec2 (R32G32_SFLOAT) per 4 x 4 pixels, written by pass 30, read by pass 21
+    VkDeviceMemory motionVelMemory = VK_NULL_HANDLE;
+    VkDeviceSize motionVelBytes = 0;
 
     size_t allocatedPixelCapacity = 0;
     bool isInitialized = false;
@@ -299,61 +302,74 @@ void cleanupBuffers() {
     safeDestroy(gVk.displayBuffer, gVk.displayMemory);
     safeDestroy(gVk.motionFramesBuffer, gVk.motionFramesMemory);
     safeDestroy(gVk.motionFlowBuffer, gVk.motionFlowMemory);
+    safeDestroy(gVk.motionVelBuffer, gVk.motionVelMemory);
     gVk.motionFramesBytes = 0;
     gVk.motionFlowBytes = 0;
+    gVk.motionVelBytes = 0;
     gVk.displayBytes = 0;
     gTsRingW = gTsRingH = gTsRingSlots = 0;   // the ring went with the display buffer
 
     gVk.allocatedPixelCapacity = 0;
 }
 
-// Motion S (batch 9): (re)points descriptors 11 / 12 at the current motion buffers.
+// Motion S (batch 9): (re)points descriptors 11 / 12 at the current motion buffers. Batch 2B: + binding 14 = the velocity map (pass 30 -> pass 21).
 void writeMotionDescriptors() {
-    if (gVk.motionFramesBuffer == VK_NULL_HANDLE || gVk.motionFlowBuffer == VK_NULL_HANDLE) return;
-    VkDescriptorBufferInfo infos[2] = {{gVk.motionFramesBuffer, 0, gVk.motionFramesBytes}, {gVk.motionFlowBuffer, 0, gVk.motionFlowBytes}};
-    VkWriteDescriptorSet w[2]{};
-    for (int k = 0; k < 2; ++k) {
+    if (gVk.motionFramesBuffer == VK_NULL_HANDLE || gVk.motionFlowBuffer == VK_NULL_HANDLE || gVk.motionVelBuffer == VK_NULL_HANDLE) return;
+    VkDescriptorBufferInfo infos[3] = {{gVk.motionFramesBuffer, 0, gVk.motionFramesBytes}, {gVk.motionFlowBuffer, 0, gVk.motionFlowBytes},
+                                       {gVk.motionVelBuffer, 0, gVk.motionVelBytes}};
+    const uint32_t dstBinding[3] = {11, 12, 14};
+    VkWriteDescriptorSet w[3]{};
+    for (int k = 0; k < 3; ++k) {
         w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[k].dstSet = gVk.descriptorSet;
-        w[k].dstBinding = 11 + k;
+        w[k].dstBinding = dstBinding[k];
         w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[k].descriptorCount = 1;
         w[k].pBufferInfo = &infos[k];
     }
-    vkUpdateDescriptorSets(gVk.device, 2, w, 0, nullptr);
+    vkUpdateDescriptorSets(gVk.device, 3, w, 0, nullptr);
 }
 
-// Grows the Motion S buffers (frames + flow) when needed. Every submit waits for its fence, so nothing is in flight here.
-bool ensureMotionBuffers(VkDeviceSize framesBytes, VkDeviceSize flowBytes) {
-    if (gVk.motionFramesBytes >= framesBytes && gVk.motionFlowBytes >= flowBytes &&
-        gVk.motionFramesBuffer != VK_NULL_HANDLE && gVk.motionFlowBuffer != VK_NULL_HANDLE) return true;
+// Grows the Motion S buffers (frames + flow + velocity map) when needed. Every submit waits for its fence, so nothing is in flight here.
+bool ensureMotionBuffers(VkDeviceSize framesBytes, VkDeviceSize flowBytes, VkDeviceSize velBytes) {
+    if (gVk.motionFramesBytes >= framesBytes && gVk.motionFlowBytes >= flowBytes && gVk.motionVelBytes >= velBytes &&
+        gVk.motionFramesBuffer != VK_NULL_HANDLE && gVk.motionFlowBuffer != VK_NULL_HANDLE && gVk.motionVelBuffer != VK_NULL_HANDLE) return true;
     auto destroy = [](VkBuffer& buf, VkDeviceMemory& mem) {
         if (buf != VK_NULL_HANDLE) { vkDestroyBuffer(gVk.device, buf, nullptr); buf = VK_NULL_HANDLE; }
         if (mem != VK_NULL_HANDLE) { vkFreeMemory(gVk.device, mem, nullptr); mem = VK_NULL_HANDLE; }
     };
     const VkDeviceSize wantFrames = std::max<VkDeviceSize>(framesBytes, gVk.motionFramesBytes);
     const VkDeviceSize wantFlow = std::max<VkDeviceSize>(flowBytes, gVk.motionFlowBytes);
+    const VkDeviceSize wantVel = std::max<VkDeviceSize>(velBytes, gVk.motionVelBytes);
     destroy(gVk.motionFramesBuffer, gVk.motionFramesMemory);
     destroy(gVk.motionFlowBuffer, gVk.motionFlowMemory);
+    destroy(gVk.motionVelBuffer, gVk.motionVelMemory);
     createBuffer(gVk.device, gVk.physicalDevice, wantFrames, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.motionFramesBuffer, gVk.motionFramesMemory);
     createBuffer(gVk.device, gVk.physicalDevice, wantFlow, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionFlowBuffer, gVk.motionFlowMemory);
+    createBuffer(gVk.device, gVk.physicalDevice, wantVel, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionVelBuffer, gVk.motionVelMemory);
     gVk.motionFramesBytes = wantFrames;
     gVk.motionFlowBytes = wantFlow;
-    if (gVk.motionFramesBuffer == VK_NULL_HANDLE || gVk.motionFlowBuffer == VK_NULL_HANDLE ||
-        gVk.motionFramesMemory == VK_NULL_HANDLE || gVk.motionFlowMemory == VK_NULL_HANDLE) {
-        LOGE("Motion S buffer allocation failed (%llu + %llu bytes)", (unsigned long long)wantFrames, (unsigned long long)wantFlow);
+    gVk.motionVelBytes = wantVel;
+    if (gVk.motionFramesBuffer == VK_NULL_HANDLE || gVk.motionFlowBuffer == VK_NULL_HANDLE || gVk.motionVelBuffer == VK_NULL_HANDLE ||
+        gVk.motionFramesMemory == VK_NULL_HANDLE || gVk.motionFlowMemory == VK_NULL_HANDLE || gVk.motionVelMemory == VK_NULL_HANDLE) {
+        LOGE("Motion S buffer allocation failed (%llu + %llu + %llu bytes)", (unsigned long long)wantFrames, (unsigned long long)wantFlow, (unsigned long long)wantVel);
         destroy(gVk.motionFramesBuffer, gVk.motionFramesMemory);
         destroy(gVk.motionFlowBuffer, gVk.motionFlowMemory);
+        destroy(gVk.motionVelBuffer, gVk.motionVelMemory);
         // keep the descriptor set valid for the grade pipeline: tiny placeholders again
         createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, gVk.motionFramesBuffer, gVk.motionFramesMemory);
         createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionFlowBuffer, gVk.motionFlowMemory);
+        createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionVelBuffer, gVk.motionVelMemory);
         gVk.motionFramesBytes = 4096;
         gVk.motionFlowBytes = 4096;
+        gVk.motionVelBytes = 4096;
         writeMotionDescriptors();
         return false;
     }
@@ -444,7 +460,7 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  gVk.flareHalfBuffer, gVk.flareHalfMemory);
 
-    // Motion S placeholders (bindings 11 / 12): replaced by ensureMotionBuffers() when process_motion() needs real sizes
+    // Motion S placeholders (bindings 11 / 12 / 14): replaced by ensureMotionBuffers() when process_motion() needs real sizes
     createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  gVk.motionFramesBuffer, gVk.motionFramesMemory);
@@ -452,6 +468,9 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
     createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionFlowBuffer, gVk.motionFlowMemory);
     gVk.motionFlowBytes = 4096;
+    createBuffer(gVk.device, gVk.physicalDevice, 4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,   // batch 2B: velocity map placeholder (binding 14)
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gVk.motionVelBuffer, gVk.motionVelMemory);
+    gVk.motionVelBytes = 4096;
 
     create3DLutImage();
 
@@ -839,7 +858,7 @@ constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
 constexpr int32_t  kMaxPixelsPerSubmit = 4000000;  // upper cap only: the time budget below normally limits a band first
 
 static int32_t gBandBudgetMs = 40;            // target wall time of ONE GPU submit (shorter = the phone UI stays fluid)
-static double  gNsPerPx[14] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14)
+static double  gNsPerPx[15] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B)
 static int64_t gLastRenderUs = 0;
 static int32_t gFlareLayer = -1;              // layer whose flare is pre-computed at half res (-1 = inline)
 static bool    gFlareHalfEnabled = false;     // runtime switch (set_flare_half_res); off = same flare maths as before
@@ -1272,10 +1291,10 @@ static bool runTimeSliceEmit(int32_t w, int32_t h) {
 //   1. CPU (tiny): global similarity motion (translation, rotation, zoom) between the current frame and its neighbours, estimated on
 //      48 / 96 / 192 px luma thumbnails. AE shakes / zooms / spins are exactly this kind of motion, so it stays accurate for big moves.
 //      The result is written into the Motion S block of the uniform buffer (floats 5376 + 128 .. 143).
-//   2. GPU passes 18 (residual block flow) / 19 (smooth) / 20 (dilate) on a coarse grid, then pass 21 (render, banded).
+//   2. GPU passes 18 (residual block flow) / 19 (smooth) / 20 (dilate) on a coarse grid, then pass 30 (velocity map at 1/4 resolution, batch 2B), then pass 21 (render, banded).
 //   Passes 18..21 read only the frames buffer, the flow buffer and the uniform buffer: bloom L0..L4 and the composite are never touched
 //   (so the S_Glint scratch rule for bloom L1 between pass 15 and pass 2 cannot be hit).
-//   Cost slots: 5 = pass 18 (flow, per grid cell), 6 = pass 21 (render, per pixel).
+//   Cost slots: 5 = pass 18 (flow, per grid cell), 6 = pass 21 (render, per pixel), 14 = pass 30 (velocity map, per 4 x 4 cell).
 // =============================================================================
 constexpr int kMotionBase = 5376;   // motionS[0] inside the uniform buffer
 static_assert(kMotionBase + 1024 <= 8192, "Motion S block must fit the uniform buffer");
@@ -1453,6 +1472,17 @@ static bool runMotionOnce(int32_t w, int32_t h, int32_t gw, int32_t gh, bool nee
                 if (!submitAndWait([&]() { recordPass(pass, gw, gh, 0.0f, y, rows, w, h); })) return false;
                 y += rows;
             }
+        }
+    }
+    // pass 30 (batch 2B): velocity map at 1/4 resolution = coarse flow refined by Lucas-Kanade, banded by time budget (slot 14, cost per 4 x 4 cell)
+    if (needFlow) {
+        const int32_t vw = (w + 3) / 4, vh = (h + 3) / 4;
+        for (int32_t y = 0; y < vh;) {
+            const int32_t rows = std::min(motionRows(14, vw, vh, std::max<int32_t>(1024, budgetPx / 16)), vh - y);
+            const auto t0 = std::chrono::steady_clock::now();
+            if (!submitAndWait([&]() { recordPass(30, vw, vh, 0.0f, y, rows, w, h); })) return false;
+            updateBandCost(14, t0, rows, vw);
+            y += rows;
         }
     }
     // pass 21: render, banded by time budget (slot 6, cost per pixel)
@@ -2078,7 +2108,7 @@ int32_t get_last_render_status() { return gLastRenderStatus; }
 void set_band_budget_ms(int32_t ms) {
     gBandBudgetMs = std::max<int32_t>(4, std::min<int32_t>(ms, 500));
     gNsPerPx[0] = gNsPerPx[1] = gNsPerPx[2] = gNsPerPx[3] = gNsPerPx[4] = 0.0;      // re-learn the cost with the new target
-    gNsPerPx[5] = gNsPerPx[6] = 0.0;                                                  // Motion S slots (batch 9)
+    gNsPerPx[5] = gNsPerPx[6] = gNsPerPx[14] = 0.0;                                   // Motion S slots (batch 9, + velocity pass batch 2B)
     gNsPerPx[7] = 0.0;                                                                // pass 23 (batch 12 step B)
     gNsPerPx[8] = gNsPerPx[9] = 0.0;                                                  // passes 22 / 24 (Time Slice, step C1)
 }
@@ -2285,8 +2315,8 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
     }
     lap("shader module");
 
-    VkDescriptorSetLayoutBinding bindings[14]{};
-    for (int b = 0; b < 14; b++) {
+    VkDescriptorSetLayoutBinding bindings[15]{};   // batch 2B: + binding 14 (Motion S velocity map)
+    for (int b = 0; b < 15; b++) {
         bindings[b].binding = b;
         bindings[b].descriptorType = (b == 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
@@ -2295,7 +2325,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 14;
+    layoutInfo.bindingCount = 15;
     layoutInfo.pBindings = bindings;
     r = vkCreateDescriptorSetLayout(gVk.device, &layoutInfo, nullptr, &gVk.descriptorSetLayout);
     if (r != VK_SUCCESS) {
@@ -2397,7 +2427,7 @@ int32_t init_vulkan(const uint8_t* shaderBytes, int32_t length, int32_t precisio
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 13;   // bindings 0,1,2,4..13 (batch 9: +2 Motion S, batch 12 step B: +1 display image)
+    poolSizes[0].descriptorCount = 14;   // bindings 0,1,2,4..14 (batch 9: +2 Motion S, batch 12 step B: +1 display image, batch 2B: +1 Motion S velocity map)
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 1;
 
@@ -2995,7 +3025,8 @@ static void processMotionImpl(const uint8_t* frames, int32_t w, int32_t h, int32
     if (ns >= frameCount) m[8] = -1.0f;
 
     const VkDeviceSize flowBytes = (VkDeviceSize)3 * (VkDeviceSize)gw * (VkDeviceSize)gh * 8 * sizeof(float);
-    if (!ensureMotionBuffers((VkDeviceSize)frameCount * (VkDeviceSize)frameBytes, flowBytes)) {
+    const VkDeviceSize velBytes = (VkDeviceSize)((w + 3) / 4) * (VkDeviceSize)((h + 3) / 4) * 2 * sizeof(float);   // batch 2B: one vec2 per 4 x 4 pixels
+    if (!ensureMotionBuffers((VkDeviceSize)frameCount * (VkDeviceSize)frameBytes, flowBytes, velBytes)) {
         fallback();
         return;
     }
