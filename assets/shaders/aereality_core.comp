@@ -124,6 +124,7 @@ layout(std430, binding = 10) buffer FlareHalf { uint flare_half[]; }; // anamorp
 // Motion S (batch 9): N packed 8-bit RGBA frames (binding 11) and the 3-plane flow field (binding 12). Only passes 18..21 touch them.
 layout(std430, binding = 11) readonly buffer MotionFrames { uint mo_frames[]; };
 layout(std430, binding = 12) buffer MotionFlow { float mo_flow[]; };
+layout(std430, binding = 14) buffer MotionVelocity { vec2 mo_vel[]; };   // batch 2B: velocity map, 1/4 resolution, (dx, dy) in pixels per frame = R32G32_SFLOAT per cell (pass 30 writes it, pass 21 reads it)
 
 // HDR composite (fp16 RGBA = 2 uints / pixel)
 layout(std430, binding = 7) buffer TempCompositeBuffer { uint temp_composite[]; };
@@ -138,7 +139,7 @@ layout(std430, binding = 13) buffer DisplayBuffer { vec4 display_px[]; };
 // Ring frames are the PRE-dither pass 6 output, so slices are never dithered twice. Without Time Slice the buffer is P long, as in step B.
 
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B)
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B)
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -311,7 +312,7 @@ struct LayerData {
     float flareCoreWhite;   // 183  hot white core in the brightest part of the band 0..1
     float dofPreview;       // 184  DOF focus-plane preview (1 = tint the in-focus zone)
     float flareHaze;        // 185  Haze Veil: wide soft glow around the flaring light 0..1
-    float pad186;
+    float flareStretch;     // 186  Flare Width / Stretch 0..1 (batch 2B): widens the flare body horizontally, strong out to the sides
     float pad187;
     float pad188;
     float pad189;
@@ -1393,6 +1394,39 @@ vec3 glowField(vec2 uv, int width, int height, float R, float th, float exMin) {
     return f;
 }
 
+// -----------------------------------------------------------------------------
+// Batch 2B: DEEP GLOW FIELD, a true inverse-square falloff.   glow(d) ~ 1.0 / (d * d + eps * eps)
+//   The pyramid levels are Gaussians of doubling width and equal energy, so their sum is a 1/d^2 tail. Two things made it show stair-steps:
+//   1) the equal weights (1,1,1,1,1) give a sum that is up to 19 % off 1/d^2 between neighbouring octaves (a ripple that reads as rings). The weights
+//      below were fitted so the octave sum follows 1/d^2 within ~3 % (grid search, d = 2 .. 14 level-2 sigmas, ideal octave Gaussians): relative
+//      (1.5, 1.5, 1.5, 1.25, 2.5) / 1.5 for levels 2, 3, 4, 5, 6. The soft core (eps) is level 2 itself.
+//   2) gfGate() cut each level at its own brightness with a narrow smoothstep, so every level drew a contour ring at a different radius. gfGateDeep()
+//      is a monotone, non-compact compressor l / (l + 0.35 t): no contour exists, the tail above the knee is untouched.
+// -----------------------------------------------------------------------------
+vec3 gfGateDeep(vec3 s, float th, float exMin, float dil) {
+    if (th - exMin <= 0.03) return s;                    // this effect set the extraction threshold itself
+    float t = (th / (1.0 + 0.5 * th)) * dil;
+    float l = luma(s);
+    return s * (l / (l + 0.35 * t + 1e-6));
+}
+
+vec3 glowFieldDeep(vec2 uv, int width, int height, float R, float th, float exMin) {
+    int w2 = max(width >> 3, 1);  int h2 = max(height >> 3, 1);
+    int w3 = max(width >> 4, 1);  int h3 = max(height >> 4, 1);
+    int w4 = max(width >> 5, 1);  int h4 = max(height >> 5, 1);
+    float c2 = 1.0 / (1.0 + exp2(4.0 * (2.0 - R)));
+    float k3 = (1.0 / (1.0 + exp2(4.0 * (3.0 - R)))) / c2;
+    float k4 = (1.0 / (1.0 + exp2(4.0 * (4.0 - R)))) / c2;
+    float k5 = (1.0 / (1.0 + exp2(4.0 * (5.0 - R)))) / c2;
+    float k6 = (1.0 / (1.0 + exp2(4.0 * (6.0 - R)))) / c2;
+    vec3 f = gfGateDeep(sampleBloomSmooth(2, uv, w2, h2).rgb, th, exMin, 0.89);
+    if (k3 > 0.004) f += gfGateDeep(sampleBloomSmooth(3, uv, w3, h3).rgb, th, exMin, 0.68) * (k3 * 1.00);
+    if (k4 > 0.004) f += gfGateDeep(sampleBloomSmooth(4, uv, w4, h4).rgb, th, exMin, 0.37) * (k4 * 1.00);
+    if (k5 > 0.010) f += gfGateDeep(gfWideTaps(uv, w4, h4, 1.6, 1), th, exMin, 0.18) * (k5 * 0.83);
+    if (k6 > 0.010) f += gfGateDeep(gfWideTaps(uv, w4, h4, 2.0, 2), th, exMin, 0.077) * (k6 * 1.67);
+    return f;
+}
+
 // =============================================================================
 // PASS 1: HIGHLIGHT + EDGE EXTRACTION -> Bloom L0
 // =============================================================================
@@ -1524,8 +1558,12 @@ vec3 colorizeGlow(vec3 g, vec3 ambient, float amount) {
 
 // Flare beam profile along the streak. at = 0 at the source, 1 at the end of the reach.
 // pw/pk come from the softness slider: low = peaked spike, high = flat plateau with a soft shoulder.
-float flareProfile(float at, float pk, float pw) {
-    return exp(-pk * pow(clamp(at, 0.0, 1.0), pw)) * (1.0 - smoothstep(0.80, 1.0, at));
+// Batch 2B: stretch (0..1) = Flare Width / Stretch. The distance is raised to a power > 1 BEFORE the exponential, so the bright body stays
+// wide and is still strong far out to the sides; the reach limit and the end taper are NOT stretched (the end of the flare stays where Length put it).
+float flareProfile(float at, float pk, float pw, float stretch) {
+    float a = clamp(at, 0.0, 1.0);
+    float aS = pow(a, 1.0 + 1.6 * stretch);
+    return exp(-pk * pow(aS, pw)) * (1.0 - smoothstep(0.80, 1.0, a));
 }
 
 float gaussBand(float x, float w) {
@@ -1655,9 +1693,11 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
     const int NT = 48;
     float origin = clamp(L.thinStreakEdgeMode, 0.0, 1.0);
     float soft = clamp(L.thinStreakSoftness, 0.0, 1.0);
-    float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5;         // frame widths per side / inward from the edge
+    float stretch = clamp(L.flareStretch, 0.0, 1.0);
+    float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5 * (1.0 + 0.6 * stretch);   // frame widths per side / inward from the edge (Stretch also reaches a little further)
     float tFrac = clamp(L.flareThreshold, 0.0, 1.0);
-    float thrV = 0.02 + 1.6 * pow(tFrac, 2.2);                        // minimum (blurred) source strength
+    // Batch 2B: gentler threshold curve (0 -> 0.012, 0.5 -> 0.26, 1 -> 0.86; it used to be 0.02 / 0.37 / 1.62, which killed every flare at the default).
+    float thrV = 0.012 + 0.85 * pow(tFrac, 1.8);                      // minimum (blurred) source strength
     float spaceN = clamp(L.flareSpacing, 0.0, 0.5);
     float thick = clamp(L.flareThickness, 0.0, 1.0);
     float fall = clamp(L.flareFalloff, 0.0, 1.0);
@@ -1669,13 +1709,18 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
 
     // vertical size of the band (sigma, in pixels) as a fraction of the frame height
     float H = float(height);
-    float sigmaT = max((0.010 + 0.050 * thick) * (1.0 + soft) * H, 2.5);
+    float sigmaT = max((0.010 + 0.050 * thick) * (1.0 + 1.5 * soft) * H, 2.5);
     // bloom level whose own blur is about sigmaT (level n blurs about 2.5 * 2^n px); anything wider is made with extra vertical taps
     float lvlF = clamp(log2(sigmaT / 2.5), 0.0, 4.0);
     float sigLvl = 2.5 * exp2(lvlF);
     float dvUv = (sigmaT > sigLvl) ? (sqrt(sigmaT * sigmaT - sigLvl * sigLvl) / 1.2247) / H : 0.0;   // 7-tap binomial: sigma = 1.2247 * spacing
     float amp = sigmaT / (0.03 * H);                                  // a blurred source keeps a comparable strength at any thickness
-    float edgeSoft = mix(0.30, 0.85, soft);                           // gate width: crisp (hard) .. very gradual (soft)
+    // Batch 2B: SOFTNESS = edge profile only. The threshold gate below has a FIXED wide knee (0.30 .. 1.70 x threshold), so Softness can never make a flare
+    // vanish (the old gate width was tied to Softness: at 0 a narrow gate at 0.7 .. 1.3 x threshold removed every source that was a little dim).
+    // hardP shapes that smooth gate: 0.04 at Softness 0 = a near-binary razor edge (the band's edge is where the field crosses the knee), 1.0 at Softness 1 = the plain smooth ramp (haze).
+    float hardP = mix(0.04, 1.0, soft);
+    float flatTop = 0.9 * (1.0 - soft);                               // compression exponent: ~1 = flat bright bar (hard), 0 = untouched gaussian profile (soft)
+    float aRef = thrV * 0.8;                                          // brightness above this is compressed in hard mode (still rises with the source: A^(1 - flatTop))
 
     float sxA = needEdge ? 0.0 : max(uv.x - reach, 0.0);
     float sxB = needEdge ? 1.0 : min(uv.x + reach, 1.0);
@@ -1687,7 +1732,7 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
     for (int k = 0; k < NT; k++) {
         float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
         float at = abs(sx - uv.x) / reach;
-        float wLocal = needLocal ? flareProfile(at, pk, pw) : 0.0;
+        float wLocal = needLocal ? flareProfile(at, pk, pw, stretch) : 0.0;
         if (!needEdge && wLocal < 0.003) continue;
 
         // blurred highlight field at this column: one read, or a 7-tap vertical binomial when the band is wider than level 4 can blur
@@ -1704,7 +1749,8 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
         }
         V *= amp;
         float A = luma(V);
-        float s = smoothstep(thrV * (1.0 - edgeSoft), thrV * (1.0 + edgeSoft), A);
+        float g = smoothstep(thrV * 0.30, thrV * 1.70, A);             // smooth fade-in as the light crosses the threshold (no pop)
+        float s = pow(g, hardP);
         if (s < 0.004) continue;
 
         if (spaceN > 0.02) {
@@ -1715,7 +1761,7 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
             if (s < 0.004) continue;
         }
 
-        vec3 c = V * s;
+        vec3 c = V * s * pow(max(A, aRef) / aRef, -flatTop);          // hard: flat-topped bright bar with a crisp edge (measured: 16-29 px edge vs 80-160 px at Softness 1)
         vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
         if (needLocal) lSum += c * mix(vec3(1.0), spectral, 0.20) * wLocal;
         if (needEdge) eSum += c;
@@ -1723,7 +1769,7 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
 
     vec3 beamL = lSum * normK;
     float dE = min(uv.x, 1.0 - uv.x) / reach;
-    vec3 beamE = eSum * normK * 0.5 * flareProfile(dE, pk, pw);
+    vec3 beamE = eSum * normK * 0.5 * flareProfile(dE, pk, pw, stretch);
     vec3 beam = beamL;
     if (needEdge) beam = needLocal ? mix(beamL, beamE, origin) : beamE;
 
@@ -1742,8 +1788,9 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
         st = mix(hazeC, sceneC, kc);
         st = saturateColor(st, mix(0.85, 1.20, kc));
         st *= mix(0.45, 1.0, smoothstep(0.0, 0.80, rc));               // haze is see-through, coloured flares are solid
-        float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.50, 1.40, lst);
-        st = mix(st, vec3(luma(st)), core * 0.75);
+        // Batch 2B: the white core follows the flare's OWN brightness (it used to need lst > 0.5, which a dim / soft flare never reached, so the slider seemed dead)
+        float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.10, 0.90, lst);
+        st = mix(st, vec3(luma(st)) * vec3(1.0, 0.99, 0.97) * 1.12, core * 0.80);
     }
 
     if (hazeAmt > 0.01) {
@@ -1896,7 +1943,7 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
         if (L.deepGlowIntensity > 0.01) {
             float r = clamp(L.deepGlowRadius, 0.0, 1.0);
             float Rg = mix(1.8, 6.6, r);
-            vec3 g = glowField(uv, width, height, Rg, L.deepGlowThreshold, exMin) * 0.70;
+            vec3 g = glowFieldDeep(uv, width, height, Rg, L.deepGlowThreshold, exMin) * 0.70;   // batch 2B: inverse-square field, no contour rings
             g = colorizeGlow(g, ambientCol, 0.85);
             g = saturateColor(g, 1.15) * mix(vec3(1.0), glowTint, 0.80);
             // Deep Glow signature: a hot core. Where the field is strong the light burns towards white, the outer
@@ -2296,6 +2343,12 @@ vec3 tsRing(int j, int P, int pixelIndex) {
     return display_px[(1 + j) * P + pixelIndex].rgb;
 }
 
+// Batch 2B: level of a slice whose centre sits at sk (0..1 along the slice axis): 0 = B time (behind the wave), 1 = A time (ahead of it), smooth in between.
+float tsSliceLevel(float sk, float f, float band) {
+    float l = clamp((sk - f) / band, 0.0, 1.0);
+    return l * l * (3.0 - 2.0 * l);
+}
+
 void executeTimeSlice(ivec2 coord, int width, int height) {
     int P = width * height;
     int pixelIndex = coord.y * width + coord.x;
@@ -2306,46 +2359,62 @@ void executeTimeSlice(ivec2 coord, int width, int height) {
     float p = clamp(timeSlice[641], 0.0, 1.0);
     float n = timeSlice[643];
 
-    float ang = radians(timeSlice[sb + 2]);
-    vec2 d = vec2(cos(ang), sin(ang));
+    // ---- Batch 2B: TEMPORAL SLICES. sliceIndex comes from the pixel's position (Y / the slice direction for Linear, ANGLE for Radial); every slice has its own
+    // time offset in the ring; the slice borders are blended in TIME (Feather), so the picture is one fluid temporal displacement and not a mask.
+    bool radial = timeSlice[sb + 24] > 0.5;                                   // slot 24: 0 = Linear (strips along Direction, 90 = horizontal strips), 1 = Radial (sectors)
     vec2 pc = vec2(coord) + vec2(0.5) - 0.5 * vec2(float(width), float(height));
-    float extent = abs(d.x) * float(width) + abs(d.y) * float(height);
-    float s = 0.5 + dot(pc, d) / max(extent, 1.0);
+    float s;
+    if (radial) {
+        s = fract(atan(pc.y, pc.x) * 0.15915494 - timeSlice[sb + 2] / 360.0);    // angle around the frame centre, 0..1, Direction rotates the start
+    } else {
+        float ang = radians(timeSlice[sb + 2]);
+        vec2 d = vec2(cos(ang), sin(ang));
+        float extent = abs(d.x) * float(width) + abs(d.y) * float(height);
+        s = 0.5 + dot(pc, d) / max(extent, 1.0);
+    }
 
     float band = timeSlice[sb + 23];
     band = (band < 0.05) ? TS_BAND : min(band, 1.0);
-    float f = p * (1.0 + band) - band;            // band = [f, f + band] along s
-    float u = (s - f) / band;                      // < 0 behind the band (B), > 1 ahead of it (A)
+    float f = p * (1.0 + band) - band;            // the time wave = [f, f + band] along s. f = -band at p = 0 (everything A), f = 1 at p = 1 (everything B)
     float qB = max(n, 0.0);                        // B shot plays normally after the cut, holds its first frame before it
     float qA = min(n, -1.0);                       // A shot plays normally before the cut, holds its last frame after it
 
-    float N = max(floor(timeSlice[sb + 3] + 0.5), 1.0);
+    float N = clamp(floor(timeSlice[sb + 3] + 0.5), 1.0, 64.0);
     float feather = clamp(timeSlice[sb + 6], 0.0, 1.0);
-    float level = 0.0;
-    if (u >= 1.0) {
-        level = 1.0;
-    } else if (u > 0.0) {
-        float x = u * N;
-        float k = min(floor(x), N - 1.0);
-        float fr = x - k;
-        float lk = (k + 1.0) / (N + 1.0);
-        float edge = 0.5 * feather;
-        float ln = lk;
+    float x = clamp(s, 0.0, 0.99999) * N;
+    float k = min(floor(x), N - 1.0);              // sliceIndex
+    float fr = x - k;
+    float level = tsSliceLevel((k + 0.5) / N, f, band);
+    float edge = 0.5 * feather;
+    if (edge > 0.0001) {
+        float nbK = -10.0;
         float wgt = 0.0;
-        if (edge > 0.0001) {
-            if (fr < edge) {
-                ln = k / (N + 1.0);
-                wgt = 0.5 * (1.0 - smoothstep(0.0, edge, fr));
-            } else if (fr > 1.0 - edge) {
-                ln = (k + 2.0) / (N + 1.0);
-                wgt = 0.5 * smoothstep(1.0 - edge, 1.0, fr);
-            }
+        if (fr < edge) {
+            nbK = k - 1.0;
+            wgt = 0.5 * (1.0 - smoothstep(0.0, edge, fr));
+        } else if (fr > 1.0 - edge) {
+            nbK = k + 1.0;
+            wgt = 0.5 * smoothstep(1.0 - edge, 1.0, fr);
         }
-        level = mix(lk, ln, wgt);
+        if (nbK > -5.0) {
+            nbK = radial ? mod(nbK + N, N) : clamp(nbK, 0.0, N - 1.0);          // radial slices wrap around, linear ones stop at the frame edge
+            level = mix(level, tsSliceLevel((nbK + 0.5) / N, f, band), wgt);   // Feather blends the TIME of two neighbouring slices (then the frames are interpolated below)
+        }
     }
 
     float q = mix(qB, qA, level);
     q += timeSlice[sb + 4] * 4.0 * level * (1.0 - level);   // frameOffset: shifts the slice times, zero at both band borders
+    // Batch 2B: SMOOTH (After Effects style) time slice, slot 25 = frames per slice. > 0: EVERY strip samples its own ring frame  t + k x step  (k centred on the middle strip),
+    // so 18 strips = 18 consecutive frames at once (0.3 s of footage at 60 fps). The offsets are eased in and out with sin^2(pi p): the wipe starts and ends on the plain video,
+    // in between the A -> B cut sweeps across the strips as a staircase (strips that look further ahead in time reach the B shot first). Frames < 0 are the A shot, >= 0 the B shot,
+    // straight from the ring, no holding. Feather turns the staircase into a continuous time warp; the two nearest ring frames are interpolated, so nothing steps. 0 = the classic wave above.
+    float stepF = timeSlice[sb + 25];
+    if (stepF > 0.001) {
+        float env = sin(3.14159265 * p);
+        env *= env;
+        float spos = mix(k + 0.5, x, feather) - 0.5 * N;
+        q = n + stepF * spos * env + timeSlice[sb + 4] * env;
+    }
     q = clamp(q, float(-R), float(R));
     float qs = q + float(R);
 
@@ -2393,13 +2462,14 @@ void executeTimeSlice(ivec2 coord, int width, int height) {
 // [ASSUMED] Tap spacing is gEdgeStep pixels (1 at 720p-ish, 2 at 1080p) like the other edge effects, so the bevel keeps the same visual width at any resolution.
 // [ASSUMED] One bevel per frame: the first enabled layer whose On slot is 1 (chosen on the host, passed in u_srcW). Later layers' bevel blocks are ignored.
 //
-// FLAT-AREA NOTE (spec behaviour, kept): with N = (0, 0, 1) the formulas give diffuse = L.z (0.81 at the defaults) and specular ~0.096 * gloss, so a
-// completely flat area is ~19 % darker and gets ~+0.19 white at the defaults. The two constants below switch that off (1.0) if the owner wants untouched
-// areas to stay exactly as they are. 0.0 = the formulas exactly as specified.
+// BATCH 2B (rewritten): the old version darkened every flat area by ~19 % and added ~+0.19 white to it (flat N still has dot(N, H) = 0.95), i.e. a brightness overlay
+// on the whole image. Now a steepness mask (smoothstep of the Sobel slope, BV_STEEP_LO .. BV_STEEP_HI) multiplies BOTH the diffuse term (taken relative to the flat value)
+// and the specular term (minus the flat value, renormalised), so only ridges / edges are shaded or lit. Two Sobel scales (st and 3 st) give a round shoulder.
+// Gloss Strength = specular intensity, Shininess = exponent (tightness), Bevel Intensity = height scale, Light X / Y = light direction (unchanged slots).
 // =============================================================================
 const float BV_SOBEL_NORM = 0.25;
-const float BV_FLAT_DIFFUSE_COMP = 0.0;   // 1.0 = divide diffuse by its flat-surface value (flat areas keep their brightness)
-const float BV_FLAT_SPEC_COMP = 0.0;      // 1.0 = subtract the flat-surface specular (flat areas get no gloss)
+const float BV_STEEP_LO = 0.10;           // batch 2B: slope (after Bevel Intensity) below which a pixel counts as flat ground: it is left untouched
+const float BV_STEEP_HI = 0.55;           // slope at which a pixel counts as a full ridge / edge: full shading + specular
 
 void executeBevelLuma(ivec2 coord, int width, int height) {
     int pixelIndex = coord.y * width + coord.x;
@@ -2409,6 +2479,19 @@ void executeBevelLuma(ivec2 coord, int width, int height) {
 float bevelLuma(ivec2 c, int width, int height) {
     c = clamp(c, ivec2(0), ivec2(width - 1, height - 1));
     return uintBitsToFloat(out_pixels[c.y * width + c.x]);
+}
+
+// Batch 2B: 3x3 Sobel of the luma plane at tap spacing st, scaled by BV_SOBEL_NORM (a full black-to-white step reads as slope 1.0). Returns (dH/dX, dH/dY), rows grow downward.
+vec2 bevelSobel(ivec2 coord, int st, int width, int height) {
+    float tl = bevelLuma(coord + ivec2(-st, -st), width, height);
+    float tc = bevelLuma(coord + ivec2( 0, -st), width, height);
+    float tr = bevelLuma(coord + ivec2( st, -st), width, height);
+    float ml = bevelLuma(coord + ivec2(-st,  0), width, height);
+    float mr = bevelLuma(coord + ivec2( st,  0), width, height);
+    float bl = bevelLuma(coord + ivec2(-st,  st), width, height);
+    float bc = bevelLuma(coord + ivec2( 0,  st), width, height);
+    float br = bevelLuma(coord + ivec2( st,  st), width, height);
+    return vec2(((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)), ((bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr))) * BV_SOBEL_NORM;
 }
 
 void executeMetallicBevel(ivec2 coord, int width, int height) {
@@ -2422,31 +2505,31 @@ void executeMetallicBevel(ivec2 coord, int width, int height) {
     float shininess = clamp(bevel[bb + 3], 1.0, 256.0);
     vec2 lightXY = clamp(vec2(bevel[bb + 4], bevel[bb + 5]), vec2(-1.0), vec2(1.0));
 
-    // 3x3 grid, luma only (centre tap has Sobel weight 0)
     int st = max(gEdgeStep, 1);
-    float tl = bevelLuma(coord + ivec2(-st, -st), width, height);
-    float tc = bevelLuma(coord + ivec2( 0, -st), width, height);
-    float tr = bevelLuma(coord + ivec2( st, -st), width, height);
-    float ml = bevelLuma(coord + ivec2(-st,  0), width, height);
-    float mr = bevelLuma(coord + ivec2( st,  0), width, height);
-    float bl = bevelLuma(coord + ivec2(-st,  st), width, height);
-    float bc = bevelLuma(coord + ivec2( 0,  st), width, height);
-    float br = bevelLuma(coord + ivec2( st,  st), width, height);
-
-    float dH_dX = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) * BV_SOBEL_NORM;
-    float dH_dY = ((bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr)) * BV_SOBEL_NORM;   // rows grow downward
-
-    vec3 N = normalize(vec3(-dH_dX * intensity, -dH_dY * intensity, 1.0));
+    // Batch 2B: NORMAL MAP SPECULAR. Height = luminance. Two Sobel scales (tap spacing st and 3 st) so a one-pixel line gets a wide, round shoulder
+    // instead of a single aliased pixel: the highlight then sits on the ridge as a continuous bright line, like the 3D depth-map reference videos.
+    vec2 grad = (bevelSobel(coord, st, width, height) + 0.6 * bevelSobel(coord, st * 3, width, height)) * intensity;   // (dH/dX, dH/dY)
+    float slope = length(grad);
+    vec3 N = normalize(vec3(-grad.x, -grad.y, 1.0));
     vec3 Ldir = normalize(vec3(lightXY.x, -lightXY.y, 0.7));                        // +Light Y = light from the top of the screen
-    vec3 Hdir = normalize(Ldir + vec3(0.0, 0.0, 1.0));
+    vec3 Hdir = normalize(Ldir + vec3(0.0, 0.0, 1.0));                              // V = (0, 0, 1)
 
-    float diffuse = max(dot(N, Ldir), 0.5);
-    diffuse /= mix(1.0, max(Ldir.z, 0.5), BV_FLAT_DIFFUSE_COMP);
-    float spec = pow(max(dot(N, Hdir), 0.0), shininess);
-    spec = max(spec - BV_FLAT_SPEC_COMP * pow(max(Hdir.z, 0.0), shininess), 0.0);
+    // 0 on flat ground, 1 on a ridge / edge. EVERYTHING below is multiplied by it: flat areas are returned bit-exact (no darkening, no white wash).
+    float steep = smoothstep(BV_STEEP_LO, BV_STEEP_HI, slope);
+
+    // diffuse relative to the flat value (dot(N, L) / L.z = 1 on flat): ridges facing the light get brighter, the far side darker
+    float dRel = dot(N, Ldir) / max(Ldir.z, 0.2);
+    float shade = mix(1.0, clamp(dRel, 0.35, 1.9), steep);
+
+    // Blinn-Phong: shininess = tightness (exponent), gloss = strength. The value a FLAT surface would give is subtracted, so a flat area adds nothing.
+    float specRaw = pow(max(dot(N, Hdir), 0.0), shininess);
+    float specFlat = pow(max(Hdir.z, 0.0), shininess);
+    float spec = max(specRaw - specFlat, 0.0) / max(1.0 - specFlat, 1e-3) * steep;
 
     vec3 base = display_px[pixelIndex].rgb;
-    vec3 lit = base * diffuse + vec3(spec * gloss);
+    vec3 tint = base / max(max(base.r, max(base.g, base.b)), 1e-3);                 // metal picks up a little of the surface colour
+    vec3 specCol = mix(vec3(1.0), tint, 0.35);
+    vec3 lit = base * shade + specCol * (spec * gloss);
     display_px[pixelIndex] = vec4(clamp(mix(base, lit, mixAmt), 0.0, 1.0), 1.0);
 }
 
@@ -3799,18 +3882,17 @@ void executeMotionDilate(ivec2 cell, int gw, int gh) {
     moWrite(2, cell, gw, gh, bestB, bestF);
 }
 
-// ---- SMEAR (rewritten): directional ACCUMULATION smear of the current frame ----------------------------------------
-// No flow, no frame differencing, no neighbour frames: the trail comes from the user's angle / length (or from the frame centre in radial mode),
-// so it is identical on every frame of the clip and cannot flicker or pop. Every pixel walks Seff steps along the trail, collects the picture
-// there and keeps the BRIGHTEST value per channel (lighten / max), which leaves solid, sharp light streaks instead of an averaged soup.
-//   linear : path(s) = q - dir * L * s                      dir = (cos a, -sin a)  (0 = right, 90 = up), the trail grows towards +dir
-//   radial : path(s) = c + Rot(-spin * m * s) * (q - c) * (1 - zoom * m * s)    c = frame centre, m = 2 * length
-//            zoom = cos a, spin = sin a  ->  a = 0 pure zoom burst (outward), 90 pure spin, in between = spiral.
-//            The trail length grows with the distance from the centre (m * r), exactly like a real zoom / spin, so the centre stays sharp.
-// s runs 0 (at the pixel) .. 1 (end of the trail).
-// Chromatic dispersion: R walks to s * (1 + d), B to s * (1 - d), G to s, so the colours part more and more towards the tail.
-// Highlight threshold: samples below the luma gate only leave a faint (15 %) trail, samples above it leave the full one.
-// [ASSUMED] below-gate share 15 %, gate softness +-0.08, sample spacing capped at 2.5..5 px (see moSmear), 160 steps maximum.
+// ---- VELOCITY VECTOR MOTION BLUR (batch 2B, RSMB style) -----------------------------------------------------------------------------
+// Replaces the static directional / radial smear and the Duplicate (echo) mode. The picture is blurred ONLY where the footage really moves.
+//   Pass 18..20 (coarse flow, 16 px cells)  global similarity transform (native side) + block-matching residual -> smoothed -> dilated.
+//   Pass 30 MotionVelocity (1/4 resolution, binding 14, vec2 per cell)  per cell: the coarse vector refined by two Lucas-Kanade iterations on the 4 px grid, for the
+//        previous AND the next frame, merged into ONE velocity of the content in pixels / frame (v = (-B + F) / 2 weighted by confidence).
+//        Because the global transform is evaluated per cell, a spinning camera gives a swirl field and a zoom gives a radial field by itself.
+//   Pass 21 MotionRender  every pixel reads its velocity (bilinear) and gathers samples of the CURRENT frame along it:  colour += frame(q + v * shutter * s).
+//        velocity == 0  ->  zero smear (the pixel is returned untouched). Shutter = trail length in frames, Phase = trailing .. centred .. leading.
+// Trail weights: the head (the pixel itself) counts most and the weight decays towards the far end (Trail Falloff).  Streak mixes the weighted AVERAGE (classic
+// vector blur) with the weighted MAXIMUM (lighten = light streaks, the "smear" look). Highlight gate / chromatic split / sharpness are the old Smear controls.
+// [ASSUMED] sample spacing capped at 2..4 px, 128 samples maximum, minimum speed knee 0.5 .. 1.5 x "Min Speed".
 float moTrailW(float s, float fe, float tailW) {
     float v = max(1.0 - s, 0.0);
     return pow(v, fe) * smoothstep(0.0, tailW, v);
@@ -3837,142 +3919,152 @@ vec3 moSampleSharp(int slot, vec2 pos, int w, int h, float sharp) {
     return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
 }
 
-// position on the trail at s. lin = dir * L (px), zoomK / spinK = radial strengths (already multiplied by m)
-vec2 moSmPos(vec2 q, float s, bool radial, vec2 lin, vec2 ctr, float zoomK, float spinK) {
-    if (!radial) return q - lin * s;
-    vec2 rv = q - ctr;
-    float sc = max(1.0 - zoomK * s, 0.02);
-    float th = -spinK * s;
-    float cs = cos(th);
-    float sn = sin(th);
-    return ctr + vec2(cs * rv.x - sn * rv.y, sn * rv.x + cs * rv.y) * sc;
+const float MO_VEL_CELL = 4.0;   // velocity map resolution: one vec2 per 4 x 4 pixels (1/4 resolution)
+
+vec2 moVelCell(ivec2 c, int vw, int vh) {
+    c = clamp(c, ivec2(0), ivec2(vw - 1, vh - 1));
+    return mo_vel[c.y * vw + c.x];
+}
+vec2 moVelAt(vec2 q, int vw, int vh) {
+    vec2 g = q * (1.0 / MO_VEL_CELL) - 0.5;
+    ivec2 i0 = ivec2(floor(g));
+    vec2 t = g - vec2(i0);
+    vec2 a = moVelCell(i0, vw, vh);
+    vec2 b = moVelCell(i0 + ivec2(1, 0), vw, vh);
+    vec2 c = moVelCell(i0 + ivec2(0, 1), vw, vh);
+    vec2 d = moVelCell(i0 + ivec2(1, 1), vw, vh);
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
 }
 
-vec3 moSmear(vec2 q, vec3 pre, int cur, int w, int h, float diag, float jit) {
-    float lenFrac = max(MOS(37), 0.0);
-    bool radial = MOS(38) > 0.5;
-    float ang = radians(MOS(32));
-    vec2 ctr = vec2(float(w), float(h)) * 0.5;
-    vec2 lin = vec2(0.0);
-    float zoomK = 0.0;
-    float spinK = 0.0;
-    float Lpx;
-    if (radial) {
-        float m = 2.0 * lenFrac;
-        zoomK = cos(ang) * m;
-        spinK = sin(ang) * m;
-        Lpx = m * length(q - ctr);
-    } else {
-        Lpx = lenFrac * diag;
-        lin = vec2(cos(ang), -sin(ang)) * Lpx;
+// Lucas-Kanade refinement of the displacement d (current -> frame nSlot) around pc: 4 x 4 taps, 2 px apart (an 8 px window), 2 iterations, each step clamped to 2 px.
+// Brightness constancy:  I_n(p + d + e) ~ I_n(p + d) + grad . e = I_c(p)   ->   (sum g g^T) e = -(sum g It).   Returns (d.x, d.y, confidence): confidence is the smaller
+// eigenvalue of the structure tensor (an aperture-problem / flat-area detector), so a textureless cell keeps the coarse vector.
+vec3 moRefineLK(int nSlot, vec2 pc, vec2 d, int cur, int w, int h) {
+    float lamMin = 0.0;
+    for (int it = 0; it < 2; it++) {
+        float sxx = 0.0, sxy = 0.0, syy = 0.0, sxt = 0.0, syt = 0.0;
+        for (int j = 0; j < 4; j++) {
+            for (int i = 0; i < 4; i++) {
+                vec2 p = pc + (vec2(float(i), float(j)) - 1.5) * 2.0;
+                vec2 pn = p + d;
+                float Ic = moGLumBi(cur, p, w, h);
+                float In = moGLumBi(nSlot, pn, w, h);
+                float Ix = 0.5 * (moGLumBi(nSlot, pn + vec2(1.0, 0.0), w, h) - moGLumBi(nSlot, pn - vec2(1.0, 0.0), w, h));
+                float Iy = 0.5 * (moGLumBi(nSlot, pn + vec2(0.0, 1.0), w, h) - moGLumBi(nSlot, pn - vec2(0.0, 1.0), w, h));
+                float It = In - Ic;
+                sxx += Ix * Ix; sxy += Ix * Iy; syy += Iy * Iy; sxt += Ix * It; syt += Iy * It;
+            }
+        }
+        sxx += 0.004; syy += 0.004;                                        // Tikhonov term: a flat window gives a zero step, not noise
+        float det = sxx * syy - sxy * sxy;
+        vec2 e = vec2(-(syy * sxt - sxy * syt), -(sxx * syt - sxy * sxt)) / max(det, 1e-8);
+        d += clamp(e, vec2(-2.0), vec2(2.0));
+        float tr = sxx + syy;
+        lamMin = 0.5 * (tr - sqrt(max(tr * tr - 4.0 * det, 0.0)));
     }
+    return vec3(d, smoothstep(0.01, 0.10, lamMin));
+}
+
+// ---- PASS 30: MotionVelocity ------------------------------------------------------------------------------------------------
+// width / height of the dispatch = the velocity grid (ceil(w / 4) x ceil(h / 4)); w / h = the frame. Output: mo_vel[cell] = velocity of the content in pixels / frame.
+void executeMotionVelocity(ivec2 cell, int vw, int vh, int w, int h) {
+    int C = max(int(MOS(12)), 4);
+    int gw = (w + C - 1) / C;
+    int gh = (h + C - 1) / C;
+    int cur = int(MOS(6));
+    vec2 pc = min((vec2(cell) + 0.5) * MO_VEL_CELL, vec2(float(w - 1), float(h - 1)));
+    int pSlot = int(MOS(7));
+    int nSlot = int(MOS(8));
+    bool useB = MOS(9) > 0.5 && pSlot >= 0 && pSlot != cur;
+    bool useF = MOS(9) > 0.5 && MOS(10) > 0.5 && nSlot >= 0 && nSlot != cur;
+    bool refine = MOS(47) > 0.5;
+    vec2 vSum = vec2(0.0);
+    float wSum = 0.0;
+    for (int dirI = 0; dirI < 2; dirI++) {
+        if (dirI == 0 && !useB) continue;
+        if (dirI == 1 && !useF) continue;
+        int k = dirI * 4;
+        vec3 f1 = moFlowAt(1, pc, gw, gh, C, k);      // smoothed coarse flow: displacement current -> neighbour, xy + confidence
+        vec3 f2 = moFlowAt(2, pc, gw, gh, C, k);      // dilated: a longer vector outside the moving region (lets the trail leave the edge)
+        vec2 d = f1.xy;
+        float conf = f1.z;
+        if (length(f2.xy) > length(f1.xy) + 0.5) {
+            d = f2.xy;                                // reach cell: keep the dilated vector, no refinement (there is no texture that moves with it)
+            conf = max(f2.z, 0.2);
+        } else if (refine) {
+            vec3 r = moRefineLK(dirI == 0 ? pSlot : nSlot, pc, d, cur, w, h);
+            d = mix(d, r.xy, r.z);
+            conf = max(conf, r.z * 0.8);
+        }
+        float wt = 0.25 + 0.75 * conf;
+        vec2 v = (dirI == 0) ? -d : d;               // B moved the content by -B (previous -> now), F by +F (now -> next)
+        vSum += v * wt;
+        wSum += wt;
+    }
+    mo_vel[cell.y * vw + cell.x] = (wSum > 0.0) ? vSum / wSum : vec2(0.0);
+}
+
+// ---- RENDER -----------------------------------------------------------------------------------------------------------------
+// q = pixel centre (after the optional Glitch Edge tear), pre = the untouched pixel (linear when moLin), cur = frame slot to sample.
+vec3 moVectorBlur(vec2 q, vec3 pre, int cur, int w, int h, float diag, float jit) {
+    if (MOS(9) < 0.5) return pre;                                    // no velocity map was built this frame (mo_vel would be stale)
+    int vw = (w + 3) / 4;
+    int vh = (h + 3) / 4;
+    vec2 v = moVelAt(q, vw, vh);                                     // pixels / frame
+    float sp = length(v);
+    float minSp = max(MOS(52), 0.0);
+    float knee = smoothstep(minSp * 0.5, minSp * 1.5 + 0.02, sp);    // no motion (or sensor-noise motion) -> exactly no smear
+    vec2 span = v * max(MOS(44), 0.0) * knee;                        // the whole trail in px = velocity * shutter
+    float Lpx = length(span);
+    float maxL = max(MOS(19), 0.0) * diag;                           // soft cap: a bad vector can never smear across the frame
+    if (maxL > 1.0 && Lpx > maxL) { span *= maxL / Lpx; Lpx = maxL; }
     if (Lpx < 0.75) return pre;
 
     float sharp = clamp(MOS(24), 0.0, 1.0);
-    float disp = clamp(MOS(40), 0.0, 0.6);
-    float thr = clamp(MOS(39), 0.0, 1.0);
+    float phase = clamp(MOS(45), -1.0, 1.0);
+    float sLo = -0.5 - 0.5 * phase;                                  // trail interval [sLo, sLo + 1] along span: -1 trailing, 0 centred, +1 leading
+    float sMax = max(abs(sLo), abs(sLo + 1.0));
+    float gap = mix(4.0, 2.0, sharp);
+    int seff = int(clamp(max(floor(MOS(26) + 0.5), ceil(Lpx / gap)), 4.0, 128.0));
     float fe = mix(0.4, 4.0, clamp(MOS(34), 0.0, 1.0));
-    float gain = max(MOS(16), 0.0);
-    int S = clamp(int(MOS(22)), 4, 96);
-    // "Trailing samples" is the minimum. A long trail also gets extra steps so that two neighbouring steps are never further apart than a few
-    // pixels: with a max blend a wider gap shows up as separate ghost copies of the picture ("popping textures"), not as a streak.
-    float gap = mix(5.0, 2.5, sharp);
-    int Seff = clamp(max(S, int(ceil(Lpx / gap))), 4, 160);
-    float tailW = mix(0.30, 0.03, sharp);   // soft end of the trail at low sharpness, a clean cut at high sharpness
-    float j = mix(jit, 0.5, sharp);          // per-pixel step jitter only while the lines are soft
-    float invS = 1.0 / float(Seff);
-    bool split = disp > 0.001;
+    float thr = clamp(MOS(39), 0.0, 1.0);
+    float disp = clamp(MOS(40), 0.0, 0.6);
+    float jj = mix(jit, 0.5, sharp);
 
-    vec3 acc = pre;
-    for (int i = 0; i < Seff; i++) {
-        float s = (float(i) + j) * invS;
-        if (!split) {
-            vec3 c = moSampleSharp(cur, moSmPos(q, s, radial, lin, ctr, zoomK, spinK), w, h, sharp);
-            acc = max(acc, c * (gain * moTrailW(s, fe, tailW) * moGate(c, thr)));
-        } else {
-            float sr = s * (1.0 + disp);
-            float sb = s * (1.0 - disp);
-            vec3 cr = moSampleSharp(cur, moSmPos(q, sr, radial, lin, ctr, zoomK, spinK), w, h, sharp);
-            vec3 cg = moSampleSharp(cur, moSmPos(q, s, radial, lin, ctr, zoomK, spinK), w, h, sharp);
-            vec3 cb = moSampleSharp(cur, moSmPos(q, sb, radial, lin, ctr, zoomK, spinK), w, h, sharp);
-            vec3 wgt = vec3(moTrailW(sr, fe, tailW) * moGate(cr, thr),
-                            moTrailW(s, fe, tailW) * moGate(cg, thr),
-                            moTrailW(sb, fe, tailW) * moGate(cb, thr)) * gain;
-            acc = max(acc, vec3(cr.r, cg.g, cb.b) * wgt);
-        }
-    }
-    float head = clamp(MOS(35), 0.0, 1.0);   // how much of the untouched picture stays on top of the trail
-    return mix(acc, pre, head);
-}
-
-// ---- DUPLICATE: real echo frames with falloff, operator, tint, optional motion-path drift / smear -------------------
-vec3 moDup(vec2 q, vec3 pre, int w, int h, int gw, int gh, int C) {
-    int N = clamp(int(MOS(64)), 0, 16);
-    if (N == 0) return pre;
-    float startOp = clamp(MOS(73), 0.0, 1.0);
-    float decay = mix(0.92, 0.45, clamp(MOS(66), 0.0, 1.0));
-    float drift = MOS(72);
-    float dsmear = clamp(MOS(71), 0.0, 1.0);
-    int op = int(MOS(68) + 0.5);
-    float tintAmt = clamp(MOS(70), 0.0, 1.0);
-    vec3 tint = fxUnpackCol(MOS(69));
-    bool useFlow = MOS(9) > 0.5;
-    vec2 B = vec2(0.0);
-    vec2 F = vec2(0.0);
-    if (useFlow) {
-        B = moFlowAt(1, q, gw, gh, C, 0).xy;
-        F = (MOS(10) > 0.5) ? moFlowAt(1, q, gw, gh, C, 4).xy : -B;
-    }
-    vec3 acc = pre;
-    float wsum = 1.0;
-    for (int kk = N; kk >= 1; kk--) {
-        int slot = int(MOS(96 + kk - 1));
-        if (slot < 0) continue;
-        float tau = MOS(112 + kk - 1);
-        float a = startOp * pow(decay, float(kk - 1));
-        vec2 shift = vec2(0.0);
-        if (useFlow) shift = (tau < 0.0) ? (B * (-tau)) : (F * tau);
-        vec2 pos = q + shift * drift;
+    vec3 acc = vec3(0.0);
+    vec3 mx = vec3(0.0);
+    float wSum = 0.0;
+    for (int i = 0; i < 128; i++) {
+        if (i >= seff) break;
+        float s = sLo + (float(i) + jj) / float(seff);
+        float wgt = moTrailW(abs(s) / sMax, fe, 0.12);
         vec3 c;
-        if (dsmear > 0.001 && length(shift) > 0.75) {
-            c = vec3(0.0);
-            for (int i = 0; i < 5; i++) {
-                float u = (float(i) / 4.0 - 0.5) * dsmear;
-                c += moSample(slot, pos + shift * u, w, h);
-            }
-            c *= 0.2;
+        if (disp > 0.001) {
+            vec3 cr = moSampleSharp(cur, q + span * (s * (1.0 + disp)), w, h, sharp);
+            vec3 cg = moSampleSharp(cur, q + span * s, w, h, sharp);
+            vec3 cb = moSampleSharp(cur, q + span * (s * (1.0 - disp)), w, h, sharp);
+            c = vec3(cr.r, cg.g, cb.b);
         } else {
-            c = moSample(slot, pos, w, h);
+            c = moSampleSharp(cur, q + span * s, w, h, sharp);
         }
-        if (tintAmt > 0.001) {
-            float gprog = float(kk) / float(N);
-            c = mix(c, c * tint * 1.6, tintAmt * gprog);
-        }
-        if (op == 0) {            // Screen
-            vec3 ca = clamp(c * a, vec3(0.0), vec3(1.0));
-            acc = acc + ca * (vec3(1.0) - clamp(acc, vec3(0.0), vec3(1.0)));
-        } else if (op == 1) {     // Add
-            acc = acc + c * a;
-        } else if (op == 2) {     // Lighten
-            acc = mix(acc, max(acc, c), a);
-        } else if (op == 3) {     // Blend (weighted average)
-            acc = (acc * wsum + c * a) / (wsum + a);
-            wsum += a;
-        } else {                  // Over (ghost in front)
-            acc = mix(acc, c, a);
-        }
+        wgt *= moGate(c, thr);
+        acc += c * wgt;
+        mx = max(mx, c * wgt);
+        wSum += wgt;
     }
-    return acc;
+    if (wSum < 1e-4) return pre;
+    vec3 avg = acc / wSum;
+    vec3 res = mix(avg, max(mx, avg), clamp(MOS(46), 0.0, 1.0));     // Streak: 0 = classic vector blur (average), 1 = lighten smear
+    res = mix(res, pre, clamp(MOS(35), 0.0, 1.0));                   // Head: how much of the untouched picture stays
+    return res;
 }
 
-// ---- PASS 21 ------------------------------------------------------------------------------------------------------
 void executeMotionRender(ivec2 coord, int w, int h) {
     moLin = MOS(11) > 0.5;
     int C = max(int(MOS(12)), 4);
     int gw = (w + C - 1) / C;
     int gh = (h + C - 1) / C;
     int cur = int(MOS(6));
-    int mode = int(MOS(0) + 0.5);
     float diag = length(vec2(float(w), float(h)));
     vec2 q0 = vec2(coord) + 0.5;
     vec2 q = q0;
@@ -4006,12 +4098,8 @@ void executeMotionRender(ivec2 coord, int w, int h) {
     vec3 pre = (slot == cur && q == q0) ? pre0 : moSample(slot, q, w, h);
     float jit = moIGN(q0 + fract(u_time * 1.7) * 91.0);
 
-    vec3 res = pre;
-    if (mode == 1 || mode == 2) {   // mode 2 (the removed Main / motion blur mode) in an old save now renders as Smear
-        res = moSmear(q, pre, slot, w, h, diag, jit);
-    } else if (mode == 3) {
-        res = moDup(q, pre, w, h, gw, gh, C);
-    }
+    // Batch 2B: the only mode is the velocity vector motion blur (old saves with mode 2 / 3 = Main / Duplicate render exactly the same thing).
+    vec3 res = moVectorBlur(q, pre, slot, w, h, diag, jit);
 
     // per-effect opacity + custom blend (batch 4 pattern), then "blend with original"
     vec3 col = fxMix(pre0, res, MOS(1), MOS(2));
@@ -4041,6 +4129,7 @@ void executeMotionPass(ivec2 coord, int width, int height) {
     if (u_passIndex == 21) { executeMotionRender(coord, width, height); return; }
     int w = u_srcW;
     int h = u_srcH;
+    if (u_passIndex == 30) { executeMotionVelocity(coord, width, height, w, h); return; }   // batch 2B: velocity map at 1/4 resolution
     if (u_passIndex == 18) { executeMotionFlow(coord, width, height, w, h); return; }
     if (u_passIndex == 19) { executeMotionSmooth(coord, width, height); return; }
     executeMotionDilate(coord, width, height);
@@ -4117,7 +4206,7 @@ void main() {
     }
 
     // Motion S (batch 9): passes 18..21 never touch the grade globals below
-    if (u_passIndex >= 18 && u_passIndex <= 21) {
+    if ((u_passIndex >= 18 && u_passIndex <= 21) || u_passIndex == 30) {
         executeMotionPass(coord, width, height);
         return;
     }
@@ -5102,6 +5191,11 @@ void main() {
         float pPatStr   = tfx(37, 0.5);
         float pPatAng   = tfx(38, 0.0);
         float pOpacity  = tfx(39, 1.0);
+        // batch 2B: 3D depth-map metal (normal map from the text mask + Blinn-Phong on the steep edges). tfx() falls back to depth 0 = the old look for old projects.
+        float pDepth    = clamp(tfx(44, 0.0), 0.0, 3.0);
+        float pShin     = clamp(tfx(45, 64.0), 4.0, 256.0);
+        float pLightAng = tfx(46, 2.2);
+        float pDGloss   = clamp(tfx(47, 1.4), 0.0, 3.0);
 
         // glow reach: the tail radius grows with the rolloff slider (no low clamp, no perf cap below 0.6 x the frame)
         float boxHpx = max(boxSize.y * whPx.y, 8.0);
@@ -5153,6 +5247,18 @@ void main() {
                 ringCol += sB.rgb * sB.a; ringW += sB.a;
             }
             gB *= 0.25; mB *= 0.125;
+
+            // ---- ring C (wide shoulder, only for the depth map): the third scale of the height field ----
+            vec2 gC = vec2(0.0);
+            if (pDepth > 0.01) {
+                float cw = bw * 2.4;
+                for (int k = 0; k < 8; k++) {
+                    float a = (float(k) + 0.3) * 0.78539816;
+                    vec2 d = vec2(cos(a), sin(a));
+                    gC += d * textFillAt(coord + ivec2(round(d * cw * tpx)));
+                }
+                gC *= 0.25;
+            }
 
             // outward edge normal (screen space, y down) and light from the upper left
             vec2 gDir = gA + gB * 0.7;
@@ -5222,6 +5328,23 @@ void main() {
                     metal *= max(1.0 + clamp(pPatStr, 0.0, 1.0) * (pv - 0.5) * 1.6, 0.0);
                 }
                 toned = mix(orig, max(metal, vec3(0.0)), metalAmt);
+            }
+            // ---- 1b) DEPTH-MAP METAL (batch 2B): the text mask is a height field (letters inflated like a 3D extrusion). Its three ring scales give the slope
+            //          (a normal map), then Blinn-Phong: diffuse relative to the flat top (flat strokes keep their metal colour), specular ONLY on the steep edges,
+            //          exactly like the 3D depth-map reference videos. Depth = height, Gloss = specular strength, Shininess = exponent, Light angle = where the light is.
+            if (pDepth > 0.01) {
+                vec2 slopeV = (gA + gB * 0.7 + gC * 0.5) * (pDepth * 1.6);      // points INTO the letter (towards more mask), length = steepness
+                float slopeL = length(slopeV);
+                vec3 Nd = normalize(vec3(-slopeV, 1.0));                          // the surface tilts DOWN towards the outside: the normal leans outwards
+                vec3 Ld = normalize(vec3(cos(pLightAng), -sin(pLightAng), 0.7));  // light angle: 0 = from the right, pi / 2 = from the top (y is down on screen)
+                vec3 Hd = normalize(Ld + vec3(0.0, 0.0, 1.0));
+                float steepT = smoothstep(0.10, 0.70, slopeL) * smoothstep(0.05, 0.40, fillC);
+                float dShade = mix(1.0, clamp(dot(Nd, Ld) / Ld.z, 0.30, 1.9), steepT);
+                float spR = pow(max(dot(Nd, Hd), 0.0), pShin);
+                float spF = pow(max(Hd.z, 0.0), pShin);
+                float spD = max(spR - spF, 0.0) / max(1.0 - spF, 1e-3) * steepT;
+                vec3 metalTint = mix(vec3(1.0), tintN, 0.40 * hasHue);
+                toned = toned * dShade + metalTint * (spD * pDGloss * (0.6 + 0.4 * tSpec));
             }
             toned *= 1.0 - 0.38 * lo * bandIn * min(bevelK, 1.5);                    // shaded bevel face
             toned += hiCol * hi * bandIn * (0.32 + 0.20 * metalAmt) * bevelK;        // lit bevel face (narrow), brighter on metal
