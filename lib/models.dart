@@ -517,6 +517,7 @@ class AdjustmentLayer {
   double flareSceneTint;  // Colour Respect (v2.7): 0 = transparent white-ish haze .. 1 = colours taken from the video
   double flareCoreWhite;  // 0..1 hot white core
   double flareHaze;       // 0..1 Haze Veil: wide soft glow around the flaring light (v5 flare)
+  double flareStretch;    // 0..1 Flare Width / Stretch (batch 2B): widens the flare body horizontally so it stays strong out to the sides (uniform slot 186)
   double lineArtStrength;
   double lineArtWidth;
   double lineArtPlacement;
@@ -691,6 +692,7 @@ class AdjustmentLayer {
     this.flareSceneTint = 0.55,
     this.flareCoreWhite = 0.35,
     this.flareHaze = 0.25,
+    this.flareStretch = 0.0,
     this.lineArtStrength = 0.0,
     this.lineArtWidth = 0.50,
     this.lineArtPlacement = 0.0,
@@ -961,6 +963,7 @@ class AdjustmentLayer {
       flareSceneTint: flareSceneTint,
       flareCoreWhite: flareCoreWhite,
       flareHaze: flareHaze,
+      flareStretch: flareStretch,
       lineArtStrength: lineArtStrength,
       lineArtWidth: lineArtWidth,
       lineArtPlacement: lineArtPlacement,
@@ -1132,6 +1135,7 @@ class AdjustmentLayer {
       'flareSceneTint': flareSceneTint,
       'flareCoreWhite': flareCoreWhite,
       'flareHaze': flareHaze,
+      'flareStretch': flareStretch,
       'lineArtStrength': lineArtStrength,
       'lineArtWidth': lineArtWidth,
       'lineArtPlacement': lineArtPlacement,
@@ -1305,6 +1309,7 @@ class AdjustmentLayer {
       flareSceneTint: (json['flareSceneTint'] as num?)?.toDouble() ?? 0.55,
       flareCoreWhite: (json['flareCoreWhite'] as num?)?.toDouble() ?? 0.35,
       flareHaze: (json['flareHaze'] as num?)?.toDouble() ?? 0.25,
+      flareStretch: (json['flareStretch'] as num?)?.toDouble() ?? 0.0,
       lineArtStrength: (json['lineArtStrength'] as num?)?.toDouble() ?? 0.0,
       lineArtWidth: (json['lineArtWidth'] as num?)?.toDouble() ?? 0.50,
       lineArtPlacement: (json['lineArtPlacement'] as num?)?.toDouble() ?? 0.0,
@@ -1474,6 +1479,11 @@ class TextFx {
   double opacity; // per-effect opacity of the whole text overlay
   double vecInfluence; // vector mode: reach of each point (box heights)
   double vecAmount; // vector mode: warp amount
+  // batch 2B: 3D depth-map metal (normal map from the text mask + Blinn-Phong, specular only on steep edges). Packed at kBase + 44..47.
+  double depthScale; // 0..3 height / extrusion of the letters (0 = off, old look)
+  double depthGloss; // 0..3 specular strength on the ridges
+  double shininess; // 4..256 Blinn-Phong exponent (tightness of the highlight)
+  double lightAngle; // radians, direction the light comes FROM (0 = right, pi/2 = top)
 
   bool vecEnabled;
   bool vecAddMode; // UI only: tapping the box adds a point (not packed, still saved with the project)
@@ -1520,6 +1530,10 @@ class TextFx {
     this.opacity = 1.0,
     this.vecInfluence = 0.35,
     this.vecAmount = 1.0,
+    this.depthScale = 0.0,
+    this.depthGloss = 1.4,
+    this.shininess = 64.0,
+    this.lightAngle = 2.2,
     this.vecEnabled = false,
     this.vecAddMode = false,
     List<TextVecPoint>? points,
@@ -1566,6 +1580,10 @@ class TextFx {
       opacity: opacity,
       vecInfluence: vecInfluence,
       vecAmount: vecAmount,
+      depthScale: depthScale,
+      depthGloss: depthGloss,
+      shininess: shininess,
+      lightAngle: lightAngle,
       vecEnabled: vecEnabled,
       vecAddMode: vecAddMode,
       points: points.map((p) => p.clone()).toList(),
@@ -1612,6 +1630,10 @@ class TextFx {
       'opacity': opacity,
       'vecInfluence': vecInfluence,
       'vecAmount': vecAmount,
+      'depthScale': depthScale,
+      'depthGloss': depthGloss,
+      'shininess': shininess,
+      'lightAngle': lightAngle,
       'vecEnabled': vecEnabled,
       'points': points.map((p) => p.toJson()).toList(),
     };
@@ -1657,6 +1679,10 @@ class TextFx {
       opacity: _d(j['opacity'], 1.0),
       vecInfluence: _d(j['vecInfluence'], 0.35),
       vecAmount: _d(j['vecAmount'], 1.0),
+      depthScale: _d(j['depthScale'], 0.0),
+      depthGloss: _d(j['depthGloss'], 1.4),
+      shininess: _d(j['shininess'], 64.0),
+      lightAngle: _d(j['lightAngle'], 2.2),
       vecEnabled: j['vecEnabled'] == true,
       points: (j['points'] is List)
           ? (j['points'] as List).whereType<Map>().take(kMaxPoints).map((m) => TextVecPoint.fromJson(Map<String, dynamic>.from(m))).toList()
@@ -1754,6 +1780,10 @@ class TextFx {
     opacity = o.opacity;
     vecInfluence = o.vecInfluence;
     vecAmount = o.vecAmount;
+    depthScale = o.depthScale;
+    depthGloss = o.depthGloss;
+    shininess = o.shininess;
+    lightAngle = o.lightAngle;
   }
 
   static void _col(Float32List u, int slot, double h, double s, double v) {
@@ -1811,6 +1841,10 @@ class TextFx {
     u[kBase + 41] = n.toDouble();
     u[kBase + 42] = vecInfluence;
     u[kBase + 43] = vecAmount;
+    u[kBase + 44] = depthScale;
+    u[kBase + 45] = shininess;
+    u[kBase + 46] = lightAngle;
+    u[kBase + 47] = depthGloss;
     for (int i = 0; i < n; i++) {
       final b = kBase + 48 + i * 4;
       u[b] = points[i].rx;

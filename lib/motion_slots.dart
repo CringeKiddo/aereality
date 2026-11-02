@@ -1,9 +1,11 @@
 // =============================================================================
 // AEReality / Shaderly - Batch 9: Motion S slot table, defaults, frame plan and uniform packing
 //
-// SMEAR REWRITE: Smear is now a directional / radial ACCUMULATION smear of the current frame only (no flow, no neighbour frames), driven by
-// smLength / smAngle / smRadial / smHiThresh / smDisp / sharp / smSamples. The Main (motion blur) mode was removed from the UI and the shader;
-// modeMain stays as a constant so an old save that holds mode 2 still loads (it renders as Smear).
+// BATCH 2B - VELOCITY VECTOR MOTION BLUR (RSMB style): Motion S is now ONE effect. The picture is blurred along the optical-flow velocity of the footage itself
+// (previous / current / next frame -> velocity map at 1/4 resolution -> directional gather), so there is NO smear where nothing moves, a spinning camera gives a swirl,
+// a zoom gives a radial blur. The old static linear / radial smear (angle, radial, length) and the Duplicate (echo) mode are gone from the UI and the shader; their slot
+// numbers stay reserved so an old save still loads (mode 2 / 3 render as the vector blur). Glitch Edge stays as its own optional effect.
+// The motion blur runs on the RAW frames: the project grade (flares, glows, bevel ...) is applied afterwards (motion_engine.dart).
 //
 // UNIFORM LAYOUT: Motion S owns floats 5376..6399 of the uniform buffer (shader: motionS[1024], pass 18..21).
 // Time Slice keeps 6400..7423 (reserved2[1024], unread). 7424..8191 is free headroom. Total buffer = Vfx.uboFloats = 8192.
@@ -65,6 +67,12 @@ class MotionS {
   // new (Smear rewrite)
   static const int smRadial = 38, smHiThresh = 39, smDisp = 40;
 
+  // ---- Velocity vector blur (batch 2B) ----
+  // vShutter: trail length in FRAMES of motion (1 = the object's displacement over one frame, 2 = twice that ...). vPhase: -1 trailing (smear behind the motion), 0 centred, +1 leading.
+  // vStreak: 0 = classic averaged vector blur, 1 = lighten (light streaks, "smear" look). vRefine: 1 = Lucas-Kanade refinement on the 4 px grid (sharper vectors), 0 = coarse flow only (faster).
+  // vMinSpeed: pixels / frame below which a vector counts as "no motion" (no smear at all). vVersion marks a save made with these slots (old saves keep the defaults).
+  static const int vShutter = 44, vPhase = 45, vStreak = 46, vRefine = 47, vMinSpeed = 52, vVersion = 53;
+
   // ---- Main (classic shutter) ----
   static const int shutterAngle = 48, shutterPhase = 49, shutterSoft = 50, mainBleed = 51;
 
@@ -108,12 +116,18 @@ class MotionS {
     f[smAngle] = 0.0;
     f[smAngleLock] = 0.0;
     f[smFalloff] = 0.45;
-    f[smHead] = 0.1;
+    f[smHead] = 0.0; // batch 2B: 0 = the blur fully replaces the picture where it moves (RSMB); raise it to keep part of the sharp frame
     f[smSpeed] = 1.0;
     f[smLength] = 0.18;
     f[smRadial] = 0.0; // 0 linear, 1 radial (zoom / spin)
     f[smHiThresh] = 0.0; // 0 = every pixel leaves a trail; raise it so only the highlights do [ASSUMED default]
     f[smDisp] = 0.06; // RGB split along the trail, fraction of the trail length [ASSUMED default]
+    f[vShutter] = 1.0; // batch 2B velocity vector blur [ASSUMED defaults, tuned on the reference spin / zoom clips]
+    f[vPhase] = -0.6; // mostly trailing: the smear sits behind the motion
+    f[vStreak] = 0.4;
+    f[vRefine] = 1.0;
+    f[vMinSpeed] = 0.6;
+    f[vVersion] = 1.0;
 
     f[shutterAngle] = 180.0;
     f[shutterPhase] = -90.0;
@@ -147,85 +161,49 @@ class MotionS {
   static List<double> sanitize(List<double>? src) {
     final d = defaults();
     if (src == null) return d;
+    final bool legacy = src.length <= vVersion || src[vVersion] < 0.5; // a save from before batch 2B: its new slots are 0 and must NOT override the defaults
     for (int i = 0; i < size && i < src.length; i++) {
+      if (legacy && (i == vShutter || i == vPhase || i == vStreak || i == vRefine || i == vMinSpeed || i == vVersion || i == smHead)) continue;
       final v = src[i];
       if (!v.isNaN && !v.isInfinite) d[i] = v;
     }
-    d[smRadial] = d[smRadial] >= 0.5 ? 1.0 : 0.0;
+    d[smRadial] = 0.0; // legacy slots (the static smear angle / radial / length / angle lock / speed) are not read any more
     d[smHiThresh] = d[smHiThresh].clamp(0.0, 1.0).toDouble();
     d[smDisp] = d[smDisp].clamp(0.0, 0.6).toDouble();
     d[smLength] = d[smLength].clamp(0.0, 0.6).toDouble();
+    d[smSamples] = d[smSamples].clamp(4.0, 96.0).toDouble();
+    d[smFalloff] = d[smFalloff].clamp(0.0, 1.0).toDouble();
+    d[smHead] = d[smHead].clamp(0.0, 1.0).toDouble();
+    d[sharp] = d[sharp].clamp(0.0, 1.0).toDouble();
+    d[maxLen] = d[maxLen].clamp(0.0, 0.6).toDouble();
+    d[vShutter] = d[vShutter].clamp(0.0, 4.0).toDouble();
+    d[vPhase] = d[vPhase].clamp(-1.0, 1.0).toDouble();
+    d[vStreak] = d[vStreak].clamp(0.0, 1.0).toDouble();
+    d[vRefine] = d[vRefine] >= 0.5 ? 1.0 : 0.0;
+    d[vMinSpeed] = d[vMinSpeed].clamp(0.0, 8.0).toDouble();
+    d[vVersion] = 1.0;
     return d;
   }
 
-  /// 1 = Smear, 3 = Duplicate. The removed Main mode (2) maps to Smear.
-  static int modeOf(List<double> s) {
-    final m = s[mode].round().clamp(1, 3).toInt();
-    return m == modeMain ? modeSmear : m;
-  }
+  /// Batch 2B: there is only the velocity vector blur now. Old saves with the removed Main (2) / Duplicate (3) mode render as it too.
+  static int modeOf(List<double> s) => modeSmear;
 
   // ---------------------------------------------------------------------------------------------------------------
   // FRAME PLAN: which frames (relative to the output frame) the effect needs, and where they sit in the upload.
   // ---------------------------------------------------------------------------------------------------------------
-  static MotionPlan plan(List<double> s, {int maxSlots = 13}) {
-    final m = modeOf(s);
-    final glitch = s[gOn] > 0.5;
-    int ghosts = 0;
-    final ghostOff = <int>[];
-    bool needFlow = false;
-    bool needFwd = false;
-    bool needPrev = false;
-
-    if (m == modeSmear) {
-      // Smear only reads the current frame: no neighbour frames, no flow passes (18..20 are skipped natively when needFlow is false)
-    } else {
-      ghosts = s[dupCount].round().clamp(0, maxGhosts).toInt();
-      final sp = s[dupSpacing].round().clamp(1, 4).toInt();
-      final dir = s[dupDirection].round().clamp(0, 2).toInt();
-      for (int k = 1; k <= ghosts; k++) {
-        int off;
-        if (dir == 0) {
-          off = -sp * k;
-        } else if (dir == 1) {
-          off = sp * k;
-        } else {
-          off = (k.isOdd ? -1 : 1) * sp * ((k + 1) ~/ 2);
-        }
-        ghostOff.add(off);
-      }
-      needFlow = s[dupDrift].abs() > 0.001 || s[dupSmear] > 0.001;
-      needPrev = needFlow;
-      needFwd = needFlow && ghostOff.any((o) => o > 0);
-    }
-    if (glitch && s[gHold] > 0.001) needPrev = true;
-    if (glitch && s[gEdgeGate] > 0.02) {
-      needFlow = true;
-      needPrev = true;
-    }
-
-    // reduce the ghost count until the frame set fits the memory budget
-    List<int> offsets;
-    while (true) {
-      final set = <int>{0};
-      if (needPrev) set.add(-1);
-      if (needFwd) set.add(1);
-      for (int i = 0; i < ghostOff.length; i++) {
-        set.add(ghostOff[i]);
-      }
-      offsets = set.toList()..sort();
-      if (offsets.length <= maxSlots || ghostOff.isEmpty) break;
-      ghostOff.removeLast();
-    }
-    final slotOf = <int, int>{for (int i = 0; i < offsets.length; i++) offsets[i]: i};
+  static MotionPlan plan(List<double> s, {int maxSlots = 13, bool hasPrev = true, bool hasNext = true}) {
+    // Velocity vector blur: previous + current + next frame (the flow is measured both ways and merged). The first / last frame of a clip has no previous / next frame:
+    // that slot is dropped (prevSlot / nextSlot = -1) so the missing side does not pull the velocity towards zero.
+    final offsets = <int>[if (hasPrev) -1, 0, if (hasNext) 1];
     return MotionPlan(
       offsets: offsets,
-      centerSlot: slotOf[0]!,
-      prevSlot: needPrev ? slotOf[-1]! : -1,
-      nextSlot: (needFwd && slotOf.containsKey(1)) ? slotOf[1]! : -1,
-      ghostSlots: [for (final o in ghostOff) slotOf[o]!],
-      ghostOffsets: [for (final o in ghostOff) o.toDouble()],
-      needFlow: needFlow,
-      needFwd: needFwd,
+      centerSlot: hasPrev ? 1 : 0,
+      prevSlot: hasPrev ? 0 : -1,
+      nextSlot: hasNext ? (hasPrev ? 2 : 1) : -1,
+      ghostSlots: const <int>[],
+      ghostOffsets: const <double>[],
+      needFlow: hasPrev || hasNext,
+      needFwd: hasNext,
     );
   }
 
@@ -261,25 +239,15 @@ class MotionS {
     final longEdge = math.max(w, h);
     u[b + flowRange] = ((longEdge / 160.0).round() ~/ 4 * 4).clamp(4, 12).toDouble();
 
-    // per-mode samples / blur -> shared slots
-    if (m == modeSmear) {
-      u[b + samples] = s[smSamples].roundToDouble().clamp(4.0, 96.0).toDouble();
-      u[b + blurAmt] = 0.0; // the old perpendicular blur is gone from Smear
-    } else {
-      u[b + samples] = 8.0;
-      u[b + blurAmt] = 0.0;
-    }
-
-    // ghost table
+    // the vector blur reads its sample count straight from smSamples (26); the shared slots 22 / 20 are not used any more
+    u[b + samples] = s[smSamples].roundToDouble().clamp(4.0, 96.0).toDouble();
+    u[b + blurAmt] = 0.0;
+    // no ghost table any more (Duplicate was removed): slots 96.. stay -1 / 0
     for (int k = 0; k < maxGhosts + 4; k++) {
       u[b + ghostSlots + k] = -1.0;
       u[b + ghostOffsets + k] = 0.0;
     }
-    for (int k = 0; k < plan.ghostSlots.length && k < maxGhosts; k++) {
-      u[b + ghostSlots + k] = plan.ghostSlots[k].toDouble();
-      u[b + ghostOffsets + k] = plan.ghostOffsets[k];
-    }
-    u[b + dupCount] = plan.ghostSlots.length.toDouble();
+    u[b + dupCount] = 0.0;
     return u;
   }
 }

@@ -2126,8 +2126,16 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         }
 
         // The GPU work runs in the worker isolate: the UI isolate stays free (sliders, taps, animations).
-        final res = await GradeWorker.instance.grade(rgba: rawBytes, w: w, h: h, uniforms: uniforms, lut: lutTable);
-        final im = await _rgbaToImage(res.rgba, w, h);
+        // Batch 2B: a paused / scrubbed frame that lies inside a Time Slice wipe shows the finished wipe frame (ring emit), not the plain grade.
+        // Before this the effect only existed inside the Adaptive playback loop, so with Smooth (Native) or while scrubbing it never appeared in the preview.
+        final ui.Image? tsIm = (!_project.isImage && _project.mediaPath.isNotEmpty) ? await _tsPausedImage(_currentTimelinePosition, w, h) : null;
+        final ui.Image im;
+        if (tsIm != null) {
+          im = tsIm;
+        } else {
+          final res = await GradeWorker.instance.grade(rgba: rawBytes, w: w, h: h, uniforms: uniforms, lut: lutTable);
+          im = await _rgbaToImage(res.rgba, w, h);
+        }
 
         if (mounted) {
           _processedStaticImage?.dispose();
@@ -2960,6 +2968,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return _tsEmitImage(cur, s, lay, w, h, pos);
   }
 
+  /// Batch 2B: Time Slice on a PAUSED / scrubbed frame (called by _applyGrade). Same decisions as _tsPreviewImage, but it WAITS for the cut scan, the schedule
+  /// and the 23-frame ring (about a second the first time a wipe is scrubbed, cached for every other frame of the same wipe), so the first paused frame already shows
+  /// the effect. Returns null when the plain grade should be used (no Time Slice layer, outside a wipe, GPU error, playback started meanwhile).
+  Future<ui.Image?> _tsPausedImage(double pos, int w, int h) async {
+    final lay = _tsLayer();
+    if (lay < 0) {
+      if (_tsRingKey.isNotEmpty) _tsReleaseRing();
+      return null;
+    }
+    final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
+    TimeSliceScheduler? sched = _tsSched;
+    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) {
+      if (_tsSchedBuilding) return null;
+      await _tsPrepSchedule(s, _pbFps);
+      sched = _tsSched;
+      if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) return null;
+    }
+    final frame = (pos * _pbFps).round();
+    final cur = sched.at(frame);
+    if (cur == null) return null;
+    final key = _tsKeyOf('pv', cur.cutFrame, w, h, _pbFps);
+    if (key != _tsRingKey) {
+      if (_tsPrepping) return null;
+      final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
+      if (!await _tsPrepareRing(wipe, w, h, _pbFps, key, preview: true)) return null;
+    }
+    return _tsEmitImage(cur, s, lay, w, h, pos);
+  }
+
   Future<ui.Image?> _tsEmitImage(TimeSliceFrame cur, List<double> s, int lay, int w, int h, double pos) async {
     try {
       final u = _packMultiLayerUniforms(w.toDouble(), h.toDouble());
@@ -3474,6 +3511,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       uniforms[offset + 182] = layer.flareSceneTint;
       uniforms[offset + 183] = layer.flareCoreWhite;
       uniforms[offset + 185] = layer.flareHaze; // v5 flare: Haze Veil
+      uniforms[offset + 186] = layer.flareStretch; // batch 2B: Flare Width / Stretch
     }
 
     TimeSlice.packLayers(uniforms, [for (final l in _project.layers) l.timeSlice]); // batch 12 C2: Time Slice settings 6400..7039 (mirror in project_uniforms.dart)
@@ -3876,19 +3914,48 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                   tooltip: 'Switch Media',
                   onPressed: _switchMediaFile,
                 ),
-                IconButton(
-                  icon: Icon(
-                    Icons.title_rounded,
-                    color: _project.textSuiteEnabled ? accent : Colors.white70,
+                // Batch 2B: the T button. A lettered chip (it glows in the accent colour while the Text Suite is on and shows a dot when the 3D depth map is active).
+                // Tap = on / off (opens the TEXT tab when it turns on), long press = open the TEXT tab without changing the switch.
+                Tooltip(
+                  message: 'Text Suite - 3D metal text (tap: on / off, hold: open settings)',
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      _pushUndoSnapshot();
+                      setState(() => _project.textSuiteEnabled = !_project.textSuiteEnabled);
+                      if (_project.textSuiteEnabled) _tabController.animateTo(11); // opens the TEXT settings tab
+                      _applyGrade();
+                      _autoSaveProject();
+                    },
+                    onLongPress: () => _tabController.animateTo(11),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        alignment: Alignment.center,
+                        children: [
+                          Container(
+                            width: 30,
+                            height: 30,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: _project.textSuiteEnabled ? accent.withOpacity(0.18) : Colors.white.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _project.textSuiteEnabled ? accent : Colors.white24, width: _project.textSuiteEnabled ? 1.6 : 1.0),
+                              boxShadow: _project.textSuiteEnabled ? [BoxShadow(color: accent.withOpacity(0.45), blurRadius: 8)] : null,
+                            ),
+                            child: Text('T', style: TextStyle(color: _project.textSuiteEnabled ? accent : Colors.white70, fontWeight: FontWeight.w900, fontSize: 17, height: 1.0)),
+                          ),
+                          if (_project.textSuiteEnabled && _project.text.depthScale > 0.01)
+                            Positioned(
+                              right: -1,
+                              top: -1,
+                              child: Container(width: 7, height: 7, decoration: BoxDecoration(color: accent, shape: BoxShape.circle, border: Border.all(color: Colors.black, width: 1))),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                  tooltip: 'Text Suite',
-                  onPressed: () {
-                    _pushUndoSnapshot();
-                    setState(() => _project.textSuiteEnabled = !_project.textSuiteEnabled);
-                    if (_project.textSuiteEnabled) _tabController.animateTo(11); // opens the TEXT settings tab
-                    _applyGrade();
-                    _autoSaveProject();
-                  },
                 ),
                 IconButton(
                   icon: Icon(Icons.aspect_ratio_rounded, color: accent),

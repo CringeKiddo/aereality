@@ -1,10 +1,13 @@
 // =============================================================================
 // AEReality / Shaderly - MotionEngine (batch 9, Motion S)
 //
-//  * MotionSource       : a saved project (its grade is applied to every frame first) or a plain video file (raw, no grade).
+//  * MotionSource       : a saved project (its grade is applied to every finished frame, AFTER the motion blur) or a plain video file (raw, no grade).
 //  * MotionEngine       : decodes the frames an effect needs (ONE ffmpeg call per window / batch, raw RGBA, like the preview and the
-//                         export already do), grades them when a project is the source (GradeWorker = the existing grade path),
-//                         renders Motion S on Vulkan (MotionWorker -> process_motion) and writes the finished frames.
+//                         export already do), renders the velocity vector motion blur on the RAW frames on Vulkan (MotionWorker -> process_motion), THEN grades the
+//                         blurred frame when a project is the source (GradeWorker / SurfaceGradeWorker = the existing grade path) and writes the finished frames.
+//                         PIPELINE ORDER (batch 2B):  raw video -> Motion S (velocity vectors) -> colour grade + flares + glows + bevel -> encoder.
+//                         It used to be grade -> Motion S, which smeared the flares and every other grade effect; now the grade sits on top of the blur, so the
+//                         flares are completely independent of the motion vectors.
 //  * Start Process      : processAll() renders EVERY frame on Vulkan in a worker isolate (UI stays free), writes batches of raw frames,
 //                         hands every finished frame to the phone's HARDWARE encoder (NativeEncoder / MediaCodecEncoder.kt: HEVC by default, H.264 optional, at
 //                         MotionS.bitrateMbps) - zero-copy GPU -> Surface when the driver allows it, NV12 buffers otherwise - as ONE continuous MP4 (no parts, no join).
@@ -248,18 +251,21 @@ class MotionEngine {
     _lutOpacity = owner.lutOpacity;
   }
 
-  Future<Uint8List> _grade(Uint8List raw, int w, int h, double timeSeconds) async {
-    final p = src.project;
-    if (p == null) return raw;
+  /// The project's grade uniforms for one frame (the same packing the editor and the export use).
+  Float32List _gradeUniforms(int w, int h, double timeSeconds) {
+    final p = src.project!;
     _resolveLut();
     final u = packProjectUniforms(p, w.toDouble(), h.toDouble(), timeSeconds: timeSeconds, hasLut: _lutTable != null, lutOpacity: _lutOpacity);
     u[0] = timeSeconds;
-    final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: u, lut: _lutTable);
-    return res.rgba;
+    return u;
   }
 
-  // small caches (preview): graded frames by index, so scrubbing back and forth does not regrade
-  final Map<String, Uint8List> _gradeCache = {};
+  /// Batch 2B: the grade is applied to the already BLURRED frame (it used to be applied to the raw frame before Motion S).
+  Future<Uint8List> _grade(Uint8List blurred, int w, int h, double timeSeconds) async {
+    if (src.project == null) return blurred;
+    final res = await GradeWorker.instance.grade(rgba: blurred, w: w, h: h, uniforms: _gradeUniforms(w, h, timeSeconds), lut: _lutTable);
+    return res.rgba;
+  }
 
   // ---------------------------------------------------------------------------------------------------------------
   // PREVIEW
@@ -273,10 +279,10 @@ class MotionEngine {
     required int h,
     bool original = false,
   }) async {
-    final plan = MotionS.plan(settings);
-    final offsets = original ? <int>[0] : plan.offsets; // "original" = the (graded) frame itself, no Motion S
     final total = math.max(1, (src.durationSec * fps).floor());
     final c = (tSec * fps).round().clamp(0, total - 1).toInt();
+    final plan = MotionS.plan(settings, hasPrev: c > 0, hasNext: c < total - 1);   // the first / last frame of the clip has no previous / next frame
+    final offsets = original ? <int>[0] : plan.offsets; // "original" = the (graded) frame itself, no Motion S
 
     final first = offsets.first;
     final last = offsets.last;
@@ -294,20 +300,10 @@ class MotionEngine {
         int i = (c + off) - startIdx;
         if (i < 0) i = 0;
         if (i >= got) i = got - 1;
-        final absIdx = math.max(0, c + off);
-        final key = '$absIdx|$w|$h';
-        Uint8List? fr = src.graded ? _gradeCache[key] : null;
-        if (fr == null) {
-          await raf.setPosition(i * fb);
-          final raw = await raf.read(fb);
-          if (raw.length != fb) return null;
-          fr = src.graded ? await _grade(raw, w, h, absIdx / fps) : raw;
-          if (src.graded) {
-            if (_gradeCache.length > 40) _gradeCache.remove(_gradeCache.keys.first);
-            _gradeCache[key] = fr;
-          }
-        }
-        slotFrames.add(fr);
+        await raf.setPosition(i * fb);
+        final raw = await raf.read(fb);
+        if (raw.length != fb) return null;
+        slotFrames.add(raw); // RAW frames: the motion blur runs on the ungraded picture
       }
     } finally {
       await raf.close();
@@ -315,11 +311,11 @@ class MotionEngine {
         file.deleteSync();
       } catch (_) {}
     }
-    if (original) return slotFrames[0];
+    if (original) return _grade(slotFrames[0], w, h, c / fps); // the graded frame itself, no Motion S
 
     final u = MotionS.pack(s: settings, plan: plan, w: w, h: h, timeSeconds: c / fps);
     final res = await MotionWorker.instance.run(frames: slotFrames, w: w, h: h, center: plan.centerSlot, uniforms: u);
-    return res.rgba;
+    return _grade(res.rgba, w, h, c / fps); // batch 2B: motion blur first, THEN the colour grade (flares / glows / bevel stay un-smeared)
   }
 
   // ---------------------------------------------------------------------------------------------------------------
@@ -337,11 +333,11 @@ class MotionEngine {
     required bool Function() cancelled,
   }) async {
     lastError = null;
-    final plan = MotionS.plan(settings);
+    final fullPlan = MotionS.plan(settings);   // previous + current + next: decides how far the decode window reaches; the real plan is made per frame (clip ends)
     final total = math.max(1, (src.durationSec * fps).round());
     final fb = w * h * 4;
-    final back = plan.back;
-    final fwd = plan.fwd;
+    final back = fullPlan.back;
+    final fwd = fullPlan.fwd;
     final base = await getApplicationSupportDirectory();
     final outDir = Directory('${base.path}/motion_s');
     final work = Directory('${(await getTemporaryDirectory()).path}/motion_s_work');
@@ -357,7 +353,6 @@ class MotionEngine {
     // batch size from a ~190 MB source window
     final batch = (((190 * 1024 * 1024) ~/ fb) - back - fwd).clamp(4, 24).toInt();
     final rawCache = <int, Uint8List>{};
-    final gradedCache = <int, Uint8List>{};
     final started = DateTime.now();
     final tmpOut = File('${work.path}/final.mp4');
     CrashLog.begin('Motion S process', {'frames': total, 'size': '${w}x$h', 'fps': fps, 'mode': MotionS.modeOf(settings), 'graded': src.graded, 'codec': MotionS.intermediateCodec, 'mbps': MotionS.bitrateMbps});
@@ -435,39 +430,55 @@ class MotionEngine {
             return bytes;
           }
 
-          Future<Uint8List> frameAt(int idx) async {
-            idx = idx.clamp(0, total - 1).toInt();
-            if (!src.graded) return rawAt(idx);
-            final hit = gradedCache[idx];
-            if (hit != null) return hit;
-            final g = await _grade(await rawAt(idx), w, h, idx / fps);
-            gradedCache[idx] = g;
-            return g;
-          }
-
           for (int i = b0; i < b1; i++) {
             if (cancelled()) break;
+            // Batch 2B: RAW frames in, velocity vector motion blur on the raw picture, THEN the project grade (when there is one) on the blurred frame.
+            final plan = MotionS.plan(settings, hasPrev: i > 0, hasNext: i < total - 1);
             final slotFrames = <Uint8List>[];
             for (final off in plan.offsets) {
-              slotFrames.add(await frameAt(i + off));
+              slotFrames.add(await rawAt(i + off));
             }
             final u = MotionS.pack(s: settings, plan: plan, w: w, h: h, timeSeconds: i / fps);
             CrashLog.note('Motion S frame ${i + 1}/$total render START');
-            final res = await MotionWorker.instance.run(frames: slotFrames, w: w, h: h, center: plan.centerSlot, uniforms: u, toSurface: viaSurface);
+            // a plain file goes straight to the encoder (zero copy); a project needs the blurred pixels back for the grade
+            final res = await MotionWorker.instance.run(frames: slotFrames, w: w, h: h, center: plan.centerSlot, uniforms: u, toSurface: viaSurface && !src.graded);
             CrashLog.note('Motion S frame ${i + 1}/$total RETURNED status=${res.gpuStatus} native ${res.micros ~/ 1000} ms');
             if (res.gpuStatus == 2 || res.gpuStatus == 3) {
               lastError = 'The GPU stopped answering (status ${res.gpuStatus}). Try a lower processing size or fewer samples.';
               failed = true;
               break;
             }
+            Uint8List? finished = res.rgba; // the frame that goes to the encoder (null = it was presented to the Surface already)
+            if (src.graded) {
+              final gu = _gradeUniforms(w, h, i / fps);
+              if (viaSurface) {
+                CrashLog.note('Motion S frame ${i + 1}/$total grade (surface) START');
+                final g = await SurfaceGradeWorker.instance.grade(rgba: res.rgba, w: w, h: h, uniforms: gu, lut: _lutTable);
+                CrashLog.note('Motion S frame ${i + 1}/$total grade RETURNED rc=${g.rc} status=${g.gpuStatus}');
+                if (g.gpuStatus == 2 || g.gpuStatus == 3 || !g.presented) {
+                  lastError = 'A graded frame could not be handed to the video encoder (${g.error.isEmpty ? 'GPU status ${g.gpuStatus}' : g.error}).';
+                  failed = true;
+                  break;
+                }
+                finished = null;
+              } else {
+                final g = await GradeWorker.instance.grade(rgba: res.rgba, w: w, h: h, uniforms: gu, lut: _lutTable);
+                if (g.gpuStatus == 2 || g.gpuStatus == 3) {
+                  lastError = 'The GPU stopped answering while grading frame ${i + 1} (status ${g.gpuStatus}).';
+                  failed = true;
+                  break;
+                }
+                finished = g.rgba;
+              }
+            }
             if (viaSurface) {
-              if (res.gpuStatus != 0) {
+              if (!src.graded && res.gpuStatus != 0) {
                 lastError = 'A frame could not be handed to the video encoder (${vulkanLastSurfaceError().isEmpty ? 'GPU status ${res.gpuStatus}' : vulkanLastSurfaceError()}).';
                 failed = true;
                 break;
               }
             } else {
-              final nv12 = rgbaToNv12(res.rgba, w, h);
+              final nv12 = rgbaToNv12(finished!, w, h);
               if (nv12 == null || !await NativeEncoder.queueNv12(nv12, i)) {
                 lastError = 'The video encoder did not accept frame ${i + 1}.';
                 failed = true;
@@ -477,7 +488,6 @@ class MotionEngine {
             done++;
             // keep only the frames the next outputs can still need
             rawCache.removeWhere((k, _) => k < i + 1 - back - 1);
-            gradedCache.removeWhere((k, _) => k < i + 1 - back - 1);
             final p = done / total;
             final elapsed = DateTime.now().difference(started).inSeconds;
             final eta = done > 2 ? ((elapsed / done) * (total - done)).round() : -1;
@@ -544,15 +554,13 @@ class MotionEngine {
     return '${m}m ${(s % 60).toString().padLeft(2, '0')}s';
   }
 
-  void dispose() {
-    _gradeCache.clear();
-  }
+  void dispose() {}
 }
 
 // =============================================================================
 // MotionExportFeed: renderFrameToRgba / prepareFrames for ExportSuite.showExportSheet (the LIVE export path).
 // Mirrors ProjectScreen._prepareExportFrames / _readBatchFrame / _renderFrameForExport, but the source is the processed video, and
-// no grade is applied (the frames already contain it).
+// no grade is applied (the frames already contain it: since batch 2B the grade is baked in AFTER the motion blur, inside processAll).
 // =============================================================================
 class MotionExportFeed {
   MotionExportFeed({required this.path, required this.width, required this.height})

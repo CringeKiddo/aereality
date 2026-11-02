@@ -268,6 +268,7 @@ Float32List packProjectUniforms(
       uniforms[offset + 182] = layer.flareSceneTint;
       uniforms[offset + 183] = layer.flareCoreWhite;
       uniforms[offset + 185] = layer.flareHaze; // v5 flare: Haze Veil
+      uniforms[offset + 186] = layer.flareStretch; // batch 2B: Flare Width / Stretch (mirror of main.dart)
     }
 
     MathOps.packLayers(uniforms, [for (final l in project.layers) l.mathOps]); // batch 14, kept in sync with main.dart

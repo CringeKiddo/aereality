@@ -67,6 +67,9 @@ class TimeSlice {
   // ---- wipe shape (step C) ----
   static const int cutPoint = 22; // where in the wipe (0..1) the cut lands. 0.40 = just before the middle (owner's choice, was 0.50)
   static const int bandWidth = 23; // C2: width of the moving band as a fraction of the frame along Direction (0.1 .. 1.0, default 0.35)
+  static const int shape = 24; // batch 2B: 0 = Linear (strips along Direction, 90 = horizontal strips), 1 = Radial (sectors around the frame centre). Old presets: 0.
+  static const int shapeLinear = 0, shapeRadial = 1;
+  static const int frameStep = 25; // batch 2B: frames per slice. > 0 = smooth After-Effects-style slices (strip k shows frame t + k x step); 0 = the classic wave. Presets saved before this have 0.
 
   // ---- ring (C2) ----
   static const int ringHalf = 11; // R: the ring holds the frames cutFrame - 11 .. cutFrame + 11 (C3: was 4)
@@ -77,7 +80,7 @@ class TimeSlice {
     f[on] = 0.0;
     f[placement] = placeGlobal.toDouble();
     f[direction] = 90.0;
-    f[sliceCount] = 12.0;
+    f[sliceCount] = 18.0; // batch 2B: 18 slices (was 12) for the 0.3 s wipe; presets that were saved with another count keep theirs
     f[frameOffset] = 0.0;
     f[interpFrames] = 1.0;
     f[feather] = 0.25; // [ASSUMED]
@@ -98,6 +101,8 @@ class TimeSlice {
     f[motMinDuration] = 0.15; // [ASSUMED] step E
     f[cutPoint] = 0.40;
     f[bandWidth] = 0.35;
+    f[shape] = shapeLinear.toDouble();
+    f[frameStep] = 1.0;
     return f;
   }
 
@@ -133,6 +138,8 @@ class TimeSlice {
     d[cutPoint] = _c(d[cutPoint], 0.2, 0.8);
     if (d[bandWidth] < 0.05) d[bandWidth] = 0.35; // presets saved before C2 have 0 here
     d[bandWidth] = _c(d[bandWidth], 0.1, 1.0);
+    d[frameStep] = _c(d[frameStep], 0.0, 2.0);
+    d[shape] = d[shape].round() == shapeRadial ? shapeRadial.toDouble() : shapeLinear.toDouble();
     return d;
   }
 

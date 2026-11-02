@@ -914,13 +914,13 @@ class EditorViews {
           },
         ),
       ),
-      row('Bevel Intensity', Bevel.intensity, 0.0, 10.0),
-      row('Gloss Strength', Bevel.gloss, 0.0, 8.0),
-      row('Shininess', Bevel.shininess, 1.0, 256.0),
+      row('Bevel Intensity (height of the lines / edges)', Bevel.intensity, 0.0, 10.0),
+      row('Gloss Strength (specular intensity)', Bevel.gloss, 0.0, 8.0),
+      row('Shininess (tightness of the highlight)', Bevel.shininess, 1.0, 256.0),
       row('Light X (left / right)', Bevel.lightX, -1.0, 1.0),
       row('Light Y (bottom / top)', Bevel.lightY, -1.0, 1.0),
       row('Mix', Bevel.mix, 0.0, 1.0),
-      _note('Applied once to the whole finished frame (after Time Slice, before dither). If several layers have it on, the first one is used.'),
+      _note('Normal map from the picture\'s luminance (Sobel) + Blinn-Phong specular: only the steep edges / ridges are lit, flat areas stay exactly as they are, so lines and text read as 3D metal. Applied once to the whole finished frame (after Time Slice, before dither). If several layers have it on, the first one is used.'),
     ];
   }
   // =============================================================================
@@ -1124,9 +1124,10 @@ class EditorViews {
           child: Text('ANAMORPHIC FLARES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Flare Width / Length', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Length (How Far It Reaches)', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Width / Stretch (Wider Body, Strong Out To The Sides)', val: cur.flareStretch, min: 0.0, max: 1.0, onChanged: (v) { cur.flareStretch = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Colour Respect (Low = Transparent White Haze / High = Colours From The Video)', val: cur.flareSceneTint, min: 0.0, max: 1.0, onChanged: (v) { cur.flareSceneTint = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Flare Source Threshold (Higher = Fewer Flares)', val: cur.flareThreshold, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThreshold = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Source Threshold (Flares Fade In Smoothly As Light Crosses It)', val: cur.flareThreshold, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThreshold = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Origin (0 Highlight / 1 Frame Edges Inward)', val: cur.flareOrigin, min: 0.0, max: 1.0, onChanged: (v) { cur.flareOrigin = v; cur.thinStreakFromEdge = false; onChanged(); }, onEnded: onEnded),
         Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
@@ -1138,11 +1139,11 @@ class EditorViews {
             title: const Text('ADVANCED FLARE SETTINGS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
             children: [
               buildSliderRow(context: context, title: 'Flare Opacity', val: cur.thinStreakOpacity, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakOpacity = v; onChanged(); }, onEnded: onEnded),
-              buildSliderRow(context: context, title: 'Flare Softness (Crisp Band to Soft Glow That Breaks Apart And Spreads)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare Softness (0 = Razor-Sharp Hard Line, 1 = Wide Soft Haze)', val: cur.thinStreakSoftness, min: 0.0, max: 1.0, onChanged: (v) { cur.thinStreakSoftness = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare Spacing (Keep Only The Strongest Flare Within This Distance, 0 = Off)', val: cur.flareSpacing, min: 0.0, max: 0.5, onChanged: (v) { cur.flareSpacing = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare Thickness (Band Height, Relative To The Frame)', val: cur.flareThickness, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThickness = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare Falloff (Long Fade to Short)', val: cur.flareFalloff, min: 0.0, max: 1.0, onChanged: (v) { cur.flareFalloff = v; onChanged(); }, onEnded: onEnded),
-              buildSliderRow(context: context, title: 'Flare White Core', val: cur.flareCoreWhite, min: 0.0, max: 1.0, onChanged: (v) { cur.flareCoreWhite = v; onChanged(); }, onEnded: onEnded),
+              buildSliderRow(context: context, title: 'Flare White Core (Hot Centre Of The Band)', val: cur.flareCoreWhite, min: 0.0, max: 1.0, onChanged: (v) { cur.flareCoreWhite = v; onChanged(); }, onEnded: onEnded),
               buildSliderRow(context: context, title: 'Flare Haze Veil (Wide Soft Glow Around The Flaring Light)', val: cur.flareHaze, min: 0.0, max: 1.0, onChanged: (v) { cur.flareHaze = v; onChanged(); }, onEnded: onEnded),
             ],
           ),
@@ -2373,6 +2374,28 @@ class EditorViews {
           ),
         );
 
+    // Batch 2B: one-tap looks modelled on the 3D depth-map reference videos (STRENGTH / VERSUS / MYROXZ / ALUCARD). They only set the finish + depth fields; the glow,
+    // colour wheels and everything else the user dialled in stay untouched.
+    void applyLook(String name) {
+      switch (name) {
+        case 'depth':   // heavy extruded metal, soft studio light from the upper left
+          fx.depthScale = 1.7; fx.depthGloss = 1.5; fx.shininess = 70; fx.lightAngle = 2.2;
+          fx.style = 0.0; fx.bandSoft = 0.30; project.textChromeIntensity = 1.8; project.textBevelDepth = 1.6; project.textSpecularGlint = 1.0;
+          break;
+        case 'chrome':  // thin razor-lit chrome edge, tight highlight (ALUCARD)
+          fx.depthScale = 1.2; fx.depthGloss = 2.3; fx.shininess = 150; fx.lightAngle = 1.2;
+          fx.style = 0.0; fx.bandSoft = 0.12; project.textChromeIntensity = 2.4; project.textBevelDepth = 1.2; project.textSpecularGlint = 1.4;
+          break;
+        case 'ice':     // soft cold silk script (MYROXZ)
+          fx.depthScale = 0.9; fx.depthGloss = 1.1; fx.shininess = 40; fx.lightAngle = 1.9;
+          fx.style = 1.0; fx.bandSoft = 0.65; project.textChromeIntensity = 1.2; project.textBevelDepth = 0.9; project.textSpecularGlint = 0.8;
+          break;
+        default:        // 'flat' = the old look (no depth map)
+          fx.depthScale = 0.0;
+      }
+      commit();
+    }
+
     Widget action(String label, IconData icon, VoidCallback run) => OutlinedButton.icon(
           style: OutlinedButton.styleFrom(
             foregroundColor: accent,
@@ -2409,8 +2432,8 @@ class EditorViews {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Text Suite (T button)', style: TextStyle(color: project.textSuiteEnabled ? Colors.white : Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
-                          const Text('Metal / silk, deep glow, vector mode', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                          Text('Text Suite  -  3D Metal Text (T button)', style: TextStyle(color: project.textSuiteEnabled ? Colors.white : Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+                          const Text('Depth-map metal, bevel, deep glow, vector warp', style: TextStyle(color: Colors.white38, fontSize: 11)),
                         ],
                       ),
                     ),
@@ -2435,13 +2458,30 @@ class EditorViews {
             decoration: BoxDecoration(color: const Color(0xFF101014), borderRadius: BorderRadius.circular(10)),
             child: const Center(
               child: Text(
-                'Turn the Text Suite on here or with the T button at the top.\nThe draggable box appears over the preview: text inside it gets the metal / silk finish, deep glow and vector warp.',
+                'Turn the Text Suite on here or with the T button at the top (tap = on / off, hold = open this menu).\nThe draggable box appears over the preview: the text inside it becomes 3D metal (depth map + specular on the edges), with deep glow and vector warp.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.4),
               ),
             ),
           )
         else ...[
+          hdr('LOOKS (one tap, you can fine-tune everything below)'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Wrap(spacing: 8, runSpacing: 8, children: [
+              action('3D Depth Metal', Icons.layers_rounded, () => applyLook('depth')),
+              action('Chrome Edge', Icons.flare_rounded, () => applyLook('chrome')),
+              action('Ice Silk', Icons.ac_unit_rounded, () => applyLook('ice')),
+              action('Flat (old look)', Icons.crop_square_rounded, () => applyLook('flat')),
+            ]),
+          ),
+
+          hdr('3D DEPTH METAL (normal map from the text + highlight only on the steep edges)'),
+          sl('Depth (height of the letters, 0 = off)', fx.depthScale, 0.0, 3.0, (v) => fx.depthScale = v),
+          sl('Gloss (specular strength on the edges)', fx.depthGloss, 0.0, 3.0, (v) => fx.depthGloss = v),
+          sl('Shininess (tightness of the highlight)', fx.shininess, 4.0, 256.0, (v) => fx.shininess = v),
+          sl('Light Direction (0 right, 1.57 top, 3.14 left)', fx.lightAngle, -3.14159, 3.14159, (v) => fx.lightAngle = v),
+
           hdr('OVERLAY'),
           sl('Text Overlay Opacity', fx.opacity, 0.0, 1.0, (v) => fx.opacity = v),
 

@@ -1,10 +1,9 @@
 // =============================================================================
 // AEReality / Shaderly - Motion S screen (batch 9)
 //
-// Full screen opened from the main-menu "Motion S" button (it is NOT a tab). Source = a saved project (its grade is applied first) or a
-// plain video file (raw). Two modes: SMEAR (directional / radial accumulation smear of the frame, no flow) and DUPLICATE (echo; the old MAIN
-// motion blur mode was removed), each with its own settings, plus shared settings and the optional
-// Glitch Edge effect. Preview is paused by default, deliberately low fps / low quality (batch 2 rule: playing / scrubbing = lower
+// Full screen opened from the main-menu "Motion S" button (it is NOT a tab). Source = a saved project (its grade is applied AFTER the blur) or a
+// plain video file (raw). Batch 2B: ONE effect, the velocity vector motion blur (optical flow, RSMB style; the Smear angle / radial controls and the
+// DUPLICATE mode were removed), plus shared settings and the optional Glitch Edge effect. Preview is paused by default, deliberately low fps / low quality (batch 2 rule: playing / scrubbing = lower
 // quality, paused = sharpen). START PROCESS renders every frame on Vulkan in a worker isolate, with the ExportClockPanel as progress,
 // a Cancel button, and then asks (immediately, no hold) whether to export through the live export path (ExportSuite).
 // =============================================================================
@@ -445,7 +444,7 @@ class _MotionSScreenState extends State<MotionSScreen> {
         ),
         const SizedBox(height: 14),
         ShelfPanel(
-          title: 'PROJECTS (graded)',
+          title: 'PROJECTS (grade applied after the blur)',
           icon: Icons.bookmarks_rounded,
           child: _projects.isEmpty
               ? const Padding(
@@ -691,72 +690,41 @@ class _MotionSScreenState extends State<MotionSScreen> {
   }
 
   List<Widget> _settingsBody(Color accent, MotionSource src) {
-    final m = MotionS.modeOf(_s);
     final blendNames = <String>['Default', ...LayerBlendMode.values.map((b) => b.name)];
     return [
-      // mode
+      // Batch 2B: ONE effect, the velocity vector motion blur (the SMEAR / DUPLICATE mode switch and the whole Duplicate panel are gone).
       ShelfPanel(
-        title: 'MODE',
-        icon: Icons.blur_linear_rounded,
-        child: _chips(
-          'Each mode has its own settings below',
-          const ['SMEAR', 'DUPLICATE'],
-          m == MotionS.modeDuplicate ? 1 : 0,
-          (i) {
-            _s[MotionS.mode] = (i == 0 ? MotionS.modeSmear : MotionS.modeDuplicate).toDouble();
-            _settingChanged();
-          },
-        ),
+        title: 'VELOCITY VECTOR BLUR',
+        icon: Icons.speed_rounded,
+        child: Column(children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
+            child: Text(
+                'Like ReelSmart Motion Blur: the blur follows the real motion of the footage (optical-flow velocity of every pixel, measured from the previous and the next frame). '
+                'Where nothing moves there is NO blur; a spinning shot gives a swirl, a zoom gives a radial blur. It runs on the raw video, BEFORE the colour grade, so flares and glows are never smeared.',
+                style: TextStyle(color: Colors.white38, fontSize: 11)),
+          ),
+          _sl('Shutter (trail length in frames of motion)', MotionS.vShutter, 0.0, 4.0),
+          _sl('Shutter phase (-1 trails behind the motion, 0 centred, +1 leads it)', MotionS.vPhase, -1.0, 1.0),
+          _sl('Streak (0 = classic vector blur, 1 = light smear)', MotionS.vStreak, 0.0, 1.0),
+          _sl('Max trail (share of the frame diagonal)', MotionS.maxLen, 0.0, 0.6),
+          _sl('Min speed (pixels per frame; slower = no blur)', MotionS.vMinSpeed, 0.0, 8.0),
+          _switchRow('Sub-pixel vector refinement', MotionS.vRefine, hint: 'Lucas-Kanade refinement of the motion vectors on a 4 px grid (sharper edges of the blur). Off = coarse flow only, faster.'),
+        ]),
       ),
       const SizedBox(height: 10),
-
-      // mode specific
-      if (m == MotionS.modeSmear)
-        ShelfPanel(
-          title: 'SMEAR',
-          icon: Icons.auto_graph_rounded,
-          child: Column(children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: Text('Directional light smear: every pixel gathers the brightest picture along the trail, so streaks stay solid and sharp. The trail comes from the angle / length below (it does not read the motion of the video), so it is the same on every frame.', style: TextStyle(color: Colors.white38, fontSize: 11)),
-            ),
-            _sl('Smear length (of frame)', MotionS.smLength, 0.0, 0.6),
-            _sl(_s[MotionS.smRadial] > 0.5 ? 'Smear angle (0 zoom, 90 spin)' : 'Smear angle (0 right, 90 up)', MotionS.smAngle, 0.0, 360.0),
-            _switchRow('Radial trails', MotionS.smRadial, hint: 'Trails run from the frame centre (zoom) or around it (spin) instead of in one straight direction.'),
-            _sl('Highlight threshold (0 = all pixels)', MotionS.smHiThresh, 0.0, 1.0),
-            _sl('Chromatic dispersion', MotionS.smDisp, 0.0, 0.6),
-            _sl('Streak sharpness', MotionS.sharp, 0.0, 1.0),
-            _sl('Trailing samples (minimum)', MotionS.smSamples, 8.0, 96.0),
-            _sl('Trail falloff', MotionS.smFalloff, 0.0, 1.0),
-            _sl('Head strength (keeps the picture)', MotionS.smHead, 0.0, 1.0),
-          ]),
-        ),
-      if (m == MotionS.modeDuplicate)
-        ShelfPanel(
-          title: 'DUPLICATE  (echo)',
-          icon: Icons.layers_rounded,
-          child: Column(children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: Text('Real earlier / later frames of the video, composited with falloff. Not copies of one still.', style: TextStyle(color: Colors.white38, fontSize: 11)),
-            ),
-            _sl('Duplicate count', MotionS.dupCount, 1.0, 12.0),
-            _sl('Duplicate spacing (frames)', MotionS.dupSpacing, 1.0, 4.0),
-            _sl('Opacity falloff', MotionS.dupFalloff, 0.0, 1.0),
-            _sl('First duplicate opacity', MotionS.dupStartOpacity, 0.0, 1.0),
-            _chips('Direction of offset', const ['Past', 'Future', 'Both'], _s[MotionS.dupDirection].round().clamp(0, 2).toInt(), (i) {
-              _s[MotionS.dupDirection] = i.toDouble();
-              _settingChanged();
-            }),
-            _chips('How duplicates combine', const ['Screen', 'Add', 'Lighten', 'Blend', 'Over'], _s[MotionS.dupOp].round().clamp(0, 4).toInt(), (i) {
-              _s[MotionS.dupOp] = i.toDouble();
-              _settingChanged();
-            }),
-            _sl('Ghost smear (along the motion)', MotionS.dupSmear, 0.0, 1.0),
-            _sl('Ghost drift (along the motion path)', MotionS.dupDrift, -1.0, 1.0),
-            _sl('Tint amount (older = more)', MotionS.dupTintAmt, 0.0, 1.0),
-          ]),
-        ),
+      ShelfPanel(
+        title: 'LOOK',
+        icon: Icons.auto_graph_rounded,
+        child: Column(children: [
+          _sl('Highlight threshold (0 = all pixels)', MotionS.smHiThresh, 0.0, 1.0),
+          _sl('Chromatic dispersion', MotionS.smDisp, 0.0, 0.6),
+          _sl('Streak sharpness', MotionS.sharp, 0.0, 1.0),
+          _sl('Samples (minimum, more are added on long trails)', MotionS.smSamples, 8.0, 96.0),
+          _sl('Trail falloff', MotionS.smFalloff, 0.0, 1.0),
+          _sl('Head strength (keeps the sharp picture)', MotionS.smHead, 0.0, 1.0),
+        ]),
+      ),
       const SizedBox(height: 10),
 
       // shared
@@ -787,7 +755,6 @@ class _MotionSScreenState extends State<MotionSScreen> {
           ),
           _sl('Blend with original', MotionS.origMix, 0.0, 1.0),
           _sl('Protect detail (line art)', MotionS.protect, 0.0, 1.0),
-          if (m != MotionS.modeDuplicate) _sl('Trail brightness', MotionS.intensity, 0.0, 3.0),
           SmoothSliderRow(
             title: 'Preview quality',
             val: _previewQ,
@@ -859,7 +826,7 @@ class _MotionSScreenState extends State<MotionSScreen> {
               return Padding(
                 padding: const EdgeInsets.fromLTRB(6, 6, 6, 8),
                 child: Text(
-                  '${sz[0]} x ${sz[1]}  -  $frames frames  -  ${src.graded ? 'with the project grade' : 'raw video, no grade'}',
+                  '${sz[0]} x ${sz[1]}  -  $frames frames  -  ${src.graded ? 'blur on the raw video, then the project grade' : 'raw video, no grade'}',
                   style: const TextStyle(color: Colors.white38, fontSize: 11),
                 ),
               );
