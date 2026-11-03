@@ -257,6 +257,8 @@ class VulkanBridge {
   static _P23CountDart? _p23CountFn;
   static _ProcessNv12Dart? _processNv12Fn; // batch 18B (video export, NV12)
   static _RgbaToNv12Dart? _rgbaToNv12Fn;
+  static _GetStatusDart? _resetFn; // batch 3: reset_vulkan() (watchdog engine restart)
+  static _GetStatusDart? _deviceLostCountFn; // batch 3: get_device_lost_count()
   static _InitTextDart? _initErrorFn; // batch 17A
   static _InitTextDart? _initLogFn;
 
@@ -301,6 +303,13 @@ class VulkanBridge {
           } catch (_) {
             _initErrorFn = null; // older native lib without boot diagnostics
             _initLogFn = null;
+          }
+          try {
+            _resetFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('reset_vulkan');
+            _deviceLostCountFn = _lib!.lookupFunction<_GetStatusC, _GetStatusDart>('get_device_lost_count');
+          } catch (_) {
+            _resetFn = null; // native lib without the batch 3 engine reset
+            _deviceLostCountFn = null;
           }
           try {
             _initVulkanAsyncFn = _lib!.lookupFunction<_InitVulkanC, _InitVulkanDart>('init_vulkan_async');
@@ -471,6 +480,38 @@ bool initVulkan(Uint8List shaderBytes, int precisionBits, {String? cacheDir}) {
   } finally {
     calloc.free(ptr);
     if (dirPtr != ffi.nullptr) calloc.free(dirPtr);
+  }
+}
+
+/// Batch 3: true when this native lib can rebuild a dead GPU context (reset_vulkan).
+bool get vulkanCanReset {
+  VulkanBridge._ensureLibraryLoaded();
+  return VulkanBridge._resetFn != null;
+}
+
+/// Batch 3: destroys the current Vulkan context (lost, hung or killed by the OS) and rebuilds it on a native thread from the shader and cache directory of the
+/// last start. Returns at once; poll [vulkanInitState] (0 = rebuilding, 1 = ready, -1 = failed, [vulkanLastInitError] has the text). false = the native lib cannot
+/// reset or there was nothing to rebuild from.
+bool resetVulkan() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    final fn = VulkanBridge._resetFn;
+    if (fn == null) return false;
+    VulkanBridge._isVulkanInitialized = false;
+    return fn() == 1;
+  } catch (e) {
+    debugPrint('resetVulkan error: $e');
+    return false;
+  }
+}
+
+/// Batch 3: how many VK_ERROR_DEVICE_LOST the native side has seen (explicit device-lost counter, 0 on an older lib).
+int vulkanDeviceLostCount() {
+  VulkanBridge._ensureLibraryLoaded();
+  try {
+    return VulkanBridge._deviceLostCountFn?.call() ?? 0;
+  } catch (_) {
+    return 0;
   }
 }
 

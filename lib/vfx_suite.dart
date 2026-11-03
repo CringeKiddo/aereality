@@ -270,7 +270,8 @@ class VfxSuite {
       children.add(s(Vfx.speedVar, 'Speed Variation (each streak falls at its own speed)', 0.0, 1.0));
     } else {
       children.add(s(Vfx.angle, 'Angle (deg, 90 = up, 0 = right)', 0.0, 360.0));
-      children.add(s(Vfx.wander, 'Wander (how much each one circles around)', 0.0, 1.0));
+      children.add(_chips(l, 'Wander Mode', Vfx.wanderMode, const ['Directional (Direction / Angle)', 'Random (smooth noise drift)'], onChanged, onEnded));
+      children.add(s(Vfx.wander, l[Vfx.wanderMode] > 0.5 ? 'Wander (how far each one strays on its own path)' : 'Wander (how much each one circles around)', 0.0, 1.0));
     }
     children.add(_chips(l, 'Direction', Vfx.direction, rain ? const ['Forward', 'Reverse', 'Hold'] : const ['Forward', 'Reverse', 'Orbit in place'],
         onChanged, onEnded));
@@ -290,10 +291,10 @@ class VfxSuite {
 
     // ---- mode specific ----
     if (bubble) {
-      children.add(_hdr('GLASS BUBBLE'));
-      children.add(s(Vfx.refraction, 'Refraction (magnify / bend the picture)', 0.0, 1.0));
+      children.add(_hdr('WATER DROPLET'));
+      children.add(s(Vfx.refraction, 'Refraction (droplet lens: flips + magnifies the picture)', 0.0, 1.0));
       children.add(s(Vfx.dispersion, 'Colour Split (edge dispersion)', 0.0, 1.0));
-      children.add(s(Vfx.rim, 'Rim Light', 0.0, 1.5));
+      children.add(s(Vfx.rim, 'Rim Light (lit edge + dark opposite edge)', 0.0, 1.5));
       children.add(s(Vfx.specular, 'Specular Highlight', 0.0, 1.5));
       children.add(s(Vfx.innerLight, 'Inner Light', 0.0, 1.0));
       children.add(s(Vfx.defocus, 'Far Bubbles Defocus', 0.0, 1.0));
@@ -301,7 +302,7 @@ class VfxSuite {
       children.add(_hdr('RAIN'));
       children.add(s(Vfx.streak, 'Streak Length', 0.0, 1.0));
       children.add(s(Vfx.rainBright, 'Streak Brightness', 0.0, 2.0));
-      children.add(s(Vfx.refraction, 'Refraction (lens in each drop)', 0.0, 1.0));
+      children.add(s(Vfx.refraction, 'Refraction (bend of the picture inside a streak)', 0.0, 1.0));
       children.add(s(Vfx.depth, 'Depth (far layers dimmer + softer)', 0.0, 1.0));
     } else {
       children.add(_hdr('PARTICLES'));
@@ -522,21 +523,29 @@ class VfxSuite {
         _note('One wipe on every detected cut.'),
         s(TimeSlice.cutPoint, 'Cut lands at (position inside the wipe, 0.40 = just before the middle)', 0.2, 0.8),
 
+        _hdr('LOOK'),
+        _chips(l, 'Look', TimeSlice.look, const ['Blend (smooth, like the reference edits)', 'Classic slices'], onChanged, onEnded),
+        _note('Blend: a soft wave of different moments sweeps across the frame; inside it the neighbouring frames are blended (optical-flow look) and the picture is smeared along the slice direction. Classic slices: the old hard strips.'),
+        if (l[TimeSlice.look].round() == TimeSlice.lookBlend) ...[
+          s(TimeSlice.blurFrames, 'Frame Blend (frames mixed inside the wave, 0 = none)', 0.0, 12.0),
+          s(TimeSlice.smear, 'Smear (soft blur along the slice direction inside the wave)', 0.0, 1.0),
+        ],
+
         _hdr('SLICES'),
         _chips(l, 'Slice shape', TimeSlice.shape, const ['Horizontal / Linear', 'Radial'], onChanged, onEnded),
-        _note('Every slice shows a different moment of the clip (ring frames -11 .. +11 around the cut). A time wave sweeps over the slices: Horizontal cuts the frame into strips along Direction (90 = stacked top to bottom), Radial into sectors around the centre (Direction rotates the start).'),
-        whole(TimeSlice.direction, 'Direction (deg, 90 = horizontal strips, top to bottom)', 0.0, 360.0),
-        whole(TimeSlice.sliceCount, 'Slices (1 - 64, default 18)', 1.0, 64.0),
-        s(TimeSlice.frameStep, 'Frames per slice (1 = every strip one frame apart, After Effects style; 0 = classic wave)', 0.0, 2.0),
-        _note('Smooth mode: strip k shows the frame k x (frames per slice) away from the middle strip, so 18 slices x 1 frame = 18 consecutive frames on screen at once (0.3 s at 60 fps). The ring holds +-11 frames, so Slices x Frames per slice beyond 22 is cut off. The wipe length stays what Wipe Duration says; the preview runs at 24 fps, so it shows fewer wipe frames than a 60 fps export.'),
-        s(TimeSlice.feather, 'Feather (blends the TIME of neighbouring slices: 0 = steps, 1 = fluid)', 0.0, 1.0),
+        whole(TimeSlice.direction, 'Direction (deg, 90 = wave moves top to bottom, 270 = bottom to top)', 0.0, 360.0),
+        whole(TimeSlice.sliceCount, 'Slices (1 - 64, 1-2 = one or two soft in-between bands, many = continuous)', 1.0, 64.0),
+        if (l[TimeSlice.look].round() == TimeSlice.lookClassic)
+          s(TimeSlice.frameStep, 'Frames per slice (1 = every strip one frame apart, 0 = classic wave)', 0.0, 2.0),
+        s(TimeSlice.feather, 'Feather (soft slice borders: 0 = hard steps, 1 = fluid)', 0.0, 1.0),
         s(TimeSlice.bandWidth, 'Wave Width (share of the frame the time wave covers)', 0.1, 1.0),
         _toggle(l, 'Interp Frames (blend neighbouring frames = silky, off = steps)', TimeSlice.interpFrames, onChanged, onEnded),
         whole(TimeSlice.frameOffset, 'Frame Offset (shifts the slice times, frames)', -4.0, 4.0),
 
         _hdr('WIPE'),
         s(TimeSlice.wipeDuration, 'Wipe Duration (seconds)', 0.1, wipeMax),
-        _note('Wipe max: ${cap(24)} s (24 fps), ${cap(30)} s (30 fps), ${cap(60)} s (60 fps). A longer setting is limited to this by the frame rate of the clip.'),
+        whole(TimeSlice.targetFps, 'Preview frame rate (the wipe is measured in this: 60 fps x 0.30 s = 18 wipe frames; export uses the export fps)', 24.0, 120.0),
+        _note('The wipe always has duration x fps frames (0.30 s = 18 frames at 60 fps, 9 at 30 fps, the same maths for a 1 s or a 60 s clip). The preview plays on a 24 fps grid, so it shows fewer of those frames while playing; pause on a frame inside the wipe to see it as exported. Wipe max: ${cap(24)} s (24 fps), ${cap(30)} s (30 fps), ${cap(60)} s (60 fps).'),
         _chips(l, 'Overlap', TimeSlice.overlap, const ['Override', 'Queue', 'Skip later'], onChanged, onEnded),
         _note('Two cuts close together: Override = the new cut takes the wipe over, Queue = it waits for the running wipe, Skip later = it is ignored.'),
 
@@ -562,6 +571,8 @@ class VfxSuite {
                   whole(TimeSlice.cutThreshold, 'Threshold (scene score that counts as a cut, lower = more cuts)', 1.0, 60.0),
                   s(TimeSlice.cutMinGap, 'Minimum Gap (seconds, closer cuts count as one)', 0.0, 1.0),
                   _toggle(l, 'Flash Reject (a double spike is a flash, not a cut)', TimeSlice.cutFlashReject, onChanged, onEnded),
+                  _chips(l, 'Slides / pushes', TimeSlice.shiftOff, const ['Also trigger', 'Hard cuts only'], onChanged, onEnded),
+                  if (l[TimeSlice.shiftOff] < 0.5) s(TimeSlice.shiftSens, 'Shift Sensitivity (higher = smaller shifts trigger a wipe)', 0.05, 1.0),
                   s(TimeSlice.cutFlashWindow, 'Flash Window (seconds)', 0.0, 0.5),
                   _note('The first run scans the video once (cached afterwards); changing these values only re-detects.'),
                 ],

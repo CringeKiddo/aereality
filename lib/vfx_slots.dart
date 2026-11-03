@@ -38,6 +38,9 @@ class Vfx {
   // ---- particle ----
   static const int colorSrc = 35, partColor = 36, partBright = 37, reactSize = 38, reactInvert = 39, reactThr = 40,
       twinkle = 42;
+  // ---- batch 3: wander mode (bubbles + particles). 0 = Directional (Direction / Angle / Orbit as chosen), 1 = Random (smooth noise drift: no straight lines, no circling) ----
+  static const int wanderMode = 41;
+  static const int wanderDirectional = 0, wanderRandom = 1;
   // ---- how it works with the media (all modes) ----
   static const int maskMode = 44, maskThr = 45, maskSoft = 46, pickup = 47;
 
@@ -84,6 +87,7 @@ class Vfx {
     f[reactInvert] = 0.0;
     f[reactThr] = 0.3;
     f[twinkle] = 0.3;
+    f[wanderMode] = wanderRandom.toDouble(); // batch 3: new layers drift randomly; a saved preset keeps what it stored
     f[maskMode] = 0.0;
     f[maskThr] = 0.5;
     f[maskSoft] = 0.3;

@@ -71,6 +71,17 @@ class TimeSlice {
   static const int shapeLinear = 0, shapeRadial = 1;
   static const int frameStep = 25; // batch 2B: frames per slice. > 0 = smooth After-Effects-style slices (strip k shows frame t + k x step); 0 = the classic wave. Presets saved before this have 0.
 
+  // ---- batch 3: BLEND look (the default; the slices are no longer hard strips but a soft, frame-blended, smeared time wave) ----
+  static const int look = 26; // 0 = Blend (new default: the look of the reference edits), 1 = Classic slices (the old strip / frames-per-slice look)
+  static const int blurFrames = 27; // temporal spread inside the band, in frames (half width): the frames around the slice time are averaged = the blended / optical-flow look
+  static const int smear = 28; // spatial smear along the slice direction inside the band (0..1 of the frame): the soft vertical blur of the reference edits
+  static const int targetFps = 29; // frame rate the wipe is measured in for the PREVIEW (the export always uses the export frame rate). 60 = 0.30 s -> 18 wipe frames
+  static const int shiftOff = 30; // 0 = also detect big shifts / slides / pushes between two clips (default), 1 = hard cuts only
+  static const int ver = 31; // 1 = saved with the batch 3 slots; older presets get the batch 3 defaults for slots 26..30
+  static const int lookBlend = 0, lookClassic = 1;
+  // detection sensitivity of the shift detector reuses cutThreshold (slot 16, lower = more triggers); its own slot is the one below
+  static const int shiftSens = 14; // 0.05 .. 1 (default 0.5); 0 in an old preset = default
+
   // ---- ring (C2) ----
   static const int ringHalf = 11; // R: the ring holds the frames cutFrame - 11 .. cutFrame + 11 (C3: was 4)
   static const int ringSlots = 2 * ringHalf + 1; // 23 (C3: was 9)
@@ -80,10 +91,10 @@ class TimeSlice {
     f[on] = 0.0;
     f[placement] = placeGlobal.toDouble();
     f[direction] = 90.0;
-    f[sliceCount] = 18.0; // batch 2B: 18 slices (was 12) for the 0.3 s wipe; presets that were saved with another count keep theirs
+    f[sliceCount] = 2.0; // batch 3: 2 slices (owner's favourite 1-2); the Blend look makes any count fluid, many slices just make the ramp finer
     f[frameOffset] = 0.0;
     f[interpFrames] = 1.0;
-    f[feather] = 0.25; // [ASSUMED]
+    f[feather] = 0.55; // batch 3: soft slice edges by default (the reference edits have no hard borders)
     f[mix] = 1.0;
     f[opacity] = 1.0;
     f[blend] = 0.0;
@@ -100,9 +111,16 @@ class TimeSlice {
     f[motThreshold] = 0.5; // [ASSUMED] step E
     f[motMinDuration] = 0.15; // [ASSUMED] step E
     f[cutPoint] = 0.40;
-    f[bandWidth] = 0.35;
+    f[bandWidth] = 0.40;
     f[shape] = shapeLinear.toDouble();
     f[frameStep] = 1.0;
+    f[look] = lookBlend.toDouble();
+    f[blurFrames] = 3.0;
+    f[smear] = 0.10;
+    f[targetFps] = 60.0;
+    f[shiftOff] = 0.0;
+    f[shiftSens] = 0.5;
+    f[ver] = 1.0;
     return f;
   }
 
@@ -112,10 +130,20 @@ class TimeSlice {
   static List<double> sanitize(List<double>? src) {
     final d = defaults();
     if (src == null) return d;
+    // a preset saved before batch 3 has 0 in the new slots: those must NOT switch the new look off, they keep the defaults
+    final bool legacy = src.length <= ver || src[ver] < 0.5;
     for (int i = 0; i < size && i < src.length; i++) {
+      if (legacy && (i == look || i == blurFrames || i == smear || i == targetFps || i == shiftOff || i == shiftSens || i == ver)) continue;
       final v = src[i];
       if (!v.isNaN && !v.isInfinite) d[i] = v;
     }
+    d[look] = d[look].round() == lookClassic ? lookClassic.toDouble() : lookBlend.toDouble();
+    d[blurFrames] = _c(d[blurFrames], 0.0, 12.0);
+    d[smear] = _c(d[smear], 0.0, 1.0);
+    d[targetFps] = _c(d[targetFps].roundToDouble(), 24.0, 120.0);
+    d[shiftOff] = d[shiftOff] >= 0.5 ? 1.0 : 0.0;
+    d[shiftSens] = d[shiftSens] < 0.05 ? 0.5 : _c(d[shiftSens], 0.05, 1.0);
+    d[ver] = 1.0;
     d[on] = d[on] >= 0.5 ? 1.0 : 0.0;
     d[placement] = d[placement].round() == placeLayer ? placeLayer.toDouble() : placeGlobal.toDouble();
     d[direction] = (((d[direction] % 360.0) + 360.0) % 360.0).roundToDouble() % 360.0; // C3: whole degrees

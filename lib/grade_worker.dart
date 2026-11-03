@@ -21,6 +21,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
+import 'gpu_watchdog.dart';
 import 'vulkan_bridge.dart';
 
 // ===== TEMPORARY DEBUG (batch 12 step B regression test) - REMOVE AFTER THE TEST =====
@@ -46,7 +47,9 @@ class GradeResult {
 }
 
 class GradeWorker {
-  GradeWorker._();
+  GradeWorker._() {
+    GpuWatchdog.onRestart.add(dispose); // a restart drops the (possibly hung) isolate; the next frame starts a fresh one
+  }
   static final GradeWorker instance = GradeWorker._();
 
   Isolate? _isolate;
@@ -103,7 +106,36 @@ class GradeWorker {
     Float32List? lut,
     bool nv12 = false,
   }) async {
-    final r = await _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
+    // batch 3: watchdog. A restart in progress: preview frames pass through unchanged (the UI never freezes), export frames wait for the engine.
+    if (GpuWatchdog.restarting.value) {
+      if (!nv12) return GradeResult(rgba, 1, 0);
+      await GpuWatchdog.waitReady();
+    }
+    GradeResult r;
+    try {
+      // an NV12 (export) frame may legitimately take long on a 4K clip: the 3 s rule is for the preview, the export gets 25 s before it is called hung
+      // while the engine is still booting (first start: up to ~90 s shader compile) a frame waits for the init thread: that is not a hang, no timeout then
+      final Future<GradeResult> core = _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
+      r = isVulkanReady() ? await core.timeout(nv12 ? const Duration(seconds: 25) : GpuWatchdog.frameTimeout) : await core;
+    } on TimeoutException {
+      GpuWatchdog.failed('no answer from the grade worker', immediate: true);
+      if (nv12) {
+        await GpuWatchdog.waitReady();
+        r = await _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
+      } else {
+        return GradeResult(rgba, 3, 0);
+      }
+    }
+    if (r.rgba.isEmpty) {
+      GpuWatchdog.failed('empty frame');
+    } else if (r.gpuStatus == 2) {
+      GpuWatchdog.failed('device lost', immediate: true);
+    } else if (r.gpuStatus == 0) {
+      GpuWatchdog.ok();
+    } else {
+      GpuWatchdog.failed('gpu status ${r.gpuStatus}');
+    }
+    GpuWatchdog.checkNative();
     if (kGradeHashDebug) {
       debugPrint('GRADEHASH n=${_gradeHashCounter++} t=${uniforms[0].toStringAsFixed(4)} ${w}x$h fnv1a=${_fnv1a32(r.rgba).toRadixString(16).padLeft(8, '0')}');
       debugPrint('P23COUNT ${vulkanPass23Count()}'); // C2 debug (own line so the GRADEHASH diff stays clean): +1 per graded frame
@@ -141,6 +173,11 @@ class GradeWorker {
       // Worker failed for this frame: do it inline once so the caller still gets a picture.
       debugPrint('GradeWorker: $e - inline fallback');
       _pending.remove(id);
+      if (GpuWatchdog.restarting.value) {
+        // the watchdog dropped this worker on purpose: never run a blocking native call on this isolate while the engine is rebuilt
+        if (!nv12) return GradeResult(rgba, 1, 0);
+        rethrow;
+      }
       return _inline(rgba, w, h, uniforms, lut, nv12);
     }
   }
@@ -207,7 +244,9 @@ void _workerMain(SendPort toMain) {
 // Message: [id, op, ...]  op 0 = ingest, 1 = emit, 2 = release.  Reply: [id, status, TransferableTypedData?, error]  (status 0 = ok, -1 = failed).
 // =============================================================================
 class TimeSliceWorker {
-  TimeSliceWorker._();
+  TimeSliceWorker._() {
+    GpuWatchdog.onRestart.add(dispose);
+  }
   static final TimeSliceWorker instance = TimeSliceWorker._();
 
   Isolate? _isolate;

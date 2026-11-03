@@ -45,6 +45,7 @@ import 'app_settings.dart'; // batch 16: SharedPreferences settings
 import 'app_theme.dart'; // batch 16: theme manager
 import 'motion_s_screen.dart'; // batch 9: Motion S (full screen, opened from the main menu)
 import 'time_slice_slots.dart'; // batch 12 step C2: wipe scheduler + packing
+import 'gpu_watchdog.dart'; // batch 3: GPU watchdog + "Restarting GPU..." banner
 import 'cut_detector.dart'; // batch 12: CutDetector (cut scan + detection for the Time Slice wipe scheduler)
 import 'video_proxy.dart'; // batch 18A: media probe + H.264 proxy for files the native player cannot use
 
@@ -110,8 +111,57 @@ class ShaderlyApp extends StatelessWidget {
             child: const BootGate(child: HomeScreen()), // loading screen until EngineBoot reports Ready
           ),
           debugShowCheckedModeBanner: false,
+          builder: (context, child) => Stack(
+            fit: StackFit.expand,
+            children: [
+              if (child != null) child,
+              const _GpuRestartBanner(),
+            ],
+          ),
         );
       },
+    );
+  }
+}
+
+/// Batch 3: small non-blocking banner while the GPU watchdog rebuilds the engine (and a short note when a restart failed). Touches pass through it.
+class _GpuRestartBanner extends StatelessWidget {
+  const _GpuRestartBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 56),
+            child: AnimatedBuilder(
+              animation: Listenable.merge(<Listenable>[GpuWatchdog.restarting, GpuWatchdog.lastProblem]),
+              builder: (context, _) {
+                final bool busy = GpuWatchdog.restarting.value;
+                final String problem = GpuWatchdog.lastProblem.value;
+                if (!busy && problem.isEmpty) return const SizedBox.shrink();
+                return Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.82), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (busy) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                        if (busy) const SizedBox(width: 10),
+                        Text(busy ? 'Restarting GPU...' : problem, style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1389,6 +1439,10 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   static const double kInteractiveScale = 0.5;
   static const int kInteractiveMinLongEdge = 480;
   bool _scrubbing = false;
+  // batch 3 (scrub fix): while the thumb is held the slider shows _scrubPos (a value that belongs to the finger alone: no player callback, seek result or
+  // playback tick can move it) and the GPU renderer is on hold (_gpuHold). The player is seeked ONCE, on release, and the grade restarts after it landed.
+  final ValueNotifier<double> _scrubPos = ValueNotifier<double>(0.0);
+  bool _gpuHold = false;
   Uint8List? _videoFrameRgba; // last decoded preview frame of the video (raw RGBA, _videoFrameW x _videoFrameH)
   int _videoFrameW = 0;
   int _videoFrameH = 0;
@@ -2007,6 +2061,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
   void _onScrubStart() {
     _scrubbing = true;
+    _gpuHold = true; // no grade / frame extraction while the finger is down
+    _scrubPos.value = _currentTimelinePosition.clamp(0.0, _videoDurationSeconds).toDouble();
     _scrubWasPlaying = _isPlaying;
     if (_isPlaying) unawaited(_pauseForScrub());
   }
@@ -2028,22 +2084,35 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  /// The slider value -> seconds. The slider maps its pixel width linearly onto [0, _videoDurationSeconds] (min / max are the real clip length of the
+  /// player, nothing hardcoded); this only clamps float noise at the ends.
+  double _scrubToSeconds(double v) => v.clamp(0.0, _videoDurationSeconds).toDouble();
+
   void _onScrubUpdate(double val) {
-    _setPos(val);
-    unawaited(_seekTo(val));
-    if (gPreviewEngine == PreviewEngine.adaptive) {
-      _applyGrade(forceExtract: true); // Adaptive: the frame under the thumb is graded while scrubbing
-    } // Smooth: nothing is graded until the thumb is released
+    final double t = _scrubToSeconds(val);
+    _scrubPos.value = t; // drag: only the thumb and the time text move
+    _posNotifier.value = t; // time text; _currentTimelinePosition (what the renderer reads) is NOT touched until release
   }
 
   Future<void> _onScrubEnd(double val) async {
-    _setPos(val);
+    final double target = _scrubToSeconds(val);
+    _scrubPos.value = target;
     final bool resume = _kResumeAfterScrub && _scrubWasPlaying;
     _scrubWasPlaying = false;
-    await _seekTo(val); // wait until the player really is on the frame
+    _setPos(target);
+    await _seekTo(target); // ONE seek, to the release position; waits until the player really is there
+    // sanity check: a player that landed far from the target (broken index) gets one more try before the frame is graded
+    try {
+      final c = _controller;
+      if (c != null && c.value.isInitialized) {
+        final double got = c.value.position.inMilliseconds / 1000.0;
+        if ((got - target).abs() > 1.0) await _seekTo(target);
+      }
+    } catch (_) {}
     _scrubbing = false; // sharpen after the scrub
+    _gpuHold = false; // the GPU renderer may run again
     if (!mounted) return;
-    _setPos(val);
+    _setPos(target);
     _applyGrade(forceExtract: true); // the exact frame under the thumb, full quality
     if (resume) await _togglePlayPause();
   }
@@ -2076,6 +2145,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   Future<void> _applyGrade({bool forceExtract = false}) async {
     // While playing, the picture is either the raw video (grade-paused-only mode) or the live loop below.
     if (_isPlaying) return;
+    if (_gpuHold) return; // batch 3: the finger is on the timeline; _onScrubEnd grades the frame it lands on
     if (_isVulkanProcessing) {
       _needsReprocess = true;
       if (forceExtract) _pendingExtract = true;
@@ -2841,7 +2911,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     return h;
   }
 
-  String _tsDetKey(List<double> s) => '${_project.mediaPath}|${s[TimeSlice.cutThreshold]}|${s[TimeSlice.cutMinGap]}|${s[TimeSlice.cutFlashReject]}|${s[TimeSlice.cutFlashWindow]}';
+  String _tsDetKey(List<double> s) => '${_project.mediaPath}|${s[TimeSlice.cutThreshold]}|${s[TimeSlice.cutMinGap]}|${s[TimeSlice.cutFlashReject]}|${s[TimeSlice.cutFlashWindow]}|${s[TimeSlice.shiftOff]}|${s[TimeSlice.shiftSens]}';
+  /// Batch 3: the frame rate the PREVIEW measures the wipe in (default 60: 0.30 s = 18 wipe frames, like the export at 60 fps). The preview still plays on its 24 fps grid.
+  double _tsFps(List<double> s) => s[TimeSlice.targetFps];
   String _tsSchedKeyFor(List<double> s, double fps) => '${_tsDetKey(s)}|$fps|${s[TimeSlice.wipeDuration]}|${s[TimeSlice.cutPoint]}|${s[TimeSlice.overlap]}';
 
   Future<TimeSliceScheduler> _tsScheduler(List<double> s, double fps) async {
@@ -2850,7 +2922,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (_tsSched != null && _tsSchedKey == key) return _tsSched!;
     if (_tsCutsCache == null || _tsCutsKey != detKey) {
       final scan = await CutDetector.scan(_project.mediaPath, _videoDurationSeconds); // cached per video on disk
-      _tsCutsCache = scan == null ? <double>[] : CutDetector.detect(scan, s);
+      _tsCutsCache = scan == null ? <double>[] : CutDetector.detect(scan, s); // batch 3: hard cuts + slides / pushes (same scan, same cache)
       _tsCutsKey = detKey;
     }
     final sched = TimeSliceScheduler.build(cuts: _tsCutsCache!, fps: fps, settings: s);
@@ -2942,26 +3014,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return null;
     }
     final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
+    final double tfps = _tsFps(s);
     final sched = _tsSched;
-    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) {
-      _tsPrepSchedule(s, _pbFps); // cut scan (cached) + schedule, in the background; plain frames meanwhile
+    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, tfps)) {
+      _tsPrepSchedule(s, tfps); // cut scan (cached) + schedule, in the background; plain frames meanwhile
       return null;
     }
-    final frame = (pos * _pbFps).round();
+    final frame = (pos * tfps).round();
     final cur = sched.at(frame);
     if (cur == null) {
-      final up = sched.upcoming(frame, (_pbFps * 2.0).round()); // C3: 2 s of look-ahead at ANY frame rate (was a fixed 36 frames = 0.6 s at 60 fps; the ring is now 23 frames)
+      final up = sched.upcoming(frame, (tfps * 2.0).round()); // C3: 2 s of look-ahead at ANY frame rate (was a fixed 36 frames = 0.6 s at 60 fps; the ring is now 23 frames)
       if (up != null && !_tsPrepping) {
-        final k = _tsKeyOf('pv', up.cutFrame, w, h, _pbFps);
-        if (k != _tsRingKey) _tsPrepareRing(up, w, h, _pbFps, k, preview: true);
+        final k = _tsKeyOf('pv', up.cutFrame, w, h, tfps);
+        if (k != _tsRingKey) _tsPrepareRing(up, w, h, tfps, k, preview: true);
       }
       return null;
     }
-    final key = _tsKeyOf('pv', cur.cutFrame, w, h, _pbFps);
+    final key = _tsKeyOf('pv', cur.cutFrame, w, h, tfps);
     if (key != _tsRingKey) {
       if (!_tsPrepping) {
         final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
-        _tsPrepareRing(wipe, w, h, _pbFps, key, preview: true);
+        _tsPrepareRing(wipe, w, h, tfps, key, preview: true);
       }
       return null; // not ready: plain frame
     }
@@ -2978,21 +3051,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return null;
     }
     final s = TimeSlice.sanitize(_project.layers[lay].timeSlice);
+    final double tfps = _tsFps(s);
     TimeSliceScheduler? sched = _tsSched;
-    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) {
+    if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, tfps)) {
       if (_tsSchedBuilding) return null;
-      await _tsPrepSchedule(s, _pbFps);
+      await _tsPrepSchedule(s, tfps);
       sched = _tsSched;
-      if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, _pbFps)) return null;
+      if (sched == null || _tsSchedKey != _tsSchedKeyFor(s, tfps)) return null;
     }
-    final frame = (pos * _pbFps).round();
+    final frame = (pos * tfps).round();
     final cur = sched.at(frame);
     if (cur == null) return null;
-    final key = _tsKeyOf('pv', cur.cutFrame, w, h, _pbFps);
+    final key = _tsKeyOf('pv', cur.cutFrame, w, h, tfps);
     if (key != _tsRingKey) {
       if (_tsPrepping) return null;
       final wipe = sched.wipes.firstWhere((x) => x.cutIndex == cur.cutIndex);
-      if (!await _tsPrepareRing(wipe, w, h, _pbFps, key, preview: true)) return null;
+      if (!await _tsPrepareRing(wipe, w, h, tfps, key, preview: true)) return null;
     }
     return _tsEmitImage(cur, s, lay, w, h, pos);
   }
@@ -3825,12 +3899,12 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                 thumbColor: accent,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               ),
-              child: ValueListenableBuilder<double>(
-                valueListenable: _posNotifier,
-                builder: (context, pos, _) => Slider(
-                  value: pos.clamp(0.0, _videoDurationSeconds).toDouble(),
+              child: AnimatedBuilder(
+                animation: Listenable.merge(<Listenable>[_posNotifier, _scrubPos]),
+                builder: (context, _) => Slider(
+                  value: (_scrubbing ? _scrubPos.value : _posNotifier.value).clamp(0.0, _videoDurationSeconds).toDouble(),
                   min: 0.0,
-                  max: _videoDurationSeconds,
+                  max: math.max(_videoDurationSeconds, 0.001),
                   // batch 18A: touching the timeline pauses the video, drags seek one target at a time, and releasing the thumb leaves the
                   // video paused ON the chosen frame (see _onScrubStart / _onScrubUpdate / _onScrubEnd).
                   onChangeStart: (_) => _onScrubStart(),

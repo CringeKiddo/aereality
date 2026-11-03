@@ -35,8 +35,12 @@ class CutScan {
   final List<double> times; // seconds, one per frame
   final List<double> mafd;
   final List<double> score;
+  // batch 3: SHIFT series (slides / pushes / whips), sampled on a fixed 30 fps grid (sample i = i / CutDetector.shiftFps seconds):
+  //   shiftD[i] = how different the picture is 5 frames before and 5 frames after sample i (0..255 grey scale), shiftE[i] = mean motion around it.
+  final List<double> shiftD;
+  final List<double> shiftE;
 
-  CutScan({required this.method, required this.times, required this.mafd, required this.score});
+  CutScan({required this.method, required this.times, required this.mafd, required this.score, this.shiftD = const <double>[], this.shiftE = const <double>[]});
 
   int get frames => times.length;
 
@@ -46,6 +50,8 @@ class CutScan {
         't': times.map((e) => double.parse(e.toStringAsFixed(4))).toList(),
         'm': mafd.map((e) => double.parse(e.toStringAsFixed(3))).toList(),
         's': score.map((e) => double.parse(e.toStringAsFixed(3))).toList(),
+        'sd': shiftD.map((e) => double.parse(e.toStringAsFixed(2))).toList(),
+        'se': shiftE.map((e) => double.parse(e.toStringAsFixed(2))).toList(),
       };
 
   static CutScan? fromJson(dynamic j) {
@@ -59,13 +65,20 @@ class CutScan {
       times: t.map((e) => (e as num).toDouble()).toList(),
       mafd: m.map((e) => (e as num).toDouble()).toList(),
       score: s.map((e) => (e as num).toDouble()).toList(),
+      shiftD: j['sd'] is List ? (j['sd'] as List).map((e) => (e as num).toDouble()).toList() : const <double>[],
+      shiftE: j['se'] is List ? (j['se'] as List).map((e) => (e as num).toDouble()).toList() : const <double>[],
     );
   }
 }
 
 class CutDetector {
   /// Bump when the scan command / scoring changes: old caches are then ignored.
-  static const int scannerVersion = 1;
+  static const int scannerVersion = 2; // 2 = batch 3: the scan also stores the shift series (old caches are rescanned once)
+
+  /// Sample rate of the shift series and the half window (frames) of its before / after comparison.
+  static const int shiftFps = 30;
+  static const int _shiftWin = 5;
+  static const int _shiftW = 48, _shiftH = 27;
 
   static const int _dartW = 96, _dartH = 54;
 
@@ -127,8 +140,67 @@ class CutDetector {
     CutScan? s;
     if (!forceDart) s = await _scanScdet(mediaPath);
     s ??= await _scanDart(mediaPath, durationSeconds);
-    if (s != null) await _store(mediaPath, s);
+    if (s != null) {
+      final sh = await _scanShift(mediaPath);
+      if (sh != null) {
+        s = CutScan(method: s.method, times: s.times, mafd: s.mafd, score: s.score, shiftD: sh[0], shiftE: sh[1]);
+      }
+      await _store(mediaPath, s);
+    }
     return s;
+  }
+
+  /// batch 3: one more small decode (48 x 27 grey, 30 fps, real timestamps from ffmpeg's fps filter) for slides / pushes / whips, which have NO single
+  /// big jump and so score ~0 in the scdet / mafd numbers above. Returns [shiftD, shiftE] or null when ffmpeg could not.
+  static Future<List<List<double>>?> _scanShift(String mediaPath) async {
+    final dir = await _tmp();
+    final out = File('${dir.path}/ts_shift.gray');
+    try {
+      if (out.existsSync()) out.deleteSync();
+    } catch (_) {}
+    final cmd = '-hide_banner -loglevel error -y -i "$mediaPath" -an -sn -dn '
+        '-vf "fps=$shiftFps,scale=$_shiftW:$_shiftH:flags=area,format=gray" -f rawvideo "${out.path}"';
+    CrashLog.note('cut scan (shift) START: ffmpeg $cmd');
+    try {
+      final session = await FFmpegKit.execute(cmd);
+      final rc = await session.getReturnCode();
+      CrashLog.note('cut scan (shift) RETURNED rc=$rc');
+      if (!ReturnCode.isSuccess(rc) || !out.existsSync()) return null;
+      final Uint8List b = await out.readAsBytes();
+      try {
+        out.deleteSync();
+      } catch (_) {}
+      final int fb = _shiftW * _shiftH;
+      final int n = b.length ~/ fb;
+      if (n < 2 * _shiftWin + 2) return null;
+      double mad(int a, int c) {
+        int sum = 0;
+        final int oa = a * fb, oc = c * fb;
+        for (int i = 0; i < fb; i++) {
+          final int d = b[oa + i] - b[oc + i];
+          sum += d < 0 ? -d : d;
+        }
+        return sum / fb;
+      }
+      final d1 = List<double>.filled(n, 0.0);
+      for (int i = 1; i < n; i++) {
+        d1[i] = mad(i - 1, i);
+      }
+      final dd = List<double>.filled(n, 0.0);
+      final ee = List<double>.filled(n, 0.0);
+      for (int i = _shiftWin; i < n - _shiftWin; i++) {
+        dd[i] = mad(i - _shiftWin, i + _shiftWin);
+        double e = 0.0;
+        for (int k = -_shiftWin; k <= _shiftWin; k++) {
+          e += d1[i + k];
+        }
+        ee[i] = e / (2 * _shiftWin + 1);
+      }
+      return <List<double>>[dd, ee];
+    } catch (e) {
+      CrashLog.note('cut scan (shift) RETURNED with Dart exception: $e');
+      return null;
+    }
   }
 
   static Future<Directory> _tmp() => getTemporaryDirectory();
@@ -266,10 +338,46 @@ class CutDetector {
       minGap: settings[TimeSlice.cutMinGap],
       flashReject: settings[TimeSlice.cutFlashReject] > 0.5,
       flashWindow: settings[TimeSlice.cutFlashWindow],
+      shifts: settings[TimeSlice.shiftOff] < 0.5,
+      shiftSensitivity: settings[TimeSlice.shiftSens],
     );
   }
 
-  static List<double> detectWith(CutScan scan, {required double threshold, required double minGap, required bool flashReject, required double flashWindow}) {
+  /// batch 3: slide / push / whip triggers from the shift series. A trigger is a local maximum of shiftD (picture 5 frames before vs 5 after) above a threshold
+  /// (sensitivity 1 -> 11, 0.5 -> 24, 0.05 -> 38 on the 0..255 grey scale) with motion around it; the time is the centre of the transition.
+  static List<double> _detectShifts(CutScan scan, double sensitivity, double minGap) {
+    final dd = scan.shiftD;
+    final ee = scan.shiftE;
+    final n = dd.length;
+    if (n < 2 * _shiftWin + 2 || ee.length != n) return <double>[];
+    final double sens = sensitivity.clamp(0.05, 1.0).toDouble();
+    final double thr = 38.0 - (sens - 0.05) * (27.0 / 0.95);
+    final int gap = math.max((minGap * shiftFps).round(), 8);
+    final out = <double>[];
+    int last = -1000000;
+    for (int i = _shiftWin; i < n - _shiftWin; i++) {
+      final v = dd[i];
+      if (v < thr || ee[i] < thr * 0.22) continue;
+      bool peak = true;
+      for (int k = -_shiftWin; k <= _shiftWin && peak; k++) {
+        final j = i + k;
+        if (j >= _shiftWin && j < n - _shiftWin && dd[j] > v) peak = false;
+      }
+      if (!peak) continue;
+      if (i - last < gap) {
+        if (out.isNotEmpty && v > dd[last]) {
+          out.removeLast();
+        } else {
+          continue;
+        }
+      }
+      last = i;
+      out.add(i / shiftFps);
+    }
+    return out;
+  }
+
+  static List<double> detectWith(CutScan scan, {required double threshold, required double minGap, required bool flashReject, required double flashWindow, bool shifts = false, double shiftSensitivity = 0.5}) {
     final n = scan.frames;
     final t = scan.times;
     final m = scan.mafd;
@@ -307,6 +415,20 @@ class CutDetector {
       if (!isPeak) continue;
       if (cuts.isNotEmpty && t[i] - cuts.last < minGap) continue;
       cuts.add(t[i]);
+    }
+    if (shifts && scan.shiftD.isNotEmpty) {
+      // a shift within 0.3 s of a hard cut is the same event: the hard cut wins
+      for (final double st in _detectShifts(scan, shiftSensitivity, math.max(0.25, minGap))) {
+        bool dup = false;
+        for (final double c in cuts) {
+          if ((c - st).abs() < 0.3) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) cuts.add(st);
+      }
+      cuts.sort();
     }
     return cuts;
   }

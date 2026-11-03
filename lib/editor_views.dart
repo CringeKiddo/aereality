@@ -1125,7 +1125,7 @@ class EditorViews {
         ),
         buildSliderRow(context: context, title: 'Flare Intensity', val: cur.thinStreakIntensity, min: 0.0, max: 2.0, onChanged: (v) { cur.thinStreakIntensity = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Length (How Far It Reaches)', val: cur.thinStreakWidth, min: 0.05, max: 2.0, onChanged: (v) { cur.thinStreakWidth = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Flare Width / Stretch (Wider Body, Strong Out To The Sides)', val: cur.flareStretch, min: 0.0, max: 1.0, onChanged: (v) { cur.flareStretch = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Flare Width / Stretch (Longer + Wider Streak And Haze, Strong Out To The Sides)', val: cur.flareStretch, min: 0.0, max: 1.0, onChanged: (v) { cur.flareStretch = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Colour Respect (Low = Transparent White Haze / High = Colours From The Video)', val: cur.flareSceneTint, min: 0.0, max: 1.0, onChanged: (v) { cur.flareSceneTint = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Source Threshold (Flares Fade In Smoothly As Light Crosses It)', val: cur.flareThreshold, min: 0.0, max: 1.0, onChanged: (v) { cur.flareThreshold = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Flare Origin (0 Highlight / 1 Frame Edges Inward)', val: cur.flareOrigin, min: 0.0, max: 1.0, onChanged: (v) { cur.flareOrigin = v; cur.thinStreakFromEdge = false; onChanged(); }, onEnded: onEnded),
