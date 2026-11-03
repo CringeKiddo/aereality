@@ -1679,16 +1679,20 @@ void detectDominantLight(int width, int height) {
 vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 ambientNear, vec3 glowTint) {
     LayerData L = layers[li];
     // =========================================================================================================================
-    // HAZE FLARE (v5). The old flare found every small local highlight, cut a band out of it relative to ITS OWN peak and normalised
-    // its strength, so every speck (hair shine, eye glint, line art) made a thin band whatever the settings - and because the bloom
-    // levels are measured in pixels, an export (more pixels) found even more of them than the preview.
-    // Now the flare is a real anamorphic smear of the light itself:
-    //   * the highlight field is read at a blur that is a FRACTION OF THE FRAME HEIGHT (Thickness x Softness), so preview, export,
-    //     4K all give the same picture, and small specks are blurred away to nothing: only big / strong light sources flare;
-    //   * that field is thresholded softly (Source Threshold), then smeared along the row with a smooth falloff (Length / Falloff);
-    //   * brightness follows the energy of the source (a dim source gives a dim flare, not a full-strength one);
-    //   * Softness widens the band, softens its edge and mixes in more haze until the band dissolves into a broad glow;
-    //   * Haze Veil adds the wide soft bloom around the flaring light.
+    // TRUE ANAMORPHIC FLARE (batch 3, v6). The slider meanings are unchanged (Length, Softness, Thickness, Falloff, Threshold, Spacing, Colour Respect,
+    // Core White, Haze, Width / Stretch, Origin); the maths under them is new. Three horizontal layers are built per pixel, all with the SAME source detection:
+    //
+    //   SOURCE DETECTION (this is what removes the mini flares). The highlight field is read at a FIXED blur of 1.2 % of the frame height (resolution independent: preview,
+    //     export and 4K see the same sources). Specks (eye glints, line art, hair shine) are far smaller than that blur, so their energy drops below the threshold and they
+    //     never flare. The gate is NARROW (0.8 .. 1.25 x Threshold) and the strength grows with the energy ABOVE the threshold (a source just over it gives a weak flare, a
+    //     source at 3 x Threshold a full one). The old gate (0.3 .. 1.7 x Threshold, then raised to a power of 0.04 at Softness 0) turned every dim source into a full-strength bar,
+    //     which is why Threshold "barely helped".
+    //   STREAK (body + white core). A pixel is only on the streak axis when its row is the vertical PEAK of the source (the field one step up and one step down is not brighter):
+    //     peak = A(y) / max(A(y), A(y - d), A(y + d)). The step d is Thickness. Core = a razor-thin white line right on the peak (smoothstep 0.93 .. 0.995 of peak),
+    //     body = a wider band around it: its lower edge (peak 0.985 at Softness 0 .. no peak test at Softness 1) is the Softness slider, so 0 = razor-sharp streak,
+    //     1 = the plain blurred field (a soft, wide haze), and the streak never disappears because the gate does not depend on Softness.
+    //   HAZE. A wider, softer, coloured blur of the same source (field at about 3 x the body blur, no peak test), longer along X than the body, scaled by Haze.
+    //   Each layer runs along the row with its own falloff (flareProfile); Width / Stretch lengthens all of them and keeps the body strong far out to the sides.
     // =========================================================================================================================
     const int NT = 48;
     float origin = clamp(L.thinStreakEdgeMode, 0.0, 1.0);
@@ -1696,84 +1700,99 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
     float stretch = clamp(L.flareStretch, 0.0, 1.0);
     float reach = clamp(L.thinStreakWidth, 0.05, 2.0) * 0.5 * (1.0 + 0.6 * stretch);   // frame widths per side / inward from the edge (Stretch also reaches a little further)
     float tFrac = clamp(L.flareThreshold, 0.0, 1.0);
-    // Batch 2B: gentler threshold curve (0 -> 0.012, 0.5 -> 0.26, 1 -> 0.86; it used to be 0.02 / 0.37 / 1.62, which killed every flare at the default).
-    float thrV = 0.012 + 0.85 * pow(tFrac, 1.8);                      // minimum (blurred) source strength
+    float thrV = 0.012 + 0.85 * pow(tFrac, 1.8);                      // minimum (blurred) source strength: 0 -> 0.012, 0.5 -> 0.26, 1 -> 0.86
     float spaceN = clamp(L.flareSpacing, 0.0, 0.5);
     float thick = clamp(L.flareThickness, 0.0, 1.0);
     float fall = clamp(L.flareFalloff, 0.0, 1.0);
     float hazeAmt = clamp(L.flareHaze, 0.0, 1.0);
+    float coreAmt = clamp(L.flareCoreWhite, 0.0, 1.0) * (1.0 - 0.55 * soft);
     float pk = mix(2.2, 6.5, fall);
     const float pw = 1.25;
     bool needEdge = origin > 0.02;
     bool needLocal = origin < 0.98;
 
-    // vertical size of the band (sigma, in pixels) as a fraction of the frame height
     float H = float(height);
-    float sigmaT = max((0.010 + 0.050 * thick) * (1.0 + 1.5 * soft) * H, 2.5);
-    // bloom level whose own blur is about sigmaT (level n blurs about 2.5 * 2^n px); anything wider is made with extra vertical taps
-    float lvlF = clamp(log2(sigmaT / 2.5), 0.0, 4.0);
-    float sigLvl = 2.5 * exp2(lvlF);
-    float dvUv = (sigmaT > sigLvl) ? (sqrt(sigmaT * sigmaT - sigLvl * sigLvl) / 1.2247) / H : 0.0;   // 7-tap binomial: sigma = 1.2247 * spacing
-    float amp = sigmaT / (0.03 * H);                                  // a blurred source keeps a comparable strength at any thickness
-    // Batch 2B: SOFTNESS = edge profile only. The threshold gate below has a FIXED wide knee (0.30 .. 1.70 x threshold), so Softness can never make a flare
-    // vanish (the old gate width was tied to Softness: at 0 a narrow gate at 0.7 .. 1.3 x threshold removed every source that was a little dim).
-    // hardP shapes that smooth gate: 0.04 at Softness 0 = a near-binary razor edge (the band's edge is where the field crosses the knee), 1.0 at Softness 1 = the plain smooth ramp (haze).
-    float hardP = mix(0.04, 1.0, soft);
-    float flatTop = 0.9 * (1.0 - soft);                               // compression exponent: ~1 = flat bright bar (hard), 0 = untouched gaussian profile (soft)
-    float aRef = thrV * 0.8;                                          // brightness above this is compressed in hard mode (still rises with the source: A^(1 - flatTop))
+    float sigDet = max(0.012 * H, 3.0);                               // fixed source-detection blur (px)
+    float lvlDet = clamp(log2(sigDet / 2.5), 0.0, 4.0);
+    float sigHaze = max(sigDet * (2.2 + 1.8 * soft), 0.03 * H);       // haze blur (px)
+    float lvlHaze = clamp(log2(sigHaze / 2.5), 0.0, 4.0);
+    float dPeak = (0.002 + 0.016 * thick) * H;                        // Thickness: step of the vertical peak test (half the width of the streak band)
+    float dPeakUv = max(dPeak, 1.5) / H;
+    float lowEdge = mix(0.985, -0.001, soft);                         // Softness: lower edge of the peak band (0.985 = razor, < 0 = no peak test = soft haze)
+    float ampBody = mix(1.0, 0.70, soft);                             // a wide soft streak is a little weaker per row but never gone
 
     float sxA = needEdge ? 0.0 : max(uv.x - reach, 0.0);
     float sxB = needEdge ? 1.0 : min(uv.x + reach, 1.0);
     float spacingPx = max((sxB - sxA) * float(width) / float(NT), 1.0);
-    float normK = 2.0 * spacingPx / (2.5 * sigmaT);                  // taps -> integral, so the beam has the strength of the blurred source
+    float normK = 2.0 * spacingPx / (0.075 * H);                       // taps -> integral (same overall strength scale as the earlier flare versions)
 
-    vec3 lSum = vec3(0.0);
-    vec3 eSum = vec3(0.0);
+    vec3 lBody = vec3(0.0), lCore = vec3(0.0), lHaze = vec3(0.0);
+    vec3 eBody = vec3(0.0), eCore = vec3(0.0), eHaze = vec3(0.0);
     for (int k = 0; k < NT; k++) {
         float sx = mix(sxA, sxB, (float(k) + 0.5) / float(NT));
         float at = abs(sx - uv.x) / reach;
-        float wLocal = needLocal ? flareProfile(at, pk, pw, stretch) : 0.0;
-        if (!needEdge && wLocal < 0.003) continue;
+        float wBody = needLocal ? flareProfile(at, pk, pw, stretch) : 0.0;
+        float wCore = needLocal ? flareProfile(at * 1.30, pk * 1.4, pw, stretch * 0.5) : 0.0;
+        float wHaze = needLocal ? flareProfile(at * 0.80 / (1.0 + 1.2 * stretch), pk * 0.6, pw, stretch) : 0.0;
+        if (!needEdge && wBody < 0.003 && wHaze < 0.003) continue;
 
-        // blurred highlight field at this column: one read, or a 7-tap vertical binomial when the band is wider than level 4 can blur
-        vec3 V;
-        if (dvUv > 0.0) {
-            V = sampleBloomLevelF(lvlF, vec2(sx, uv.y), width, height) * (20.0 / 64.0);
-            for (int j = 1; j <= 3; j++) {
-                float wj = (j == 1) ? (15.0 / 64.0) : ((j == 2) ? (6.0 / 64.0) : (1.0 / 64.0));
-                V += (sampleBloomLevelF(lvlF, vec2(sx, uv.y + dvUv * float(j)), width, height)
-                    + sampleBloomLevelF(lvlF, vec2(sx, uv.y - dvUv * float(j)), width, height)) * wj;
-            }
-        } else {
-            V = sampleBloomLevelF(lvlF, vec2(sx, uv.y), width, height);
-        }
-        V *= amp;
-        float A = luma(V);
-        float g = smoothstep(thrV * 0.30, thrV * 1.70, A);             // smooth fade-in as the light crosses the threshold (no pop)
-        float s = pow(g, hardP);
-        if (s < 0.004) continue;
+        // cheap early out: the wide haze-level field is the first read; no light here = nothing to do (most taps of a normal frame stop here)
+        vec3 Vh = sampleBloomLevelF(lvlHaze, vec2(sx, uv.y), width, height);
+        if (luma(Vh) < thrV * 0.30) continue;
+
+        vec3 V0 = sampleBloomLevelF(lvlDet, vec2(sx, uv.y), width, height);
+        vec3 Vu = sampleBloomLevelF(lvlDet, vec2(sx, uv.y - dPeakUv), width, height);
+        vec3 Vd = sampleBloomLevelF(lvlDet, vec2(sx, uv.y + dPeakUv), width, height);
+        float A0 = luma(V0), Au = luma(Vu), Ad = luma(Vd);
+        float A = max(A0, max(Au, Ad));                                // strength of the source this row belongs to
+        float gS = smoothstep(thrV * 0.80, thrV * 1.25, A) * mix(0.35, 1.0, smoothstep(thrV, 3.0 * thrV, A));
+        if (gS < 0.004) continue;
 
         if (spaceN > 0.02) {
             // keep only the strongest flare within +-Spacing of this row (a much stronger neighbour takes over)
-            float nbA = max(luma(sampleBloomLevelF(lvlF, vec2(sx, uv.y + spaceN), width, height)),
-                            luma(sampleBloomLevelF(lvlF, vec2(sx, uv.y - spaceN), width, height))) * amp;
-            s *= smoothstep(0.45, 0.85, A / max(max(A, nbA), 1e-5));
-            if (s < 0.004) continue;
+            float nbA = max(luma(sampleBloomLevelF(lvlDet, vec2(sx, uv.y + spaceN), width, height)),
+                            luma(sampleBloomLevelF(lvlDet, vec2(sx, uv.y - spaceN), width, height)));
+            gS *= smoothstep(0.45, 0.85, A / max(max(A, nbA), 1e-5));
+            if (gS < 0.004) continue;
         }
 
-        vec3 c = V * s * pow(max(A, aRef) / aRef, -flatTop);          // hard: flat-topped bright bar with a crisp edge (measured: 16-29 px edge vs 80-160 px at Softness 1)
+        float peak = A0 / max(max(A0, max(Au, Ad)), 1e-5);              // 1 on the vertical peak of the source, falls off above and below it
+        float mBody = smoothstep(lowEdge, 0.995, peak);
+        float mCore = smoothstep(0.93, 0.995, peak);
+        vec3 cB = V0 * (gS * mBody * ampBody);                          // streak body keeps the source colour
+        vec3 cC = vec3(A0) * (gS * mCore);                              // core: pure luminance (made white below)
+        vec3 cH = Vh * (gS * hazeAmt * 1.1);                            // haze
         vec3 spectral = mix(vec3(0.85, 0.97, 1.15), vec3(1.15, 0.92, 0.75), clamp(at, 0.0, 1.0));
-        if (needLocal) lSum += c * mix(vec3(1.0), spectral, 0.20) * wLocal;
-        if (needEdge) eSum += c;
+        if (needLocal) {
+            lBody += cB * mix(vec3(1.0), spectral, 0.20) * wBody;
+            lCore += cC * wCore;
+            lHaze += cH * wHaze;
+        }
+        if (needEdge) {
+            eBody += cB;
+            eCore += cC;
+            eHaze += cH;
+        }
     }
 
-    vec3 beamL = lSum * normK;
     float dE = min(uv.x, 1.0 - uv.x) / reach;
-    vec3 beamE = eSum * normK * 0.5 * flareProfile(dE, pk, pw, stretch);
-    vec3 beam = beamL;
-    if (needEdge) beam = needLocal ? mix(beamL, beamE, origin) : beamE;
+    float pE = flareProfile(dE, pk, pw, stretch);
+    float pEc = flareProfile(dE * 1.30, pk * 1.4, pw, stretch * 0.5);
+    float pEh = flareProfile(dE * 0.80 / (1.0 + 1.2 * stretch), pk * 0.6, pw, stretch);
+    vec3 bodyL = lBody * normK;
+    vec3 coreL = lCore * normK;
+    vec3 hazeL = lHaze * normK;
+    vec3 bodyE = eBody * normK * 0.5 * pE;
+    vec3 coreE = eCore * normK * 0.5 * pEc;
+    vec3 hazeE = eHaze * normK * 0.5 * pEh;
+    vec3 bodyV = bodyL, coreV = coreL, hazeV = hazeL;
+    if (needEdge) {
+        bodyV = needLocal ? mix(bodyL, bodyE, origin) : bodyE;
+        coreV = needLocal ? mix(coreL, coreE, origin) : coreE;
+        hazeV = needLocal ? mix(hazeL, hazeE, origin) : hazeE;
+    }
 
-    vec3 st = beam;
+    vec3 st = bodyV + hazeV;
     float lst = luma(st);
     if (lst > 1e-5) {
         // COLOUR RESPECT (flareSceneTint): low = transparent haze, a pale white-ish veil with only a whisper of the
@@ -1788,19 +1807,18 @@ vec3 flareBeam(int li, vec2 uv, int width, int height, vec3 ambientCol, vec3 amb
         st = mix(hazeC, sceneC, kc);
         st = saturateColor(st, mix(0.85, 1.20, kc));
         st *= mix(0.45, 1.0, smoothstep(0.0, 0.80, rc));               // haze is see-through, coloured flares are solid
-        // Batch 2B: the white core follows the flare's OWN brightness (it used to need lst > 0.5, which a dim / soft flare never reached, so the slider seemed dead)
-        float core = clamp(L.flareCoreWhite, 0.0, 1.0) * smoothstep(0.10, 0.90, lst);
-        st = mix(st, vec3(luma(st)) * vec3(1.0, 0.99, 0.97) * 1.12, core * 0.80);
     }
+    // the razor-thin white core goes on top of the coloured streak (it never takes the scene colour)
+    st += coreV * coreAmt * vec3(1.0, 0.99, 0.97) * 1.6;
 
     if (hazeAmt > 0.01) {
-        // Haze Veil: the wide soft bloom around the flaring light (isotropic, from the 1/32 level; wider with Softness)
+        // a faint round veil around the flaring light (kept small: the haze is now mostly the horizontal haze layer above)
         int w4 = max(width >> 5, 1);
         int h4 = max(height >> 5, 1);
-        vec3 veil = gfWideTaps(uv, w4, h4, mix(1.2, 2.4, soft), 2) * amp;
-        float vg = smoothstep(thrV * 0.3, thrV * 1.0, luma(veil));
+        vec3 veil = gfWideTaps(uv, w4, h4, mix(1.2, 2.4, soft), 2);
+        float vg = smoothstep(thrV * 0.8, thrV * 1.6, luma(veil));
         vec3 vc = mix(vec3(luma(veil)), veil, mix(0.25, 0.6, clamp(L.flareSceneTint, 0.0, 1.0)));
-        st += vc * vg * hazeAmt * 1.3;
+        st += vc * vg * hazeAmt * 0.35;
     }
     st *= mix(vec3(1.0), glowTint, 0.65);
     st = vec3(1.0) - exp(-st);                                         // filmic shoulder
@@ -2349,6 +2367,39 @@ float tsSliceLevel(float sk, float f, float band) {
     return l * l * (3.0 - 2.0 * l);
 }
 
+
+// -----------------------------------------------------------------------------
+// BATCH 3: BLEND LOOK (timeSlice slot 26 = 0, the default). The strips are no longer hard-edged copies of single frames. The time wave still sweeps over the frame,
+// but every pixel now averages TS_TAPS taps that are spread (a) in TIME (blurFrames = half window in frames: neighbouring frames are blended = optical-flow-like mush),
+// (b) in SPACE along the slice axis (smear: soft vertical / tangential blur) and (c) over the wave position (feather: soft slice borders). The spreads are scaled by a band
+// envelope e = 4 L (1 - L), which is 0 on pure A and pure B, so frame 0 and the last frame of a wipe are exactly the plain video and nothing outside the band is touched.
+// Slices = how many time levels the band is cut into (1 = one in-between slice between shot B and shot A, 2 = two, many = a continuous ramp). Feather / many slices smooth the levels.
+// The tap pattern is stratified and jittered by a hash of the pixel position only, so a preview frame and an export frame are bit-identical for the same state.
+// -----------------------------------------------------------------------------
+const int TS_TAPS = 16;
+
+vec3 tsRingQ(float q, int R, int maxSlot, int P, int pixelIndex, bool interp) {
+    float qs = clamp(q + float(R), 0.0, float(maxSlot));
+    if (interp) {
+        float q0 = floor(qs);
+        float fq = qs - q0;
+        int s0 = int(q0);
+        int s1 = min(s0 + 1, maxSlot);
+        if (fq < 0.001) return tsRing(s0, P, pixelIndex);
+        return mix(tsRing(s0, P, pixelIndex), tsRing(s1, P, pixelIndex), fq);
+    }
+    return tsRing(clamp(int(floor(qs + 0.5)), 0, maxSlot), P, pixelIndex);
+}
+
+float tsBlendLevel(float so, float f, float band, float N, float softMix) {
+    float u = (so - f) / band;
+    if (u <= 0.0) return 0.0;
+    if (u >= 1.0) return 1.0;
+    float ramp = u * u * (3.0 - 2.0 * u);
+    float stepped = (min(floor(u * N), N - 1.0) + 0.5) / N;
+    return mix(stepped, ramp, softMix);
+}
+
 void executeTimeSlice(ivec2 coord, int width, int height) {
     int P = width * height;
     int pixelIndex = coord.y * width + coord.x;
@@ -2381,6 +2432,49 @@ void executeTimeSlice(ivec2 coord, int width, int height) {
 
     float N = clamp(floor(timeSlice[sb + 3] + 0.5), 1.0, 64.0);
     float feather = clamp(timeSlice[sb + 6], 0.0, 1.0);
+
+    // ---- BATCH 3: BLEND look ----
+    if (timeSlice[sb + 26] < 0.5) {
+        bool interpB = timeSlice[sb + 5] >= 0.5;
+        float blurF = clamp(timeSlice[sb + 27], 0.0, 12.0);
+        float smearF = clamp(timeSlice[sb + 28], 0.0, 1.0);
+        float softMix = clamp(max(feather, (N - 6.0) / 10.0), 0.0, 1.0);        // many slices = a continuous ramp whatever Feather says
+        float edgeSpread = feather * 0.5 * band / N;                              // how far (in s units) the level is blurred: soft slice borders
+        vec2 axis;
+        float ext;
+        if (radial) {
+            vec2 rr = pc / max(length(pc), 1.0);
+            axis = vec2(-rr.y, rr.x);                                              // tangent: the smear goes around the centre
+            ext = float(max(width, height));
+        } else {
+            float a2 = radians(timeSlice[sb + 2]);
+            axis = vec2(cos(a2), sin(a2));
+            ext = abs(axis.x) * float(width) + abs(axis.y) * float(height);
+        }
+        float smearPx = smearF * ext * 0.5;
+        float jit = hash12(vec2(coord) * 0.37 + 11.0);
+        vec3 acc = vec3(0.0);
+        float wsum = 0.0;
+        for (int i = 0; i < TS_TAPS; i++) {
+            float o = ((float(i) + jit) / float(TS_TAPS)) * 2.0 - 1.0;            // -1 .. 1, stratified + jittered
+            float w = 1.0 - 0.85 * abs(o);                                         // tent
+            float lvl = tsBlendLevel(s + o * edgeSpread, f, band, N, softMix);
+            float e = 4.0 * lvl * (1.0 - lvl);                                     // 0 on pure A / pure B, 1 in the middle of the band
+            float q = mix(qB, qA, lvl) + timeSlice[sb + 4] * e + o * blurF * e;     // frame offset follows the band, the temporal spread only exists inside it
+            vec2 sc = vec2(coord) + axis * (o * smearPx * e);
+            ivec2 ic = clamp(ivec2(sc), ivec2(0), ivec2(width - 1, height - 1));
+            acc += w * tsRingQ(q, R, maxSlot, P, ic.y * width + ic.x, interpB);
+            wsum += w;
+        }
+        vec3 colB = acc / wsum;
+        float amountB = clamp(timeSlice[sb + 7], 0.0, 1.0) * clamp(timeSlice[sb + 8], 0.0, 1.0);
+        if (amountB < 0.9999) {
+            vec3 baseB = tsRing(clamp(int(floor(n + 0.5)) + R, 0, maxSlot), P, pixelIndex);
+            colB = mix(baseB, colB, amountB);
+        }
+        display_px[pixelIndex] = vec4(colB, 1.0);
+        return;
+    }
     float x = clamp(s, 0.0, 0.99999) * N;
     float k = min(floor(x), N - 1.0);              // sliceIndex
     float fr = x - k;
@@ -3211,6 +3305,16 @@ vec3 vfxLightMix(vec3 pre, vec3 layer, float op, float cb, float defScreen) {
 // Bubbles / particles live on a scrolling jittered grid (cells of 2.6 radii, <= 2 per cell, 3x3 cells tested per pixel),
 // so there is no per-bubble loop over the whole frame and nothing depends on frame history: it is fully procedural.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// BATCH 3: RANDOM WANDER. A smooth, endless, non-repeating drift field in frame-height units: two independent value-noise channels that slide through time.
+// It is a position OFFSET (home position + drift), so a particle's path is the integral of nothing abrupt: direction changes are as smooth as the noise itself, never a snap.
+// Frequency and amplitude are chosen so the field's gradient stays below ~0.4 (q = p - drift(p) stays one-to-one: no folds, no duplicated particles).
+// -----------------------------------------------------------------------------
+vec2 vfxDrift(vec2 p, float T, float sd) {
+    vec2 a = p * 0.36 + vec2(T * 1.00 + sd, -T * 0.74 + 7.3);
+    return (vec2(vnoise(a), vnoise(a + vec2(31.7, 17.3))) - 0.5) * 0.95;
+}
+
 vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
     float mode = VXF(0);
     float cb = VXF(2);
@@ -3236,6 +3340,7 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
     float R0 = mix(0.010, 0.10, clamp(VXF(3), 0.0, 1.0));
     bool isRain = (mode > 1.5 && mode < 2.5);
     bool isPart = (mode > 2.5);
+    bool rndW = (VXF(41) > 0.5) && !isRain;               // batch 3: Wander Mode = Random (noise drift) for bubbles and particles
     float ang = radians(isRain ? VXF(30) : VXF(8));
     vec2 dirV = vec2(cos(ang), -sin(ang));               // screen direction (y down); 0 deg = right, 90 deg = up
     float axisM = VXF(10);
@@ -3268,8 +3373,10 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
             // ---------------------------- bubbles + particles ----------------------------
             float R = R0 * lsc;
             float cs = R * 2.6;
-            vec2 shift = dirV * (T * lspd * travel);
-            vec2 q = p - shift;
+            vec2 shift = rndW ? vec2(0.0) : dirV * (T * lspd * travel);
+            float Tw = T * lspd;
+            float sdw = lseed * 0.13;
+            vec2 q = rndW ? (p - vfxDrift(p, Tw, sdw)) : (p - shift);
             vec2 cell0 = floor(q / cs);
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dx = -1; dx <= 1; dx++) {
@@ -3281,17 +3388,30 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                         float sz = fract(rn.w * 5.31 + rn.x * 3.7);
                         float r = R * mix(1.0, 0.3 + 0.7 * sz, scaleV);
                         vec2 cen = (cid + vec2(0.22) + rn.yz * 0.56) * cs;
-                        float wr = wander * 0.20 * cs * (0.4 + 0.6 * rn.w) * ((dirM > 1.5) ? 1.6 : 1.0);
-                        float ph = fract(rn.x * 12.9898 + rn.w) * 6.2831853
-                                 + T * (3.0 + 5.0 * rn.w) * ((rn.y > 0.5) ? 1.0 : -1.0);
-                        vec2 wo = vec2(cos(ph), sin(ph)) * wr;
+                        vec2 wo;
+                        if (rndW) {
+                            // random wander: each one also drifts on its own smooth noise path (direction changes fluidly, nothing circles)
+                            float tt = T * lspd * 0.9;
+                            wo = (vec2(vnoise(vec2(tt + rn.x * 40.0, rn.y * 9.0)), vnoise(vec2(tt * 0.85 + rn.z * 40.0, rn.w * 9.0 + 3.0))) - 0.5) * (2.0 * 0.40 * cs * wander);
+                        } else {
+                            float wr = wander * 0.20 * cs * (0.4 + 0.6 * rn.w) * ((dirM > 1.5) ? 1.6 : 1.0);
+                            float ph = fract(rn.x * 12.9898 + rn.w) * 6.2831853
+                                     + T * (3.0 + 5.0 * rn.w) * ((rn.y > 0.5) ? 1.0 : -1.0);
+                            wo = vec2(cos(ph), sin(ph)) * wr;
+                        }
                         if (axisM > 0.5 && axisM < 1.5) wo.y = 0.0;
                         else if (axisM > 1.5) wo.x = 0.0;
                         cen += wo;
-                        vec2 dq = q - cen;
+                        vec2 shiftC = shift;
+                        if (rndW) {                                       // where the particle really is: home + the drift field at that spot (2 fixed-point steps)
+                            vec2 pc2 = cen + vfxDrift(cen, Tw, sdw);
+                            pc2 = cen + vfxDrift(pc2, Tw, sdw);
+                            shiftC = pc2 - cen;
+                        }
+                        vec2 dq = rndW ? (p - (cen + shiftC)) : (q - cen);   // random mode measures in screen space: circles stay circles
                         if (dot(dq, dq) > r * r * 9.0) continue;           // farther than 3 radii: nothing to draw
 
-                        vec2 cenP = (cen + shift) * hpx;                  // centre in pixels
+                        vec2 cenP = (cen + shiftC) * hpx;                 // centre in pixels
                         vec3 cC = compAt(ivec2(cenP), w, h);             // what is under the centre (media reaction)
                         float lg = luma(linearToSrgb(max(cC, vec3(0.0))));
                         float rv = (VXF(39) > 0.5) ? 1.0 - lg : lg;
@@ -3345,12 +3465,15 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                             vec3 outc = pc * (1.12 - 0.22 * d);
                             col = vfxBlend(col, outc, aa * m * opEff, cb);
                         } else {
-                            // glass bubble: magnified / bent view of the picture + rim + specular
-                            float k = 1.0 - refr * (0.55 * (1.0 - d * d)) + refr * 0.5 * pow(clamp(d, 0.0, 1.2), 6.0);
+                            // BATCH 3: WATER DROPLET. A convex droplet on glass: the picture inside is flipped and magnified (a ball lens), it bends hard toward the rim, the side
+                            // facing the light carries a small bright specular + a thin bright rim, the opposite side is DARK (thick glass edge) with a bright caustic line just inside it.
+                            float lensAmt = clamp(refr * 1.4, 0.0, 1.0);
+                            float kt = -0.45 + 0.95 * d * d * d;                       // centre: flipped 2.2x, rim: bent outward
+                            float k = mix(0.9, kt, lensAmt);
                             vec2 dpx = pP - cenP;
                             vec3 refrC;
                             if (hiQ) {
-                                float disp = clamp(VXF(27), 0.0, 1.0) * 0.06;
+                                float disp = clamp(VXF(27), 0.0, 1.0) * 0.06 * (0.3 + d);
                                 refrC = vec3(compBilinear(cenP + dpx * (k * (1.0 + disp)), w, h).r,
                                              compBilinear(cenP + dpx * k, w, h).g,
                                              compBilinear(cenP + dpx * (k * (1.0 - disp)), w, h).b);
@@ -3358,40 +3481,46 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                                 refrC = compBilinear(cenP + dpx * k, w, h).rgb;
                             }
                             vec2 nv = v / max(dRaw, 1e-4);
-                            float rimBand = smoothstep(0.55, 1.0, d);
+                            float rimBand = smoothstep(0.62, 1.0, d);
                             float lit = max(dot(nv, ldir), 0.0);
                             float unlit = max(dot(nv, -ldir), 0.0);
-                            float rimLight = rimBand * (0.25 + 0.75 * lit * lit);
-                            float rimDark = rimBand * pow(unlit, 1.5);
-                            float spec = exp(-pow(length(v - ldir * 0.50) / 0.17, 2.0));
-                            float spec2 = exp(-pow(length(v + ldir * 0.55) / 0.30, 2.0)) * 0.25;
+                            float rimLight = rimBand * (0.15 + 0.85 * pow(lit, 3.0));            // thin bright rim only on the lit side
+                            float rimDark = rimBand * pow(unlit, 1.3);                           // dark edge on the opposite side
+                            float spec = exp(-pow(length(v - ldir * 0.46) / 0.13, 2.0));          // small, hard specular highlight
+                            float spec2 = exp(-pow(length(v + ldir * 0.52) / 0.26, 2.0)) * 0.22;  // dim bounce on the far side
+                            float caustic = smoothstep(0.50, 0.80, d) * (1.0 - smoothstep(0.80, 0.96, d)) * pow(unlit, 1.6);   // bright crescent just inside the dark edge
                             float inL = clamp(VXF(26), 0.0, 1.0);
                             vec3 inside = refrC;
                             inside = mix(inside, inside * (tintC * 1.6 + 0.2), tintA);
+                            inside *= 1.0 - 0.22 * smoothstep(0.35, 1.0, d);                      // the body is a little darker than the picture around it
                             inside = inside * (1.0 + inL * 0.6 * (1.0 - d)) + tintC * (inL * 0.05 * (1.0 - d));
-                            inside *= 1.0 - 0.55 * rimDark * clamp(VXF(24), 0.0, 1.0);
-                            inside += lightCol * (rimLight * clamp(VXF(24), 0.0, 1.5) * 0.9
-                                                + (spec + spec2) * clamp(VXF(25), 0.0, 1.5) * 1.6);
+                            inside *= 1.0 - 0.80 * rimDark * clamp(VXF(24) * 0.9 + 0.25, 0.0, 1.0);
+                            inside += lightCol * (caustic * 0.32 * (0.4 + clamp(VXF(25), 0.0, 1.5)));
+                            inside += lightCol * (rimLight * clamp(VXF(24), 0.0, 1.5) * 0.85
+                                                + (spec + spec2) * clamp(VXF(25), 0.0, 1.5) * 1.9);
                             col = vfxBlend(col, inside, a * m * opEff, cb);
                         }
                     }
                 }
             }
         } else {
-            // ---------------------------- rain ----------------------------
+            // ---------------------------- rain (batch 3) ----------------------------
+            // Real rain = FAST, thin, long, semi-transparent streaks along the fall direction: the picture shows through them (slightly brightened, a hair of refraction),
+            // a tapered head, a fading tail and a subtle white highlight down the middle. Not round drops, no shadow beside them.
             vec2 fall = dirV;
             vec2 perp = vec2(-fall.y, fall.x);
-            float width = R0 * 0.28 * lsc;
+            float width = R0 * 0.060 * lsc;
             float Lr = R0 * (1.0 + clamp(VXF(29), 0.0, 1.0) * 9.0) * lsc;
-            float csv = width * 5.5;
+            float csv = width * 9.0;
             float csu = Lr * 2.6;
+            float crisp = mix(1.1, 3.6, hard);                         // Hardness: soft streak edge -> crisp
             vec2 pu = vec2(dot(p, fall), dot(p, perp));         // u along the fall, v across it
             float vcell = floor(pu.y / csv);
             for (int dv = -1; dv <= 1; dv++) {
                 float cvid = vcell + float(dv);
                 float cr = hash12(vec2(cvid, lseed * 0.37 + 5.1));
                 float ps = 1.0 + (cr - 0.5) * clamp(VXF(31), 0.0, 1.0) * 1.8;   // every column falls at its own speed
-                float ushift = T * travel * lspd * ps * 3.0;
+                float ushift = T * travel * lspd * ps * 4.5;               // rain is FAST
                 float qu = pu.x - ushift;
                 float ucell = floor(qu / csu);
                 for (int du = -1; du <= 1; du++) {
@@ -3403,10 +3532,10 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                     float cv = (cvid + 0.2 + 0.6 * rn.z) * csv;
                     vec2 dd = vec2(qu - cu, pu.y - cv);
                     float t = clamp(dd.x / hl, -1.0, 1.0);          // +1 = leading head, -1 = tail
-                    float wt = width * (0.30 + 0.70 * smoothstep(-1.0, 0.75, t));
+                    float wt = width * (0.35 + 0.65 * smoothstep(-1.0, 0.85, t));
                     vec2 e = vec2(max(abs(dd.x) - hl, 0.0), dd.y);
                     float dist = length(e) / wt;
-                    if (dist > 4.0) continue;
+                    if (dist > 3.2) continue;
 
                     vec2 cenP = (fall * (cu + ushift) + perp * cv) * hpx;
                     vec3 cC = compAt(ivec2(cenP), w, h);
@@ -3418,28 +3547,23 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                     }
                     if (m <= 0.001) continue;
 
-                    float a = 1.0 - smoothstep(1.0 - edge, 1.0, dist);
+                    float across = dd.y / wt;
+                    float body = exp(-dist * dist * crisp);
+                    float prof = pow(clamp(0.5 + 0.5 * t, 0.0, 1.0), 1.4);      // 1 at the head, 0 at the tail
+                    float aStreak = body * (0.10 + 0.90 * prof) * (0.55 + 0.15 * rn.w);   // semi-transparent
                     vec3 lightCol = mix(vec3(1.0), cC / max(max(cC.r, max(cC.g, cC.b)), 0.05), pickup);
 
-                    if (shA > 0.001) {
-                        vec2 sUV = vec2(dot(sdir, fall), dot(sdir, perp));
-                        vec2 d2 = dd - sUV * wt * (0.6 + clamp(VXF(17), 0.0, 1.0) * 2.0);
-                        vec2 e2 = vec2(max(abs(d2.x) - hl, 0.0), d2.y);
-                        float sm = (1.0 - smoothstep(0.5, 2.6, length(e2) / wt)) * (1.0 - a);
-                        col *= 1.0 - sm * clamp(shA, 0.0, 1.5) * 0.5 * m * opEff;
-                    }
-                    if (gA > 0.001) {
-                        float gm = exp(-pow(max(dist - 0.9, 0.0) / gr, 1.4)) * (1.0 - a);
-                        col += mix(lightCol, tintC * 1.4, tintA) * (gm * clamp(gA, 0.0, 2.0) * 0.22 * m * opEff);
-                    }
-                    if (a <= 0.001) continue;
-
-                    vec2 smp = pP + perp * ((dd.y / wt) * width * hpx * (-0.9 * refr));
-                    vec3 rc = compBilinear(smp, w, h).rgb * (1.0 + 0.25 * refr);
-                    float prof = pow(0.5 + 0.5 * t, 1.6);
+                    vec2 smp = pP + perp * (across * width * hpx * (-0.35 * refr));
+                    vec3 rc = compBilinear(smp, w, h).rgb * 1.10;               // the picture seen through the streak, a touch brighter
                     rc = mix(rc, rc * (tintC * 1.5 + 0.2), tintA);
-                    rc += lightCol * (clamp(VXF(33), 0.0, 2.0) * (0.12 + 0.88 * prof) * (1.0 - 0.5 * dist * dist));
-                    col = vfxBlend(col, rc, a * m * opEff, cb);
+                    col = vfxBlend(col, rc, aStreak * m * opEff, cb);
+                    // subtle white highlight down the centre line
+                    float hi = exp(-across * across * 7.0) * (0.10 + 0.90 * prof) * (1.0 - smoothstep(0.0, 1.0, max(abs(dd.x) - hl, 0.0) / wt));
+                    col += lightCol * (hi * clamp(VXF(33), 0.0, 2.0) * 0.55 * m * opEff);
+                    if (gA > 0.001) {
+                        float gm = exp(-pow(max(dist - 0.9, 0.0) / gr, 1.4)) * (1.0 - aStreak);
+                        col += mix(lightCol, tintC * 1.4, tintA) * (gm * clamp(gA, 0.0, 2.0) * 0.10 * m * opEff);
+                    }
                 }
             }
         }
