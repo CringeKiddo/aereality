@@ -852,6 +852,7 @@ void uploadLutTo3DTexture(const float* lutTable, int32_t lutCount) {
 //  * Bloom + composite + output buffers are cleared on every render, so nothing from a previous
 //    (differently sized) render can leak into the next one as a "ghost".
 // =============================================================================
+static std::atomic<int32_t> gDeviceLostCount{0};   // batch 3: VK_ERROR_DEVICE_LOST seen since the process started (explicit, never confused with a timeout)
 static int32_t gLastRenderStatus = 0;   // 0 ok, 1 GPU error (CPU fallback used), 2 device lost, 3 timeout
 
 constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
@@ -1006,12 +1007,14 @@ static bool submitAndWait(const std::function<void()>& record) {
     if (sr != VK_SUCCESS) {
         LOGE("vkQueueSubmit failed: %d", (int)sr);
         gLastRenderStatus = (sr == VK_ERROR_DEVICE_LOST) ? 2 : 1;
+        if (sr == VK_ERROR_DEVICE_LOST) gDeviceLostCount.fetch_add(1);   // batch 3: the Dart watchdog reads this
         return false;
     }
     VkResult wr = vkWaitForFences(gVk.device, 1, &gVk.computeFence, VK_TRUE, kFenceTimeoutNs);
     if (wr != VK_SUCCESS) {
         LOGE("vkWaitForFences failed: %d (GPU timeout / device lost)", (int)wr);
         gLastRenderStatus = (wr == VK_ERROR_DEVICE_LOST) ? 2 : 3;
+        if (wr == VK_ERROR_DEVICE_LOST) gDeviceLostCount.fetch_add(1);
         return false;
     }
     return true;
@@ -2517,6 +2520,12 @@ struct InitJob {
     int32_t precision;
 };
 
+// batch 3: the arguments of the last successful start, kept so reset_vulkan() can rebuild the engine without Dart sending the shader again
+static std::mutex gLastInitMutex;
+static std::vector<uint8_t> gLastShader;
+static std::string gLastCacheDir;
+static int32_t gLastPrecision = 1;
+
 int32_t init_vulkan_async(const uint8_t* shaderBytes, int32_t length, int32_t precision, const char* cache_dir) {
     if (shaderBytes == nullptr || length < 20 || (length % 4) != 0) {
         // same text the synchronous path gives; nothing is running, so writing the error buffer here is safe
@@ -2546,6 +2555,12 @@ int32_t init_vulkan_async(const uint8_t* shaderBytes, int32_t length, int32_t pr
     job->shader.assign(shaderBytes, shaderBytes + length);   // Dart frees its buffer as soon as this function returns
     job->cacheDir = (cache_dir != nullptr) ? cache_dir : "";
     job->precision = precision;
+    {
+        std::lock_guard<std::mutex> lk(gLastInitMutex);
+        gLastShader = job->shader;
+        gLastCacheDir = job->cacheDir;
+        gLastPrecision = precision;
+    }
 
     try {
         std::thread([job]() {
@@ -2565,6 +2580,65 @@ int32_t init_vulkan_async(const uint8_t* shaderBytes, int32_t length, int32_t pr
         delete job;
         gInitError[0] = '\0';
         initFailMsg("Could not start the background thread for the GPU pipeline.");
+        gInitResult.store(0);
+        gInitDone.store(true);
+        gInitRunning.store(false);
+        return 0;
+    }
+    return 1;
+}
+
+
+// -----------------------------------------------------------------------------------------------------------------
+// BATCH 3: ENGINE RESET (GPU watchdog). reset_vulkan() destroys the current Vulkan context (a dead / lost / hung one included) and builds a fresh one
+// from the SPIR-V + cache directory of the last start, on a native thread, so the calling isolate never waits:
+//   1. flags first: is_vulkan_ready() turns false at once, vulkan_init_state() reads 0 (running), so Dart can show "Restarting GPU..." and poll,
+//   2. the thread waits for pipelineMutex (a frame that is still inside the GPU finishes or hits its fence timeout first), tears everything down
+//      (teardownAfterFailedInit: surface target, buffers, pipeline, device, instance) and clears the Time Slice ring,
+//   3. init_vulkan() rebuilds it (the pipeline cache file makes this a few seconds), then the flags are published like a normal init.
+// Returns 1 = started (or already running), 0 = nothing to rebuild from (the engine was never started) or the thread could not start.
+// get_device_lost_count() = how many VK_ERROR_DEVICE_LOST the native side has seen (it also reports status 2 on that frame).
+// -----------------------------------------------------------------------------------------------------------------
+int32_t get_device_lost_count() { return gDeviceLostCount.load(); }
+
+int32_t reset_vulkan() {
+    InitJob* job = new InitJob();
+    {
+        std::lock_guard<std::mutex> lk(gLastInitMutex);
+        job->shader = gLastShader;
+        job->cacheDir = gLastCacheDir;
+        job->precision = gLastPrecision;
+    }
+    if (job->shader.size() < 20) { delete job; return 0; }
+
+    bool expected = false;
+    if (!gInitRunning.compare_exchange_strong(expected, true)) { delete job; return 1; }   // an init / reset is already running
+    gInitDone.store(false);
+    gInitResult.store(0);
+    gInitCold.store(false);
+    try {
+        std::thread([job]() {
+            int32_t res = 0;
+            try {
+                {
+                    std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
+                    teardownAfterFailedInit();
+                    gTsRingW = gTsRingH = gTsRingSlots = 0;
+                    gTsStoreSlot = -1;
+                    gLastRenderStatus = 0;
+                }
+                res = init_vulkan(job->shader.data(), (int32_t)job->shader.size(), job->precision, job->cacheDir.c_str());
+            } catch (...) {
+                initFailMsg("reset_vulkan threw an exception on the background thread.");
+                res = 0;
+            }
+            delete job;
+            gInitResult.store(res == 1 ? 1 : 0);
+            gInitDone.store(true, std::memory_order_release);
+            gInitRunning.store(false);
+        }).detach();
+    } catch (...) {
+        delete job;
         gInitResult.store(0);
         gInitDone.store(true);
         gInitRunning.store(false);
