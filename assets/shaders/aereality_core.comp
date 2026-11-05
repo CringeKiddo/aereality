@@ -139,7 +139,7 @@ layout(std430, binding = 13) buffer DisplayBuffer { vec4 display_px[]; };
 // Ring frames are the PRE-dither pass 6 output, so slices are never dithered twice. Without Time Slice the buffer is P long, as in step B.
 
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B)
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B), 31 DiffusionPrefilter (composite -> unthresholded L0, batch 19), 32 DiffusionApply (composite + L1..L4 -> out scratch, then pass 14 copies back, batch 19)
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -762,14 +762,18 @@ vec4 sampleBloom(int level, vec2 uv, int w, int h) {
     return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
+vec4 sampleBloomSmooth(int level, vec2 uv, int w, int h);   // defined with the clean glow field below (cubic B-spline read)
+
 // Fractional pyramid level (1..4): blends two levels so a streak never pops between them.
+// Batch 19: cubic B-spline reads (was plain bilinear). The flare reads levels 2..4 (cells of 8..32 px); a bilinear read of such a coarse level has a
+// slope kink at every texel centre, and the flare's vertical peak test turned those kinks into the stepped, pane-like bars. The cubic read is C1-smooth.
 vec3 sampleBloomLevelF(float lvlF, vec2 uv, int width, int height) {
     int lo = int(floor(lvlF));
     int hi = min(lo + 1, 4);
     float f = lvlF - float(lo);
-    vec3 a = sampleBloom(lo, uv, max(width >> (lo + 1), 1), max(height >> (lo + 1), 1)).rgb;
+    vec3 a = sampleBloomSmooth(lo, uv, max(width >> (lo + 1), 1), max(height >> (lo + 1), 1)).rgb;
     if (hi == lo || f < 0.001) return a;
-    vec3 b = sampleBloom(hi, uv, max(width >> (hi + 1), 1), max(height >> (hi + 1), 1)).rgb;
+    vec3 b = sampleBloomSmooth(hi, uv, max(width >> (hi + 1), 1), max(height >> (hi + 1), 1)).rgb;
     return mix(a, b, f);
 }
 
@@ -1286,6 +1290,7 @@ float glowExtractThreshold() {
         if (L.thinStreakIntensity > 0.01)    { t = min(t, 0.20); any_ = true; }
         if (L.halationRadius > 0.01 && L.halationStrength > 0.01) { t = min(t, clamp(L.halationThreshold, 0.25, 0.95)); any_ = true; }
         if (L.copiedProMist > 0.01 || L.bslaBloomHaze > 0.01 || L.bslFogScatter > 0.01) { t = min(t, 0.40); any_ = true; }
+        if (fx[i].f[28] > 0.01) { t = min(t, clamp(fx[i].f[29] * 0.6, 0.05, 0.95)); any_ = true; }   // batch 19: Pro Mist v2 sets its own extraction threshold (its field was starved at the shared 0.60)
     }
     return any_ ? clamp(t, 0.05, 0.95) : 0.60;
 }
@@ -1434,13 +1439,20 @@ void executeHighlightExtraction(ivec2 coord, int l0W, int l0H, int srcW, int src
     vec2 centerUV = (vec2(coord) + 0.5) / vec2(l0W, l0H);
     ivec2 srcC = clamp(ivec2(centerUV * vec2(srcW, srcH)), ivec2(0), ivec2(srcW - 1, srcH - 1));
 
-    vec3 col = unpackComposite(srcC.y * srcW + srcC.x).rgb;
-    float l = luma(col);
-
+    // Batch 19: the L0 texel covers a 2 x 2 block of the composite. It used to read ONE pixel of that block (nearest tap), so thin bright lines
+    // (anime line art, hair shine) aliased: they flickered in and out of the glow and left stair-steps. Now all four pixels are extracted
+    // separately (knee + Karis weight per pixel, so one hot pixel cannot become a firefly) and averaged = a proper area filter.
     float threshold = glowExtractThreshold();
-    float knee = smoothstep(threshold, threshold + 0.20, l);
-    vec3 isolated = col * knee;
-    isolated *= karisWeight(isolated);
+    vec2 spC = centerUV * vec2(srcW, srcH);
+    vec3 isolated = vec3(0.0);
+    for (int t = 0; t < 4; t++) {
+        ivec2 tc = clamp(ivec2(floor(spC + vec2((t & 1) == 0 ? -0.5 : 0.5, (t & 2) == 0 ? -0.5 : 0.5))), ivec2(0), ivec2(srcW - 1, srcH - 1));
+        vec3 col = unpackComposite(tc.y * srcW + tc.x).rgb;
+        float kn = smoothstep(threshold, threshold + 0.20, luma(col));
+        vec3 iso = col * kn;
+        isolated += iso * karisWeight(iso);
+    }
+    isolated *= 0.25;
 
     // Edge mask (perceptual-luma Sobel, 2px step because L0 is half-res)
     float gx = 0.0;
@@ -2182,38 +2194,13 @@ void executeFinalComposite(ivec2 coord, int width, int height) {
     }
 
     // ---- OPTICAL DIFFUSION + PRO MIST v2 (batch 4) ----
-    // Optical Diffusion: highlight-gated softening. A clean multi-octave highlight field (no raw copy) is screened back in,
-    // and a tiny highlight-gated ring blur removes digital edge sharpness only where light is hot. Nothing is blurred in the
-    // shadows / mids, so the picture stays crisp but gains a filmic, atmospheric roll-off. "Mix" = how much of the original
-    // sharp frame is kept.
+    // Optical Diffusion: see passes 31 / 32 (batch 19).
     // Pro Mist: physical Black Pro-Mist style - WIDE tinted halation-flavoured bloom, milky black lift, and a gentle contrast
     // drop. Different from Optical Diffusion on purpose (tinted + lifted blacks + wider vs. neutral + crisp + local).
     for (int i = 0; i < totalLayers; i++) {
         LayerData L = layers[i];
         if (L.isEnabled < 0.5) continue;
-        float dAmt = clamp(fx[i].f[23], 0.0, 1.0);
-        if (dAmt > 0.01) {
-            vec3 pre = linearBase;
-            float r = clamp(fx[i].f[25], 0.0, 1.0);
-            vec3 fieldD = glowField(uv, width, height, mix(1.6, 5.0, r), clamp(fx[i].f[24], 0.0, 1.5), exMin) * 0.75;
-            float warm = clamp(fx[i].f[27], -1.0, 1.0);
-            fieldD *= vec3(1.0 + 0.10 * warm, 1.0, 1.0 - 0.10 * warm);
-            // highlight-gated micro softening (ring of 8 taps, radius ~1-3 px)
-            float rr = (0.8 + r * 2.4) * gRes;
-            vec3 ring = vec3(0.0);
-            for (int k = 0; k < 8; k++) {
-                float a = (float(k) + 0.5) * 0.78539816;
-                ring += compAt(coord + ivec2(round(vec2(cos(a), sin(a)) * rr)), width, height);
-            }
-            ring *= 0.125;
-            float hiW = smoothstep(clamp(fx[i].f[24], 0.0, 1.5) * 0.6, clamp(fx[i].f[24], 0.0, 1.5) * 0.6 + 0.45, luma(linearBase));
-            vec3 soft = mix(linearBase, 0.5 * (ring + linearBase), hiW * dAmt);
-            vec3 cbD = clamp(soft, 0.0, 1.0);
-            vec3 gl = vec3(1.0) - exp(-fieldD * (dAmt * 2.2));
-            vec3 diffused = cbD + gl - cbD * gl + max(soft - 1.0, vec3(0.0));
-            vec3 processed = mix(diffused, pre, clamp(fx[i].f[26], 0.0, 1.0));   // keep some of the original sharp frame
-            linearBase = fxMix(pre, processed, fx[i].f[3], fx[i].f[21]);
-        }
+        // Optical Diffusion moved to passes 31 / 32 (batch 19): it needs an UNTHRESHOLDED whole-frame pyramid, which this pass does not have.
         float mAmt = clamp(fx[i].f[28], 0.0, 1.0);
         if (mAmt > 0.01) {
             vec3 pre = linearBase;
@@ -2709,7 +2696,11 @@ void executeGradient4(ivec2 coord, int width, int height) {
             sum += g4Color(grad4[pb + 2]) * w;
             wsum += w;
         }
-        col = mix(col, sum / wsum, mixAmt);
+        // Batch 19: slot 14 = blend mode (LayerBlendMode index, 0 = Normal = the old replace-with-gradient behaviour). New layers default to Soft Light,
+        // so switching the effect on tints the picture instead of painting a solid 4-colour card over it.
+        int bm = clamp(int(grad4[gb + 14] + 0.5), 0, 20);
+        vec3 gcol = clamp(sum / wsum, vec3(0.0), vec3(1.0));
+        col = applyBlendMode(clamp(col, vec3(0.0), vec3(1.0)), gcol, bm, mixAmt, true);
     }
     display_px[pixelIndex] = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
@@ -4310,6 +4301,66 @@ void executeYuvPack(ivec2 coord, int imgW, int imgH) {
     out_pixels[uvBase + coord.y * rowWords + coord.x] = uvw;
 }
 
+
+// =============================================================================
+// BATCH 19: OPTICAL DIFFUSION v3 (passes 31 + 32), runs BEFORE the glow pyramid (pass 1) and changes the composite.
+//
+// Why it was rebuilt: the old diffusion read the glow pyramid, which only holds pixels above glowExtractThreshold() (0.60 linear unless another glow
+// lowers it) and then gated them again with its own threshold. On a pastel frame (most pixels 0.1 .. 0.4 linear) there was almost nothing in the field, so
+// the effect did next to nothing. A soft-focus / diffusion filter acts on the WHOLE frame: it adds a blurred copy of the image back on top of it.
+// Calibrated against a reference render (the same frame with a hard-edged diffusion): original + ~1.0 x a blend of tight blurs (after the 0.5 hot-area boost below) (about 0.6 % .. 3 % of the
+// frame width), the same gain at every brightness. Pass 31 builds a clean, unthresholded pyramid (2 x 2 box into L0, then the normal downsample passes
+// 2 / 3 / 7 / 8 build L1..L4); pass 32 reads L1..L4 with the cubic reader and adds the field. The pyramid is rebuilt from scratch by pass 1 afterwards.
+//   fx slots: 23 Strength, 24 Highlight Bias (0 = whole frame, 1.5 = only where the blurred light is strong), 25 Radius (0 tight .. 1 wide),
+//             26 keep original (0 .. 1), 27 warmth, 3 effect opacity, 21 custom blend.
+// =============================================================================
+void executeDiffusionPrefilter(ivec2 coord, int l0W, int l0H, int srcW, int srcH) {
+    vec2 spC = ((vec2(coord) + 0.5) / vec2(l0W, l0H)) * vec2(srcW, srcH);
+    vec3 acc = vec3(0.0);
+    for (int t = 0; t < 4; t++) {
+        ivec2 tc = clamp(ivec2(floor(spC + vec2((t & 1) == 0 ? -0.5 : 0.5, (t & 2) == 0 ? -0.5 : 0.5))), ivec2(0), ivec2(srcW - 1, srcH - 1));
+        acc += unpackComposite(tc.y * srcW + tc.x).rgb;
+    }
+    bloomStore(0, coord.y * l0W + coord.x, vec4(acc * 0.25, 0.0));
+}
+
+void executeDiffusionApply(ivec2 coord, int width, int height) {
+    int idx = coord.y * width + coord.x;
+    vec4 base = unpackComposite(idx);
+    vec3 col = base.rgb;
+    vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
+    vec3 B1 = sampleBloomSmooth(1, uv, max(width >> 2, 1), max(height >> 2, 1)).rgb;
+    vec3 B2 = sampleBloomSmooth(2, uv, max(width >> 3, 1), max(height >> 3, 1)).rgb;
+    vec3 B3 = sampleBloomSmooth(3, uv, max(width >> 4, 1), max(height >> 4, 1)).rgb;
+    vec3 B4 = sampleBloomSmooth(4, uv, max(width >> 5, 1), max(height >> 5, 1)).rgb;
+    int totalL = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int li = 0; li < 10; li++) {
+        if (li >= totalL) break;
+        if (layers[li].isEnabled < 0.5) continue;
+        float amt = clamp(fx[li].f[23], 0.0, 1.0);
+        if (amt <= 0.01) continue;
+        float r = clamp(fx[li].f[25], 0.0, 1.0);
+        // level weights (L1, L2, L3, L4): tight / calibrated / wide anchors, Radius slides between them
+        vec4 wT = vec4(0.60, 0.50, 0.20, 0.00);
+        vec4 wF = vec4(0.20, 0.10, 0.85, 0.14);
+        vec4 wW = vec4(0.05, 0.10, 0.60, 0.70);
+        vec4 wt = (r < 0.5) ? mix(wT, wF, r * 2.0) : mix(wF, wW, (r - 0.5) * 2.0);
+        vec3 F = B1 * wt.x + B2 * wt.y + B3 * wt.z + B4 * wt.w;
+        float bias = clamp(fx[li].f[24] / 1.5, 0.0, 1.0);
+        F *= mix(1.0, smoothstep(0.10, 0.60, luma(F)), bias);
+        F += F * (luma(F) * 0.5);                                   // hot areas bloom a little harder than the dim ones
+        float warm = clamp(fx[li].f[27], -1.0, 1.0);
+        F *= vec3(1.0 + 0.10 * warm, 1.0, 1.0 - 0.10 * warm);
+        vec3 pre = col;
+        vec3 processed = pre + F * amt;                              // gain 1.0: Strength 1.0 = the reference "high" (checked against the reference frame: mean error 0.051 at 0.75 x 1.3)
+        processed = mix(processed, pre, clamp(fx[li].f[26], 0.0, 1.0));
+        col = fxMix(pre, processed, fx[li].f[3], fx[li].f[21]);
+    }
+    col = sanitize(col);
+    out_pixels[idx * 2] = packHalf2x16(col.rg);
+    out_pixels[idx * 2 + 1] = packHalf2x16(vec2(col.b, base.a));
+}
+
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_bandY);
     int width = u_passWidth;
@@ -4388,6 +4439,12 @@ void main() {
         return;
     } else if (u_passIndex == 28) {
         executeGradient4(coord, width, height);
+        return;
+    } else if (u_passIndex == 31) {
+        executeDiffusionPrefilter(coord, width, height, int(u_imgWidth), int(u_imgHeight));
+        return;
+    } else if (u_passIndex == 32) {
+        executeDiffusionApply(coord, width, height);
         return;
     } else if (u_passIndex == 22) {
         executeTimeSlice(coord, width, height);
