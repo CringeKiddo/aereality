@@ -866,12 +866,46 @@ class EditorViews {
     ];
   }
 
+  // Batch 19: blend mode of the 4-Way Gradient (slot 14 = LayerBlendMode index, no "Default" entry: 0 = Normal).
+  static Widget _g4BlendPicker(List<double> l, VoidCallback onChanged, VoidCallback onEnded) {
+    final int v = l[Gradient4Way.blend].round().clamp(0, _blendLabels.length - 1);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+      child: Row(
+        children: [
+          const Expanded(child: Text('Blend mode', style: TextStyle(color: Colors.white70, fontSize: 12))),
+          DropdownButton<int>(
+            value: v,
+            dropdownColor: gPalette.value.card,
+            underline: const SizedBox(),
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            items: [for (int i = 0; i < _blendLabels.length; i++) DropdownMenuItem(value: i, child: Text(_blendLabels[i]))],
+            onChanged: (m) {
+              if (m != null) {
+                l[Gradient4Way.blend] = m.toDouble();
+                onChanged();
+                onEnded();
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   // Batch 14: 4-Way Gradient (pass 28). Slots = class Gradient4Way, packed at 7744 + layer * 16. Colours use the existing colour widget (VfxSuite.colorSlot).
   static List<Widget> _gradient4Rows(BuildContext context, AdjustmentLayer cur, VoidCallback onChanged, VoidCallback onEnded) {
     final l = cur.grad4;
     Widget pos(String title, int slot) => buildSliderRow(context: context, title: title, val: l[slot].clamp(0.0, 1.0).toDouble(), min: 0.0, max: 1.0, onChanged: (v) { l[slot] = v; onChanged(); }, onEnded: onEnded);
     return [
-      _slotSwitch(l, '4-Way Gradient', Gradient4Way.on, onChanged, onEnded),
+      _slotSwitch(l, '4-Way Gradient', Gradient4Way.on, () {
+        // Batch 19: layers saved before this change hold the old first-look (Normal, Mix 1.0 = a solid card). Switching the effect on gives them the new first look.
+        if (l[Gradient4Way.on] >= 0.5 && l[Gradient4Way.blend] < 0.5 && l[Gradient4Way.mix] > 0.999) {
+          l[Gradient4Way.mix] = 0.7;
+          l[Gradient4Way.blend] = 4.0;
+        }
+        onChanged();
+      }, onEnded),
       for (int k = 0; k < 4; k++) ...[
         const SizedBox(height: 6),
         ...VfxSuite.colorSlot(context, l, Gradient4Way.pointSlot(k) + 2, 'Point ${k + 1} Colour', onChanged, onEnded),
@@ -880,7 +914,8 @@ class EditorViews {
       ],
       const SizedBox(height: 6),
       buildSliderRow(context: context, title: 'Mix / Opacity', val: l[Gradient4Way.mix].clamp(0.0, 1.0).toDouble(), min: 0.0, max: 1.0, onChanged: (v) { l[Gradient4Way.mix] = v; onChanged(); }, onEnded: onEnded),
-      _note('Colours blend by inverse distance to the four points (0,0 = top left). Applied after MathOps, before dither.'),
+      _g4BlendPicker(l, onChanged, onEnded),
+      _note('Colours blend by inverse distance to the four points (0,0 = top left). Blend: Normal replaces the picture with the gradient, Soft Light / Overlay / Color tint it. Applied after MathOps, before dither.'),
     ];
   }
 
@@ -1558,7 +1593,7 @@ class EditorViews {
       _hdr('OPTICAL DIFFUSION'),
       _note('Softens highlights into a cinematic glow and removes digital edge sharpness, without blurring the picture.'),
       _fxRow(c, cur, 'Diffusion Strength', Fx.diffAmt, 0.0, 1.0, onChanged, onEnded),
-      _fxRow(c, cur, 'Highlight Threshold', Fx.diffThreshold, 0.0, 1.5, onChanged, onEnded),
+      _fxRow(c, cur, 'Highlight Bias (0 = whole frame)', Fx.diffThreshold, 0.0, 1.5, onChanged, onEnded),
       _fxRow(c, cur, 'Diffusion Radius', Fx.diffRadius, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Keep Original Sharp Frame', Fx.diffMix, 0.0, 1.0, onChanged, onEnded),
       _fxRow(c, cur, 'Warmth (cool - warm)', Fx.diffWarmth, -1.0, 1.0, onChanged, onEnded),

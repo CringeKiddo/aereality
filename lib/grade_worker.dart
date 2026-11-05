@@ -43,7 +43,13 @@ class GradeResult {
   final Uint8List rgba;
   final int gpuStatus; // 0 ok, 1 GPU error (CPU fallback used), 2 device lost, 3 timeout
   final int micros; // wall time of the native call inside the worker
-  GradeResult(this.rgba, this.gpuStatus, this.micros);
+  /// Batch 19: true when [rgba] is the INPUT frame handed back unchanged (GPU restarting / worker hung), i.e. nothing was graded at all. Callers must not
+  /// cache such a frame as "the graded picture" (the preview used to, which is why the timeline showed no grade until the next slider move).
+  final bool passthrough;
+  GradeResult(this.rgba, this.gpuStatus, this.micros, {this.passthrough = false});
+
+  /// A real GPU grade. false for a passthrough frame and for the simplified CPU fallback grade.
+  bool get graded => !passthrough && gpuStatus == 0;
 }
 
 class GradeWorker {
@@ -108,7 +114,7 @@ class GradeWorker {
   }) async {
     // batch 3: watchdog. A restart in progress: preview frames pass through unchanged (the UI never freezes), export frames wait for the engine.
     if (GpuWatchdog.restarting.value) {
-      if (!nv12) return GradeResult(rgba, 1, 0);
+      if (!nv12) return GradeResult(rgba, 1, 0, passthrough: true);
       await GpuWatchdog.waitReady();
     }
     GradeResult r;
@@ -116,14 +122,14 @@ class GradeWorker {
       // an NV12 (export) frame may legitimately take long on a 4K clip: the 3 s rule is for the preview, the export gets 25 s before it is called hung
       // while the engine is still booting (first start: up to ~90 s shader compile) a frame waits for the init thread: that is not a hang, no timeout then
       final Future<GradeResult> core = _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
-      r = isVulkanReady() ? await core.timeout(nv12 ? const Duration(seconds: 25) : GpuWatchdog.frameTimeout) : await core;
+      r = isVulkanReady() ? await core.timeout(nv12 ? GpuWatchdog.exportFrameTimeout : GpuWatchdog.frameTimeout) : await core;
     } on TimeoutException {
       GpuWatchdog.failed('no answer from the grade worker', immediate: true);
       if (nv12) {
         await GpuWatchdog.waitReady();
         r = await _gradeCore(rgba: rgba, w: w, h: h, uniforms: uniforms, lut: lut, nv12: nv12);
       } else {
-        return GradeResult(rgba, 3, 0);
+        return GradeResult(rgba, 3, 0, passthrough: true);
       }
     }
     if (r.rgba.isEmpty) {
@@ -175,7 +181,7 @@ class GradeWorker {
       _pending.remove(id);
       if (GpuWatchdog.restarting.value) {
         // the watchdog dropped this worker on purpose: never run a blocking native call on this isolate while the engine is rebuilt
-        if (!nv12) return GradeResult(rgba, 1, 0);
+        if (!nv12) return GradeResult(rgba, 1, 0, passthrough: true);
         rethrow;
       }
       return _inline(rgba, w, h, uniforms, lut, nv12);

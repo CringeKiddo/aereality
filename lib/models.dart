@@ -213,9 +213,9 @@ class Fx {
     f[duoGamma] = 1.0;
     f[duoMix] = 1.0;
     f[duoKeepLight] = 0.0;
-    f[diffThreshold] = 0.55;
+    f[diffThreshold] = 0.0; // batch 19: Highlight Bias, 0 = the whole frame is diffused (was a 0.55 brightness threshold that left pastel frames untouched)
     f[diffRadius] = 0.5;
-    f[diffMix] = 0.25;
+    f[diffMix] = 0.0; // batch 19: was 0.25 (kept a quarter of the sharp frame, which weakened the effect before it started)
     f[mistThreshold] = 0.50;
     f[mistRadius] = 0.55;
     f[mistTint] = 0.40;

@@ -318,7 +318,8 @@ class Gradient4Way {
   static const int p3x = 7, p3y = 8, p3c = 9;
   static const int p4x = 10, p4y = 11, p4c = 12;
   static const int mix = 13; // 0 .. 1
-  // 14, 15 reserved
+  static const int blend = 14; // batch 19: LayerBlendMode index (0 Normal = replace, 4 Soft Light, 3 Overlay, 17 Color ...). Old presets store 0 here = unchanged behaviour
+  // 15 reserved
 
   /// Slot of point [k] (0..3): X is the returned slot, Y is +1, colour is +2.
   static int pointSlot(int k) => 1 + k * 3;
@@ -330,7 +331,8 @@ class Gradient4Way {
     f[p2x] = 1.0; f[p2y] = 0.0; f[p2c] = 0xFF3366.toDouble();
     f[p3x] = 0.0; f[p3y] = 1.0; f[p3c] = 0xFFD700.toDouble();
     f[p4x] = 1.0; f[p4y] = 1.0; f[p4c] = 0x7C4DFF.toDouble();
-    f[mix] = 1.0;
+    f[mix] = 0.7; // batch 19: was 1.0 (a solid card of four colours over the whole picture the moment the effect was switched on)
+    f[blend] = 4.0; // batch 19: Soft Light, so the first look is a tint of the picture, not a replacement of it
     return f;
   }
 
@@ -352,6 +354,7 @@ class Gradient4Way {
       d[b + 2] = _c(d[b + 2].roundToDouble(), 0.0, 16777215.0);
     }
     d[mix] = _c(d[mix], 0.0, 1.0);
+    d[blend] = _c(d[blend].roundToDouble(), 0.0, 20.0);
     return d;
   }
 

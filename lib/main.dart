@@ -2200,18 +2200,27 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
         // Before this the effect only existed inside the Adaptive playback loop, so with Smooth (Native) or while scrubbing it never appeared in the preview.
         final ui.Image? tsIm = (!_project.isImage && _project.mediaPath.isNotEmpty) ? await _tsPausedImage(_currentTimelinePosition, w, h) : null;
         final ui.Image im;
+        bool realGrade = true; // batch 19: false when the frame is the untouched input (GPU restarting / worker hung)
         if (tsIm != null) {
           im = tsIm;
         } else {
           final res = await GradeWorker.instance.grade(rgba: rawBytes, w: w, h: h, uniforms: uniforms, lut: lutTable);
+          realGrade = !res.passthrough;
           im = await _rgbaToImage(res.rgba, w, h);
         }
 
         if (mounted) {
           _processedStaticImage?.dispose();
           _processedStaticImage = im;
-          _lastGradeSig = sig;
-          _gradeStale = false; // batch 16: a fresh grade of the current position is on screen
+          // Batch 19: an UNGRADED passthrough frame used to be remembered under this signature, so the "nothing changed, skip the GPU" check above kept
+          // showing the ungraded picture ("timeline shows no grade") until a slider moved. Now it is shown but not remembered, and a retry is scheduled.
+          _lastGradeSig = realGrade ? sig : '';
+          _gradeStale = !realGrade; // batch 16: a fresh grade of the current position is on screen
+          if (!realGrade) {
+            Future<void>.delayed(const Duration(milliseconds: 1200), () {
+              if (mounted && !_isVulkanProcessing) _applyGrade();
+            });
+          }
           _previewTick.value++;
         } else {
           im.dispose();
@@ -3248,9 +3257,18 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       return raw;
     }
     if (surfaceOut) {
-      final sr = await SurfaceGradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+      var sr = await SurfaceGradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+      // Batch 19: the native side no longer presents a CPU-fallback (ungraded) frame; it returns an error instead. Give the GPU watchdog time to rebuild
+      // the engine and send the SAME frame again (up to 3 times) instead of losing the frame or exporting it ungraded.
+      for (int attempt = 1; attempt <= 3 && EngineBoot.gpuOk && !sr.presented && sr.rc == -6; attempt++) {
+        CrashLog.note('  frame at t=${timestampMs.round()} ms was not graded by the GPU (status ${sr.gpuStatus}); retry $attempt / 3');
+        GpuWatchdog.failed('export frame not graded (status ${sr.gpuStatus})', immediate: attempt >= 2);
+        await GpuWatchdog.waitReady();
+        await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+        sr = await SurfaceGradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable());
+      }
       StageTimer.add('frame: grade + present (zero copy)', gradeWatch.elapsedMicroseconds);
-      if (!sr.presented) throw Exception('Could not hand a frame to the video encoder: ${sr.error}');
+      if (!sr.presented) throw Exception('The GPU could not grade this frame, so the export was stopped instead of saving an ungraded video: ${sr.error}');
       if (sr.gpuStatus != 0) {
         CrashLog.note('  GPU status ${sr.gpuStatus} at t=${timestampMs.round()} ms (0 = ok, 1 = GPU error: CPU fallback frame), native ${sr.micros ~/ 1000} ms');
       }
@@ -3258,7 +3276,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
     // Worker isolate: the UI isolate keeps running during the GPU work (no freeze, no "not responding").
     // batch 18B: with _expNv12 the result is NV12 (GPU RGB -> YUV), w * h * 3 / 2 bytes.
-    final res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable(), nv12: _expNv12);
+    var res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable(), nv12: _expNv12);
+    // Batch 19: status != 0 means the frame is the simplified CPU grade (brightness / contrast / saturation only). It used to be exported as it was ("no grade
+    // in the export"). Wait for the GPU watchdog to rebuild the engine and grade the same frame again; stop the export if the GPU stays broken.
+    for (int attempt = 1; attempt <= 3 && EngineBoot.gpuOk && !res.graded; attempt++) {
+      CrashLog.note('  frame at t=${timestampMs.round()} ms was not graded by the GPU (status ${res.gpuStatus}); retry $attempt / 3');
+      GpuWatchdog.failed('export frame not graded (status ${res.gpuStatus})', immediate: attempt >= 2);
+      await GpuWatchdog.waitReady();
+      await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+      res = await GradeWorker.instance.grade(rgba: raw, w: w, h: h, uniforms: uniforms, lut: _getActiveLutTable(), nv12: _expNv12);
+    }
+    if (EngineBoot.gpuOk && !res.graded) {
+      throw Exception('The GPU could not grade this frame (status ${res.gpuStatus}), so the export was stopped instead of saving an ungraded video. Restart the app and export again.');
+    }
     StageTimer.add('frame: grade (Vulkan, incl. copies)', gradeWatch.elapsedMicroseconds);
     // batch 18B: the per-frame "vulkan processImage / vulkan done" disk-flushing notes are gone (ExportSuite logs one line per batch);
     // only a GPU problem is written at once, because it is exactly what the crash report needs
