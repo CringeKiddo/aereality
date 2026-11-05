@@ -40,7 +40,9 @@ class Vfx {
       twinkle = 42;
   // ---- batch 3: wander mode (bubbles + particles). 0 = Directional (Direction / Angle / Orbit as chosen), 1 = Random (smooth noise drift: no straight lines, no circling) ----
   static const int wanderMode = 41;
-  static const int wanderDirectional = 0, wanderRandom = 1;
+  static const int wanderDirectional = 0, wanderRandom = 1, wanderCinematic = 2; // batch 19: 2 = Cinematic (large flowing field with depth parallax)
+  // ---- batch 19: rain style. 0 = falling streaks (the old look), 1 = rain on a window (drops grow, slide down, leave a wet trail). Old presets store 0 in this slot = unchanged ----
+  static const int rainStyle = 48;
   // ---- how it works with the media (all modes) ----
   static const int maskMode = 44, maskThr = 45, maskSoft = 46, pickup = 47;
 
@@ -87,7 +89,8 @@ class Vfx {
     f[reactInvert] = 0.0;
     f[reactThr] = 0.3;
     f[twinkle] = 0.3;
-    f[wanderMode] = wanderRandom.toDouble(); // batch 3: new layers drift randomly; a saved preset keeps what it stored
+    f[wanderMode] = wanderCinematic.toDouble(); // batch 19: new layers drift cinematically (was Random since batch 3); a saved preset keeps what it stored
+    f[rainStyle] = 1.0; // batch 19: new rain layers are rain on a window; a saved preset keeps what it stored (0 = streaks)
     f[maskMode] = 0.0;
     f[maskThr] = 0.5;
     f[maskSoft] = 0.3;

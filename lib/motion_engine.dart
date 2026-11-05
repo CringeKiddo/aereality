@@ -268,6 +268,42 @@ class MotionEngine {
   }
 
   // ---------------------------------------------------------------------------------------------------------------
+  // BATCH 19: DUPLICATE-FRAME AWARE NEIGHBOURS
+  // The decode uses ffmpeg's fps filter, which DUPLICATES frames whenever the source rate is lower than the project rate (24 -> 30, 30 -> 60, or an edit that
+  // only moves every second frame). A duplicate has zero flow to its neighbour, so the velocity (and the blur) flickered on and off from frame to frame.
+  // The blur must describe the motion between two DIFFERENT pictures, so each side now uses the nearest frame that really differs (at most kHunt away).
+  // Every frame of a duplicated run then gets the same velocity: a steady streak instead of a flash.
+  // ---------------------------------------------------------------------------------------------------------------
+  static const int kHunt = 3;
+
+  /// true when two RGBA frames are the same picture (exact duplicate or compression noise only): mean absolute difference of ~6000 sampled pixels below 0.6 / 255.
+  static bool _sameFrame(Uint8List a, Uint8List b) {
+    if (a.length != b.length || a.length < 16) return false;
+    final int px = a.length >> 2;
+    final int step = math.max(1, px ~/ 6000) | 1;
+    int sum = 0;
+    int n = 0;
+    for (int p = 0; p < px; p += step) {
+      final int o = p << 2;
+      sum += (a[o] - b[o]).abs() + (a[o + 1] - b[o + 1]).abs() + (a[o + 2] - b[o + 2]).abs();
+      n += 3;
+    }
+    return n > 0 && sum / n < 0.6;
+  }
+
+  /// Index of the nearest frame on side [dir] (-1 / +1) of [i] that differs from [cur]; the farthest one checked when they are all duplicates (flow is zero then anyway).
+  static Future<int> _distinctNeighbour(int i, int dir, int total, Future<Uint8List> Function(int) rawAt, Uint8List cur) async {
+    int idx = i + dir;
+    for (int k = 1; k <= kHunt; k++) {
+      final int j = i + dir * k;
+      if (j < 0 || j >= total) break;
+      idx = j;
+      if (!_sameFrame(cur, await rawAt(j))) return j;
+    }
+    return idx;
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------
   // PREVIEW
   // ---------------------------------------------------------------------------------------------------------------
   /// One Motion S preview frame at [tSec]. Returns RGBA (w * h * 4) or null when nothing could be decoded.
@@ -284,10 +320,10 @@ class MotionEngine {
     final plan = MotionS.plan(settings, hasPrev: c > 0, hasNext: c < total - 1);   // the first / last frame of the clip has no previous / next frame
     final offsets = original ? <int>[0] : plan.offsets; // "original" = the (graded) frame itself, no Motion S
 
-    final first = offsets.first;
-    final last = offsets.last;
-    final startIdx = math.max(0, c + first);
-    final count = (c + last) - startIdx + 1;
+    // Batch 19: the neighbours are the nearest frames that really DIFFER from this one (up to kHunt frames away), see _distinctNeighbour.
+    final int startIdx = math.max(0, c - (original ? 0 : kHunt));
+    final int endIdx = math.min(total - 1, c + (original ? 0 : kHunt));
+    final count = endIdx - startIdx + 1;
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/motion_s_preview_window.rgba');
     final fb = w * h * 4;
@@ -296,15 +332,24 @@ class MotionEngine {
     final raf = await file.open(mode: FileMode.read);
     final slotFrames = <Uint8List>[];
     try {
-      for (final off in offsets) {
-        int i = (c + off) - startIdx;
+      Future<Uint8List> at(int idx) async {
+        int i = idx - startIdx;
         if (i < 0) i = 0;
         if (i >= got) i = got - 1;
         await raf.setPosition(i * fb);
         final raw = await raf.read(fb);
-        if (raw.length != fb) return null;
-        slotFrames.add(raw); // RAW frames: the motion blur runs on the ungraded picture
+        if (raw.length != fb) throw Exception('short read in the preview window');
+        return raw;
       }
+
+      final Uint8List cur = await at(c);
+      final int pIdx = (c > 0 && !original) ? await _distinctNeighbour(c, -1, total, at, cur) : c - 1;
+      final int nIdx = (c < total - 1 && !original) ? await _distinctNeighbour(c, 1, total, at, cur) : c + 1;
+      for (final off in offsets) {
+        slotFrames.add(off == 0 ? cur : await at(off < 0 ? pIdx : nIdx)); // RAW frames: the motion blur runs on the ungraded picture
+      }
+    } catch (_) {
+      return null;
     } finally {
       await raf.close();
       try {
@@ -333,11 +378,10 @@ class MotionEngine {
     required bool Function() cancelled,
   }) async {
     lastError = null;
-    final fullPlan = MotionS.plan(settings);   // previous + current + next: decides how far the decode window reaches; the real plan is made per frame (clip ends)
     final total = math.max(1, (src.durationSec * fps).round());
     final fb = w * h * 4;
-    final back = fullPlan.back;
-    final fwd = fullPlan.fwd;
+    final back = kHunt;   // batch 19: the decode window reaches kHunt frames each way so the nearest DIFFERENT neighbour can be found (duplicate frames)
+    final fwd = kHunt;
     final base = await getApplicationSupportDirectory();
     final outDir = Directory('${base.path}/motion_s');
     final work = Directory('${(await getTemporaryDirectory()).path}/motion_s_work');
@@ -435,8 +479,11 @@ class MotionEngine {
             // Batch 2B: RAW frames in, velocity vector motion blur on the raw picture, THEN the project grade (when there is one) on the blurred frame.
             final plan = MotionS.plan(settings, hasPrev: i > 0, hasNext: i < total - 1);
             final slotFrames = <Uint8List>[];
+            final Uint8List curRaw = await rawAt(i);
+            final int pIdx = i > 0 ? await _distinctNeighbour(i, -1, total, rawAt, curRaw) : i - 1;
+            final int nIdx = i < total - 1 ? await _distinctNeighbour(i, 1, total, rawAt, curRaw) : i + 1;
             for (final off in plan.offsets) {
-              slotFrames.add(await rawAt(i + off));
+              slotFrames.add(off == 0 ? curRaw : await rawAt(off < 0 ? pIdx : nIdx));
             }
             final u = MotionS.pack(s: settings, plan: plan, w: w, h: h, timeSeconds: i / fps);
             CrashLog.note('Motion S frame ${i + 1}/$total render START');

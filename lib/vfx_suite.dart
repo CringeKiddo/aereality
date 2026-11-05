@@ -266,11 +266,12 @@ class VfxSuite {
     children.add(s(Vfx.speed, 'Speed (0 = frozen)', 0.0, 1.0));
     children.add(s(Vfx.progression, 'Progression (scrub the animation by hand)', 0.0, 1.0));
     if (rain) {
+      children.add(_chips(l, 'Rain Style', Vfx.rainStyle, const ['Falling streaks', 'On a window (drops slide)'], onChanged, onEnded));
       children.add(s(Vfx.rainAngle, 'Fall Angle (deg, 270 = straight down, 0 = right)', 0.0, 360.0));
       children.add(s(Vfx.speedVar, 'Speed Variation (each streak falls at its own speed)', 0.0, 1.0));
     } else {
       children.add(s(Vfx.angle, 'Angle (deg, 90 = up, 0 = right)', 0.0, 360.0));
-      children.add(_chips(l, 'Wander Mode', Vfx.wanderMode, const ['Directional (Direction / Angle)', 'Random (smooth noise drift)'], onChanged, onEnded));
+      children.add(_chips(l, 'Wander Mode', Vfx.wanderMode, const ['Directional (Direction / Angle)', 'Random (smooth noise drift)', 'Cinematic (large flowing paths)'], onChanged, onEnded));
       children.add(s(Vfx.wander, l[Vfx.wanderMode] > 0.5 ? 'Wander (how far each one strays on its own path)' : 'Wander (how much each one circles around)', 0.0, 1.0));
     }
     children.add(_chips(l, 'Direction', Vfx.direction, rain ? const ['Forward', 'Reverse', 'Hold'] : const ['Forward', 'Reverse', 'Orbit in place'],

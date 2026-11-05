@@ -106,7 +106,7 @@ class MotionS {
     f[thresholdKnee] = 3.0;
     f[maxLen] = 0.12; // fraction of the diagonal, soft limit (it can never run away)
     f[highlightBias] = 0.35;
-    f[dilate] = 3.0; // grid cells
+    f[dilate] = 2.0; // grid cells (batch 19: was 3; a wide dilation copied the fastest vector far out of every edge)
     f[sharp] = 0.55;
     f[smSamples] = 32.0;
     f[smBlur] = 0.0; // blur is OFF by default in every mode (video quality)
