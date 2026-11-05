@@ -3306,6 +3306,23 @@ vec2 vfxDrift(vec2 p, float T, float sd) {
     return (vec2(vnoise(a), vnoise(a + vec2(31.7, 17.3))) - 0.5) * 0.95;
 }
 
+// BATCH 19: CINEMATIC WANDER. Large, slow, camera-like motion instead of local jitter: a roaming sweep of the whole field (a slow Lissajous pan) + one big vortex that drifts across
+// the frame + low-frequency noise at a larger amplitude. The depth layers run at different speeds (lspd), which gives the parallax. Every term is smooth and the vortex turn is
+// capped (r * dTheta/dr stays below 0.4), so q = p - drift(p) stays one-to-one: nothing folds, nothing duplicates.
+vec2 vfxDriftCine(vec2 p, float T, float sd) {
+    vec2 sweep = vec2(0.34 * sin(T * 0.21 + sd) + 0.10 * sin(T * 0.53 + sd * 2.1), 0.24 * cos(T * 0.17 + sd * 1.3) + 0.08 * cos(T * 0.47 + sd));
+    vec2 c = vec2(0.55 + 0.30 * sin(T * 0.13 + sd * 0.7), 0.50 + 0.25 * cos(T * 0.11 + sd * 1.9));
+    vec2 dc = p - c;
+    float r2 = dot(dc, dc);
+    float th = 0.60 * exp(-r2 / 0.30) * sin(T * 0.19 + sd * 1.1);
+    float cs = cos(th), sn = sin(th);
+    vec2 swirl = vec2(cs * dc.x - sn * dc.y, sn * dc.x + cs * dc.y) - dc;
+    vec2 a = p * 0.22 + vec2(T * 0.55 + sd, -T * 0.41 + 3.1);
+    vec2 nz = (vec2(vnoise(a), vnoise(a + vec2(31.7, 17.3))) - 0.5) * 1.30;
+    return sweep + swirl + nz;
+}
+vec2 vfxDriftAny(vec2 p, float T, float sd, bool cine) { return cine ? vfxDriftCine(p, T, sd) : vfxDrift(p, T, sd); }
+
 vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
     float mode = VXF(0);
     float cb = VXF(2);
@@ -3332,6 +3349,7 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
     bool isRain = (mode > 1.5 && mode < 2.5);
     bool isPart = (mode > 2.5);
     bool rndW = (VXF(41) > 0.5) && !isRain;               // batch 3: Wander Mode = Random (noise drift) for bubbles and particles
+    bool cine = (VXF(41) > 1.5) && !isRain;               // batch 19: Wander Mode 2 = Cinematic (large flowing field, see vfxDriftCine)
     float ang = radians(isRain ? VXF(30) : VXF(8));
     vec2 dirV = vec2(cos(ang), -sin(ang));               // screen direction (y down); 0 deg = right, 90 deg = up
     float axisM = VXF(10);
@@ -3367,7 +3385,7 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
             vec2 shift = rndW ? vec2(0.0) : dirV * (T * lspd * travel);
             float Tw = T * lspd;
             float sdw = lseed * 0.13;
-            vec2 q = rndW ? (p - vfxDrift(p, Tw, sdw)) : (p - shift);
+            vec2 q = rndW ? (p - vfxDriftAny(p, Tw, sdw, cine)) : (p - shift);
             vec2 cell0 = floor(q / cs);
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dx = -1; dx <= 1; dx++) {
@@ -3383,7 +3401,7 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                         if (rndW) {
                             // random wander: each one also drifts on its own smooth noise path (direction changes fluidly, nothing circles)
                             float tt = T * lspd * 0.9;
-                            wo = (vec2(vnoise(vec2(tt + rn.x * 40.0, rn.y * 9.0)), vnoise(vec2(tt * 0.85 + rn.z * 40.0, rn.w * 9.0 + 3.0))) - 0.5) * (2.0 * 0.40 * cs * wander);
+                            wo = (vec2(vnoise(vec2(tt + rn.x * 40.0, rn.y * 9.0)), vnoise(vec2(tt * 0.85 + rn.z * 40.0, rn.w * 9.0 + 3.0))) - 0.5) * (2.0 * 0.40 * cs * wander * (cine ? 0.35 : 1.0));
                         } else {
                             float wr = wander * 0.20 * cs * (0.4 + 0.6 * rn.w) * ((dirM > 1.5) ? 1.6 : 1.0);
                             float ph = fract(rn.x * 12.9898 + rn.w) * 6.2831853
@@ -3395,8 +3413,8 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                         cen += wo;
                         vec2 shiftC = shift;
                         if (rndW) {                                       // where the particle really is: home + the drift field at that spot (2 fixed-point steps)
-                            vec2 pc2 = cen + vfxDrift(cen, Tw, sdw);
-                            pc2 = cen + vfxDrift(pc2, Tw, sdw);
+                            vec2 pc2 = cen + vfxDriftAny(cen, Tw, sdw, cine);
+                            pc2 = cen + vfxDriftAny(pc2, Tw, sdw, cine);
                             shiftC = pc2 - cen;
                         }
                         vec2 dq = rndW ? (p - (cen + shiftC)) : (q - cen);   // random mode measures in screen space: circles stay circles
@@ -3422,7 +3440,8 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                             vec2 nd = v / max(dRaw, 1e-4);
                             d *= 1.0 + rough * 0.25 * (vnoise(nd * 1.6 + rn.xy * 13.0 + vec2(T * 0.5)) - 0.5);
                         }
-                        float a = 1.0 - smoothstep(1.0 - edge, 1.0 + edge * 0.15, d);
+                        float aaE = max(edge, 1.25 / max(r * hpx, 1.0));   // batch 19: never sharper than ~1.25 px (small / hard bubbles used to alias)
+                        float a = 1.0 - smoothstep(1.0 - aaE, 1.0 + aaE * 0.15, d);
                         vec3 lightCol = mix(vec3(1.0), cC / max(max(cC.r, max(cC.g, cC.b)), 0.05), pickup);
 
                         // soft shadow on the picture beside the shape
@@ -3495,6 +3514,109 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                 }
             }
         } else {
+            // ---------------------------- WINDOW RAIN (batch 19) ----------------------------
+            // Rain on a car window: round drops sit on the glass, GROW, then slide down in a wobbling line and leave a thin wet trail; many tiny beads stay put. Every drop is a ball
+            // lens (the picture inside is flipped + magnified, dark thick edge, bright specular) = the same shading as the Bubbles water droplet. Style 0 keeps the old falling streaks.
+            if (VXF(48) > 0.5) {
+                vec2 fallW = dirV;
+                vec2 perpW = vec2(-fallW.y, fallW.x);
+                float Rw = R0 * 0.85 * lsc;
+                float csw = Rw * 3.0;
+                vec2 puw = vec2(dot(p, fallW), dot(p, perpW));
+                float ucw = floor(puw.x / csw);
+                float vcw = floor(puw.y / csw);
+                float dirSign = (travel < 0.0) ? -1.0 : 1.0;
+                float streakAmt = clamp(VXF(29), 0.0, 1.0);
+                float lensW = clamp(refr * 1.4, 0.0, 1.0);
+                for (int dv = -1; dv <= 1; dv++) {
+                    for (int du = -3; du <= 1; du++) {
+                        vec2 cid = vec2(ucw + float(du), vcw + float(dv));
+                        vec4 rn = vfxRnd(cid, lseed + 211.0);
+                        if (rn.x > dens) continue;
+                        bool bead = rn.w > 0.72;                                              // small drops that stay where they are
+                        float cyc = fract(T * lspd * dirSign * (0.55 + 0.9 * rn.w) + rn.z * 7.3 + rn.y * 3.1);
+                        if (travel == 0.0) cyc = fract(rn.z * 7.3 + rn.y * 3.1);
+                        float life = smoothstep(0.0, 0.12, cyc) * (1.0 - smoothstep(0.90, 1.0, cyc));
+                        float grow = smoothstep(0.0, 0.5, cyc);
+                        float szv = 0.5 + 0.5 * fract(rn.w * 5.3 + rn.x * 3.7);
+                        float rr = Rw * mix(1.0, szv, scaleV) * (bead ? (0.16 + 0.12 * szv) : (0.30 + 0.70 * grow));
+                        float slideT = bead ? 0.0 : clamp((cyc - 0.5) / 0.5, 0.0, 1.0);
+                        float slide = slideT * slideT * csw * (0.8 + 2.0 * rn.y) * (0.35 + 0.65 * streakAmt);
+                        vec2 c0 = vec2((cid.x + 0.25 + 0.5 * rn.y) * csw, (cid.y + 0.2 + 0.6 * rn.z) * csw);
+                        float wob = (vnoise(vec2(c0.x * 5.0 + slide * 7.0, rn.x * 31.0)) - 0.5) * csw * 0.22 * slideT;   // the line a sliding drop takes wanders a little
+                        vec2 c1 = c0 + vec2(slide, wob);
+                        vec2 dd = puw - c1;
+                        float m = layerA * life;
+                        if (m <= 0.001) continue;
+
+                        // ---- the wet trail behind a sliding drop
+                        if (slide > 0.002) {
+                            float tw = rr * 0.30;
+                            float tAlong = (puw.x - c0.x) / max(slide, 1e-4);
+                            if (tAlong >= 0.0 && tAlong <= 1.0) {
+                                float cAcross = puw.y - (c0.y + wob * tAlong);
+                                float tm = 1.0 - smoothstep(tw * 0.35, tw, abs(cAcross));
+                                float tA = tm * smoothstep(0.0, 0.25, tAlong) * mix(0.30, 1.0, tAlong) * 0.55;
+                                if (tA > 0.003) {
+                                    vec2 smp = pP + perpW * (cAcross / max(tw, 1e-5)) * (-0.5 * refr) * tw * hpx;
+                                    vec3 rcT = compBilinear(smp, w, h).rgb * 1.06;
+                                    col = vfxBlend(col, rcT, tA * m * opEff, cb);
+                                    col += vec3(1.0) * (exp(-pow(cAcross / max(tw, 1e-5) + 0.55, 2.0) * 6.0) * tA * 0.10 * clamp(VXF(33), 0.0, 2.0) * m * opEff);
+                                }
+                            }
+                        }
+                        if (dot(dd, dd) > rr * rr * 9.0) continue;
+
+                        // ---- the drop (ball lens)
+                        vec2 cenP = (fallW * c1.x + perpW * c1.y) * hpx;
+                        vec3 cC = compAt(ivec2(cenP), w, h);
+                        float lg = luma(linearToSrgb(max(cC, vec3(0.0))));
+                        float mm = m;
+                        if (maskMode > 0.5) {
+                            float on = smoothstep(maskThr - maskSf, maskThr + maskSf, lg);
+                            mm *= (maskMode < 1.5) ? on : (1.0 - on);
+                        }
+                        if (mm <= 0.001) continue;
+                        vec2 v = (fallW * dd.x + perpW * dd.y) / rr;                         // screen-frame vector (light directions are screen-space)
+                        float dRaw = length(v);
+                        float d = dRaw;
+                        if (rough > 0.001) {
+                            vec2 nd = v / max(dRaw, 1e-4);
+                            d *= 1.0 + rough * 0.25 * (vnoise(nd * 1.6 + rn.xy * 13.0) - 0.5);
+                        }
+                        float aaE = max(edge, 1.25 / max(rr * hpx, 1.0));
+                        float a = 1.0 - smoothstep(1.0 - aaE, 1.0 + aaE * 0.15, d);
+                        if (a <= 0.001) continue;
+                        vec3 lightCol = mix(vec3(1.0), cC / max(max(cC.r, max(cC.g, cC.b)), 0.05), pickup);
+                        float kt = -0.45 + 0.95 * d * d * d;
+                        float k = mix(0.9, kt, lensW);
+                        vec2 dpx = pP - cenP;
+                        vec3 refrC;
+                        if (hiQ) {
+                            float disp = clamp(VXF(27), 0.0, 1.0) * 0.06 * (0.3 + d);
+                            refrC = vec3(compBilinear(cenP + dpx * (k * (1.0 + disp)), w, h).r,
+                                         compBilinear(cenP + dpx * k, w, h).g,
+                                         compBilinear(cenP + dpx * (k * (1.0 - disp)), w, h).b);
+                        } else {
+                            refrC = compBilinear(cenP + dpx * k, w, h).rgb;
+                        }
+                        vec2 nv = v / max(dRaw, 1e-4);
+                        float rimBand = smoothstep(0.62, 1.0, d);
+                        float lit = max(dot(nv, ldir), 0.0);
+                        float unlit = max(dot(nv, -ldir), 0.0);
+                        float rimLight = rimBand * (0.15 + 0.85 * pow(lit, 3.0));
+                        float rimDark = rimBand * pow(unlit, 1.3);
+                        float spec = exp(-pow(length(v - ldir * 0.46) / 0.13, 2.0));
+                        float caustic = smoothstep(0.50, 0.80, d) * (1.0 - smoothstep(0.80, 0.96, d)) * pow(unlit, 1.6);
+                        vec3 inside = mix(refrC, refrC * (tintC * 1.6 + 0.2), tintA);
+                        inside *= 1.0 - 0.22 * smoothstep(0.35, 1.0, d);
+                        inside *= 1.0 - 0.75 * rimDark * 0.8;
+                        inside += lightCol * (caustic * 0.30 + rimLight * 0.55 + spec * clamp(VXF(33), 0.0, 2.0) * 1.9);
+                        col = vfxBlend(col, inside, a * mm * opEff, cb);
+                    }
+                }
+                continue;
+            }
             // ---------------------------- rain (batch 3) ----------------------------
             // Real rain = FAST, thin, long, semi-transparent streaks along the fall direction: the picture shows through them (slightly brightened, a hair of refraction),
             // a tapered head, a fading tail and a subtle white highlight down the middle. Not round drops, no shadow beside them.
@@ -3523,7 +3645,7 @@ vec3 vfxLayer(vec3 base, int li, ivec2 coord, int w, int h, float opEff) {
                     float cv = (cvid + 0.2 + 0.6 * rn.z) * csv;
                     vec2 dd = vec2(qu - cu, pu.y - cv);
                     float t = clamp(dd.x / hl, -1.0, 1.0);          // +1 = leading head, -1 = tail
-                    float wt = width * (0.35 + 0.65 * smoothstep(-1.0, 0.85, t));
+                    float wt = max(width * (0.35 + 0.65 * smoothstep(-1.0, 0.85, t)), 0.8 / hpx);   // batch 19: at least ~0.8 px wide (thin streaks used to flicker)
                     vec2 e = vec2(max(abs(dd.x) - hl, 0.0), dd.y);
                     float dist = length(e) / wt;
                     if (dist > 3.2) continue;
@@ -3918,8 +4040,12 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
         float s0 = moBlockSad(nSlot, T, pc, vec2(0.0), w, h);
         float bestS = s0;
         vec2 bestD = vec2(0.0);
+        // Batch 19: when the global motion (spin / zoom / pan) already explains this block (mean luma error under 0.02) there is nothing local to find. The local search on
+        // thin line art is ambiguous (aperture problem: a line slides along itself), so it used to invent per-block vectors = random smears drawn from the line art.
+        bool explained = (s0 < 0.02);
         for (int dy = -R; dy <= R; dy += 4) {
             for (int dx = -R; dx <= R; dx += 4) {
+                if (explained) break;
                 if (dx == 0 && dy == 0) continue;
                 vec2 d = vec2(float(dx), float(dy));
                 float s = moBlockSad(nSlot, T, pc, d, w, h);
@@ -3927,6 +4053,7 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
             }
         }
         for (int stepI = 0; stepI < 2; stepI++) {
+            if (explained) break;
             float st = (stepI == 0) ? 2.0 : 1.0;
             vec2 c0 = bestD;
             for (int dy = -1; dy <= 1; dy++) {
@@ -3939,7 +4066,7 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
             }
         }
         // no residual when the block has no texture or the gain over "just the global motion" is small
-        if (tex < 0.012 || bestS > 0.9 * s0) { bestD = vec2(0.0); bestS = s0; }
+        if (tex < 0.02 || bestS > 0.75 * s0) { bestD = vec2(0.0); bestS = s0; }   // batch 19: was 0.012 / 0.9, only a clear local win counts
         float conf = clamp(1.0 - bestS / (tex + 0.02), 0.0, 1.0);
         if (dirI == 0) outB = vec3(g0 + bestD, conf); else outF = vec3(g0 + bestD, conf);
     }
@@ -3988,10 +4115,10 @@ void executeMotionDilate(ivec2 cell, int gw, int gh) {
             float dist = length(vec2(float(dx), float(dy))) * float(C);
             vec3 nB = moCellFlow(1, cell + ivec2(dx, dy), gw, gh, 0);
             float m = length(nB.xy);
-            if (m > mB && m + 0.5 * float(C) >= dist) { bestB = nB; mB = m; }
+            if (m > mB && nB.z > 0.25 && m + 0.5 * float(C) >= dist) { bestB = nB; mB = m; }   // batch 19: only confident vectors spread
             vec3 nF = moCellFlow(1, cell + ivec2(dx, dy), gw, gh, 4);
             float mf = length(nF.xy);
-            if (mf > mF && mf + 0.5 * float(C) >= dist) { bestF = nF; mF = mf; }
+            if (mf > mF && nF.z > 0.25 && mf + 0.5 * float(C) >= dist) { bestF = nF; mF = mf; }
         }
     }
     moWrite(2, cell, gw, gh, bestB, bestF);
@@ -4093,8 +4220,10 @@ void executeMotionVelocity(ivec2 cell, int vw, int vh, int w, int h) {
     bool useB = MOS(9) > 0.5 && pSlot >= 0 && pSlot != cur;
     bool useF = MOS(9) > 0.5 && MOS(10) > 0.5 && nSlot >= 0 && nSlot != cur;
     bool refine = MOS(47) > 0.5;
-    vec2 vSum = vec2(0.0);
-    float wSum = 0.0;
+    vec2 vB = vec2(0.0);
+    vec2 vF = vec2(0.0);
+    float wB = 0.0;
+    float wF = 0.0;
     for (int dirI = 0; dirI < 2; dirI++) {
         if (dirI == 0 && !useB) continue;
         if (dirI == 1 && !useF) continue;
@@ -4113,10 +4242,27 @@ void executeMotionVelocity(ivec2 cell, int vw, int vh, int w, int h) {
         }
         float wt = 0.25 + 0.75 * conf;
         vec2 v = (dirI == 0) ? -d : d;               // B moved the content by -B (previous -> now), F by +F (now -> next)
-        vSum += v * wt;
-        wSum += wt;
+        if (dirI == 0) { vB = v; wB = wt; } else { vF = v; wF = wt; }
     }
-    mo_vel[cell.y * vw + cell.x] = (wSum > 0.0) ? vSum / wSum : vec2(0.0);
+    // Batch 19: forward / backward CONSISTENCY. Real motion is smooth, so the content velocity measured towards the previous frame and towards the next frame must roughly
+    // agree. When they disagree (more than 60 % of the larger one + 1.5 px) one of them is a bad match: keep only the more trustworthy side and halve its weight, instead of
+    // averaging a wrong vector into a right one (that average was the random smear).
+    vec2 vOut = vec2(0.0);
+    if (wB > 0.0 && wF > 0.0) {
+        float diff = length(vB - vF);
+        float big = max(length(vB), length(vF));
+        if (diff > 0.6 * big + 1.5) {
+            vOut = (wB >= wF) ? vB * 0.5 : vF * 0.5;
+            vOut *= 1.0;
+        } else {
+            vOut = (vB * wB + vF * wF) / (wB + wF);
+        }
+    } else if (wB > 0.0) {
+        vOut = vB;
+    } else if (wF > 0.0) {
+        vOut = vF;
+    }
+    mo_vel[cell.y * vw + cell.x] = vOut;
 }
 
 // ---- RENDER -----------------------------------------------------------------------------------------------------------------
@@ -4211,7 +4357,7 @@ void executeMotionRender(ivec2 coord, int w, int h) {
 
     vec3 pre0 = moIn(moRgb(moLoadU(cur, coord, w, h)));
     vec3 pre = (slot == cur && q == q0) ? pre0 : moSample(slot, q, w, h);
-    float jit = moIGN(q0 + fract(u_time * 1.7) * 91.0);
+    float jit = moIGN(q0);   // batch 19: no time term (a changing jitter pattern made the streak grain flicker from frame to frame)
 
     // Batch 2B: the only mode is the velocity vector motion blur (old saves with mode 2 / 3 = Main / Duplicate render exactly the same thing).
     vec3 res = moVectorBlur(q, pre, slot, w, h, diag, jit);
