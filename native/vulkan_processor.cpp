@@ -178,10 +178,21 @@ void createBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkDeviceSize
 
     if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
         LOGE("Failed to allocate memory size: %llu", (unsigned long long)memRequirements.size);
+        // Batch 19: a buffer WITHOUT memory used to survive here (handle non-null, nothing bound). Only 3 of the buffers were checked afterwards,
+        // so a failed device-local allocation (memory pressure) produced a frame that read / wrote an unbound buffer = garbage or VK_ERROR_DEVICE_LOST.
+        vkDestroyBuffer(device, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        bufferMemory = VK_NULL_HANDLE;
         return;
     }
 
-    vkBindBufferMemory(device, buffer, bufferMemory, 0);
+    if (vkBindBufferMemory(device, buffer, bufferMemory, 0) != VK_SUCCESS) {
+        LOGE("Failed to bind buffer memory (size %llu)", (unsigned long long)memRequirements.size);
+        vkDestroyBuffer(device, buffer, nullptr);
+        vkFreeMemory(device, bufferMemory, nullptr);
+        buffer = VK_NULL_HANDLE;
+        bufferMemory = VK_NULL_HANDLE;
+    }
 }
 
 void createHardwareSamplers() {
@@ -583,7 +594,11 @@ bool ensureBuffersCapacity(size_t requiredPixels) {
         gVk.tempCompositeBuffer == VK_NULL_HANDLE || gVk.displayBuffer == VK_NULL_HANDLE || gVk.flareHalfBuffer == VK_NULL_HANDLE ||
         gVk.bloomL0Buffer == VK_NULL_HANDLE || gVk.bloomL1Buffer == VK_NULL_HANDLE || gVk.bloomL2Buffer == VK_NULL_HANDLE ||
         gVk.bloomL3Buffer == VK_NULL_HANDLE || gVk.bloomL4Buffer == VK_NULL_HANDLE ||
-        gVk.inMemory == VK_NULL_HANDLE || gVk.outMemory == VK_NULL_HANDLE || gVk.uboMemory == VK_NULL_HANDLE) {
+        gVk.inMemory == VK_NULL_HANDLE || gVk.outMemory == VK_NULL_HANDLE || gVk.uboMemory == VK_NULL_HANDLE ||
+        gVk.tempCompositeMemory == VK_NULL_HANDLE || gVk.displayMemory == VK_NULL_HANDLE || gVk.flareHalfMemory == VK_NULL_HANDLE ||
+        gVk.bloomL0Memory == VK_NULL_HANDLE || gVk.bloomL1Memory == VK_NULL_HANDLE || gVk.bloomL2Memory == VK_NULL_HANDLE ||
+        gVk.bloomL3Memory == VK_NULL_HANDLE || gVk.bloomL4Memory == VK_NULL_HANDLE || gVk.lutStagingBuffer == VK_NULL_HANDLE ||
+        gVk.lutImage == VK_NULL_HANDLE || gVk.lutImageView == VK_NULL_HANDLE) {
         LOGE("Buffer allocation failed for %zu pixels (out of memory?) - releasing and using the fallback path.", requiredPixels);
         cleanupBuffers();
         return false;
@@ -859,7 +874,7 @@ constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
 constexpr int32_t  kMaxPixelsPerSubmit = 4000000;  // upper cap only: the time budget below normally limits a band first
 
 static int32_t gBandBudgetMs = 40;            // target wall time of ONE GPU submit (shorter = the phone UI stays fluid)
-static double  gNsPerPx[15] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B)
+static double  gNsPerPx[16] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B), [15] pass 32 (Optical Diffusion apply, batch 19)
 static int64_t gLastRenderUs = 0;
 static int32_t gFlareLayer = -1;              // layer whose flare is pre-computed at half res (-1 = inline)
 static bool    gFlareHalfEnabled = false;     // runtime switch (set_flare_half_res); off = same flare maths as before
@@ -871,6 +886,9 @@ static float   gWarpY1n = 0.0f;
 static bool    gVfxActive = false;    // passes 13 / 14
 static bool    gSapGlint = false;     // pass 15 (+ glint inside 16)
 static bool    gSapLeak = false;      // light leak inside pass 16
+// Batch 19: Optical Diffusion v3 (passes 31 + 32 before the glow pyramid) and "does anything read the glow pyramid at all" (passes 1..10).
+static bool    gDiffActive = false;
+static bool    gNeedBloom = true;
 // Batch 13: Global Metallic Bevel (passes 25 + 26, between Time Slice and the dither). Block at float 7424 + layer * 16 (class Bevel in vfx_slots.dart):
 // slot 0 = On, slot 6 = Mix. The FIRST enabled layer with On = 1 and Mix > 0 is the one that is applied (its index goes to pass 26 in srcW).
 constexpr int kBevelBase = 7424;
@@ -927,16 +945,29 @@ static void findBatch6Passes(const float* ubo, int32_t count) {
     gVfxActive = false;
     gSapGlint = false;
     gSapLeak = false;
+    gDiffActive = false;
+    gNeedBloom = true;                                          // unknown buffer = keep the old behaviour (always build the pyramid)
     if (ubo == nullptr || count < (int32_t)kUboFloats) return;
     const int layers = (int)std::max(1.0f, std::min(ubo[1], 10.0f));
+    bool needBloom = false;
     for (int l = 0; l < layers; ++l) {
         if (ubo[32 + l * 192] < 0.5f) continue;                 // layer disabled
+        {
+            // Everything in pass 6 / pass 10 that reads the glow pyramid (superset of the shader's own gates; a missed one would change the look).
+            const float* L = ubo + 32 + l * 192;
+            const float* fxp = ubo + 2432 + l * 72;
+            if (L[10] > 0.01f || L[71] > 0.01f || L[73] > 0.01f || L[86] > 0.01f || L[98] > 0.01f || L[50] > 0.01f || L[102] > 0.01f ||
+                L[14] > 0.01f || L[99] > 0.01f || L[57] > 0.01f || L[58] > 0.01f ||
+                (L[30] > 0.01f && L[174] > 0.01f) || (L[77] > 0.01f && L[76] > 0.01f) || fxp[28] > 0.01f) needBloom = true;
+            if (fxp[23] > 0.01f) gDiffActive = true;
+        }
         const float* vx = ubo + 4096 + l * 64;
         const float* sx = ubo + 4736 + l * 64;
         if (vx[0] >= 0.5f && vx[1] > 0.001f) gVfxActive = true;
         if (sx[0] >= 0.5f && sx[1] > 0.001f && sx[15] > 0.001f) gSapGlint = true;
         if (sx[32] >= 0.5f && sx[33] > 0.001f && sx[45] > 0.001f) gSapLeak = true;
     }
+    gNeedBloom = needBloom;
 }
 
 static void findBevel(const float* ubo, int32_t count) {
@@ -1090,6 +1121,24 @@ static bool runPixelPass(int32_t pass, int slot, int32_t w, int32_t h, int32_t p
     return true;
 }
 
+// Batch 19: Optical Diffusion v3. Pass 31 builds an UNTHRESHOLDED L0 (2 x 2 box of the composite), the normal downsample passes 2 / 3 / 7 / 8 build L1..L4,
+// pass 32 adds the blurred frame back onto the composite (scratch), pass 14 copies it back. The glow pyramid (pass 1 ..) rewrites every level afterwards.
+static bool runDiffusion(int32_t w, int32_t h, int32_t pixelsPerSubmit) {
+    const int32_t wL0 = std::max(1, w >> 1), hL0 = std::max(1, h >> 1);
+    const int32_t wL1 = std::max(1, w >> 2), hL1 = std::max(1, h >> 2);
+    const int32_t wL2 = std::max(1, w >> 3), hL2 = std::max(1, h >> 3);
+    const int32_t wL3 = std::max(1, w >> 4), hL3 = std::max(1, h >> 4);
+    const int32_t wL4 = std::max(1, w >> 5), hL4 = std::max(1, h >> 5);
+    if (!submitAndWait([&]() {
+            recordPass(31, wL0, hL0, 0.0f, 0, hL0, w, h); recordBarrier();
+            recordPass(2, wL1, hL1, 1.5f, 0, hL1, wL0, hL0); recordBarrier();
+            recordPass(3, wL2, hL2, 2.0f, 0, hL2, wL1, hL1); recordBarrier();
+            recordPass(7, wL3, hL3, 2.0f, 0, hL3, wL2, hL2); recordBarrier();
+            recordPass(8, wL4, hL4, 2.0f, 0, hL4, wL3, hL3);
+        })) return false;
+    return runScratchEffect(32, 14, w, h, 15, pixelsPerSubmit);
+}
+
 static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixelsPerSubmit) {
     const int32_t wL0 = std::max(1, outWidth >> 1),  hL0 = std::max(1, outHeight >> 1);
     const int32_t wL1 = std::max(1, outWidth >> 2),  hL1 = std::max(1, outHeight >> 2);
@@ -1162,8 +1211,14 @@ static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixe
         if (!runScratchEffect(16, 17, outWidth, outHeight, 4, pixelsPerSubmit)) return false;
     }
 
-    // 2. Bloom pyramid (cheap, low-res) in a single submit.
-    if (!submitAndWait([&]() {
+    // 1e. Batch 19: Optical Diffusion v3 (needs its own unthresholded pyramid, so it runs before the glow pyramid rewrites the levels).
+    if (gDiffActive) {
+        if (!runDiffusion(outWidth, outHeight, pixelsPerSubmit)) return false;
+    }
+
+    // 2. Bloom pyramid (cheap, low-res) in a single submit. Batch 19: skipped when no effect reads it (an export of a plain colour grade no longer pays
+    //    for 8 extra passes per frame; the shader only touches the pyramid behind the same effect gates that gNeedBloom mirrors).
+    if (gNeedBloom && !submitAndWait([&]() {
             recordPass(1, wL0, hL0, 1.0f, 0, hL0); recordBarrier();
             recordPass(2, wL1, hL1, 1.5f, 0, hL1, wL0, hL0); recordBarrier();
             recordPass(3, wL2, hL2, 2.0f, 0, hL2, wL1, hL1); recordBarrier();
@@ -1175,7 +1230,7 @@ static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixe
         })) return false;
 
     // 2b. Pass 10: flare beam at HALF resolution for the flare layer (only when enabled and a flare is active).
-    if (gFlareLayer >= 0) {
+    if (gFlareLayer >= 0 && gNeedBloom) {
         for (int32_t y = 0; y < hL0;) {
             const int32_t rows = std::min(adaptiveRows(2, wL0, hL0, pixelsPerSubmit), hL0 - y);
             const auto t0 = std::chrono::steady_clock::now();
@@ -2043,6 +2098,10 @@ static void teardownAfterFailedInit() {
         if (gVk.lutImageView != VK_NULL_HANDLE) { vkDestroyImageView(gVk.device, gVk.lutImageView, nullptr); gVk.lutImageView = VK_NULL_HANDLE; }
         if (gVk.lutImage != VK_NULL_HANDLE) { vkDestroyImage(gVk.device, gVk.lutImage, nullptr); gVk.lutImage = VK_NULL_HANDLE; }
         if (gVk.lutMemory != VK_NULL_HANDLE) { vkFreeMemory(gVk.device, gVk.lutMemory, nullptr); gVk.lutMemory = VK_NULL_HANDLE; }
+        // Batch 19: the LUT texture is gone, so "this LUT is already uploaded" is no longer true. Without this reset, after a GPU restart the new (empty)
+        // LUT image was never filled again (same hash = upload skipped) and every LUT look turned flat / wrong until the app was force-stopped.
+        gVk.lutUploaded = false;
+        gLutHash = 0;
         if (gVk.linearSampler != VK_NULL_HANDLE) { vkDestroySampler(gVk.device, gVk.linearSampler, nullptr); gVk.linearSampler = VK_NULL_HANDLE; }
         if (gVk.lutSampler != VK_NULL_HANDLE) { vkDestroySampler(gVk.device, gVk.lutSampler, nullptr); gVk.lutSampler = VK_NULL_HANDLE; }
         vkDestroyDevice(gVk.device, nullptr);
@@ -2111,7 +2170,7 @@ int32_t get_last_render_status() { return gLastRenderStatus; }
 void set_band_budget_ms(int32_t ms) {
     gBandBudgetMs = std::max<int32_t>(4, std::min<int32_t>(ms, 500));
     gNsPerPx[0] = gNsPerPx[1] = gNsPerPx[2] = gNsPerPx[3] = gNsPerPx[4] = 0.0;      // re-learn the cost with the new target
-    gNsPerPx[5] = gNsPerPx[6] = gNsPerPx[14] = 0.0;                                   // Motion S slots (batch 9, + velocity pass batch 2B)
+    gNsPerPx[5] = gNsPerPx[6] = gNsPerPx[14] = gNsPerPx[15] = 0.0;                                   // Motion S slots (batch 9, + velocity pass batch 2B)
     gNsPerPx[7] = 0.0;                                                                // pass 23 (batch 12 step B)
     gNsPerPx[8] = gNsPerPx[9] = 0.0;                                                  // passes 22 / 24 (Time Slice, step C1)
 }
@@ -2666,9 +2725,12 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
                    const float* lutTable, int32_t lutCount) {
     std::lock_guard<std::mutex> lock(gVk.pipelineMutex);
 
-    size_t pixelCount = static_cast<size_t>(outWidth * outHeight);
+    size_t pixelCount = static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight);
 
     if (!gVk.isInitialized || !ensureBuffersCapacity(pixelCount)) {
+        // Batch 19: report it. This branch never set a status, so the app saw "0 = OK" for a frame that was the simplified CPU grade, the watchdog never
+        // noticed, and the preview / export silently showed (and saved) an almost ungraded picture until the app was restarted.
+        gLastRenderStatus = 1;
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
                                   reinterpret_cast<uint32_t*>(outputBytes),
                                   outWidth, outHeight, uniforms);
@@ -2705,6 +2767,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     findBatch6Passes(uniforms, uniformCount);
     findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);   // batch 13
     if (!runGpuPipeline(outWidth, outHeight)) {
+        if (gLastRenderStatus == 0) gLastRenderStatus = 1;
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
                                   reinterpret_cast<uint32_t*>(outputBytes),
                                   outWidth, outHeight, uniforms);
@@ -2961,7 +3024,14 @@ int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h
         gSurfGradeFrames++;
     }
     if (!gpuOk) {
-        // same fallback process_image uses; the pixels are put into outBuffer so the present path is identical
+        // Batch 19: do NOT present the simplified CPU grade. A frame that is presented cannot be taken back, so one bad frame meant a permanently
+        // ungraded frame in the exported video. Return -6 instead: nothing is presented, the caller waits for the GPU restart and sends the frame again.
+        if (gLastRenderStatus == 0) gLastRenderStatus = 1;
+        surfFailMsg("The GPU grade failed for this frame; it was not sent to the encoder (the CPU fallback would have been almost ungraded).");
+        return -6;
+    }
+    if (false) {
+        // (old fallback kept for reference, unreachable)
         if (!gVk.isInitialized || gVk.outBuffer == VK_NULL_HANDLE) return -2;
         std::vector<uint32_t> graded(pixelCount);
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes), graded.data(), w, h, uniforms);
