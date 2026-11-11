@@ -31,7 +31,7 @@ namespace {
 // + (batch 9) Motion S block motionS[1024] at floats 5376..6399, timeSlice[1024] at 6400..7423 (Time Slice, batch 12: renamed from reserved2, still unread), 7424..8191 free headroom.
 // Must match Vfx.uboFloats (vfx_slots.dart) and the UniformBlock in aereality_core.comp.
 // findBatch6Passes() returns early when fewer than kUboFloats floats are sent, so every caller must send the full buffer.
-constexpr size_t kUboFloats = 8192;
+constexpr size_t kUboFloats = 9216;   // batch 19: 8192 -> 9216 (Looks 8192.., Edge FX 8512.., Effect Region 8992..)
 
 struct ComputePushConstants {
     int32_t passIndex;
@@ -874,7 +874,7 @@ constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
 constexpr int32_t  kMaxPixelsPerSubmit = 4000000;  // upper cap only: the time budget below normally limits a band first
 
 static int32_t gBandBudgetMs = 40;            // target wall time of ONE GPU submit (shorter = the phone UI stays fluid)
-static double  gNsPerPx[16] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B), [15] pass 32 (Optical Diffusion apply, batch 19)
+static double  gNsPerPx[18] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B), [15] pass 32 (Optical Diffusion apply, batch 19)
 static int64_t gLastRenderUs = 0;
 static int32_t gFlareLayer = -1;              // layer whose flare is pre-computed at half res (-1 = inline)
 static bool    gFlareHalfEnabled = false;     // runtime switch (set_flare_half_res); off = same flare maths as before
@@ -889,6 +889,9 @@ static bool    gSapLeak = false;      // light leak inside pass 16
 // Batch 19: Optical Diffusion v3 (passes 31 + 32 before the glow pyramid) and "does anything read the glow pyramid at all" (passes 1..10).
 static bool    gDiffActive = false;
 static bool    gNeedBloom = true;
+static bool    gLooksActive = false;   // pass 33 (Looks Diffusion / Film Damage / Glimmer Glass)
+static bool    gLooksPyr = false;      // pass 33 reads the unthresholded pyramid (Looks Diffusion or Glimmer Glass)
+static bool    gEdgeActive = false;    // pass 34 (Edge FX)
 // Batch 13: Global Metallic Bevel (passes 25 + 26, between Time Slice and the dither). Block at float 7424 + layer * 16 (class Bevel in vfx_slots.dart):
 // slot 0 = On, slot 6 = Mix. The FIRST enabled layer with On = 1 and Mix > 0 is the one that is applied (its index goes to pass 26 in srcW).
 constexpr int kBevelBase = 7424;
@@ -946,6 +949,9 @@ static void findBatch6Passes(const float* ubo, int32_t count) {
     gSapGlint = false;
     gSapLeak = false;
     gDiffActive = false;
+    gLooksActive = false;
+    gLooksPyr = false;
+    gEdgeActive = false;
     gNeedBloom = true;                                          // unknown buffer = keep the old behaviour (always build the pyramid)
     if (ubo == nullptr || count < (int32_t)kUboFloats) return;
     const int layers = (int)std::max(1.0f, std::min(ubo[1], 10.0f));
@@ -960,6 +966,17 @@ static void findBatch6Passes(const float* ubo, int32_t count) {
                 L[14] > 0.01f || L[99] > 0.01f || L[57] > 0.01f || L[58] > 0.01f ||
                 (L[30] > 0.01f && L[174] > 0.01f) || (L[77] > 0.01f && L[76] > 0.01f) || fxp[28] > 0.01f) needBloom = true;
             if (fxp[23] > 0.01f) gDiffActive = true;
+            // Batch 19: Looks (8192 + l * 32) and Edge FX (8512 + l * 48), slot numbers = LK(l, i) / EG(l, i) in the shader
+            const float* lk = ubo + 8192 + l * 32;
+            const float* eg = ubo + 8512 + l * 48;
+            const bool ld = lk[0] >= 0.5f && lk[2] > 0.001f;
+            const bool gc = lk[21] >= 0.5f && (lk[22] > 0.001f || lk[25] > 0.001f);
+            const bool fd = lk[8] >= 0.5f;
+            if ((ld || gc || fd) && lk[31] > 0.001f) {
+                gLooksActive = true;
+                if (ld || gc) gLooksPyr = true;
+            }
+            if (eg[0] >= 0.5f && eg[7] > 0.001f) gEdgeActive = true;
         }
         const float* vx = ubo + 4096 + l * 64;
         const float* sx = ubo + 4736 + l * 64;
@@ -1123,19 +1140,23 @@ static bool runPixelPass(int32_t pass, int slot, int32_t w, int32_t h, int32_t p
 
 // Batch 19: Optical Diffusion v3. Pass 31 builds an UNTHRESHOLDED L0 (2 x 2 box of the composite), the normal downsample passes 2 / 3 / 7 / 8 build L1..L4,
 // pass 32 adds the blurred frame back onto the composite (scratch), pass 14 copies it back. The glow pyramid (pass 1 ..) rewrites every level afterwards.
-static bool runDiffusion(int32_t w, int32_t h, int32_t pixelsPerSubmit) {
+static bool buildDiffusionPyramid(int32_t w, int32_t h) {
     const int32_t wL0 = std::max(1, w >> 1), hL0 = std::max(1, h >> 1);
     const int32_t wL1 = std::max(1, w >> 2), hL1 = std::max(1, h >> 2);
     const int32_t wL2 = std::max(1, w >> 3), hL2 = std::max(1, h >> 3);
     const int32_t wL3 = std::max(1, w >> 4), hL3 = std::max(1, h >> 4);
     const int32_t wL4 = std::max(1, w >> 5), hL4 = std::max(1, h >> 5);
-    if (!submitAndWait([&]() {
-            recordPass(31, wL0, hL0, 0.0f, 0, hL0, w, h); recordBarrier();
-            recordPass(2, wL1, hL1, 1.5f, 0, hL1, wL0, hL0); recordBarrier();
-            recordPass(3, wL2, hL2, 2.0f, 0, hL2, wL1, hL1); recordBarrier();
-            recordPass(7, wL3, hL3, 2.0f, 0, hL3, wL2, hL2); recordBarrier();
-            recordPass(8, wL4, hL4, 2.0f, 0, hL4, wL3, hL3);
-        })) return false;
+    return submitAndWait([&]() {
+        recordPass(31, wL0, hL0, 0.0f, 0, hL0, w, h); recordBarrier();
+        recordPass(2, wL1, hL1, 1.5f, 0, hL1, wL0, hL0); recordBarrier();
+        recordPass(3, wL2, hL2, 2.0f, 0, hL2, wL1, hL1); recordBarrier();
+        recordPass(7, wL3, hL3, 2.0f, 0, hL3, wL2, hL2); recordBarrier();
+        recordPass(8, wL4, hL4, 2.0f, 0, hL4, wL3, hL3);
+    });
+}
+
+static bool runDiffusion(int32_t w, int32_t h, int32_t pixelsPerSubmit) {
+    if (!buildDiffusionPyramid(w, h)) return false;
     return runScratchEffect(32, 14, w, h, 15, pixelsPerSubmit);
 }
 
@@ -1212,8 +1233,18 @@ static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixe
     }
 
     // 1e. Batch 19: Optical Diffusion v3 (needs its own unthresholded pyramid, so it runs before the glow pyramid rewrites the levels).
+    // Batch 19: Looks (pass 33) and Edge FX (pass 34) use the same unthresholded pyramid when they need one; it is built once for all of them.
+    if (gDiffActive || gLooksPyr) {
+        if (!buildDiffusionPyramid(outWidth, outHeight)) return false;
+    }
     if (gDiffActive) {
-        if (!runDiffusion(outWidth, outHeight, pixelsPerSubmit)) return false;
+        if (!runScratchEffect(32, 14, outWidth, outHeight, 15, pixelsPerSubmit)) return false;
+    }
+    if (gLooksActive) {
+        if (!runScratchEffect(33, 14, outWidth, outHeight, 16, pixelsPerSubmit)) return false;
+    }
+    if (gEdgeActive) {
+        if (!runScratchEffect(34, 14, outWidth, outHeight, 17, pixelsPerSubmit)) return false;
     }
 
     // 2. Bloom pyramid (cheap, low-res) in a single submit. Batch 19: skipped when no effect reads it (an export of a plain colour grade no longer pays
@@ -2170,7 +2201,7 @@ int32_t get_last_render_status() { return gLastRenderStatus; }
 void set_band_budget_ms(int32_t ms) {
     gBandBudgetMs = std::max<int32_t>(4, std::min<int32_t>(ms, 500));
     gNsPerPx[0] = gNsPerPx[1] = gNsPerPx[2] = gNsPerPx[3] = gNsPerPx[4] = 0.0;      // re-learn the cost with the new target
-    gNsPerPx[5] = gNsPerPx[6] = gNsPerPx[14] = gNsPerPx[15] = 0.0;                                   // Motion S slots (batch 9, + velocity pass batch 2B)
+    gNsPerPx[5] = gNsPerPx[6] = gNsPerPx[14] = gNsPerPx[15] = gNsPerPx[16] = gNsPerPx[17] = 0.0;                                   // Motion S slots (batch 9, + velocity pass batch 2B)
     gNsPerPx[7] = 0.0;                                                                // pass 23 (batch 12 step B)
     gNsPerPx[8] = gNsPerPx[9] = 0.0;                                                  // passes 22 / 24 (Time Slice, step C1)
 }
