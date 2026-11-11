@@ -308,7 +308,7 @@ class GlowFrame extends StatelessWidget {
 //
 // Controller index map (UNCHANGED, identical to the old TabBar order):
 //   0 PRESETS  1 TONEMAPPERS  2 GRADIENT MAP  3 LUT  4 BASIC  5 COLORISTA  6 MAGIC  7 COPIED STUFF
-//   8 GLOW / FLARE  9 ATMOSPHERE  10 CURVES  11 TEXT  12 VFX  13 SAPPHIRE  14 TIME SLICE (added in batch 12 C3, appended so no old index moved)
+//   8 GLOW / FLARE  9 ATMOSPHERE  10 CURVES  11 TEXT  12 VFX  13 SAPPHIRE  14 TIME SLICE (added in batch 12 C3, appended so no old index moved)  15 LOOKS  16 EDGE FX (batch 19)
 // Shelves only decide which tabs are shown together.
 // -----------------------------------------------------------------------------
 class _TabDef {
@@ -334,6 +334,8 @@ const List<_ShelfDef> _kShelves = <_ShelfDef>[
     _TabDef(12, 'VFX'),
     _TabDef(13, 'SAPPHIRE'),
     _TabDef(14, 'TIME SLICE'),
+    _TabDef(15, 'LOOKS'),
+    _TabDef(16, 'EDGE FX'),
   ]),
   _ShelfDef('TEXT', Icons.title_rounded, <_TabDef>[_TabDef(11, 'TEXT')]),
 ];

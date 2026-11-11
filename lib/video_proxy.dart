@@ -35,6 +35,7 @@ class MediaProbe {
   final bool tenBit;
   final bool hasAudio;
   final double? fps; // frames per second the stream header says (null = unknown)
+  final double? tbr; // batch 19: ffmpeg's "tbr" (its guess of the real frame rate); with fps it tells variable frame rate files apart
 
   const MediaProbe({
     required this.ok,
@@ -45,11 +46,21 @@ class MediaProbe {
     this.tenBit = false,
     this.hasAudio = false,
     this.fps,
+    this.tbr,
   });
 
   static const MediaProbe unknown = MediaProbe(ok: false);
 
   bool get hasSize => width != null && height != null && width! > 0 && height! > 0;
+
+  /// Batch 19: true for a VARIABLE frame rate file (phone screen recordings, many editor exports): the average rate in the header and ffmpeg's real-rate guess disagree
+  /// by more than 3 %. Such a file has uneven gaps between frames, which gives uneven duplicate / dropped frames everywhere a fixed rate is needed.
+  bool get isVfr {
+    final double? a = fps;
+    final double? t = tbr;
+    if (a == null || t == null || a <= 0 || t <= 0) return false;
+    return (a - t).abs() / t > 0.03;
+  }
 }
 
 class VideoProxy {
@@ -111,6 +122,7 @@ class VideoProxy {
     int? w;
     int? h;
     double? fps;
+    double? tbr;
     bool ten = false;
     for (final m in RegExp(r'Stream #\d+:\d+[^\n]*?: Video: ([A-Za-z0-9_]+)([^\n]*)').allMatches(log)) {
       final String rest = m.group(2) ?? '';
@@ -124,6 +136,8 @@ class VideoProxy {
       ten = RegExp(r'p1[02](le|be)?').hasMatch(rest) || rest.contains('Main 10');
       final fm = RegExp(r'(\d+(?:\.\d+)?) fps').firstMatch(rest);
       if (fm != null) fps = double.tryParse(fm.group(1)!);
+      final tm = RegExp(r'(\d+(?:\.\d+)?)(k?) tbr').firstMatch(rest);
+      if (tm != null) tbr = (double.tryParse(tm.group(1)!) ?? 0) * (tm.group(2) == 'k' ? 1000.0 : 1.0);
       break;
     }
 
@@ -140,7 +154,7 @@ class VideoProxy {
 
     final bool audio = RegExp(r'Stream #\d+:\d+[^\n]*?: Audio:').hasMatch(log);
     final bool ok = codec != null || dur != null;
-    return MediaProbe(ok: ok, durationSec: dur, width: w, height: h, videoCodec: codec, tenBit: ten, hasAudio: audio, fps: fps);
+    return MediaProbe(ok: ok, durationSec: dur, width: w, height: h, videoCodec: codec, tenBit: ten, hasAudio: audio, fps: fps, tbr: tbr);
   }
 
   // ---------------------------------------------------------------------------
@@ -148,13 +162,28 @@ class VideoProxy {
   // ---------------------------------------------------------------------------
   static String _key(String path, int length, int modifiedMs) {
     int h = 0x811C9DC5;
-    for (final int u in '$path|$length|$modifiedMs'.codeUnits) {
+    for (final int u in '$path|$length|$modifiedMs|cfr1'.codeUnits) {   // batch 19: "cfr1" = proxies are constant frame rate now (older cached proxies may be variable)
       h ^= u & 0xFF;
       h = (h * 0x01000193) & 0xFFFFFFFF;
       h ^= (u >> 8) & 0xFF;
       h = (h * 0x01000193) & 0xFFFFFFFF;
     }
     return h.toRadixString(16).padLeft(8, '0');
+  }
+
+  /// Batch 19: the constant frame rate every proxy is written at. A variable frame rate file uses ffmpeg's real-rate guess (tbr, so no frame is lost), otherwise the
+  /// header rate; the value snaps to the nearest standard rate when it is within 6 % (29.7 -> 30, 23.98 -> 23.976), and falls back to 30.
+  static String cfrRate(MediaProbe p) {
+    double? r = (p.isVfr ? p.tbr : null) ?? p.fps ?? p.tbr;
+    if (r == null || r < 1 || r > 240) return '30';
+    const List<double> std = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 90, 120];
+    for (final double c in std) {
+      if ((r - c).abs() / c < 0.06) {
+        r = c;
+        break;
+      }
+    }
+    return r.toStringAsFixed(3);
   }
 
   /// Long edge is capped at [maxLongEdge]; sizes are always even for H.264.
@@ -233,13 +262,14 @@ class VideoProxy {
       final String video = '-c:v libx264 -preset ultrafast -pix_fmt yuv420p -vf "$vf" -g 12';
       // -fflags +genpts: WebM / MKV files with missing or broken timestamps get generated ones (without them ffmpeg can drop every frame but the first,
       // which is a proxy that is "a single static image").
-      final String fpsArg = (probe.fps != null && probe.fps! >= 1 && probe.fps! <= 120) ? probe.fps!.toStringAsFixed(3) : '30';
+      final String fpsArg = cfrRate(probe);
+      final String cfr = '-vsync cfr -r $fpsArg'; // batch 19: EVERY attempt writes a constant frame rate (mp4 would otherwise keep the variable timestamps)
       final List<String> attempts = [
-        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -map 0:a:0? -sn -dn $video -c:a aac -b:a 128k -movflags +faststart "${part.path}"',
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -map 0:a:0? -sn -dn $video $cfr -c:a aac -b:a 128k -movflags +faststart "${part.path}"',
         // second try without sound: a source audio stream ffmpeg cannot convert must not cost the picture
-        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video -movflags +faststart "${part.path}"',
-        // last try: constant frame rate with generated timestamps (accepted even if it cannot be checked against the source)
-        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video -vsync cfr -r $fpsArg -movflags +faststart "${part.path}"',
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video $cfr -movflags +faststart "${part.path}"',
+        // last try: the same without the output-rate option order that some builds reject (-r before the filter chain as an input-independent output rate)
+        '-hide_banner -y ${_cpuArgs()}-fflags +genpts -i "$srcPath" -map 0:v:0 -an -sn -dn $video -r $fpsArg -movflags +faststart "${part.path}"',
       ];
 
       final Stopwatch sw = Stopwatch()..start();

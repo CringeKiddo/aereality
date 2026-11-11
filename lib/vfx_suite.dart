@@ -200,6 +200,15 @@ class VfxSuite {
   static List<Widget> colorSlot(BuildContext c, List<double> l, int slot, String label, VoidCallback onChanged, VoidCallback onEnded) =>
       _color(c, l, slot, label, onChanged, onEnded);
 
+  // Batch 19: the same helpers for looks_edge_suite.dart (Looks / Edge FX tabs)
+  static Widget sliderRow(BuildContext c, List<double> l, int slot, String title, double min, double max, VoidCallback onChanged, VoidCallback onEnded) =>
+      _s(c, l, slot, title, min, max, onChanged, onEnded);
+  static Widget chipsRow(List<double> l, String label, int slot, List<String> names, VoidCallback onChanged, VoidCallback onEnded) =>
+      _chips(l, label, slot, names, onChanged, onEnded);
+  static Widget toggleRow(List<double> l, String label, int slot, VoidCallback onChanged, VoidCallback onEnded) => _toggle(l, label, slot, onChanged, onEnded);
+  static Widget header(String t) => _hdr(t);
+  static Widget note(String t) => _note(t);
+
   static List<Widget> _color(BuildContext c, List<double> l, int slot, String label, VoidCallback onChanged, VoidCallback onEnded) {
     final hsv = _hsv(l[slot]);
     final v = l[slot].round();

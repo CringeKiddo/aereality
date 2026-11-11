@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'gradient_map.dart';
 import 'vfx_slots.dart';
+import 'looks_edge_slots.dart'; // batch 19: Looks / Edge FX / Effect Region blocks
 import 'time_slice_slots.dart'; // batch 12 (step A): Time Slice settings model
 
 // =============================================================================
@@ -408,6 +409,9 @@ class AdjustmentLayer {
   List<double> sap; // batch 6 Sapphire block: S_Glint + S_LightLeak (see class Sap)
   List<double> timeSlice; // batch 12 Time Slice block (see class TimeSlice); old presets without it load the defaults (effect off)
   List<double> mathOps; // batch 14 MathOps block (see class MathOps in vfx_slots.dart); old presets without it load the defaults (effect off)
+  List<double> looks; // batch 19 Looks block (class Looks in looks_edge_slots.dart); old presets: defaults (everything off)
+  List<double> edgeFx; // batch 19 Edge FX block (class EdgeFx)
+  List<double> place; // batch 19 Effect Region block (class Place)
   List<double> grad4; // batch 14 4-Way Gradient block (see class Gradient4Way in vfx_slots.dart); old presets without it load the defaults (effect off)
   List<double> bevel; // batch 13 Global Metallic Bevel block (see class Bevel in vfx_slots.dart); old presets without it load the defaults (effect off)
   // Curves v2: flat [x0,y0,x1,y1,...] per channel (RGB, R, G, B). Empty = fall back to the legacy 5-point curves.
@@ -712,6 +716,9 @@ class AdjustmentLayer {
     List<double>? bevel,
     List<double>? mathOps,
     List<double>? grad4,
+    List<double>? looks,
+    List<double>? edgeFx,
+    List<double>? place,
     List<double>? curveXYM,
     List<double>? curveXYR,
     List<double>? curveXYG,
@@ -794,6 +801,9 @@ class AdjustmentLayer {
         bevel = Bevel.sanitize(bevel),
         mathOps = MathOps.sanitize(mathOps),
         grad4 = Gradient4Way.sanitize(grad4),
+        looks = Looks.sanitize(looks),
+        edgeFx = EdgeFx.sanitize(edgeFx),
+        place = Place.sanitize(place),
         curveXYM = curveXYM ?? <double>[],
         curveXYR = curveXYR ?? <double>[],
         curveXYG = curveXYG ?? <double>[],
@@ -983,6 +993,9 @@ class AdjustmentLayer {
       bevel: List<double>.from(bevel),
       mathOps: List<double>.from(mathOps),
       grad4: List<double>.from(grad4),
+      looks: List<double>.from(looks),
+      edgeFx: List<double>.from(edgeFx),
+      place: List<double>.from(place),
       curveXYM: List<double>.from(curveXYM),
       curveXYR: List<double>.from(curveXYR),
       curveXYG: List<double>.from(curveXYG),
@@ -1155,6 +1168,9 @@ class AdjustmentLayer {
       'bevel': bevel,
       'mathOps': mathOps,
       'grad4': grad4,
+      'looks': looks,
+      'edgeFx': edgeFx,
+      'place': place,
       'curveXY': [curveXYM, curveXYR, curveXYG, curveXYB],
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
@@ -1329,6 +1345,9 @@ class AdjustmentLayer {
       bevel: (json['bevel'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       mathOps: (json['mathOps'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       grad4: (json['grad4'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      looks: (json['looks'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      edgeFx: (json['edgeFx'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      place: (json['place'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       curveXYM: _xyFromJson(json['curveXY'], 0),
       curveXYR: _xyFromJson(json['curveXY'], 1),
       curveXYG: _xyFromJson(json['curveXY'], 2),
