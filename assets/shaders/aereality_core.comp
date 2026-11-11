@@ -139,7 +139,7 @@ layout(std430, binding = 13) buffer DisplayBuffer { vec4 display_px[]; };
 // Ring frames are the PRE-dither pass 6 output, so slices are never dithered twice. Without Time Slice the buffer is P long, as in step B.
 
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B), 31 DiffusionPrefilter (composite -> unthresholded L0, batch 19), 32 DiffusionApply (composite + L1..L4 -> out scratch, then pass 14 copies back, batch 19)
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B), 31 DiffusionPrefilter (composite -> unthresholded L0, batch 19), 32 DiffusionApply (composite + L1..L4 -> out scratch, then pass 14 copies back, batch 19), 33 Looks (diffusion looks / glimmer glass / film damage, same scratch + pass 14 scheme), 34 Edge FX (border effects)
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -396,6 +396,10 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float bevel[160];              // 7424..7583: METALLIC BEVEL (batch 13), 16 floats per layer at 7424 + layer * 16, slot map = class Bevel in vfx_slots.dart (read by pass 26 only). 7584..8191 stays free headroom (not declared here)
     float mathops[160];            // 7584..7743: MATHOPS (batch 14), 16 floats per layer at 7584 + layer * 16, slot map = class MathOps in vfx_slots.dart (read by pass 27 only)
     float grad4[160];              // 7744..7903: 4-WAY GRADIENT (batch 14), 16 floats per layer at 7744 + layer * 16, slot map = class Gradient4Way in vfx_slots.dart (read by pass 28 only). 7904..8191 stays free headroom (not declared here)
+    float _headroom[288];          // 7904..8191: unused (keeps the next blocks at their documented offsets)
+    float looks[320];              // 8192..8511: LOOKS (batch 19), 32 floats per layer: Looks Diffusion / Film Damage / Glimmer Glass (class Looks in looks_edge_slots.dart), read by pass 33
+    float edgefx[480];             // 8512..8991: EDGE FX (batch 19), 48 floats per layer (class EdgeFx), read by pass 34
+    float place[80];               // 8992..9071: EFFECT REGION (batch 19), 8 floats per layer (class Place), read by VFX, diffusion, Looks and Edge FX
 };
 
 // Per-dispatch globals
@@ -427,6 +431,40 @@ float linearToSrgb(float c) {
 }
 vec3 linearToSrgb(vec3 c) {
     return vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+}
+
+// =============================================================================
+// BATCH 19: EFFECT REGION + LOOKS (pass 33) + EDGE FX (pass 34)
+//   place[]   8992..9071   per layer 8 floats: 0 on, 1 cx, 2 cy, 3 zoom, 4 feather, 5 shape (0 ellipse, 1 rectangle)   (class Place in looks_edge_slots.dart)
+//   looks[]   8192..8511   per layer 32 floats: Looks Diffusion 0..7, Film Damage 8..20, Glimmer Glass 21..30, opacity 31   (class Looks)
+//   edgefx[]  8512..8991   per layer 48 floats: Edge FX (border) on the rectangular edges of the picture (class EdgeFx)
+// =============================================================================
+#define LK(l, i) looks[(l) * 32 + (i)]
+#define EG(l, i) edgefx[(l) * 48 + (i)]
+#define PL(l, i) place[(l) * 8 + (i)]
+
+// 1 inside the layer's effect region (or everywhere when no region is set), 0 outside; the edge fades over "feather".
+float placeMask(int l, vec2 uv) {
+    if (PL(l, 0) < 0.5) return 1.0;
+    vec2 c = vec2(PL(l, 1), PL(l, 2));
+    float z = max(PL(l, 3), 0.05);
+    float f = clamp(PL(l, 4), 0.02, 1.0);
+    vec2 d = (uv - c) / (0.5 * z);
+    float dist = (PL(l, 5) > 0.5) ? max(abs(d.x), abs(d.y)) : length(d);
+    return 1.0 - smoothstep(1.0 - f, 1.0, dist);
+}
+
+vec3 packedRGB(float v) {
+    float n = floor(v + 0.5);
+    float r = floor(n / 65536.0);
+    float g = floor((n - r * 65536.0) / 256.0);
+    float b = n - r * 65536.0 - g * 256.0;
+    return srgbToLinear(vec3(r, g, b) / 255.0);
+}
+
+vec3 hueRGB(float h) {
+    vec3 k = clamp(abs(fract(vec3(h) + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    return k * k * (3.0 - 2.0 * k);
 }
 
 float hash12(vec2 p) {
@@ -3695,7 +3733,8 @@ void executeVfx(ivec2 coord, int width, int height) {
         if (layers[li].isEnabled < 0.5 || vx[li].v[0] < 0.5) continue;
         float op = clamp(vx[li].v[1], 0.0, 1.0) * clamp(layers[li].opacity, 0.0, 1.0);
         if (op <= 0.001) continue;
-        col = vfxLayer(col, li, coord, width, height, op);
+        float reg = placeMask(li, (vec2(coord) + 0.5) / vec2(width, height));   // batch 19: effect region
+        if (reg > 0.001) col = mix(col, vfxLayer(col, li, coord, width, height, op), reg);
     }
     col = sanitize(col);
     out_pixels[idx * 2] = packHalf2x16(col.rg);
@@ -4483,7 +4522,7 @@ void executeDiffusionApply(ivec2 coord, int width, int height) {
     for (int li = 0; li < 10; li++) {
         if (li >= totalL) break;
         if (layers[li].isEnabled < 0.5) continue;
-        float amt = clamp(fx[li].f[23], 0.0, 1.0);
+        float amt = clamp(fx[li].f[23], 0.0, 1.0) * placeMask(li, uv);   // batch 19: effect region
         if (amt <= 0.01) continue;
         float r = clamp(fx[li].f[25], 0.0, 1.0);
         // level weights (L1, L2, L3, L4): tight / calibrated / wide anchors, Radius slides between them
@@ -4501,6 +4540,526 @@ void executeDiffusionApply(ivec2 coord, int width, int height) {
         vec3 processed = pre + F * amt;                              // gain 1.0: Strength 1.0 = the reference "high" (checked against the reference frame: mean error 0.051 at 0.75 x 1.3)
         processed = mix(processed, pre, clamp(fx[li].f[26], 0.0, 1.0));
         col = fxMix(pre, processed, fx[li].f[3], fx[li].f[21]);
+    }
+    col = sanitize(col);
+    out_pixels[idx * 2] = packHalf2x16(col.rg);
+    out_pixels[idx * 2 + 1] = packHalf2x16(vec2(col.b, base.a));
+}
+
+// ----------------------------------------------------------------------------- pass 33: LOOKS
+void executeLooks(ivec2 coord, int width, int height) {
+    int idx = coord.y * width + coord.x;
+    vec4 base = unpackComposite(idx);
+    vec3 col = base.rgb;
+    vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
+    float hs = float(height) / 1080.0;                         // everything that is measured in pixels scales with the frame height
+    vec2 pix = vec2(coord);
+    vec3 B1 = sampleBloomSmooth(1, uv, max(width >> 2, 1), max(height >> 2, 1)).rgb;
+    vec3 B2 = sampleBloomSmooth(2, uv, max(width >> 3, 1), max(height >> 3, 1)).rgb;
+    vec3 B3 = sampleBloomSmooth(3, uv, max(width >> 4, 1), max(height >> 4, 1)).rgb;
+    vec3 B4 = sampleBloomSmooth(4, uv, max(width >> 5, 1), max(height >> 5, 1)).rgb;
+    int totalL = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int li = 0; li < 10; li++) {
+        if (li >= totalL) break;
+        if (layers[li].isEnabled < 0.5) continue;
+        float lop = clamp(LK(li, 31), 0.0, 1.0) * clamp(layers[li].opacity, 0.0, 1.0) * placeMask(li, uv);
+        if (lop <= 0.001) continue;
+        vec3 pre = col;
+        vec3 o = col;
+
+        // ---------------- LOOKS DIFFUSION: lens-filter looks (0 Black Pro-Mist, 1 White Pro-Mist, 2 Soft FX, 3 Hollywood Black Magic, 4 Classic Soft)
+        if (LK(li, 0) > 0.5) {
+            int t = int(LK(li, 1) + 0.5);
+            float st = clamp(LK(li, 2), 0.0, 1.0);
+            float rad = clamp(LK(li, 3), 0.0, 1.0);
+            vec4 wt = mix(vec4(0.55, 0.40, 0.15, 0.0), vec4(0.10, 0.30, 0.55, 0.45), rad);
+            vec3 F = B1 * wt.x + B2 * wt.y + B3 * wt.z + B4 * wt.w;
+            float lf = luma(F);
+            float lc = luma(o);
+            F *= mix(1.0, smoothstep(0.08, 0.55, lf), clamp(LK(li, 6), 0.0, 1.0));
+            if (t == 0) {                       // Black Pro-Mist: highlights bloom, shadows stay deep, slightly desaturated glow
+                vec3 g = mix(F, vec3(luma(F)), 0.25) * st * 1.2;
+                o += g * (0.35 + 0.65 * smoothstep(0.05, 0.50, lc));
+            } else if (t == 1) {                // White Pro-Mist: milky veil everywhere, lifted shadows
+                o += F * st * 1.5 + vec3(0.035) * st * (1.0 - smoothstep(0.0, 0.25, lc));
+            } else if (t == 2) {                // Soft FX: detail is softened, brightness barely changes
+                o = mix(o, F * 1.5, st * 0.55) + F * st * 0.20;
+            } else if (t == 3) {                // Hollywood Black Magic: Black Pro-Mist + warm halo + lifted blacks
+                o += mix(F, vec3(luma(F)), 0.15) * st * 1.3 * (0.30 + 0.70 * smoothstep(0.04, 0.45, lc));
+                o += vec3(1.0, 0.45, 0.22) * F * st * 0.45 + vec3(0.02) * st;
+            } else {                            // Classic Soft: a lighten-style soft copy over a sharp core
+                o = mix(o, max(o, F * 1.6), st * 0.85);
+            }
+            float hal = clamp(LK(li, 4), 0.0, 1.0);
+            if (hal > 0.001) {                  // halation: warm red-orange glow around bright areas
+                vec3 H = (B2 * 0.5 + B3 * 0.5) * smoothstep(0.30, 1.00, max(luma(B2), luma(B3)));
+                o += H * vec3(1.0, 0.28, 0.10) * hal * 1.2;
+            }
+            float ck = clamp(LK(li, 5), 0.0, 1.0);
+            o = o * (1.0 - 0.30 * ck) + vec3(0.03 * ck);   // contrast softening
+        }
+
+        // ---------------- GLIMMER GLASS: soft halo + small star-shaped glints on the brightest points
+        if (LK(li, 21) > 0.5) {
+            float th = clamp(LK(li, 24), 0.0, 1.5);
+            vec3 hz = B1 * 0.5 + B2 * 0.5;
+            o += hz * smoothstep(th * 0.5, th * 0.5 + 0.40, luma(hz)) * clamp(LK(li, 25), 0.0, 1.0) * 1.2;
+            float spark = clamp(LK(li, 22), 0.0, 1.0);
+            if (spark > 0.001) {
+                float dens = clamp(LK(li, 26), 0.0, 1.0);
+                float cs = mix(56.0, 18.0, dens) * hs;
+                float sz = mix(7.0, 40.0, clamp(LK(li, 23), 0.0, 1.0)) * hs;
+                int nLines = int(clamp(floor(LK(li, 27) + 0.5), 2.0, 4.0));           // 2 = 4-point star, 3 = 6-point, 4 = 8-point
+                float tw = clamp(LK(li, 28), 0.0, 1.0);
+                float cm = LK(li, 29);
+                float seed = LK(li, 30);
+                vec2 cell = floor(pix / cs);
+                vec3 add = vec3(0.0);
+                for (int cy = -1; cy <= 1; cy++) {
+                    for (int cx = -1; cx <= 1; cx++) {
+                        vec2 cid = cell + vec2(float(cx), float(cy));
+                        vec4 rn = vfxRnd(cid, seed + 17.0);
+                        if (rn.x > 0.60) continue;
+                        vec2 cp = (cid + 0.15 + 0.7 * rn.yz) * cs;
+                        vec3 src = compAt(ivec2(clamp(cp, vec2(0.0), vec2(float(width - 1), float(height - 1)))), width, height);
+                        float hv = luma(src);
+                        if (hv < th) continue;
+                        vec2 d = pix - cp;
+                        float tws = mix(1.0, 0.5 + 0.5 * sin(u_time * (2.0 + 4.0 * rn.w) + rn.z * 40.0), tw);
+                        float len = sz * (0.45 + 0.75 * rn.y);
+                        float rays = 0.0;
+                        for (int k = 0; k < 4; k++) {
+                            if (k >= nLines) break;
+                            float a = float(k) * 3.14159265 / float(nLines) + rn.x * 3.0;
+                            vec2 ax = vec2(cos(a), sin(a));
+                            float along = abs(dot(d, ax));
+                            float across = abs(dot(d, vec2(-ax.y, ax.x)));
+                            rays += exp(-pow(across / (1.1 * hs + 0.02 * along), 2.0)) * exp(-along / len);
+                        }
+                        float core = exp(-dot(d, d) / pow(len * 0.18 + 1.0, 2.0));
+                        vec3 tint = (cm < 0.5) ? vec3(1.0) : ((cm < 1.5) ? vec3(1.0, 0.82, 0.55) : ((cm < 2.5) ? vec3(0.65, 0.82, 1.0) : hueRGB(rn.w)));
+                        add += tint * (rays * 0.75 + core) * clamp(hv - th * 0.8, 0.0, 3.0) * tws;
+                    }
+                }
+                o += add * spark * 0.9;
+            }
+        }
+
+        // ---------------- FILM DAMAGE
+        if (LK(li, 8) > 0.5) {
+            float fps = clamp(LK(li, 18), 2.0, 30.0);
+            float ft = floor(u_time * fps);                // the damage changes at this rate ("on twos" look at low values)
+            float seed = LK(li, 19);
+            float weave = clamp(LK(li, 15), 0.0, 1.0);
+            if (weave > 0.01) {                            // gate weave: the whole picture jitters a little
+                vec2 off = (vec2(hash12(vec2(ft, seed + 1.0)), hash12(vec2(ft + 7.0, seed + 2.0))) - 0.5) * weave * 0.010 * float(height);
+                o += compBilinear(pix + off, width, height).rgb - col;
+            }
+            float fl = clamp(LK(li, 14), 0.0, 1.0);
+            o *= 1.0 + fl * 0.28 * (hash12(vec2(ft * 1.7, seed + 5.0)) - 0.5) * 2.0;
+            float gr = clamp(LK(li, 9), 0.0, 1.0);
+            if (gr > 0.001) {                              // grain: strongest in the mid tones
+                float gs = mix(1.0, 3.2, clamp(LK(li, 10), 0.0, 1.0)) * max(hs, 0.5);
+                float g = hash12(floor(pix / gs) + vec2(ft * 13.7, seed)) - 0.5;
+                float l2 = clamp(luma(linearToSrgb(max(o, vec3(0.0)))), 0.0, 1.0);
+                o += vec3(g) * gr * 0.18 * (0.20 + 4.0 * l2 * (1.0 - l2));
+            }
+            float sc = clamp(LK(li, 11), 0.0, 1.0);
+            if (sc > 0.001) {                              // vertical scratches
+                for (int k = 0; k < 6; k++) {
+                    vec4 rn = vfxRnd(vec2(float(k), floor(ft * 0.5)), seed + 3.0);
+                    if (rn.x > sc * 0.85) continue;
+                    float x = rn.y * float(width) + sin(pix.y * 0.012 + rn.z * 6.0) * 2.0 * hs;
+                    float y0 = rn.z * float(height);
+                    float ln = (0.25 + 0.75 * rn.w) * float(height);
+                    float inRange = step(y0, pix.y) * step(pix.y, y0 + ln) + step(y0, pix.y + float(height)) * step(pix.y + float(height), y0 + ln);
+                    float line = exp(-pow((pix.x - x) / (0.75 * hs + 0.1), 2.0)) * clamp(inRange, 0.0, 1.0);
+                    o += (mod(float(k), 2.0) < 0.5 ? 1.0 : -0.6) * line * 0.55;
+                }
+            }
+            float du = clamp(LK(li, 12), 0.0, 1.0);
+            if (du > 0.001) {                              // dust specks
+                float cs = 46.0 * hs;
+                vec2 cell = floor(pix / cs);
+                for (int cy = -1; cy <= 1; cy++) {
+                    for (int cx = -1; cx <= 1; cx++) {
+                        vec2 cid = cell + vec2(float(cx), float(cy));
+                        vec4 rn = vfxRnd(cid, seed + floor(ft * 0.5) * 3.1 + 11.0);
+                        if (rn.x > du * 0.30) continue;
+                        vec2 cp = (cid + rn.yz) * cs;
+                        float rr = (1.2 + rn.w * 4.0) * hs;
+                        float a = 1.0 - smoothstep(rr * 0.6, rr, length(pix - cp));
+                        o = mix(o, vec3(rn.w > 0.5 ? 1.0 : 0.0), a * 0.75);
+                    }
+                }
+            }
+            float ha = clamp(LK(li, 13), 0.0, 1.0);
+            if (ha > 0.001) {                              // hairs: thin curved dark / light lines
+                float cs = 240.0 * hs;
+                vec2 cell = floor(pix / cs);
+                for (int cy = -1; cy <= 1; cy++) {
+                    for (int cx = -1; cx <= 1; cx++) {
+                        vec2 cid = cell + vec2(float(cx), float(cy));
+                        vec4 rn = vfxRnd(cid, seed + floor(ft * 0.25) * 2.3 + 23.0);
+                        if (rn.x > ha * 0.16) continue;
+                        vec2 cp = (cid + 0.2 + 0.6 * rn.yz) * cs;
+                        float ang = rn.w * 6.2832;
+                        vec2 e1 = vec2(cos(ang), sin(ang));
+                        vec2 e2 = vec2(-e1.y, e1.x);
+                        vec2 d = pix - cp;
+                        float dx = dot(d, e1);
+                        float dy = dot(d, e2);
+                        float L = (30.0 + 70.0 * rn.y) * hs;
+                        float bend = (rn.z - 0.5) * 0.04 / max(hs, 0.2);
+                        float dist = abs(dy - bend * dx * dx) / sqrt(1.0 + pow(2.0 * bend * dx, 2.0));
+                        float line = exp(-pow(dist / (0.9 * hs + 0.1), 2.0)) * step(abs(dx), L);
+                        o = mix(o, vec3(rn.z > 0.5 ? 0.9 : 0.0), line * 0.8);
+                    }
+                }
+            }
+            float bl = clamp(LK(li, 16), 0.0, 1.0);
+            if (bl > 0.001) {                              // emulsion blotches / stains
+                float n = fbm(uv * vec2(float(width) / float(height), 1.0) * 3.0 + vec2(seed, floor(ft / max(fps * 1.5, 1.0))));
+                float b = smoothstep(0.58, 0.82, n) * bl;
+                o *= 1.0 - b * vec3(0.30, 0.50, 0.80);
+            }
+            float bu = clamp(LK(li, 17), 0.0, 1.0);
+            if (bu > 0.001) {                              // burnt edges
+                float e = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+                float nz = fbm(pix / (90.0 * hs) + vec2(seed, ft * 0.1));
+                float bb = smoothstep(0.16 * bu, 0.0, e + (nz - 0.5) * 0.06);
+                o = o * (1.0 - 0.85 * bb) + vec3(1.0, 0.32, 0.06) * bb * (1.0 - bb) * 1.4 * nz;
+            }
+            float tn = clamp(LK(li, 20), 0.0, 1.0);
+            o = mix(o, vec3(luma(o)) * vec3(1.12, 0.92, 0.68), tn);
+        }
+        col = mix(pre, o, lop);
+    }
+    col = sanitize(col);
+    out_pixels[idx * 2] = packHalf2x16(col.rg);
+    out_pixels[idx * 2 + 1] = packHalf2x16(vec2(col.b, base.a));
+}
+
+// ----------------------------------------------------------------------------- pass 34: EDGE FX (border effects on the rectangular edges)
+// modes: 0 Water, 1 Audio visualizer, 2 Glossy leaves, 3 Blood mist, 4 LED lights, 5 Pyro aura, 6 Anemo vortex, 7 Red / black edge glitch.
+// Parameters of a mode are EG(li, 17 + k). Common: 2 width, 3 intensity, 4 speed, 5 scale, 6 softness, 7 opacity, 8 seed, 9..12 sides (top, right, bottom, left), 13 / 14 colours, 15 inset, 27 corner radius.
+struct EdgeCtx {
+    int li, w, h;
+    vec2 pix;            // pixel position in the picture
+    vec2 nin, tang;      // unit vector pointing from the nearest enabled edge into the picture, and along that edge
+    float d;             // distance (px) from the nearest enabled edge, positive inside
+    float al;            // coordinate (px) along that edge
+    float len;           // length (px) of that edge
+    float wpx;           // band width (px)
+    float md;            // min(rect width, rect height) (px)
+    float t, seed, inten, soft, scl;
+    vec3 cA, cB;
+};
+float egP(EdgeCtx c, int k) { return EG(c.li, 17 + k); }
+float egSmooth(float x) { return x * x * (3.0 - 2.0 * x); }
+
+// returns the colour to blend (rgb, a) and an additive part
+void edgeWater(EdgeCtx c, inout vec4 rgba, inout vec3 add, out vec3 refr) {
+    float n = c.d / c.wpx;
+    float m = pow(clamp(1.0 - n, 0.0, 1.0), mix(1.4, 0.55, c.soft));
+    float thick = pow(clamp(1.0 - n, 0.0, 1.0), 1.5);
+    float sc = 90.0 * mix(0.4, 2.0, c.scl) * c.md / 1080.0;
+    vec2 q = vec2(c.al, c.d) / sc + vec2(0.0, c.t * 0.25 * (0.3 + egP(c, 2)));
+    float h0 = fbm(q);
+    float hA = fbm(q + vec2(0.06, 0.0));
+    float hD = fbm(q + vec2(0.0, 0.06));
+    float gA = (hA - h0) * 6.0 * (0.4 + egP(c, 5));
+    float gD = (hD - h0) * 6.0 * (0.4 + egP(c, 5));
+    vec2 gs = c.tang * gA + c.nin * (gD + thick * 0.9);
+    float rf = egP(c, 0) * thick * c.wpx * 0.95;
+    refr = vec3(compBilinear(c.pix + gs * rf * 1.06, c.w, c.h).r, compBilinear(c.pix + gs * rf, c.w, c.h).g, compBilinear(c.pix + gs * rf * 0.94, c.w, c.h).b);
+    refr = mix(refr, refr * (c.cA * 1.6 + 0.2), clamp(egP(c, 3), 0.0, 1.0) * m);
+    vec3 N = normalize(vec3(-(c.tang * gA + c.nin * gD) * 0.30, 1.0));
+    vec3 L = normalize(vec3(-0.45, -0.55, 0.70));
+    float spec = pow(max(dot(N, normalize(L + vec3(0.0, 0.0, 1.0))), 0.0), 70.0) * thick * egP(c, 1) * 2.4;
+    float rim = exp(-pow((n - 0.90) / 0.07, 2.0)) * 0.45 * egP(c, 1) + exp(-pow(n / 0.05, 2.0)) * 0.20 * egP(c, 1);
+    rgba = vec4(refr, m);
+    add += vec3(1.0) * (spec + rim) * m;
+}
+
+void edgeAudio(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float N = clamp(floor(egP(c, 0) + 0.5), 6.0, 160.0);
+    float pitch = c.len / N;
+    float idx = floor(c.al / pitch);
+    float bx = (c.al - idx * pitch) / pitch;               // 0..1 inside the bar slot
+    float gap = clamp(egP(c, 4), 0.0, 0.85);
+    float bpm = max(egP(c, 5), 30.0);
+    float beat = pow(0.5 + 0.5 * cos(c.t * bpm / 60.0 * 6.2832), 3.0);
+    float env = mix(1.0, 0.45, idx / N);
+    float v = 0.5 * vnoise(vec2(idx * 0.45, c.t * 2.2)) + 0.5 * (0.5 + 0.5 * sin(c.t * 3.3 + idx * 0.7 + hash12(vec2(idx, c.seed)) * 6.0));
+    float h = clamp(env * (0.50 + 0.50 * v) * (0.72 + 0.28 * beat) * egP(c, 1) * 1.25, 0.02, 1.0) * c.wpx;
+    float dbl = egP(c, 2) > 0.5 ? 1.0 : 0.0;
+    float off = egP(c, 3) * c.md;
+    float lo = dbl > 0.5 ? off - h * 0.5 : 0.0;
+    float hi = dbl > 0.5 ? off + h * 0.5 : h;
+    float halfW = (1.0 - gap) * 0.5 * pitch;
+    float dx = (bx - 0.5) * pitch;
+    float dy = c.d - 0.5 * (lo + hi);
+    vec2 q = abs(vec2(dx, dy)) - vec2(halfW, 0.5 * (hi - lo)) + vec2(halfW);
+    float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - halfW;     // rounded bar
+    float cov = 1.0 - smoothstep(-0.7, 0.7, sd);
+    vec3 colr = mix(c.cA, c.cB, clamp(c.d / max(hi, 1.0), 0.0, 1.0));
+    rgba = vec4(colr, cov);
+    add += colr * exp(-max(sd, 0.0) / (0.35 * c.wpx + 1.0)) * 0.22;
+}
+
+void edgeLeaves(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float spacing = mix(40.0, 150.0, clamp(egP(c, 0), 0.0, 1.0)) * c.md / 1080.0;
+    float Ls = mix(60.0, 320.0, clamp(egP(c, 1), 0.0, 1.0)) * c.md / 1080.0;
+    int layersN = int(clamp(floor(egP(c, 4) + 0.5), 1.0, 3.0));
+    float sway = egP(c, 2);
+    float gloss = egP(c, 3);
+    float hue = egP(c, 5);
+    vec3 acc = vec3(0.0);
+    float accA = 0.0;
+    for (int ly = 2; ly >= 0; ly--) {                       // back layer first
+        if (ly >= layersN) continue;
+        float lsz = Ls * (1.0 - 0.22 * float(ly));
+        float cellIdx = floor(c.al / spacing);
+        for (int k = -2; k <= 2; k++) {
+            float ci = cellIdx + float(k);
+            vec4 rn = vfxRnd(vec2(ci, float(ly)), c.seed + 31.0);
+            if (rn.x > 0.82) continue;
+            float aR = (ci + 0.5 + (rn.y - 0.5) * 0.6) * spacing;
+            float dR = -0.12 * lsz;
+            float baseA = (rn.z - 0.5) * 1.5;
+            float ang = baseA + sway * 0.55 * sin(c.t * (0.7 + rn.w) + rn.z * 6.0 + ci * 0.3);
+            vec2 dir = vec2(sin(ang), cos(ang));
+            vec2 prp = vec2(-dir.y, dir.x);
+            vec2 rel = vec2(c.al - aR, c.d - dR);
+            float u = dot(rel, dir);
+            float v = dot(rel, prp);
+            float Ll = lsz * (0.65 + 0.5 * rn.y);
+            if (u < 0.0 || u > Ll) continue;
+            float tu = u / Ll;
+            float hw = Ll * 0.20 * pow(sin(3.14159265 * tu), 0.75) * (1.0 - 0.25 * tu);
+            float cov = 1.0 - smoothstep(-0.8, 0.8, abs(v) - hw);
+            if (cov <= 0.001) continue;
+            float side = clamp(v / max(hw, 1e-3), -1.0, 1.0);
+            vec3 g0 = mix(c.cA, c.cB, 0.15 + 0.55 * rn.w);
+            g0 = mix(g0, g0.gbr * vec3(1.35, 0.9, 0.5), clamp(hue, 0.0, 1.0) * rn.y);                                   // towards autumn colours
+            vec3 lc = g0 * (0.55 + 0.45 * (1.0 - abs(side)));
+            lc += vec3(0.22) * exp(-pow((abs(v) - 0.015 * Ll) / (0.01 * Ll + 0.8), 2.0)) * (1.0 - tu);                  // mid-rib
+            float sheen = exp(-pow((side - 0.35) / 0.20, 2.0)) * (0.5 + 0.5 * sin(c.t * 1.3 + tu * 5.0 + rn.z * 6.0));
+            lc += vec3(1.0) * sheen * gloss * 0.9 * (1.0 - 0.4 * tu);                                                   // glossy highlight
+            acc = mix(acc, lc, cov);
+            accA = max(accA, cov);
+        }
+    }
+    rgba = vec4(acc, accA);
+}
+
+void edgeBlood(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float n = c.d / c.wpx;
+    float sc = c.wpx * mix(0.5, 1.6, c.scl) * (0.6 + egP(c, 3));
+    vec2 q = vec2(c.al, c.d) / sc + vec2(c.t * 0.10, -c.t * 0.35 * (0.3 + egP(c, 1)));
+    vec2 wv = vec2(fbm(q + 3.1), fbm(q + 7.7));
+    float f = fbm(q + (wv - 0.5) * 1.4);
+    float env = pow(clamp(1.0 - n, 0.0, 1.0), mix(1.8, 0.7, c.soft));
+    float dens = clamp(env * (0.35 + 1.45 * f) * 1.7 * egP(c, 0) * c.inten, 0.0, 1.0);
+    vec3 colr = mix(c.cA, c.cB, smoothstep(0.35, 0.95, f * (1.0 - 0.5 * n)));
+    rgba = vec4(colr * (1.0 - 0.35 * egP(c, 2) * dens), clamp(dens, 0.0, 0.96));
+}
+
+void edgeLed(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float sp = mix(10.0, 64.0, clamp(egP(c, 0), 0.0, 1.0)) * c.md / 1080.0;
+    float r = max(sp * mix(0.22, 0.48, clamp(egP(c, 1), 0.0, 1.0)), 1.2);
+    int rows = int(clamp(floor(egP(c, 5) + 0.5), 1.0, 3.0));
+    int pat = int(egP(c, 3) + 0.5);
+    float gl = clamp(egP(c, 2), 0.0, 1.0);
+    float spill = clamp(egP(c, 4), 0.0, 1.0);
+    float idx = floor(c.al / sp);
+    float aC = (idx + 0.5) * sp;
+    vec3 glowAcc = vec3(0.0);
+    vec3 coreAcc = vec3(0.0);
+    float coreA = 0.0;
+    for (int row = 0; row < 3; row++) {
+        if (row >= rows) break;
+        float dR = r * 1.6 + float(row) * r * 2.6;
+        float ii = idx + float(row) * 7.0;
+        vec3 lc = c.cA;
+        float br = 1.0;
+        if (pat == 1) br = pow(fract(idx / 14.0 - c.t * 0.35), 3.0) * 1.2 + 0.08;
+        else if (pat == 2) lc = hueRGB(fract(idx * 0.035 - c.t * 0.12));
+        else if (pat == 3) lc = mix(c.cA, c.cB, 0.5 + 0.5 * sin(c.t * 2.5 + float(row)));
+        else if (pat == 4) br = step(0.45, hash12(vec2(ii, floor(c.t * 4.0) + c.seed)));
+        float dist = length(vec2(c.al - aC, c.d - dR));
+        float core = 1.0 - smoothstep(r * 0.65, r, dist);
+        coreAcc = mix(coreAcc, lc * br * 1.4, core);
+        coreA = max(coreA, core * step(0.02, br));
+        glowAcc += lc * br * exp(-dist * dist / (2.0 * pow(r * (1.0 + gl * 1.6), 2.0))) * 0.55;
+        // the strip lights the picture up near it (light spill)
+        glowAcc += lc * br * exp(-c.d / (c.wpx * 0.7 + 1.0)) * spill * 0.05;
+    }
+    rgba = vec4(coreAcc, coreA);
+    add += glowAcc;
+}
+
+void edgePyro(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float n = c.d / c.wpx;
+    float hgt = clamp(egP(c, 0), 0.1, 1.5);
+    float turb = egP(c, 1);
+    vec2 q = vec2(c.al / (c.wpx * mix(0.35, 1.0, c.scl)), c.d / (c.wpx * mix(0.35, 1.0, c.scl)) - c.t * 1.4);
+    float nz = fbm(q + vec2(0.0, 2.0));
+    float nz2 = fbm(q * 2.0 + vec2(5.0, -c.t * 0.7));
+    float h = hgt * (0.45 + 0.75 * fbm(vec2(c.al / (c.wpx * 0.6), c.t * 0.7)));
+    float nd = n + (nz - 0.5) * turb * 0.9 + (nz2 - 0.5) * turb * 0.35;
+    float f = pow(clamp(1.0 - nd / max(h, 0.05), 0.0, 1.0), mix(1.0, 1.9, c.soft));
+    f *= 1.0 + 0.12 * sin(c.t * 18.0 + c.al * 0.05) * egP(c, 3);
+    vec3 fc = mix(c.cA, c.cB, clamp(f * 1.2, 0.0, 1.0));
+    fc = mix(fc, vec3(1.0, 0.93, 0.78), smoothstep(0.62, 1.0, f * (0.5 + egP(c, 2))));
+    add += fc * f * 2.3 * c.inten;
+    float ecs = 20.0 * c.md / 1080.0;                                                                           // rising embers: one round dot per cell that has one
+    vec2 ep = vec2(c.al, c.d + c.t * 55.0);
+    vec2 ecell = floor(ep / ecs);
+    vec4 ern = vfxRnd(ecell, c.seed + 71.0);
+    vec2 ectr = (ecell + 0.2 + 0.6 * ern.yz) * ecs;
+    float edot = (1.0 - smoothstep(0.6, 1.6 * c.md / 1080.0 + 0.8, length(ep - ectr))) * step(1.0 - (0.04 + 0.30 * egP(c, 4)), ern.x);
+    add += c.cB * edot * clamp(1.0 - n, 0.0, 1.0) * 2.0;
+    rgba = vec4(fc, clamp(f * 0.20, 0.0, 0.3));
+}
+
+void edgeAnemo(EdgeCtx c, inout vec4 rgba, inout vec3 add) {
+    float n = c.d / c.wpx;
+    float cnt = clamp(floor(egP(c, 0) + 0.5), 1.0, 12.0);
+    float sp = c.len / cnt;
+    float idx = floor(c.al / sp);
+    float arms = clamp(floor(egP(c, 1) + 0.5), 2.0, 8.0);
+    float twist = egP(c, 2);
+    float thickP = mix(6.0, 1.6, clamp(egP(c, 3), 0.0, 1.0));
+    float rb = 0.0;
+    float hz = 0.0;
+    for (int k = -2; k <= 2; k++) {
+        float ci = idx + float(k);
+        vec4 rn = vfxRnd(vec2(ci, 3.0), c.seed + 41.0);
+        vec2 ctr = vec2((ci + 0.5) * sp, c.wpx * (0.15 + 0.25 * rn.y));
+        float rs = c.wpx * mix(0.45, 0.95, c.scl) * (0.8 + 0.5 * rn.z);
+        vec2 rel = (vec2(c.al, c.d) - ctr) / rs;
+        float r = length(rel);
+        float th = atan(rel.y, rel.x);
+        float dirS = rn.w > 0.5 ? 1.0 : -1.0;
+        float s = sin(arms * th + twist * log(r + 0.06) * 6.0 - c.t * 2.2 * dirS);
+        float rib = pow(clamp(s * 0.5 + 0.5, 0.0, 1.0), thickP);
+        float env = exp(-r * r * 0.85) * (1.0 - exp(-r * 7.0));
+        rib *= (0.55 + 0.45 * vnoise(vec2(th * 3.0 - c.t * 2.0 * dirS, r * 8.0)));
+        rb += rib * env;
+        hz += exp(-r * r * 1.3);
+    }
+    float wind = smoothstep(0.72, 1.0, vnoise(vec2(c.al / (c.wpx * 2.2) - c.t * 0.8, c.d / (c.wpx * 0.07 + 1.0)))) * pow(clamp(1.0 - n, 0.0, 1.0), 2.0) * 0.28;
+    rb = clamp(rb + wind, 0.0, 1.0);
+    vec3 colr = mix(c.cA, c.cB, rb);
+    add += colr * rb * 0.95 * c.inten + c.cA * hz * clamp(egP(c, 5), 0.0, 1.0) * 0.14;
+    rgba = vec4(colr, rb * 0.40);
+}
+
+void edgeGlitch(EdgeCtx c, inout vec4 rgba, inout vec3 add, out vec3 shifted, out float shiftA) {
+    float n = c.d / c.wpx;
+    float sps = max(egP(c, 5), 1.0);
+    float ft = floor(c.t * sps);
+    float cnt = clamp(floor(egP(c, 0) + 0.5), 2.0, 24.0);
+    float chance = clamp(egP(c, 2), 0.0, 1.0);
+    float redRatio = clamp(egP(c, 3), 0.0, 1.0);
+    vec3 acc = vec3(0.0);
+    float accA = 0.0;
+    for (int k = 0; k < 24; k++) {
+        if (float(k) >= cnt) break;
+        vec4 rn = vfxRnd(vec2(float(k), ft), c.seed + 53.0);
+        if (rn.x > chance) continue;
+        float a0 = rn.y * c.len;
+        float wA = (0.01 + rn.z * clamp(egP(c, 1), 0.02, 0.6)) * c.len;
+        float d0 = (rn.w > 0.7 ? rn.y * 0.5 : 0.0) * c.wpx;
+        float hD = (0.12 + 0.88 * fract(rn.w * 7.3 + rn.y * 3.1)) * c.wpx;
+        if (c.al >= a0 && c.al <= a0 + wA && c.d >= d0 && c.d <= d0 + hD) {
+            float pick = fract(rn.z * 13.7 + rn.x * 5.1);
+            acc = (pick < redRatio) ? vec3(0.90, 0.015, 0.04) : vec3(0.0);
+            accA = 1.0;
+        }
+    }
+    float tear = step(0.985 - 0.02 * egP(c, 6), hash12(vec2(floor(c.al / (6.0 * c.md / 1080.0)), ft + c.seed))) * (1.0 - smoothstep(0.0, 1.0, n));
+    acc = mix(acc, vec3(1.0, 0.04, 0.08), tear * (1.0 - accA));
+    accA = max(accA, tear * 0.9);
+    float rowQ = floor(c.al / (7.0 * c.md / 1080.0));
+    float sh = (hash12(vec2(rowQ, ft + c.seed + 9.0)) - 0.5) * 2.0 * egP(c, 4) * c.wpx * 0.5 * (1.0 - smoothstep(0.0, 1.0, n));
+    vec2 so = c.tang * sh;
+    shifted = vec3(compBilinear(c.pix + so * 1.3, c.w, c.h).r, compBilinear(c.pix + so, c.w, c.h).g, compBilinear(c.pix + so * 0.7, c.w, c.h).b);
+    shiftA = (1.0 - smoothstep(0.0, 1.0, n)) * step(0.001, egP(c, 4));
+    rgba = vec4(acc, accA);
+}
+
+void executeEdgeFx(ivec2 coord, int width, int height) {
+    int idx = coord.y * width + coord.x;
+    vec4 base = unpackComposite(idx);
+    vec3 col = base.rgb;
+    vec2 uv = (vec2(coord) + 0.5) / vec2(width, height);
+    int totalL = int(clamp(u_layerCount, 1.0, 10.0));
+    for (int li = 0; li < 10; li++) {
+        if (li >= totalL) break;
+        if (layers[li].isEnabled < 0.5 || EG(li, 0) < 0.5) continue;
+        float lop = clamp(EG(li, 7), 0.0, 1.0) * clamp(layers[li].opacity, 0.0, 1.0);
+        if (lop <= 0.001) continue;
+        // the effect's rectangle: the whole picture, or the effect region (class Place) when one is set
+        vec2 rsz = vec2(width, height);
+        vec2 ruv = uv;
+        if (PL(li, 0) > 0.5) {
+            float z = max(PL(li, 3), 0.05);
+            ruv = (uv - vec2(PL(li, 1), PL(li, 2))) / z + 0.5;
+            rsz = vec2(width, height) * z;
+        }
+        vec2 p = ruv * rsz;
+        float md = min(rsz.x, rsz.y);
+        float inset = EG(li, 15) * md;
+        float dT = p.y - inset, dB = rsz.y - p.y - inset, dL = p.x - inset, dR = rsz.x - p.x - inset;
+        // rounded corners: a point inside the corner radius counts as farther from the edge
+        float cr = EG(li, 27) * md;
+        if (cr > 0.5) {
+            vec2 q = abs(p - 0.5 * rsz) - (0.5 * rsz - vec2(inset + cr));
+            float sd = length(max(q, 0.0)) - cr;
+            if (q.x > 0.0 && q.y > 0.0) { float extra = max(-sd, 0.0); dT = min(dT, extra); dB = min(dB, extra); dL = min(dL, extra); dR = min(dR, extra); }
+        }
+        float wpx = max(EG(li, 2) * md, 2.0);
+        float best = 1e9;
+        vec2 nin = vec2(0.0, 1.0);
+        vec2 tang = vec2(1.0, 0.0);
+        float along = p.x;
+        float elen = rsz.x;
+        if (EG(li, 9) > 0.5 && dT < best) { best = dT; nin = vec2(0.0, 1.0); tang = vec2(1.0, 0.0); along = p.x; elen = rsz.x; }
+        if (EG(li, 10) > 0.5 && dR < best) { best = dR; nin = vec2(-1.0, 0.0); tang = vec2(0.0, 1.0); along = p.y; elen = rsz.y; }
+        if (EG(li, 11) > 0.5 && dB < best) { best = dB; nin = vec2(0.0, -1.0); tang = vec2(1.0, 0.0); along = p.x; elen = rsz.x; }
+        if (EG(li, 12) > 0.5 && dL < best) { best = dL; nin = vec2(1.0, 0.0); tang = vec2(0.0, 1.0); along = p.y; elen = rsz.y; }
+        if (best > 1e8 || best > wpx * 1.6 + 8.0 || best < -wpx) continue;   // outside the band (also: no side enabled)
+        EdgeCtx c;
+        c.li = li; c.w = width; c.h = height; c.pix = vec2(coord);
+        c.nin = nin; c.tang = tang; c.d = best; c.al = along; c.len = elen; c.wpx = wpx; c.md = md;
+        c.t = u_time * max(EG(li, 4), 0.0); c.seed = EG(li, 8); c.inten = EG(li, 3); c.soft = clamp(EG(li, 6), 0.0, 1.0); c.scl = clamp(EG(li, 5), 0.0, 1.0);
+        c.cA = packedRGB(EG(li, 13)); c.cB = packedRGB(EG(li, 14));
+        int mode = int(EG(li, 1) + 0.5);
+        vec4 rgba = vec4(0.0);
+        vec3 add = vec3(0.0);
+        vec3 refr = col;
+        vec3 shifted = col;
+        float shiftA = 0.0;
+        if (mode == 0) edgeWater(c, rgba, add, refr);
+        else if (mode == 1) edgeAudio(c, rgba, add);
+        else if (mode == 2) edgeLeaves(c, rgba, add);
+        else if (mode == 3) edgeBlood(c, rgba, add);
+        else if (mode == 4) edgeLed(c, rgba, add);
+        else if (mode == 5) edgePyro(c, rgba, add);
+        else if (mode == 6) edgeAnemo(c, rgba, add);
+        else edgeGlitch(c, rgba, add, shifted, shiftA);
+        float a = clamp(rgba.a * c.inten, 0.0, 1.0) * (mode == 0 ? 1.0 : 1.0);
+        if (mode == 7) col = mix(col, shifted, shiftA * lop * 0.9);
+        vec3 pre = col;
+        vec3 outc = col;
+        int bm = int(EG(li, 16) + 0.5);
+        if (bm > 0 && mode != 0) outc = applyBlendMode(clamp(col, vec3(0.0), vec3(1.0)), rgba.rgb, bm - 1, a, true);
+        else outc = mix(col, rgba.rgb, a);
+        outc += add * ((mode == 0) ? 1.0 : c.inten);
+        col = mix(pre, outc, lop);
     }
     col = sanitize(col);
     out_pixels[idx * 2] = packHalf2x16(col.rg);
@@ -4591,6 +5150,12 @@ void main() {
         return;
     } else if (u_passIndex == 32) {
         executeDiffusionApply(coord, width, height);
+        return;
+    } else if (u_passIndex == 33) {
+        executeLooks(coord, width, height);
+        return;
+    } else if (u_passIndex == 34) {
+        executeEdgeFx(coord, width, height);
         return;
     } else if (u_passIndex == 22) {
         executeTimeSlice(coord, width, height);
