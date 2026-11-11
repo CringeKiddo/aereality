@@ -174,8 +174,9 @@ class VideoProxy {
   /// Batch 19: the constant frame rate every proxy is written at. A variable frame rate file uses ffmpeg's real-rate guess (tbr, so no frame is lost), otherwise the
   /// header rate; the value snaps to the nearest standard rate when it is within 6 % (29.7 -> 30, 23.98 -> 23.976), and falls back to 30.
   static String cfrRate(MediaProbe p) {
-    double? r = (p.isVfr ? p.tbr : null) ?? p.fps ?? p.tbr;
-    if (r == null || r < 1 || r > 240) return '30';
+    final double? raw = (p.isVfr ? p.tbr : null) ?? p.fps ?? p.tbr;
+    if (raw == null || raw < 1 || raw > 240) return '30';
+    double r = raw;
     const List<double> std = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 90, 120];
     for (final double c in std) {
       if ((r - c).abs() / c < 0.06) {
