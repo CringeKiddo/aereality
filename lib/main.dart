@@ -30,6 +30,8 @@ import 'vulkan_bridge.dart';
 import 'touch_particles.dart';
 import 'editor_views.dart';
 import 'vfx_slots.dart';
+import 'looks_edge_slots.dart'; // batch 19
+import 'looks_edge_suite.dart'; // batch 19: Looks / Edge FX tabs + effect region handle
 import 'vfx_suite.dart';
 import 'export_suite.dart';
 import 'native_encoder.dart';
@@ -1472,7 +1474,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _activeSessionId = widget.projectId ?? 'session_${DateTime.now().millisecondsSinceEpoch}';
-    _tabController = TabController(length: 15, vsync: this); // 15 since batch 12 C3 (index 14 = TIME SLICE)
+    _tabController = TabController(length: 17, vsync: this); // 17 since batch 19 (index 14 = TIME SLICE, 15 = LOOKS, 16 = EDGE FX)
 
     _project = widget.initialProject ?? ProjectData(mediaPath: '');
     _pushUndoSnapshot();
@@ -1826,6 +1828,19 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (!forceProxy) {
       if (VideoProxy.looksNativeSafe(path)) {
         c = await _tryNativeController(path, null, gen);
+        // Batch 19: constant frame rate. A variable frame rate file (screen recordings, many editor exports) is converted to a constant frame rate copy for the player.
+        if (c != null) {
+          probe = await VideoProxy.probe(path);
+          if (stale()) {
+            unawaited(_releaseController(c));
+            return;
+          }
+          if (probe.isVfr) {
+            CrashLog.note('variable frame rate (${probe.fps} fps average, ${probe.tbr} tbr): making a constant frame rate copy');
+            unawaited(_releaseController(c));
+            c = null;
+          }
+        }
       } else {
         probe = await VideoProxy.probe(path);
         if (stale()) return;
@@ -3620,6 +3635,9 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
 
     TimeSlice.packLayers(uniforms, [for (final l in _project.layers) l.timeSlice]); // batch 12 C2: Time Slice settings 6400..7039 (mirror in project_uniforms.dart)
     MathOps.packLayers(uniforms, [for (final l in _project.layers) l.mathOps]); // batch 14: MathOps settings 7584..7743 (mirror in project_uniforms.dart)
+    Looks.packLayers(uniforms, [for (final l in _project.layers) l.looks]); // batch 19: Looks 8192..8511 (mirror in project_uniforms.dart)
+    EdgeFx.packLayers(uniforms, [for (final l in _project.layers) l.edgeFx]); // batch 19: Edge FX 8512..8991
+    Place.packLayers(uniforms, [for (final l in _project.layers) l.place]); // batch 19: Effect Region 8992..9071
     Gradient4Way.packLayers(uniforms, [for (final l in _project.layers) l.grad4]); // batch 14: 4-Way Gradient settings 7744..7903 (mirror in project_uniforms.dart)
     Bevel.packLayers(uniforms, [for (final l in _project.layers) l.bevel]); // batch 13: Metallic Bevel settings 7424..7583 (mirror in project_uniforms.dart)
     return uniforms;
@@ -3953,6 +3971,22 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     );
   }
 
+  /// Batch 19: the draggable handle of the selected layer's effect region (class Place). Only shown while a region is switched on for a layer above the base layer.
+  Widget _buildEffectRegionOverlay(BoxConstraints constraints) {
+    if (_project.layers.isEmpty || identical(_cur, _project.layers.first)) return const SizedBox.shrink();
+    if (_cur.place[Place.on] < 0.5) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: EffectRegionGizmo(
+        layer: _cur,
+        onUpdated: () => _applyGrade(),
+        onEnded: () {
+          _pushUndoSnapshot();
+          _autoSaveProject();
+        },
+      ),
+    );
+  }
+
   Widget _buildTextSuiteBoundingBoxOverlay(BoxConstraints constraints) {
     if (!_project.textSuiteEnabled) return const SizedBox.shrink();
 
@@ -4170,6 +4204,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                                   ),
 
                                   _buildTextSuiteBoundingBoxOverlay(constraints),
+                                  _buildEffectRegionOverlay(constraints),
 
                                   if (_preparingMedia)
                                     Positioned(
@@ -4470,6 +4505,30 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
                         onChanged: _onSliderChanged,
                         onEnded: () {
                           setState(() {}); // values changed during the drag: refresh everything else once, now
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      LooksEdgeSuite.buildLooksTab(
+                        context: context,
+                        cur: _cur,
+                        isBaseLayer: _project.layers.isEmpty || identical(_cur, _project.layers.first),
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {});
+                          _pushUndoSnapshot();
+                          _autoSaveProject();
+                          _applyGrade();
+                        },
+                      ),
+                      LooksEdgeSuite.buildEdgeTab(
+                        context: context,
+                        cur: _cur,
+                        isBaseLayer: _project.layers.isEmpty || identical(_cur, _project.layers.first),
+                        onChanged: _onSliderChanged,
+                        onEnded: () {
+                          setState(() {});
                           _pushUndoSnapshot();
                           _autoSaveProject();
                           _applyGrade();
