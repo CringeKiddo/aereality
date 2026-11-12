@@ -22,6 +22,9 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Pinned (was: channel stable only). The newest stable Flutter builds its Gradle plugin for Android Gradle Plugin 9, which breaks this project's
+          # AGP 8.7.2 / Gradle 8.13 setup ("ApplicationExtension.getDefaultConfig" error). 3.35.x matches compileSdk 36 and this toolchain.
+          flutter-version: '3.35.x'
           channel: 'stable'
 
       - name: Install glslang and compile shader
