@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'gradient_map.dart';
 import 'vfx_slots.dart';
 import 'looks_edge_slots.dart'; // batch 19: Looks / Edge FX / Effect Region blocks
+import 'lens_slots.dart'; // batch 20: Chromatic Aberration + Inner Edge Glow blocks
 import 'time_slice_slots.dart'; // batch 12 (step A): Time Slice settings model
 
 // =============================================================================
@@ -412,6 +413,8 @@ class AdjustmentLayer {
   List<double> looks; // batch 19 Looks block (class Looks in looks_edge_slots.dart); old presets: defaults (everything off)
   List<double> edgeFx; // batch 19 Edge FX block (class EdgeFx)
   List<double> place; // batch 19 Effect Region block (class Place)
+  List<double> chroma; // batch 20 Chromatic Aberration block (class ChromaAb in lens_slots.dart); old presets: defaults (off)
+  List<double> innerGlow; // batch 20 Inner Edge Glow block (class InnerGlow); old presets: defaults
   List<double> grad4; // batch 14 4-Way Gradient block (see class Gradient4Way in vfx_slots.dart); old presets without it load the defaults (effect off)
   List<double> bevel; // batch 13 Global Metallic Bevel block (see class Bevel in vfx_slots.dart); old presets without it load the defaults (effect off)
   // Curves v2: flat [x0,y0,x1,y1,...] per channel (RGB, R, G, B). Empty = fall back to the legacy 5-point curves.
@@ -719,6 +722,8 @@ class AdjustmentLayer {
     List<double>? looks,
     List<double>? edgeFx,
     List<double>? place,
+    List<double>? chroma,
+    List<double>? innerGlow,
     List<double>? curveXYM,
     List<double>? curveXYR,
     List<double>? curveXYG,
@@ -804,6 +809,8 @@ class AdjustmentLayer {
         looks = Looks.sanitize(looks),
         edgeFx = EdgeFx.sanitize(edgeFx),
         place = Place.sanitize(place),
+        chroma = ChromaAb.sanitize(chroma),
+        innerGlow = InnerGlow.sanitize(innerGlow),
         curveXYM = curveXYM ?? <double>[],
         curveXYR = curveXYR ?? <double>[],
         curveXYG = curveXYG ?? <double>[],
@@ -996,6 +1003,8 @@ class AdjustmentLayer {
       looks: List<double>.from(looks),
       edgeFx: List<double>.from(edgeFx),
       place: List<double>.from(place),
+      chroma: List<double>.from(chroma),
+      innerGlow: List<double>.from(innerGlow),
       curveXYM: List<double>.from(curveXYM),
       curveXYR: List<double>.from(curveXYR),
       curveXYG: List<double>.from(curveXYG),
@@ -1171,6 +1180,8 @@ class AdjustmentLayer {
       'looks': looks,
       'edgeFx': edgeFx,
       'place': place,
+      'chroma': chroma,
+      'innerGlow': innerGlow,
       'curveXY': [curveXYM, curveXYR, curveXYG, curveXYB],
       'lineChromaStrength': lineChromaStrength,
       'centerAura': centerAura,
@@ -1348,6 +1359,8 @@ class AdjustmentLayer {
       looks: (json['looks'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       edgeFx: (json['edgeFx'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       place: (json['place'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      chroma: (json['chroma'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
+      innerGlow: (json['innerGlow'] as List<dynamic>?)?.map((e) => (e as num).toDouble()).toList(),
       curveXYM: _xyFromJson(json['curveXY'], 0),
       curveXYR: _xyFromJson(json['curveXY'], 1),
       curveXYG: _xyFromJson(json['curveXY'], 2),

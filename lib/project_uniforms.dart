@@ -17,6 +17,7 @@ import 'models.dart';
 import 'time_slice_slots.dart';
 import 'vfx_slots.dart';
 import 'looks_edge_slots.dart'; // batch 19
+import 'lens_slots.dart'; // batch 20
 import 'vfx_suite.dart';
 
 Float32List packProjectUniforms(
@@ -276,6 +277,8 @@ Float32List packProjectUniforms(
     Looks.packLayers(uniforms, [for (final l in project.layers) l.looks]); // batch 19, kept in sync with main.dart
     EdgeFx.packLayers(uniforms, [for (final l in project.layers) l.edgeFx]); // batch 19
     Place.packLayers(uniforms, [for (final l in project.layers) l.place]); // batch 19
+    ChromaAb.packLayers(uniforms, [for (final l in project.layers) l.chroma]); // batch 20
+    InnerGlow.packLayers(uniforms, [for (final l in project.layers) l.innerGlow]); // batch 20
     Gradient4Way.packLayers(uniforms, [for (final l in project.layers) l.grad4]); // batch 14, kept in sync with main.dart
     Bevel.packLayers(uniforms, [for (final l in project.layers) l.bevel]); // batch 13: Metallic Bevel settings 7424..7583, kept in sync with main.dart
     TimeSlice.packLayers(uniforms, [for (final l in project.layers) l.timeSlice]); // batch 12 C2: Time Slice settings (6400..7039), kept in sync with main.dart

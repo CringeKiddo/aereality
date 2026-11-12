@@ -22,6 +22,7 @@ import 'constants.dart';
 import 'editor_views.dart' show SmoothSliderRow;
 import 'export_clock.dart';
 import 'export_suite.dart';
+import 'frame_cadence.dart'; // batch 20
 import 'models.dart';
 import 'motion_engine.dart';
 import 'motion_slots.dart';
@@ -857,6 +858,25 @@ class _MotionSScreenState extends State<MotionSScreen> {
               SettingsStore.save();
               setState(() {});
             }),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              activeColor: accent,
+              title: const Text('Duplicate frame remover', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              subtitle: const Text(
+                'Drops repeated frames (clips from other apps often repeat each picture 2-3 times, unevenly) and holds every picture for the same time, so the motion blur '
+                'is measured between real pictures and the output keeps an even rhythm at the frame rate above.',
+                style: TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+              value: FrameCadence.enabled,
+              onChanged: _phase == _Phase.processing
+                  ? null
+                  : (v) {
+                      FrameCadence.enabled = v;
+                      SettingsStore.save();
+                      setState(() {});
+                    },
+            ),
             _plateButton('START PROCESS', Icons.auto_awesome_rounded, accent, _nativeOk ? _startProcess : null, filled: true),
             const Padding(
               padding: EdgeInsets.only(top: 8),

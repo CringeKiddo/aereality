@@ -31,6 +31,7 @@ import 'package:video_player/video_player.dart';
 
 import 'constants.dart';
 import 'cpu_safe.dart';
+import 'frame_cadence.dart'; // batch 20: duplicate frame remover
 import 'crash_log.dart';
 import 'grade_worker.dart';
 import 'models.dart';
@@ -215,6 +216,26 @@ class MotionEngine {
     try {
       if (out.existsSync()) out.deleteSync();
     } catch (_) {}
+    // batch 20: DUPLICATE FRAME REMOVER (Motion S menu switch): every output frame holds the unique picture of an even cadence (frame_cadence.dart)
+    if (FrameCadence.enabled) {
+      final CadencePlan? plan = await FrameCadence.analyze(src.mediaPath);
+      if (plan != null && plan.hasDuplicates) {
+        final String head = 'fps=$fps,';
+        final String tail = _vf(fps, w, h);
+        final int got = await FrameCadence.decodeExpanded(
+          plan: plan,
+          path: src.mediaPath,
+          startFrame: (math.max(0.0, startSec) * fps).round(),
+          count: count,
+          outFps: fps,
+          vfTail: tail.startsWith(head) ? tail.substring(head.length) : tail,
+          frameBytes: w * h * 4,
+          out: out,
+        );
+        if (got == count) return got;
+        CrashLog.note('Motion S duplicate frame remover: decode failed, normal decode used');
+      }
+    }
     final cmd = '-hide_banner -y ${CpuSafe.ffArgs()}-ss ${math.max(0.0, startSec).toStringAsFixed(4)} -i "${src.mediaPath}" -an -sn -dn '
         '-vf "${_vf(fps, w, h)}" -frames:v $count -f rawvideo -pix_fmt rgba "${out.path}"';
     CrashLog.note('Motion S decode START: ffmpeg $cmd');
@@ -662,10 +683,29 @@ class MotionExportFeed {
     final file = File('${dir.path}/motion_s_export_batch.rgba');
     final fb = _w * _h * 4;
     final scale = (_w == width && _h == height) ? '' : ',scale=$_w:$_h';
-    final cmd = '-hide_banner -y ${CpuSafe.ffArgs()}-ss ${(startMs / 1000.0).toStringAsFixed(4)} -i "$path" -an -sn -dn '
-        '-vf "fps=$fps$scale" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"';
-    CrashLog.note('  Motion S export decode: ffmpeg $cmd');
-    await FFmpegKit.execute(cmd);
+    int cadenceGot = 0;
+    if (FrameCadence.enabled) {
+      final CadencePlan? plan = await FrameCadence.analyze(path);
+      if (plan != null && plan.hasDuplicates) {
+        cadenceGot = await FrameCadence.decodeExpanded(
+          plan: plan,
+          path: path,
+          startFrame: (startMs * fps / 1000.0).round(),
+          count: frameCount,
+          outFps: fps,
+          vfTail: scale.isEmpty ? 'null' : scale.substring(1),
+          frameBytes: fb,
+          out: file,
+        );
+        if (cadenceGot != frameCount) cadenceGot = 0;
+      }
+    }
+    if (cadenceGot == 0) {
+      final cmd = '-hide_banner -y ${CpuSafe.ffArgs()}-ss ${(startMs / 1000.0).toStringAsFixed(4)} -i "$path" -an -sn -dn '
+          '-vf "fps=$fps$scale" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"';
+      CrashLog.note('  Motion S export decode: ffmpeg $cmd');
+      await FFmpegKit.execute(cmd);
+    }
     if (!file.existsSync() || file.lengthSync() < fb) {
       try {
         if (file.existsSync()) file.deleteSync();

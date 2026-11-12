@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
+import 'constants.dart';
 import 'models.dart';
 import 'crash_log.dart';
 import 'cpu_safe.dart';
@@ -19,6 +20,8 @@ import 'vulkan_bridge.dart';
 import 'export_matrix.dart';
 import 'export_clock.dart';
 import 'native_encoder.dart';
+import 'frame_cadence.dart'; // batch 20: duplicate frame remover switch
+import 'app_settings.dart'; // batch 20: SettingsStore.save()
 
 /// H.264 / HEVC (8-bit and 10-bit) are encoded by the phone's hardware encoder through Kotlin MediaCodec (NativeEncoder / MediaCodecEncoder.kt): no FFmpeg encode.
 /// true = the graded frames go GPU -> the encoder's Surface without touching the CPU. false = NV12 frames are sent to the encoder instead (slower, same picture);
@@ -482,6 +485,44 @@ class ExportSuite {
                         },
                       );
                     }).toList(),
+                  ),
+                  const SizedBox(height: 10),
+                  // 1c. Batch 20: duplicate frame remover
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    activeColor: const Color(0xFF00E5FF),
+                    title: const Text('Duplicate frame remover', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    subtitle: const Text(
+                      'Scans the clip for repeated frames (a clip made in another app often repeats every picture 2-3 times, unevenly), drops the repeats and holds every '
+                      'picture for the same time, so the export has exactly the frame rate above with an even rhythm. Adds a short scan before the export. Audio is not changed.',
+                      style: TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                    value: FrameCadence.enabled,
+                    onChanged: isExporting
+                        ? null
+                        : (v) {
+                            setSheetState(() => FrameCadence.enabled = v);
+                            SettingsStore.save();
+                          },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    activeColor: const Color(0xFF00E5FF),
+                    title: const Text('Faster flares (half-resolution beam)', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    subtitle: const Text(
+                      'The anamorphic flare beam is a wide soft light, so computing it at half resolution looks the same but can save a large part of the render time on a heavy grade. '
+                      'Only affects this export, not the preview.',
+                      style: TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                    value: gFlareHalfResExport,
+                    onChanged: isExporting
+                        ? null
+                        : (v) {
+                            setSheetState(() => gFlareHalfResExport = v);
+                            SettingsStore.save();
+                          },
                   ),
                   const SizedBox(height: 14),
 
@@ -988,6 +1029,10 @@ class ExportSuite {
     try {
       StageTimer.reset();
       vulkanSetBandBudgetMs(150); // export: bigger GPU submits (less overhead); the phone UI is not being used
+      if (gFlareHalfResExport && !gFlareHalfRes) {
+        vulkanSetFlareHalfRes(true); // batch 20: half-resolution flare beam for the export only (restored below); see "Faster flares" on the export sheet
+        ExportNotes.add('faster flares: the flare beam is computed at half resolution for this export');
+      }
       CrashLog.begin('Video export', {
         'codec': codec,
         'container': container,
@@ -1370,6 +1415,7 @@ class ExportSuite {
       rethrow;
     } finally {
       vulkanSetBandBudgetMs(40);
+      vulkanSetFlareHalfRes(gFlareHalfRes); // batch 20: back to the preview setting
       // an export that stopped half way must not leave a MediaCodec / Surface open (after a normal finish nothing is active)
       if (NativeEncoder.active != null) {
         try {

@@ -14,7 +14,8 @@
 //   7744 .. 7903        4-WAY GRADIENT (batch 14) (shader: grad4[160], class Gradient4Way below): per-layer 16-float blocks at 7744 + layer * 16, read by pass 28
 //   7904 .. 8191        unused (padding in the shader block)
 //   8192 .. 9071        LOOKS / EDGE FX / EFFECT REGION (batch 19, class Looks / EdgeFx / Place in looks_edge_slots.dart)
-//   total buffer = 9216 floats (batch 19; was 8192 (4096 -> 5376 in batch 6, 5376 -> 6144 in batch 7, 6144 -> 8192 in batch 9)  ->  kUboFloats
+//   9216 .. 9535        CHROMATIC ABERRATION / INNER EDGE GLOW (batch 20, classes ChromaAb / InnerGlow in lens_slots.dart)
+//   total buffer = 9600 floats (batch 20; was 9216 in batch 19; was 8192 (4096 -> 5376 in batch 6, 5376 -> 6144 in batch 7, 6144 -> 8192 in batch 9)  ->  kUboFloats
 // Slot numbers MUST match the VX_* / SX_* constants in aereality_core.comp.
 // =============================================================================
 
@@ -23,7 +24,7 @@ import 'dart:typed_data';
 class Vfx {
   static const int size = 64;
   static const int packBase = 4096; // + layer * 64
-  static const int uboFloats = 9216; // batch 19: 8192 -> 9216 (Looks 8192.., Edge FX 8512.., Effect Region 8992..). Whole uniform buffer (main.dart, vulkan_processor.cpp, aereality_core.comp). Every caller must send ALL of it.
+  static const int uboFloats = 9600; // batch 20: 9216 -> 9600 (Chromatic Aberration 9216.., Inner Edge Glow 9376..); batch 19: 8192 -> 9216 (Looks 8192.., Edge FX 8512.., Effect Region 8992..). Whole uniform buffer (main.dart, vulkan_processor.cpp, aereality_core.comp). Every caller must send ALL of it.
 
   // ---- modes ----
   static const int modeOff = 0, modeBubble = 1, modeRain = 2, modeParticle = 3;

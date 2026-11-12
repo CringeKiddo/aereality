@@ -7,6 +7,9 @@
 // numbers stay reserved so an old save still loads (mode 2 / 3 render as the vector blur). Glitch Edge stays as its own optional effect.
 // The motion blur runs on the RAW frames: the project grade (flares, glows, bevel ...) is applied afterwards (motion_engine.dart).
 //
+// BATCH 20: DENSE FLOW + BENT TRAIL. Every cell finds its own displacement (x / y moves, spins and zooms all come out of the same field), the past and the future velocity are kept
+// apart and the trail bends through both (no cancelling or flipping on a camera shake), and the global fit is translation-first (no invented spin / zoom on a plain pan).
+//
 // UNIFORM LAYOUT: Motion S owns floats 5376..6399 of the uniform buffer (shader: motionS[1024], pass 18..21).
 // Time Slice keeps 6400..7423 (reserved2[1024], unread). 7424..8191 is free headroom. Total buffer = Vfx.uboFloats = 8192.
 //
@@ -124,7 +127,7 @@ class MotionS {
     f[smDisp] = 0.06; // RGB split along the trail, fraction of the trail length [ASSUMED default]
     f[vShutter] = 1.0; // batch 2B velocity vector blur [ASSUMED defaults, tuned on the reference spin / zoom clips]
     f[vPhase] = -0.6; // mostly trailing: the smear sits behind the motion
-    f[vStreak] = 0.4;
+    f[vStreak] = 0.6; // batch 20: streakier by default (was 0.4): more of the lighten smear, still only where the footage moves
     f[vRefine] = 1.0;
     f[vMinSpeed] = 0.6;
     f[vVersion] = 1.0;
@@ -237,7 +240,7 @@ class MotionS {
     u[b + needFwdSlot] = (plan.needFlow && plan.needFwd && plan.nextSlot >= 0) ? 1.0 : 0.0;
     u[b + cell] = 16.0;
     final longEdge = math.max(w, h);
-    u[b + flowRange] = ((longEdge / 160.0).round() ~/ 4 * 4).clamp(4, 12).toDouble();
+    u[b + flowRange] = (longEdge / 60.0).round().clamp(8, 40).toDouble(); // batch 20: search range of the dense flow (log search 16, 8, 4, 2, 1 px steps: about +-31 px per frame at 2K); was 4..12
 
     // the vector blur reads its sample count straight from smSamples (26); the shared slots 22 / 20 are not used any more
     u[b + samples] = s[smSamples].roundToDouble().clamp(4.0, 96.0).toDouble();

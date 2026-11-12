@@ -31,6 +31,8 @@ import 'touch_particles.dart';
 import 'editor_views.dart';
 import 'vfx_slots.dart';
 import 'looks_edge_slots.dart'; // batch 19
+import 'lens_slots.dart'; // batch 20: Chromatic Aberration + Inner Edge Glow
+import 'frame_cadence.dart'; // batch 20: duplicate frame remover
 import 'looks_edge_suite.dart'; // batch 19: Looks / Edge FX tabs + effect region handle
 import 'vfx_suite.dart';
 import 'export_suite.dart';
@@ -2831,6 +2833,11 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
   int _batchRequested = 0; // frames the export asked for
   int _batchFrames = 0; // frames actually present in the file
   int _batchFrameBytes = 0;
+  // batch 20: duplicate frame remover. _batchPicks[q] = the SOURCE frame output frame (batch start + q) shows (null = normal decode); _prevPick = the picture of the frame that was
+  // graded last (null = unknown), so an unchanged picture can be presented again instead of being graded again.
+  List<int>? _batchPicks;
+  int _batchFirstFrame = 0;
+  int? _prevPick;
 
   Future<void> _releaseExportBatch() async {
     try { await _batchRaf?.close(); } catch (_) {}
@@ -2846,6 +2853,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     if (frameCount <= 0) {
       _tsExportBroken = false;
       _tsReleaseRing(); // batch 12 C2: the export is over, free the ring
+      _prevPick = null;
+      _batchPicks = null;
     }
     if (frameCount <= 0 || _project.isImage) return;
 
@@ -2856,8 +2865,38 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     final file = File('${tempDir.path}/export_src_batch.rgba');
     final startSec = (startMs / 1000.0).toStringAsFixed(4);
 
+    // batch 20: DUPLICATE FRAME REMOVER (export sheet switch). The unique pictures of the clip are laid on an even cadence (frame_cadence.dart) and each output frame gets its picture.
+    _batchPicks = null;
+    int cadenceGot = 0;
+    if (FrameCadence.enabled) {
+      final CadencePlan? plan = await FrameCadence.analyze(_project.mediaPath);
+      if (plan != null && plan.hasDuplicates) {
+        if (startMs <= 0.5) ExportNotes.add('duplicate frame remover: ${plan.summary}');
+        final int k0 = (startMs * fps / 1000.0).round();
+        cadenceGot = await FrameCadence.decodeExpanded(
+          plan: plan,
+          path: _project.mediaPath,
+          startFrame: k0,
+          count: frameCount,
+          outFps: fps,
+          vfTail: '${_exportCropFilter()}scale=$w:$h',
+          frameBytes: w * h * 4,
+          out: file,
+        );
+        if (cadenceGot == frameCount) {
+          _batchPicks = List<int>.of(FrameCadence.lastPicks);
+          _batchFirstFrame = k0;
+        } else {
+          CrashLog.note('  duplicate frame remover: decode of this batch failed, normal decode used');
+          cadenceGot = 0;
+        }
+      } else if (plan != null && startMs <= 0.5) {
+        ExportNotes.add('duplicate frame remover: no duplicate frames found (${plan.summary})');
+      }
+    }
+
     CrashLog.note('  decode batch: $frameCount frames from ${startSec}s @ ${fps}fps, ${w}x$h');
-    await FFmpegKit.execute(
+    if (cadenceGot == 0) await FFmpegKit.execute(
       '-hide_banner -y ${CpuSafe.ffArgs()}-ss $startSec -i "${_project.mediaPath}" -an -sn -dn '
       '-vf "fps=$fps,${_exportCropFilter()}scale=$w:$h" -frames:v $frameCount -f rawvideo -pix_fmt rgba "${file.path}"',
     );
@@ -3184,6 +3223,26 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     }
   }
 
+  /// Batch 20: true when no effect of the project changes with time (no flicker, grain, animated fog / god rays, VFX, Sapphire glint / leak, film damage, glimmer twinkle,
+  /// Edge FX, Time Slice). Only then is a repeated picture graded to exactly the same frame, so it may be presented again instead of graded again. Conservative on purpose.
+  bool _gradeIsTimeStatic() {
+    try {
+      if (_tsLayer() >= 0) return false;
+      for (final l in _project.layers) {
+        if (!l.isEnabled) continue;
+        if (l.flickerIntensity > 0.001 || l.filmGrain > 0.001 || l.bslaGodRays > 0.01 || l.bslaFogDensity > 0.01) return false;
+        if (l.fx.length > 53 && l.fx[53] > 0.01) return false;
+        if (l.vfx[Vfx.mode] > 0.5) return false;
+        if (l.sap[0] >= 0.5 || l.sap[32] >= 0.5) return false;
+        if (l.looks[Looks.fdOn] >= 0.5 || l.looks[Looks.gcOn] >= 0.5) return false;
+        if (l.edgeFx[EdgeFx.on] >= 0.5) return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Uint8List> _renderFrameForExport(double timestampMs) async {
     final size = _exportRenderSize(); // batch 18B: the export size for a video export, the source size otherwise
     final w = size[0];
@@ -3194,6 +3253,24 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     // the GPU, nothing comes back. The empty list returned below is only a "frame done" token; ExportSuite must NOT write it anywhere (it checks session.surface).
     final NativeEncoderSession? hwEnc = NativeEncoder.active;
     final bool surfaceOut = hwEnc != null && hwEnc.surface && !_project.isImage;
+
+    // batch 20: DUPLICATE FRAME REMOVER, frame re-use. When this output frame shows the same source picture as the frame graded just before it and nothing in the grade moves with
+    // time, the finished frame is still in the native output buffer: it is presented again (no decode, no grade). Every other path clears _prevPick first, so it can never go stale.
+    final int? prevPick = _prevPick;
+    _prevPick = null;
+    int? pick;
+    if (!_project.isImage && _batchPicks != null) {
+      final int q = ((timestampMs - _batchStartMs) * _batchFps / 1000.0).round();
+      if (q >= 0 && q < _batchPicks!.length) pick = _batchPicks![q];
+    }
+    if (surfaceOut && pick != null && pick == prevPick && _gradeIsTimeStatic()) {
+      final reuse = await SurfaceGradeWorker.instance.presentCurrent(hwEnc!.windowHandle);
+      if (reuse.presented) {
+        StageTimer.add('frame: same picture as the one before (presented again, not graded)', 0);
+        _prevPick = pick;
+        return Uint8List(0);
+      }
+    }
 
     if (!_project.isImage) {
       // batch 12 C2: a frame inside a Time Slice wipe comes from the ring (pass 22 + the single dither of pass 23); every other frame takes the normal path below
@@ -3284,6 +3361,7 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
       }
       StageTimer.add('frame: grade + present (zero copy)', gradeWatch.elapsedMicroseconds);
       if (!sr.presented) throw Exception('The GPU could not grade this frame, so the export was stopped instead of saving an ungraded video: ${sr.error}');
+      if (sr.rc == 0) _prevPick = pick; // batch 20: graded by the GPU (not the CPU fallback): the native output buffer holds this frame
       if (sr.gpuStatus != 0) {
         CrashLog.note('  GPU status ${sr.gpuStatus} at t=${timestampMs.round()} ms (0 = ok, 1 = GPU error: CPU fallback frame), native ${sr.micros ~/ 1000} ms');
       }
@@ -3638,6 +3716,8 @@ class _ProjectScreenState extends State<ProjectScreen> with SingleTickerProvider
     Looks.packLayers(uniforms, [for (final l in _project.layers) l.looks]); // batch 19: Looks 8192..8511 (mirror in project_uniforms.dart)
     EdgeFx.packLayers(uniforms, [for (final l in _project.layers) l.edgeFx]); // batch 19: Edge FX 8512..8991
     Place.packLayers(uniforms, [for (final l in _project.layers) l.place]); // batch 19: Effect Region 8992..9071
+    ChromaAb.packLayers(uniforms, [for (final l in _project.layers) l.chroma]); // batch 20: Chromatic Aberration 9216..9375 (mirror in project_uniforms.dart)
+    InnerGlow.packLayers(uniforms, [for (final l in _project.layers) l.innerGlow]); // batch 20: Inner Edge Glow 9376..9535
     Gradient4Way.packLayers(uniforms, [for (final l in _project.layers) l.grad4]); // batch 14: 4-Way Gradient settings 7744..7903 (mirror in project_uniforms.dart)
     Bevel.packLayers(uniforms, [for (final l in _project.layers) l.bevel]); // batch 13: Metallic Bevel settings 7424..7583 (mirror in project_uniforms.dart)
     return uniforms;

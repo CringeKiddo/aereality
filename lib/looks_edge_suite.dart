@@ -6,12 +6,14 @@
 //                 anemo vortex, red / black glitch), each with its own settings and a good starting point when the mode is picked.
 //  * EffectRegionGizmo: the handle drawn over the preview. Drag the centre dot to move the region, drag the right-hand dot to make it larger / smaller
 //                 (or pinch). It writes Place.cx / cy / zoom of the selected layer; the shader limits that layer's VFX, diffusion, Looks and Edge FX to it.
+// Batch 20: CHROMATIC ABERRATION section (real lens fringing with depth) at the end of the LOOKS tab; its settings are AdjustmentLayer.chroma (lens_slots.dart).
 // Settings are flat lists in AdjustmentLayer.looks / edgeFx / place (looks_edge_slots.dart), saved by the layer JSON.
 // =============================================================================
 
 import 'package:flutter/material.dart';
 
 import 'constants.dart';
+import 'lens_slots.dart';
 import 'looks_edge_slots.dart';
 import 'models.dart';
 import 'vfx_suite.dart';
@@ -40,6 +42,42 @@ class LooksEdgeSuite {
         VfxSuite.sliderRow(c, p, Place.feather, 'Edge softness', 0.02, 1.0, onChanged, onEnded),
         VfxSuite.note('Drag the dot in the middle of the picture to move the region, the dot on its right edge (or pinch) to resize it. Applies to this layer\'s VFX, '
             'Optical Diffusion, Looks and Edge FX (the glow / flare family still covers the whole picture).'),
+      ]);
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // CHROMATIC ABERRATION (batch 20)
+  // ---------------------------------------------------------------------------
+  static List<Widget> _chromaSection(BuildContext c, AdjustmentLayer cur, VoidCallback onChanged, VoidCallback onEnded) {
+    final ca = cur.chroma;
+    Widget s(int slot, String title, double min, double max) => VfxSuite.sliderRow(c, ca, slot, title, min, max, onChanged, onEnded);
+    final out = <Widget>[
+      VfxSuite.header('CHROMATIC ABERRATION  (lens fringes with depth)'),
+      VfxSuite.toggleRow(ca, 'Chromatic Aberration', ChromaAb.on, onChanged, onEnded),
+    ];
+    if (ca[ChromaAb.on] > 0.5) {
+      final bool linear = ca[ChromaAb.mode] >= 0.5;
+      out.addAll([
+        VfxSuite.chipsRow(ca, 'Mode', ChromaAb.mode, ChromaAb.modes, onChanged, onEnded),
+        s(ChromaAb.amount, 'Amount (spread of the colours)', 0.0, 1.0),
+        if (linear) s(ChromaAb.angle, 'Angle', -180.0, 180.0),
+        if (!linear) ...[
+          s(ChromaAb.start, 'Clear centre (where the fringes begin)', 0.0, 0.9),
+          s(ChromaAb.curve, 'Depth curve (low = even, high = only the corners)', 0.4, 4.0),
+          s(ChromaAb.cx, 'Centre X', -0.25, 1.25),
+          s(ChromaAb.cy, 'Centre Y', -0.25, 1.25),
+        ],
+        s(ChromaAb.smooth, 'Smoothness (more wavelength samples = smoother rainbow)', 0.0, 1.0),
+        s(ChromaAb.balance, 'Red / blue balance (-1 blue moves more, +1 red moves more)', -1.0, 1.0),
+        s(ChromaAb.axial, 'Depth fringe (purple / green halos on contrast edges)', 0.0, 1.0),
+        s(ChromaAb.axialSize, 'Depth fringe size', 0.0, 1.0),
+        s(ChromaAb.hiBias, 'Favour bright edges', 0.0, 1.0),
+        s(ChromaAb.fringeSat, 'Fringe saturation', 0.0, 2.0),
+        s(ChromaAb.mix, 'Mix', 0.0, 1.0),
+        VfxSuite.note('Applied after the whole grade (flares, glows, bevel) and before the dither. If several layers have it on, the first one is used. '
+            'The Effect Region of the layer limits where it acts.'),
       ]);
     }
     return out;
@@ -111,6 +149,7 @@ class LooksEdgeSuite {
         s(Looks.fdSeed, 'Pattern seed', 0.0, 50.0),
       ]);
     }
+    w.addAll(_chromaSection(context, cur, onChanged, onEnded));
     w.addAll([
       VfxSuite.header('ALL LOOKS'),
       s(Looks.opacity, 'Looks opacity', 0.0, 1.0),

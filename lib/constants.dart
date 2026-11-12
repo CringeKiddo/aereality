@@ -100,6 +100,10 @@ bool gGradeActiveFrameOnly = true;
 // Switch in Settings > Preview; compare both on the same clip before leaving it on.
 bool gFlareHalfRes = false;
 
+// Batch 20: use the half-resolution flare beam (native pass 10) while EXPORTING, whatever the preview setting is. The flare beam is a wide soft light, so half resolution is
+// visually the same; the per-pixel flare maths is one of the most expensive parts of a heavy grade on a weak GPU. Export sheet switch "Faster flares".
+bool gFlareHalfResExport = true;
+
 // -----------------------------------------------------------------------------
 // Anime Aesthetic Palette Constants
 // -----------------------------------------------------------------------------

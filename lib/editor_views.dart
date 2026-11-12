@@ -25,6 +25,7 @@ import 'components/curve_editor.dart';
 import 'export_suite.dart';
 import 'ui_kit.dart';
 import 'vfx_suite.dart'; // batch 14: VfxSuite.colorSlot (existing colour widget) for the 4-Way Gradient
+import 'lens_slots.dart'; // batch 20: Inner Edge Glow slot numbers
 import 'vfx_slots.dart'; // batch 13: Bevel slot numbers (Metallic Bevel rows in the Magic tab)
 
 class EditorViews {
@@ -535,8 +536,19 @@ class EditorViews {
           padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           child: Text('CEL SHADING & VIGNETTES', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
         ),
-        buildSliderRow(context: context, title: 'Edge Darken', val: cur.edgeDarken, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarken = v; onChanged(); }, onEnded: onEnded),
-        buildSliderRow(context: context, title: 'Edge Darken Inner Blur (Spread)', val: cur.edgeDarkenBlur, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarkenBlur = v; onChanged(); }, onEnded: onEnded),
+        // Batch 20: the Edge Darken pair now drives the INNER EDGE GLOW (finds the line art, dark glow on the inside of the shape, smooth roll-off, short reach).
+        buildSliderRow(context: context, title: 'Inner Edge Glow (strength)', val: cur.edgeDarken, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarken = v; onChanged(); }, onEnded: onEnded),
+        buildSliderRow(context: context, title: 'Inner Edge Glow reach (how far in)', val: cur.edgeDarkenBlur, min: 0.0, max: 1.0, onChanged: (v) { cur.edgeDarkenBlur = v; onChanged(); }, onEnded: onEnded),
+        if (cur.edgeDarken > 0.01 || cur.edgeDarkenBlur > 0.01) ...[
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.rolloff, 'Roll-off (low = long soft tail, high = tight)', 0.5, 4.0, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.inkLevel, 'Line detection (what counts as line art)', 0.03, 0.55, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.inkSoft, 'Line detection softness', 0.03, 0.40, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.core, 'Darken the line itself', 0.0, 1.0, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.multiply, 'Keep detail (1 = multiply, 0 = flat colour)', 0.0, 1.0, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.hiProtect, 'Protect highlights', 0.0, 1.0, onChanged, onEnded),
+          VfxSuite.sliderRow(context, cur.innerGlow, InnerGlow.opacity, 'Inner glow opacity', 0.0, 1.0, onChanged, onEnded),
+          ...VfxSuite.colorSlot(context, cur.innerGlow, InnerGlow.colour, 'Glow colour (black by default)', onChanged, onEnded),
+        ],
         // Tuned to 0.70 max so it doesn't aggressively black out borders
         buildSliderRow(context: context, title: 'Radial Vignette', val: cur.vignette, min: 0.0, max: 0.70, onChanged: (v) { cur.vignette = v; onChanged(); }, onEnded: onEnded),
         buildSliderRow(context: context, title: 'Boxed Vignette', val: cur.vignetteBoxed, min: 0.0, max: 0.70, onChanged: (v) { cur.vignetteBoxed = v; onChanged(); }, onEnded: onEnded),

@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'constants.dart';
+import 'frame_cadence.dart';
 import 'motion_slots.dart';
 
 /// Batch 17B: how the editor preview behaves while the video PLAYS.
@@ -44,6 +45,8 @@ class SettingsStore {
   static const String _kTheme = 'shaderly.themeId';
   static const String _kMotionBitrate = 'shaderly.motionBitrateMbps'; // Motion S intermediate bitrate (hardware encoder)
   static const String _kMotionCodec = 'shaderly.motionCodec'; // 'hevc' | 'h264'
+  static const String _kDropDup = 'shaderly.dropDuplicateFrames'; // batch 20: duplicate frame remover switch (export sheet + Motion S menu)
+  static const String _kFastFlareExport = 'shaderly.fastFlaresExport'; // batch 20: half-resolution flare beam while EXPORTING
 
   static SharedPreferences? _prefs;
 
@@ -78,6 +81,8 @@ class SettingsStore {
       savedThemeId = p.getString(_kTheme);
       MotionS.bitrateMbps = MotionS.sanitizeBitrate(p.getInt(_kMotionBitrate));
       MotionS.intermediateCodec = MotionS.sanitizeCodec(p.getString(_kMotionCodec));
+      FrameCadence.enabled = p.getBool(_kDropDup) ?? false;
+      gFlareHalfResExport = p.getBool(_kFastFlareExport) ?? gFlareHalfResExport;
     } catch (e) {
       debugPrint('SettingsStore.load failed: $e');
     }
@@ -95,6 +100,8 @@ class SettingsStore {
       await p.setInt(_kGradeSpace, gGradeSpace == 1 ? 1 : 0);
       await p.setInt(_kMotionBitrate, MotionS.sanitizeBitrate(MotionS.bitrateMbps));
       await p.setString(_kMotionCodec, MotionS.sanitizeCodec(MotionS.intermediateCodec));
+      await p.setBool(_kDropDup, FrameCadence.enabled);
+      await p.setBool(_kFastFlareExport, gFlareHalfResExport);
     } catch (e) {
       debugPrint('SettingsStore.save failed: $e');
     }
