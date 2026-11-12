@@ -31,7 +31,7 @@ namespace {
 // + (batch 9) Motion S block motionS[1024] at floats 5376..6399, timeSlice[1024] at 6400..7423 (Time Slice, batch 12: renamed from reserved2, still unread), 7424..8191 free headroom.
 // Must match Vfx.uboFloats (vfx_slots.dart) and the UniformBlock in aereality_core.comp.
 // findBatch6Passes() returns early when fewer than kUboFloats floats are sent, so every caller must send the full buffer.
-constexpr size_t kUboFloats = 9216;   // batch 19: 8192 -> 9216 (Looks 8192.., Edge FX 8512.., Effect Region 8992..)
+constexpr size_t kUboFloats = 9600;   // batch 20: 9216 -> 9600 (Chromatic Aberration 9216.., Inner Edge Glow 9376..); batch 19: 8192 -> 9216 (Looks 8192.., Edge FX 8512.., Effect Region 8992..)
 
 struct ComputePushConstants {
     int32_t passIndex;
@@ -874,7 +874,7 @@ constexpr uint64_t kFenceTimeoutNs = 30ull * 1000000000ull;
 constexpr int32_t  kMaxPixelsPerSubmit = 4000000;  // upper cap only: the time budget below normally limits a band first
 
 static int32_t gBandBudgetMs = 40;            // target wall time of ONE GPU submit (shorter = the phone UI stays fluid)
-static double  gNsPerPx[18] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B), [15] pass 32 (Optical Diffusion apply, batch 19)
+static double  gNsPerPx[20] = {0.0};   // batch 20: 18 -> 20 slots ([16] pass 33 Looks, [17] pass 34 Edge FX, [18] pass 35 Chromatic Aberration, [19] pass 36 its copy-back) // smoothed GPU cost per pixel: [0] pass 0, [1] pass 6, [2] pass 10, [3] pass 13 (VFX), [4] pass 16 (Sapphire), [5] pass 18 (Motion S flow, per grid cell), [6] pass 21 (Motion S render), [7] pass 23 (dither + quantise, batch 12 step B), [8] pass 22 (Time Slice, step C1), [9] pass 24 (Time Slice store, step C1), [10] pass 25 (Metallic Bevel luma plane, batch 13), [11] pass 26 (Metallic Bevel, batch 13), [12] pass 27 (MathOps, batch 14), [13] pass 28 (4-Way Gradient, batch 14), [14] pass 30 (Motion S velocity map, per 4 x 4 cell, batch 2B), [15] pass 32 (Optical Diffusion apply, batch 19)
 static int64_t gLastRenderUs = 0;
 static int32_t gFlareLayer = -1;              // layer whose flare is pre-computed at half res (-1 = inline)
 static bool    gFlareHalfEnabled = false;     // runtime switch (set_flare_half_res); off = same flare maths as before
@@ -892,6 +892,12 @@ static bool    gNeedBloom = true;
 static bool    gLooksActive = false;   // pass 33 (Looks Diffusion / Film Damage / Glimmer Glass)
 static bool    gLooksPyr = false;      // pass 33 reads the unthresholded pyramid (Looks Diffusion or Glimmer Glass)
 static bool    gEdgeActive = false;    // pass 34 (Edge FX)
+// Batch 20: Chromatic Aberration (passes 35 + 36, after the Bevel / MathOps / 4-Way Gradient, before the dither). Block at float 9216 + layer * 16 (class ChromaAb in lens_slots.dart):
+// slot 0 = On, slot 1 = Amount, slot 9 = Axial amount, slot 14 = Mix. The FIRST enabled layer that has it on is applied (its index goes to pass 35 in srcW).
+constexpr int kChromaBase = 9216;
+static bool    gChromaActive = false;
+static int32_t gChromaLayer = 0;
+static_assert(kChromaBase + 160 + 160 + 64 == 9600, "Chromatic Aberration + Inner Edge Glow blocks must end at the uniform buffer size");
 // Batch 13: Global Metallic Bevel (passes 25 + 26, between Time Slice and the dither). Block at float 7424 + layer * 16 (class Bevel in vfx_slots.dart):
 // slot 0 = On, slot 6 = Mix. The FIRST enabled layer with On = 1 and Mix > 0 is the one that is applied (its index goes to pass 26 in srcW).
 constexpr int kBevelBase = 7424;
@@ -1013,6 +1019,18 @@ static void findMathGrad(const float* ubo, int32_t count) {
     }
 }
 
+static void findChroma(const float* ubo, int32_t count) {
+    gChromaActive = false;
+    gChromaLayer = 0;
+    if (ubo == nullptr || count < (int32_t)kUboFloats) return;
+    const int layers = (int)std::max(1.0f, std::min(ubo[1], 10.0f));
+    for (int l = 0; l < layers; ++l) {
+        if (ubo[32 + l * 192] < 0.5f) continue;                 // layer disabled
+        const float* c = ubo + kChromaBase + l * 16;
+        if (c[0] >= 0.5f && c[14] > 0.0001f && (c[1] > 0.0001f || c[9] > 0.0001f)) { gChromaActive = true; gChromaLayer = l; return; }
+    }
+}
+
 static void findTextWarpRows(const float* ubo, int32_t count) {
     gWarpActive = false;
     const int base = 3872;
@@ -1121,6 +1139,26 @@ static bool runBevel(int32_t w, int32_t h, int32_t pixelsPerSubmit) {
         const auto t0 = std::chrono::steady_clock::now();
         if (!submitAndWait([&]() { recordPass(26, w, h, 0.0f, y, rows, gBevelLayer, 0); })) return false;
         updateBandCost(11, t0, rows, w);
+        y += rows;
+    }
+    return true;
+}
+
+// Batch 20: Chromatic Aberration on the finished display image (slot 0). Pass 35 reads display_px and writes the result into out_pixels (scratch, pass 23 overwrites it),
+// pass 36 copies it back. Two separate loops (and submits), so every pixel reads the untouched image.
+static bool runChroma(int32_t w, int32_t h, int32_t pixelsPerSubmit) {
+    for (int32_t y = 0; y < h;) {
+        const int32_t rows = std::min(adaptiveRows(18, w, h, pixelsPerSubmit), h - y);
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!submitAndWait([&]() { recordPass(35, w, h, 0.0f, y, rows, gChromaLayer, 0); })) return false;
+        updateBandCost(18, t0, rows, w);
+        y += rows;
+    }
+    for (int32_t y = 0; y < h;) {
+        const int32_t rows = std::min(adaptiveRows(19, w, h, pixelsPerSubmit), h - y);
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!submitAndWait([&]() { recordPass(36, w, h, 0.0f, y, rows); })) return false;
+        updateBandCost(19, t0, rows, w);
         y += rows;
     }
     return true;
@@ -1306,6 +1344,11 @@ static bool runGpuPipelineOnce(int32_t outWidth, int32_t outHeight, int32_t pixe
         if (!runPixelPass(28, 13, outWidth, outHeight, pixelsPerSubmit)) return false;
     }
 
+    // 3e. Batch 20: Chromatic Aberration (passes 35 + 36), after the 4-Way Gradient, before the dither.
+    if (gChromaActive) {
+        if (!runChroma(outWidth, outHeight, pixelsPerSubmit)) return false;
+    }
+
     // 4. Pass 23 (batch 12 step B): TPDF dither + quantise, display image (float32) -> outBuffer, banded the same way as pass 6.
     //    Pass 22 (Time Slice) runs between pass 6 and pass 23 in runTimeSliceEmit() (step C1), never inside this function. Nothing runs after pass 23.
     for (int32_t y = 0; y < outHeight;) {
@@ -1361,6 +1404,9 @@ static bool runTimeSliceEmit(int32_t w, int32_t h) {
     }
     if (gGrad4Active) {
         if (!runPixelPass(28, 13, w, h, px)) return false;
+    }
+    if (gChromaActive) {   // batch 20: ... 4-Way Gradient (28) -> Chromatic Aberration (35 + 36) -> Dither (23)
+        if (!runChroma(w, h, px)) return false;
     }
     for (int32_t y = 0; y < h;) {
         const int32_t rows = std::min(adaptiveRows(7, w, h, px), h - y);
@@ -1483,6 +1529,9 @@ static MoSim moRefine(const MoGray& a, const MoGray& b, MoSim s, float rotStep, 
 
 // Global motion current -> neighbour. Falls back to "no global motion" unless the match is clearly better than standing still,
 // which also keeps static scenes (and tiny shakes) from producing fake motion.
+// Batch 20: TRANSLATION FIRST. The old search fitted translation + rotation + zoom at once on a 48 px thumbnail, and for a plain pan / shake it often "explained" the move with a
+// bit of spin or zoom, so the flow came out as swirls and radial blur and the x / y movement was lost. Now a translation-only fit is made first; rotation / zoom is only searched
+// when the translation fit leaves a large error, and it is only used when it is a clear win (Occam: 20 % lower error than translation alone).
 static MoSim moEstimate(const uint8_t* cur, const uint8_t* nb, int w, int h, float* confOut) {
     *confOut = 0.0f;
     MoSim id;
@@ -1500,30 +1549,52 @@ static MoSim moEstimate(const uint8_t* cur, const uint8_t* nb, int w, int h, flo
     const float idSad = moSad(a2, b2, id, 1);
     if (idSad < 0.004f) return id;                    // frames are practically identical
 
-    MoSim best;
-    float bestS = moSad(a0, b0, id, 1);
-    const float kDeg = 3.14159265f / 180.0f;
-    for (int ri = -12; ri <= 12; ++ri) {
-        for (int si = -6; si <= 6; ++si) {
-            for (int yi = -3; yi <= 3; ++yi) {
-                for (int xi = -3; xi <= 3; ++xi) {
-                    MoSim c;
-                    c.rot = (float)ri * 4.0f * kDeg;
-                    c.ls = (float)si * 0.05f;
-                    c.tx = (float)xi * 0.04f;
-                    c.ty = (float)yi * 0.04f;
-                    const float v = moSad(a0, b0, c, 1);
-                    if (v < bestS) { bestS = v; best = c; }
+    // ---- 1. translation only ----
+    MoSim bt;
+    float bts = moSad(a0, b0, id, 1);
+    for (int yi = -6; yi <= 6; ++yi) {
+        for (int xi = -6; xi <= 6; ++xi) {
+            MoSim c;
+            c.tx = (float)xi * 0.02f;
+            c.ty = (float)yi * 0.02f;
+            const float v = moSad(a0, b0, c, 1);
+            if (v < bts) { bts = v; bt = c; }
+        }
+    }
+    bt = moRefine(a1, b1, bt, 0.0f, 0.0f, 0.006f, 14, 1);
+    bt = moRefine(a2, b2, bt, 0.0f, 0.0f, 0.002f, 10, 1);
+    const float tS = moSad(a2, b2, bt, 1);
+
+    MoSim chosen = bt;
+    float chosenS = tS;
+    if (tS > 0.45f * idSad) {
+        // ---- 2. translation does not explain it: try the full similarity (spin / zoom) ----
+        MoSim best;
+        float bestS = moSad(a0, b0, id, 1);
+        const float kDeg = 3.14159265f / 180.0f;
+        for (int ri = -12; ri <= 12; ++ri) {
+            for (int si = -6; si <= 6; ++si) {
+                for (int yi = -3; yi <= 3; ++yi) {
+                    for (int xi = -3; xi <= 3; ++xi) {
+                        MoSim c;
+                        c.rot = (float)ri * 4.0f * kDeg;
+                        c.ls = (float)si * 0.05f;
+                        c.tx = (float)xi * 0.04f;
+                        c.ty = (float)yi * 0.04f;
+                        const float v = moSad(a0, b0, c, 1);
+                        if (v < bestS) { bestS = v; best = c; }
+                    }
                 }
             }
         }
+        best = moRefine(a1, b1, best, 0.02f, 0.015f, 0.006f, 14, 1);
+        best = moRefine(a2, b2, best, 0.006f, 0.005f, 0.002f, 10, 1);
+        const float sS = moSad(a2, b2, best, 1);
+        if (sS < 0.80f * tS - 0.001f) { chosen = best; chosenS = sS; }   // only a clear win over plain translation
     }
-    best = moRefine(a1, b1, best, 0.02f, 0.015f, 0.006f, 14, 1);
-    best = moRefine(a2, b2, best, 0.006f, 0.005f, 0.002f, 10, 1);
-    const float finalS = moSad(a2, b2, best, 1);
-    if (!(finalS < 0.85f * idSad)) return id;
-    *confOut = std::max(0.0f, std::min(1.0f, 1.0f - finalS / idSad));
-    return best;
+    if (!(chosenS < 0.85f * idSad)) return id;
+    *confOut = std::max(0.0f, std::min(1.0f, 1.0f - chosenS / idSad));
+    return chosen;
 }
 
 static void moWriteT(float* m, int base, const MoSim& s, int w, int h, float conf) {
@@ -1777,7 +1848,7 @@ static bool gWsiTiming = false;     // VK_GOOGLE_display_timing enabled too: eve
 static char gSurfError[200] = {0};  // text of the last surface failure, read through get_last_surface_error()
 // Where the time of a surface export goes (microseconds summed over all presented frames); read through get_surface_timing().
 static uint64_t gSurfAcqUs = 0, gSurfCopyUs = 0, gSurfPresUs = 0, gSurfTimedFrames = 0, gSurfUpUs = 0, gSurfGradeUs = 0, gSurfGradeFrames = 0;
-static char gSurfTimingText[700] = {0};
+static char gSurfTimingText[1200] = {0};
 static inline uint64_t surfNowUs() {
     return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -2796,7 +2867,7 @@ void process_image(const uint8_t* inputBytes, int32_t inWidth, int32_t inHeight,
     gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
     findTextWarpRows(uniforms, uniformCount);
     findBatch6Passes(uniforms, uniformCount);
-    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);   // batch 13
+    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);   // batch 13
     if (!runGpuPipeline(outWidth, outHeight)) {
         if (gLastRenderStatus == 0) gLastRenderStatus = 1;
         executeCpuFallbackGrading(reinterpret_cast<const uint32_t*>(inputBytes),
@@ -2853,7 +2924,7 @@ int32_t process_timeslice_ingest(const uint8_t* inputBytes, int32_t w, int32_t h
     gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
     findTextWarpRows(uniforms, uniformCount);
     findBatch6Passes(uniforms, uniformCount);
-    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);   // batch 13
+    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);   // batch 13
     gTsStoreSlot = slot;
     const bool ok = runGpuPipeline(w, h);
     gTsStoreSlot = -1;
@@ -2874,7 +2945,7 @@ int32_t process_timeslice_emit(int32_t w, int32_t h, uint8_t* outputBytes, const
     vkFlushMappedMemoryRanges(gVk.device, 1, &uboRange);
     vkUnmapMemory(gVk.device, gVk.uboMemory);
 
-    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);   // batch 13: the wipe frame's UBO decides whether pass 25 + 26 run between pass 22 and pass 23
+    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);   // batch 13: the wipe frame's UBO decides whether pass 25 + 26 run between pass 22 and pass 23
     if (!runTimeSliceEmit(w, h)) return -1;
 
     const size_t byteSize = static_cast<size_t>(w) * static_cast<size_t>(h) * sizeof(uint32_t);
@@ -2937,7 +3008,7 @@ int32_t process_image_nv12(const uint8_t* inputBytes, int32_t w, int32_t h, uint
         gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
         findTextWarpRows(uniforms, uniformCount);
         findBatch6Passes(uniforms, uniformCount);
-        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);
+        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);
 
         if (runGpuPipeline(w, h) && runYuvPack(w, h)) {
             // RGBA8 sits in words [0, P); the NV12 planes start right behind it, at byte P * 4
@@ -2990,11 +3061,15 @@ const char* get_surface_timing() {
     const uint64_t g = gSurfGradeFrames ? gSurfGradeFrames : 1;
     snprintf(gSurfTimingText, sizeof(gSurfTimingText),
              "surface path, %llu frames, average per frame: upload %.1f ms | GRADE (GPU passes) %.1f ms | wait for encoder %.1f ms | GPU copy %.1f ms | present %.1f ms"
-             " || inside the grade (estimate): pass 0 primary grade %.0f ms | pass 6 master composite %.0f ms | pass 23 dither %.0f ms",
+             " || inside the grade (estimate): pass 0 primary grade %.0f ms | pass 6 master composite %.0f ms | pass 23 dither %.0f ms"
+             " | flare beam (pass 10) %.0f ms | diffusion (32) %.0f ms | Looks (33) %.0f ms | Edge FX (34) %.0f ms | Chromatic Aberration (35 + 36) %.0f ms",
              (unsigned long long)gSurfTimedFrames, gSurfUpUs / 1000.0 / g, gSurfGradeUs / 1000.0 / g,
              gSurfAcqUs / 1000.0 / n, gSurfCopyUs / 1000.0 / n, gSurfPresUs / 1000.0 / n,
              gNsPerPx[0] * (double)gSurf.w * (double)gSurf.h / 1e6, gNsPerPx[1] * (double)gSurf.w * (double)gSurf.h / 1e6,
-             gNsPerPx[7] * (double)gSurf.w * (double)gSurf.h / 1e6);
+             gNsPerPx[7] * (double)gSurf.w * (double)gSurf.h / 1e6,
+             gNsPerPx[2] * (double)gSurf.w * (double)gSurf.h / 4e6, gNsPerPx[15] * (double)gSurf.w * (double)gSurf.h / 1e6,
+             gNsPerPx[16] * (double)gSurf.w * (double)gSurf.h / 1e6, gNsPerPx[17] * (double)gSurf.w * (double)gSurf.h / 1e6,
+             (gNsPerPx[18] + gNsPerPx[19]) * (double)gSurf.w * (double)gSurf.h / 1e6);
     return gSurfTimingText;
 }
 
@@ -3047,7 +3122,7 @@ int32_t process_image_to_surface(const uint8_t* inputBytes, int32_t w, int32_t h
         gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
         findTextWarpRows(uniforms, uniformCount);
         findBatch6Passes(uniforms, uniformCount);
-        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);
+        findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);
         tGrade0 = surfNowUs();
         gSurfUpUs += tGrade0 - tUp0;
         gpuOk = runGpuPipeline(w, h);   // the finished RGBA8 frame is now in outBuffer
@@ -3140,7 +3215,7 @@ void process_image_16(const uint16_t* inputBytes, int32_t inWidth, int32_t inHei
     gFlareLayer = gFlareHalfEnabled ? findFlareLayer(uniforms, uniformCount) : -1;
     findTextWarpRows(uniforms, uniformCount);
     findBatch6Passes(uniforms, uniformCount);
-    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount);   // batch 13
+    findBevel(uniforms, uniformCount); findMathGrad(uniforms, uniformCount); findChroma(uniforms, uniformCount);   // batch 13
     if (!runGpuPipeline(outWidth, outHeight)) {
         std::memcpy(outputBytes, inputBytes, pixelCount * 8);
         return;
@@ -3200,7 +3275,7 @@ static void processMotionImpl(const uint8_t* frames, int32_t w, int32_t h, int32
     if (ns >= frameCount) m[8] = -1.0f;
 
     const VkDeviceSize flowBytes = (VkDeviceSize)3 * (VkDeviceSize)gw * (VkDeviceSize)gh * 8 * sizeof(float);
-    const VkDeviceSize velBytes = (VkDeviceSize)((w + 3) / 4) * (VkDeviceSize)((h + 3) / 4) * 2 * sizeof(float);   // batch 2B: one vec2 per 4 x 4 pixels
+    const VkDeviceSize velBytes = (VkDeviceSize)((w + 3) / 4) * (VkDeviceSize)((h + 3) / 4) * 4 * sizeof(float);   // batch 20: one vec4 (past xy, future zw velocity) per 4 x 4 pixels
     if (!ensureMotionBuffers((VkDeviceSize)frameCount * (VkDeviceSize)frameBytes, flowBytes, velBytes)) {
         fallback();
         return;
