@@ -124,7 +124,7 @@ layout(std430, binding = 10) buffer FlareHalf { uint flare_half[]; }; // anamorp
 // Motion S (batch 9): N packed 8-bit RGBA frames (binding 11) and the 3-plane flow field (binding 12). Only passes 18..21 touch them.
 layout(std430, binding = 11) readonly buffer MotionFrames { uint mo_frames[]; };
 layout(std430, binding = 12) buffer MotionFlow { float mo_flow[]; };
-layout(std430, binding = 14) buffer MotionVelocity { vec2 mo_vel[]; };   // batch 2B: velocity map, 1/4 resolution, (dx, dy) in pixels per frame = R32G32_SFLOAT per cell (pass 30 writes it, pass 21 reads it)
+layout(std430, binding = 14) buffer MotionVelocity { vec4 mo_vel[]; };   // batch 2B: velocity map, 1/4 resolution. Batch 20: vec4 per cell = (past velocity xy, future velocity zw) in pixels per frame (pass 30 writes it, pass 21 reads it)
 
 // HDR composite (fp16 RGBA = 2 uints / pixel)
 layout(std430, binding = 7) buffer TempCompositeBuffer { uint temp_composite[]; };
@@ -139,7 +139,7 @@ layout(std430, binding = 13) buffer DisplayBuffer { vec4 display_px[]; };
 // Ring frames are the PRE-dither pass 6 output, so slices are never dithered twice. Without Time Slice the buffer is P long, as in step B.
 
 layout(push_constant) uniform PushConsts {
-    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B), 31 DiffusionPrefilter (composite -> unthresholded L0, batch 19), 32 DiffusionApply (composite + L1..L4 -> out scratch, then pass 14 copies back, batch 19), 33 Looks (diffusion looks / glimmer glass / film damage, same scratch + pass 14 scheme), 34 Edge FX (border effects)
+    int u_passIndex;   // 0 Grade, 1 Prefilter->L0, 2 Down1, 3 Down2, 4 Up1, 5 Up0, 6 Composite, 7 Down3, 8 Down4, 9 Up3, 10 FlareHalf, 11 TextWarp (composite -> out scratch), 12 TextWarpCopy (scratch -> composite), 13 VfxShade (composite -> out scratch), 14 VfxCopy, 15 SapGlintMap (composite -> bloom L1), 16 SapGather (composite + L1 -> out scratch), 17 SapCopy, 18 MotionFlow (grid), 19 MotionSmooth (grid), 20 MotionDilate (grid), 21 MotionRender (frames -> out), 22 TimeSlice (ring slots -> display_px slot 0, batch 12 step C1), 23 DitherQuantise (display_px -> out_pixels; pass 6 now stops at the float display image), 24 TimeSliceStore (display_px slot 0 -> ring slot u_srcW), 25 BevelLuma (display_px slot 0 -> luma plane in out_pixels scratch, batch 13), 26 MetallicBevel (luma plane + display_px slot 0 -> display_px slot 0; u_srcW = layer whose bevel block is used, batch 13), 27 MathOps (display_px slot 0 in place, all layers in layer order, batch 14), 28 Gradient4Way (display_px slot 0 in place, all layers in layer order, batch 14), 29 YuvPack (out_pixels RGBA8 -> NV12 planes behind it, video export, batch 18B), 30 MotionVelocity (grid at 1/4 resolution: coarse flow refined by Lucas-Kanade -> mo_vel, binding 14, batch 2B), 31 DiffusionPrefilter (composite -> unthresholded L0, batch 19), 32 DiffusionApply (composite + L1..L4 -> out scratch, then pass 14 copies back, batch 19), 33 Looks (diffusion looks / glimmer glass / film damage, same scratch + pass 14 scheme), 34 Edge FX (border effects), 35 ChromaAb (display_px slot 0 -> packed scratch in out_pixels; u_srcW = layer whose chroma block is used, batch 20), 36 ChromaCopy (scratch -> display_px slot 0)
     int u_passWidth;
     int u_passHeight;
     float u_passRadius;
@@ -400,6 +400,10 @@ layout(std430, binding = 2) readonly buffer UniformBlock {
     float looks[320];              // 8192..8511: LOOKS (batch 19), 32 floats per layer: Looks Diffusion / Film Damage / Glimmer Glass (class Looks in looks_edge_slots.dart), read by pass 33
     float edgefx[480];             // 8512..8991: EDGE FX (batch 19), 48 floats per layer (class EdgeFx), read by pass 34
     float place[80];               // 8992..9071: EFFECT REGION (batch 19), 8 floats per layer (class Place), read by VFX, diffusion, Looks and Edge FX
+    float _gapB[144];              // 9072..9215: unused (keeps the next blocks at their documented offsets)
+    float chroma[160];             // 9216..9375: CHROMATIC ABERRATION (batch 20), 16 floats per layer (class ChromaAb in lens_slots.dart), read by pass 35 (first enabled layer with it on)
+    float inglow[160];             // 9376..9535: INNER EDGE GLOW (batch 20), 16 floats per layer (class InnerGlow), read by the grade (pass 0, section 8d)
+    float _tail[64];               // 9536..9599: free headroom
 };
 
 // Per-dispatch globals
@@ -442,6 +446,8 @@ vec3 linearToSrgb(vec3 c) {
 #define LK(l, i) looks[(l) * 32 + (i)]
 #define EG(l, i) edgefx[(l) * 48 + (i)]
 #define PL(l, i) place[(l) * 8 + (i)]
+#define CA(l, i) chroma[(l) * 16 + (i)]   // batch 20
+#define IG(l, i) inglow[(l) * 16 + (i)]   // batch 20
 
 // 1 inside the layer's effect region (or everywhere when no region is set), 0 outside; the edge fades over "feather".
 float placeMask(int l, vec2 uv) {
@@ -4036,27 +4042,30 @@ void moWrite(int plane, ivec2 c, int gw, int gh, vec3 B, vec3 F) {
     mo_flow[b + 7] = 0.0;
 }
 
-// ---- PASS 18: residual block matching around the global prediction ----------------------------------------------
-float moBlockSad(int nSlot, MoT T, vec2 pc, vec2 d, int w, int h) {
+// Patch SAD: the current frame's 6 x 6 luma patch (moRef, tap spacing ts) against frame nSlot displaced by d (displacement current -> neighbour).
+float moPatchSad(int nSlot, vec2 pc, vec2 d, float ts, int w, int h) {
     float s = 0.0;
     for (int j = 0; j < 6; j++) {
         for (int i = 0; i < 6; i++) {
-            vec2 o = (vec2(float(i), float(j)) - 2.5) * 3.0;
-            vec2 p = moMapT(T, pc + o) + d;
-            s += abs(moRef[j * 6 + i] - moGLumBi(nSlot, p, w, h));
+            vec2 o = (vec2(float(i), float(j)) - 2.5) * ts;
+            s += abs(moRef[j * 6 + i] - moGLumBi(nSlot, pc + o + d, w, h));
         }
     }
     return s * (1.0 / 36.0);
 }
 
+// Batch 20: DENSE FLOW. The old pass trusted the global spin / zoom fit and only searched a few px around it, so a plain x / y move of the picture (or of one
+// character) was lost and the field came out as swirls and zooms. Now every cell finds its OWN displacement with a log search (16, 8, 4, 2, 1 px steps = up to about
+// +-31 px per frame), seeded with "standing still" and the global prediction. A non-zero vector must clearly beat standing still, so static parts stay exactly static.
 void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
     int C = max(int(MOS(12)), 4);
     int cur = int(MOS(6));
     vec2 pc = min((vec2(cell) + 0.5) * float(C), vec2(float(w - 1), float(h - 1)));
+    float ts = max(float(C) * 0.25, 2.0);
     float mean = 0.0;
     for (int j = 0; j < 6; j++) {
         for (int i = 0; i < 6; i++) {
-            vec2 o = (vec2(float(i), float(j)) - 2.5) * 3.0;
+            vec2 o = (vec2(float(i), float(j)) - 2.5) * ts;
             float v = moGLumBi(cur, pc + o, w, h);
             moRef[j * 6 + i] = v;
             mean += v;
@@ -4067,47 +4076,46 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
     for (int k = 0; k < 36; k++) tex += abs(moRef[k] - mean);
     tex /= 36.0;
 
+    float R = clamp(MOS(13), 4.0, 40.0);
+    float st0 = clamp(exp2(floor(log2(R / 1.5))), 2.0, 16.0);
+    const float biasNZ = 0.006;
+
     vec3 outB = vec3(0.0);
     vec3 outF = vec3(0.0);
-    int R = clamp(int(MOS(13)), 0, 16);
     for (int dirI = 0; dirI < 2; dirI++) {
         int nSlot = (dirI == 0) ? int(MOS(7)) : int(MOS(8));
         if (nSlot < 0) continue;
         if (dirI == 1 && MOS(10) < 0.5) continue;
         MoT T = moLoadT(dirI == 0 ? MO_TPREV : MO_TNEXT);
         vec2 g0 = moMapT(T, pc) - pc;
-        float s0 = moBlockSad(nSlot, T, pc, vec2(0.0), w, h);
+        float s0 = moPatchSad(nSlot, pc, vec2(0.0), ts, w, h);
         float bestS = s0;
         vec2 bestD = vec2(0.0);
-        // Batch 19: when the global motion (spin / zoom / pan) already explains this block (mean luma error under 0.02) there is nothing local to find. The local search on
-        // thin line art is ambiguous (aperture problem: a line slides along itself), so it used to invent per-block vectors = random smears drawn from the line art.
-        bool explained = (s0 < 0.02);
-        for (int dy = -R; dy <= R; dy += 4) {
-            for (int dx = -R; dx <= R; dx += 4) {
-                if (explained) break;
-                if (dx == 0 && dy == 0) continue;
-                vec2 d = vec2(float(dx), float(dy));
-                float s = moBlockSad(nSlot, T, pc, d, w, h);
-                if (s < bestS) { bestS = s; bestD = d; }
-            }
+        if (dot(g0, g0) > 0.04) {
+            float sg = moPatchSad(nSlot, pc, g0, ts, w, h) + biasNZ;
+            if (sg < bestS) { bestS = sg; bestD = g0; }
         }
-        for (int stepI = 0; stepI < 2; stepI++) {
-            if (explained) break;
-            float st = (stepI == 0) ? 2.0 : 1.0;
-            vec2 c0 = bestD;
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if (dx == 0 && dy == 0) continue;
-                    vec2 d = c0 + vec2(float(dx), float(dy)) * st;
-                    float s = moBlockSad(nSlot, T, pc, d, w, h);
-                    if (s < bestS) { bestS = s; bestD = d; }
+        if (s0 > 0.010) {                                   // standing still already explains it (static or flat): nothing to search
+            float st = st0;
+            for (int si = 0; si < 5; si++) {
+                if (st < 1.0) break;
+                vec2 c0 = bestD;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        if (dx == 0 && dy == 0) continue;
+                        vec2 d = c0 + vec2(float(dx), float(dy)) * st;
+                        float sc = moPatchSad(nSlot, pc, d, ts, w, h) + biasNZ;
+                        if (sc < bestS) { bestS = sc; bestD = d; }
+                    }
                 }
+                st *= 0.5;
             }
         }
-        // no residual when the block has no texture or the gain over "just the global motion" is small
-        if (tex < 0.02 || bestS > 0.75 * s0) { bestD = vec2(0.0); bestS = s0; }   // batch 19: was 0.012 / 0.9, only a clear local win counts
-        float conf = clamp(1.0 - bestS / (tex + 0.02), 0.0, 1.0);
-        if (dirI == 0) outB = vec3(g0 + bestD, conf); else outF = vec3(g0 + bestD, conf);
+        bool moved = dot(bestD, bestD) > 0.0;
+        float sRaw = moved ? bestS - biasNZ : bestS;
+        if (moved && (tex < 0.012 || sRaw > 0.8 * s0)) { bestD = vec2(0.0); sRaw = s0; }   // only a clear win counts; a flat patch says nothing
+        float conf = (tex < 0.012) ? 0.0 : clamp(1.0 - sRaw / (tex + 0.02), 0.0, 1.0);
+        if (dirI == 0) outB = vec3(bestD, conf); else outF = vec3(bestD, conf);
     }
     moWrite(0, cell, gw, gh, outB, outF);
 }
@@ -4202,18 +4210,18 @@ vec3 moSampleSharp(int slot, vec2 pos, int w, int h, float sharp) {
 
 const float MO_VEL_CELL = 4.0;   // velocity map resolution: one vec2 per 4 x 4 pixels (1/4 resolution)
 
-vec2 moVelCell(ivec2 c, int vw, int vh) {
+vec4 moVelCell(ivec2 c, int vw, int vh) {
     c = clamp(c, ivec2(0), ivec2(vw - 1, vh - 1));
     return mo_vel[c.y * vw + c.x];
 }
-vec2 moVelAt(vec2 q, int vw, int vh) {
+vec4 moVelAt(vec2 q, int vw, int vh) {
     vec2 g = q * (1.0 / MO_VEL_CELL) - 0.5;
     ivec2 i0 = ivec2(floor(g));
     vec2 t = g - vec2(i0);
-    vec2 a = moVelCell(i0, vw, vh);
-    vec2 b = moVelCell(i0 + ivec2(1, 0), vw, vh);
-    vec2 c = moVelCell(i0 + ivec2(0, 1), vw, vh);
-    vec2 d = moVelCell(i0 + ivec2(1, 1), vw, vh);
+    vec4 a = moVelCell(i0, vw, vh);
+    vec4 b = moVelCell(i0 + ivec2(1, 0), vw, vh);
+    vec4 c = moVelCell(i0 + ivec2(0, 1), vw, vh);
+    vec4 d = moVelCell(i0 + ivec2(1, 1), vw, vh);
     return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
 }
 
@@ -4263,6 +4271,8 @@ void executeMotionVelocity(ivec2 cell, int vw, int vh, int w, int h) {
     vec2 vF = vec2(0.0);
     float wB = 0.0;
     float wF = 0.0;
+    float cB = 0.0;
+    float cF = 0.0;
     for (int dirI = 0; dirI < 2; dirI++) {
         if (dirI == 0 && !useB) continue;
         if (dirI == 1 && !useF) continue;
@@ -4281,49 +4291,50 @@ void executeMotionVelocity(ivec2 cell, int vw, int vh, int w, int h) {
         }
         float wt = 0.25 + 0.75 * conf;
         vec2 v = (dirI == 0) ? -d : d;               // B moved the content by -B (previous -> now), F by +F (now -> next)
-        if (dirI == 0) { vB = v; wB = wt; } else { vF = v; wF = wt; }
+        if (dirI == 0) { vB = v; wB = wt; cB = conf; } else { vF = v; wF = wt; cF = conf; }
     }
-    // Batch 19: forward / backward CONSISTENCY. Real motion is smooth, so the content velocity measured towards the previous frame and towards the next frame must roughly
-    // agree. When they disagree (more than 60 % of the larger one + 1.5 px) one of them is a bad match: keep only the more trustworthy side and halve its weight, instead of
-    // averaging a wrong vector into a right one (that average was the random smear).
-    vec2 vOut = vec2(0.0);
-    if (wB > 0.0 && wF > 0.0) {
-        float diff = length(vB - vF);
-        float big = max(length(vB), length(vF));
-        if (diff > 0.6 * big + 1.5) {
-            vOut = (wB >= wF) ? vB * 0.5 : vF * 0.5;
-            vOut *= 1.0;
-        } else {
-            vOut = (vB * wB + vF * wF) / (wB + wF);
-        }
-    } else if (wB > 0.0) {
-        vOut = vB;
-    } else if (wF > 0.0) {
-        vOut = vF;
+    // Batch 20: the two sides are KEPT SEPARATE (past velocity in xy, future velocity in zw) and the render bends the trail through them. Averaging them (the old
+    // behaviour) cancelled the motion at every direction reversal of a camera shake and flipped between the two sides from frame to frame = the wobble.
+    // A side with no match (first / last frame of the clip) or no confidence copies the other side (constant velocity).
+    if (wB <= 0.0 && wF > 0.0) vB = vF;
+    else if (wF <= 0.0 && wB > 0.0) vF = vB;
+    else if (wB > 0.0 && wF > 0.0) {
+        if (cB < 0.12 && cF > 0.25) vB = vF;
+        else if (cF < 0.12 && cB > 0.25) vF = vB;
     }
-    mo_vel[cell.y * vw + cell.x] = vOut;
+    mo_vel[cell.y * vw + cell.x] = vec4(vB, vF);
 }
 
 // ---- RENDER -----------------------------------------------------------------------------------------------------------------
 // q = pixel centre (after the optional Glitch Edge tear), pre = the untouched pixel (linear when moLin), cur = frame slot to sample.
+// Batch 20: BENT TRAIL. The velocity map holds the content's PAST velocity (xy) and FUTURE velocity (zw). The exposure interval s in [sLo, sLo + 1] (frames of shutter) is
+// sampled along the true path of the motion: the half behind the pixel (s >= 0) runs along the past velocity, the half ahead (s < 0) along the future velocity.
+// Constant motion = one straight streak as before; a camera shake or a direction change = the trail bends through the real positions instead of cancelling out.
 vec3 moVectorBlur(vec2 q, vec3 pre, int cur, int w, int h, float diag, float jit) {
     if (MOS(9) < 0.5) return pre;                                    // no velocity map was built this frame (mo_vel would be stale)
     int vw = (w + 3) / 4;
     int vh = (h + 3) / 4;
-    vec2 v = moVelAt(q, vw, vh);                                     // pixels / frame
-    float sp = length(v);
+    vec4 vv = moVelAt(q, vw, vh);                                    // pixels / frame: past (xy), future (zw)
     float minSp = max(MOS(52), 0.0);
-    float knee = smoothstep(minSp * 0.5, minSp * 1.5 + 0.02, sp);    // no motion (or sensor-noise motion) -> exactly no smear
-    vec2 span = v * max(MOS(44), 0.0) * knee;                        // the whole trail in px = velocity * shutter
-    float Lpx = length(span);
+    float shutter = max(MOS(44), 0.0);
+    float kneeB = smoothstep(minSp * 0.5, minSp * 1.5 + 0.02, length(vv.xy));   // no motion (or sensor-noise motion) -> exactly no smear
+    float kneeF = smoothstep(minSp * 0.5, minSp * 1.5 + 0.02, length(vv.zw));
+    vec2 spanB = vv.xy * shutter * kneeB;                            // whole trail on the behind side in px (velocity * shutter)
+    vec2 spanF = vv.zw * shutter * kneeF;                            // whole trail on the ahead side
     float maxL = max(MOS(19), 0.0) * diag;                           // soft cap: a bad vector can never smear across the frame
-    if (maxL > 1.0 && Lpx > maxL) { span *= maxL / Lpx; Lpx = maxL; }
+    float LB = length(spanB);
+    float LF = length(spanF);
+    if (maxL > 1.0) {
+        if (LB > maxL) { spanB *= maxL / LB; LB = maxL; }
+        if (LF > maxL) { spanF *= maxL / LF; LF = maxL; }
+    }
+    float phase = clamp(MOS(45), -1.0, 1.0);
+    float sLo = -0.5 - 0.5 * phase;                                  // trail interval [sLo, sLo + 1]: -1 trailing, 0 centred, +1 leading
+    float sMax = max(abs(sLo), abs(sLo + 1.0));
+    float Lpx = LB * max(sLo + 1.0, 0.0) + LF * max(-sLo, 0.0);      // path length of the whole trail
     if (Lpx < 0.75) return pre;
 
     float sharp = clamp(MOS(24), 0.0, 1.0);
-    float phase = clamp(MOS(45), -1.0, 1.0);
-    float sLo = -0.5 - 0.5 * phase;                                  // trail interval [sLo, sLo + 1] along span: -1 trailing, 0 centred, +1 leading
-    float sMax = max(abs(sLo), abs(sLo + 1.0));
     float gap = mix(4.0, 2.0, sharp);
     int seff = int(clamp(max(floor(MOS(26) + 0.5), ceil(Lpx / gap)), 4.0, 128.0));
     float fe = mix(0.4, 4.0, clamp(MOS(34), 0.0, 1.0));
@@ -4338,6 +4349,7 @@ vec3 moVectorBlur(vec2 q, vec3 pre, int cur, int w, int h, float diag, float jit
         if (i >= seff) break;
         float s = sLo + (float(i) + jj) / float(seff);
         float wgt = moTrailW(abs(s) / sMax, fe, 0.12);
+        vec2 span = (s >= 0.0) ? spanB : spanF;
         vec3 c;
         if (disp > 0.001) {
             vec3 cr = moSampleSharp(cur, q + span * (s * (1.0 + disp)), w, h, sharp);
@@ -5066,6 +5078,138 @@ void executeEdgeFx(ivec2 coord, int width, int height) {
     out_pixels[idx * 2 + 1] = packHalf2x16(vec2(col.b, base.a));
 }
 
+// =============================================================================
+// PASS 35 + PASS 36 (batch 20): CHROMATIC ABERRATION (lens)
+//
+// Works on the FINISHED display image (display_px slot 0), after the Bevel / MathOps / 4-Way Gradient and before the dither, so the fringes also sit on glows and flares.
+// Pass 35 reads display_px and writes the result into out_pixels (scratch, 3 x 21-bit unorm packed in 2 words per pixel), pass 36 copies it back. Two passes because every
+// pixel reads its neighbours. The host runs them only when a layer has Chromatic Aberration on; the FIRST enabled layer with it on is used (its index arrives in u_srcW).
+//
+// LATERAL (what a real lens does): the colour spectrum is spread along the radius (or along one angle in Linear mode). The picture is sampled at up to 17 positions along
+// that line, each position weighted by a smooth red .. green .. blue spectral response, so a bright edge turns into a continuous rainbow fringe instead of three copies.
+// The shift grows from the "clear centre" towards the corners on the Curve you choose (that is the depth of the lens).
+// AXIAL (depth): red and blue are blurred by different radii around the sharp green, which puts purple / green fringes on contrast edges the way out-of-focus glass does.
+// CA(l, i): 0 on, 1 amount, 2 mode (0 radial, 1 linear), 3 angle, 4/5 centre x/y, 6 clear centre, 7 curve, 8 smoothness (sample count), 9 axial amount, 10 axial size,
+//           11 highlight bias, 12 red / blue balance, 13 fringe saturation, 14 mix.   Zero shift returns the input exactly (the spectral weights are normalised per channel).
+// =============================================================================
+vec3 caLoad(int idx) {
+    uint a = out_pixels[idx * 2];
+    uint b = out_pixels[idx * 2 + 1];
+    float r = float(a & 0x1FFFFFu);
+    float g = float((a >> 21u) | ((b & 0x3FFu) << 11u));
+    float bl = float((b >> 10u) & 0x1FFFFFu);
+    return vec3(r, g, bl) * (1.0 / 2097151.0);
+}
+
+void caStore(int idx, vec3 c) {
+    uvec3 q = uvec3(clamp(c, vec3(0.0), vec3(1.0)) * 2097151.0 + 0.5);
+    out_pixels[idx * 2] = q.x | (q.y << 21u);
+    out_pixels[idx * 2 + 1] = (q.y >> 11u) | (q.z << 10u);
+}
+
+// bilinear fetch of the display image, clamped at the borders
+vec3 caFetch(vec2 p, int width, int height) {
+    vec2 f = p - 0.5;
+    ivec2 i0 = ivec2(floor(f));
+    vec2 t = f - vec2(i0);
+    ivec2 mx = ivec2(width - 1, height - 1);
+    ivec2 a0 = clamp(i0, ivec2(0), mx);
+    ivec2 a1 = clamp(i0 + ivec2(1, 1), ivec2(0), mx);
+    vec3 c00 = display_px[a0.y * width + a0.x].rgb;
+    vec3 c10 = display_px[a0.y * width + a1.x].rgb;
+    vec3 c01 = display_px[a1.y * width + a0.x].rgb;
+    vec3 c11 = display_px[a1.y * width + a1.x].rgb;
+    return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
+}
+
+// spectral response of the three colour channels: u = 0 is the red end of the spectrum, u = 1 the blue end (smooth overlapping bands)
+vec3 caSpec(float u) {
+    float r = clamp(1.0 - u / 0.62, 0.0, 1.0);
+    float b = clamp(1.0 - (1.0 - u) / 0.62, 0.0, 1.0);
+    float g = clamp(1.0 - abs(u - 0.5) / 0.45, 0.0, 1.0);
+    return vec3(r * r * (3.0 - 2.0 * r), g * g * (3.0 - 2.0 * g), b * b * (3.0 - 2.0 * b));
+}
+
+void executeChroma(ivec2 coord, int width, int height) {
+    int pixelIndex = coord.y * width + coord.x;
+    int l = clamp(u_srcW, 0, 9);
+    vec3 base = display_px[pixelIndex].rgb;
+    vec2 res = vec2(float(width), float(height));
+    vec2 uv = (vec2(coord) + 0.5) / res;
+    float mixAmt = clamp(CA(l, 14), 0.0, 1.0) * clamp(layers[l].opacity, 0.0, 1.0) * placeMask(l, uv);
+    if (CA(l, 0) < 0.5 || mixAmt <= 0.0001) { caStore(pixelIndex, base); return; }
+
+    vec2 p = vec2(coord) + 0.5;
+    vec2 d = p - vec2(CA(l, 4), CA(l, 5)) * res;
+    float halfDiag = 0.5 * length(res);
+    float rn = length(d) / max(halfDiag, 1.0);
+    float amount = clamp(CA(l, 1), 0.0, 1.0);
+    float maxShift = amount * 0.020 * max(res.x, res.y);           // px at the far end of the curve (2 % of the long edge at full amount)
+    vec2 dir;
+    float prof;
+    if (CA(l, 2) < 0.5) {
+        dir = d / max(length(d), 1e-4);
+        float st = clamp(CA(l, 6), 0.0, 0.9);
+        float tt = clamp((rn - st) / max(1.0 - st, 0.05), 0.0, 1.6);
+        prof = pow(tt, clamp(CA(l, 7), 0.4, 4.0));
+    } else {
+        float a = radians(CA(l, 3));
+        dir = vec2(cos(a), sin(a));
+        prof = 1.0;
+    }
+
+    // ---- lateral: spectral spread along dir ----
+    vec3 lat = base;
+    if (maxShift > 0.01 && prof > 0.0) {
+        int n = 5 + int(clamp(CA(l, 8), 0.0, 1.0) * 12.0 + 0.5);   // 5 .. 17 wavelength samples
+        float bal = clamp(CA(l, 12), -1.0, 1.0);
+        vec3 acc = vec3(0.0);
+        vec3 wsum = vec3(0.0);
+        for (int i = 0; i < 17; i++) {
+            if (i >= n) break;
+            float u = (float(i) + 0.5) / float(n);
+            float k = 1.0 - 2.0 * u;                               // +1 red end .. -1 blue end
+            k = (k > 0.0) ? k * (1.0 + 0.6 * bal) : k * (1.0 - 0.6 * bal);
+            vec3 sw = caSpec(u);
+            acc += caFetch(p + dir * (maxShift * prof * k), width, height) * sw;
+            wsum += sw;
+        }
+        lat = acc / max(wsum, vec3(1e-4));
+    }
+
+    // ---- axial (depth): red and blue blurred by different radii around the sharp green ----
+    vec3 outc = lat;
+    float ax = clamp(CA(l, 9), 0.0, 1.0);
+    if (ax > 0.001) {
+        float rad = (0.8 + 5.0 * clamp(CA(l, 10), 0.0, 1.0)) * max(gRes, 1.0);
+        float sumR = base.r;
+        float sumB = base.b;
+        for (int k = 0; k < 8; k++) {
+            float ang = 0.7853982 * float(k) + 0.3;
+            vec2 o = vec2(cos(ang), sin(ang));
+            sumR += caFetch(p + o * (rad * 0.65), width, height).r;
+            sumB += caFetch(p + o * rad, width, height).b;
+        }
+        vec3 blurRB = vec3(sumR / 9.0, base.g, sumB / 9.0);
+        outc.r += (blurRB.r - base.r) * ax;
+        outc.b += (blurRB.b - base.b) * ax;
+    }
+
+    // ---- fringe strength shaping: saturation, highlight bias ----
+    vec3 fr = outc - base;
+    float fl = luma(fr);
+    fr = vec3(fl) + (fr - vec3(fl)) * clamp(CA(l, 13), 0.0, 2.0);
+    float hb = clamp(CA(l, 11), 0.0, 1.0);
+    float lm = max(max(base.r, max(base.g, base.b)), max(outc.r, max(outc.g, outc.b)));
+    fr *= mix(1.0, smoothstep(0.15, 0.9, lm), hb);
+    caStore(pixelIndex, mix(base, base + fr, mixAmt));
+}
+
+void executeChromaCopy(ivec2 coord, int width, int height) {
+    int pixelIndex = coord.y * width + coord.x;
+    display_px[pixelIndex] = vec4(caLoad(pixelIndex), 1.0);
+}
+
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_bandY);
     int width = u_passWidth;
@@ -5156,6 +5300,12 @@ void main() {
         return;
     } else if (u_passIndex == 34) {
         executeEdgeFx(coord, width, height);
+        return;
+    } else if (u_passIndex == 35) {
+        executeChroma(coord, width, height);
+        return;
+    } else if (u_passIndex == 36) {
+        executeChromaCopy(coord, width, height);
         return;
     } else if (u_passIndex == 22) {
         executeTimeSlice(coord, width, height);
@@ -5581,52 +5731,51 @@ void main() {
         }
 
         layerColor = fxMix(fxPreEb, layerColor, fx[i].f[13], 0.0);
-        // 8d. EDGE DARKEN (v2.5)
-        //     (1) line art: the ink core and its anti-aliased edge get a slight darkening (edgeDarken).
-        //     (2) inner spread: the FILL beside every line gets a soft blur that reaches inward from the line
-        //         (edgeDarkenBlur = strength and reach). It is a blur of the source around the pixel, so the dark of the
-        //         line bleeds a little way into the fill and any shading detail next to the line is softened;
-        //         the line itself stays crisp, and a gentle extra darkening fades inward with the same reach.
-        //         Applied as a DELTA so earlier grades survive.
+        // 8d. INNER EDGE GLOW (batch 20, replaces Edge Darken v2.5)
+        //     Finds the line art (dark ink strokes), measures how much ink sits around every fill pixel and lays a smooth dark glow on the INSIDE of the shape
+        //     beside the line. Ink coverage is gathered with a 36-tap spiral (a radial kernel (1 - r)^rolloff), so the glow is a continuous ramp that is strongest at
+        //     the line and rolls off to nothing at the reach, with no rings or steps. The reach is short by design (an edge effect, not a vignette).
+        //     Sliders: Edge Darken = strength, Edge Darken Inner Blur = reach; the rest is in IG(i, k) (class InnerGlow in lens_slots.dart):
+        //     0 ink level, 1 ink softness, 2 roll-off, 3 line core darkening, 4 glow colour (packed, black), 5 multiply vs mix, 6 highlight protect, 8 opacity.
+        //     Applied as a DELTA on layerColor, so earlier grades survive.
         if (L.edgeDarken > 0.01 || L.edgeDarkenBlur > 0.01) {
             float ed = clamp(L.edgeDarken, 0.0, 1.0);
             float eb = clamp(L.edgeDarkenBlur, 0.0, 1.0);
-            float selfInk = 1.0 - smoothstep(0.08, 0.28, luma(srcSrgb(coord)));
-            float innerEdge = smoothstep(0.10, 0.45, lineEdge);
+            float igOp = clamp(IG(i, 8), 0.0, 1.0);
+            float inkLo = clamp(IG(i, 0), 0.03, 0.55);
+            float inkHi = inkLo + clamp(IG(i, 1), 0.03, 0.40);
+            float selfInk = 1.0 - smoothstep(inkLo, inkHi, luma(srcSrgb(coord)));
 
-            // (1) line core + AA edge
-            layerColor *= 1.0 - max(innerEdge, selfInk * 0.8) * ed * 0.40;
+            // (1) line core: the ink itself gets a little darker
+            layerColor *= 1.0 - selfInk * ed * clamp(IG(i, 3), 0.0, 1.0) * igOp * 0.9;
 
-            // (2) inner spread. 12 rays x 5 steps looking for ink; reach grows with the slider.
-            if (selfInk < 0.85 && (eb > 0.01 || ed > 0.30)) {
-                float reach = (2.5 + 11.0 * max(eb, 0.25 * ed)) * resScale;
-                vec3 accAll = src0;
-                float wAll = 1.0;
-                vec3 accFill = src0;
-                float wFill = 1.0;
-                float prox = 0.0;                                   // 0 = no ink in reach, 1 = ink right next to us
-                for (int rI = 0; rI < 12; rI++) {
-                    float ang = (float(rI) + 0.5) * 0.52359878;      // 30 degree spacing, offset so axes are not special
-                    vec2 dir = vec2(cos(ang), sin(ang));
-                    for (int sI = 0; sI < 5; sI++) {
-                        float fr = float(sI + 1) / 5.0;
-                        vec3 sS = srcSrgb(coord + ivec2(round(dir * (reach * fr))));
-                        vec3 sL = srgbToLinear(sS);
-                        float ink = 1.0 - smoothstep(0.08, 0.28, luma(sS));
-                        float wd = 1.0 - 0.55 * fr;                  // nearer taps count more
-                        accAll += sL * wd;
-                        wAll += wd;
-                        accFill += sL * wd * (1.0 - ink);
-                        wFill += wd * (1.0 - ink);
-                        prox = max(prox, ink * (1.0 - 0.8 * (fr - 0.2)));   // max, not mean: a thin line still counts fully
-                    }
+            // (2) inner glow on the fill beside the line
+            if (selfInk < 0.85 && igOp > 0.001 && (ed > 0.01)) {
+                float reach = (1.5 + 13.5 * eb) * resScale;
+                float pw = clamp(IG(i, 2), 0.5, 4.0);
+                float sumInk = 0.0;
+                float sumW = 0.0;
+                for (int kI = 0; kI < 36; kI++) {
+                    float fr = (float(kI) + 0.5) / 36.0;
+                    float rr = sqrt(fr);                                   // equal area per tap (Vogel disk)
+                    float ang = float(kI) * 2.39996323;                    // golden angle
+                    vec2 o = vec2(cos(ang), sin(ang)) * (rr * reach);
+                    vec3 sS = srcSrgb(coord + ivec2(round(o)));
+                    float ink = 1.0 - smoothstep(inkLo, inkHi, luma(sS));
+                    float wk = pow(max(1.0 - rr, 0.0), pw) + 0.02;
+                    sumInk += ink * wk;
+                    sumW += wk;
                 }
-                vec3 blurAll = accAll / wAll;
-                vec3 blurFill = accFill / wFill;
-                vec3 soft = mix(blurFill, blurAll, 0.60);            // 40% pure fill softening, 60% line darkness bleeding in
-                float band = smoothstep(0.0, 0.55, prox) * (1.0 - selfInk) * (1.0 - innerEdge * 0.35);
-                layerColor += (soft - src0) * band * eb * 0.90;
-                layerColor *= 1.0 - band * band * ed * 0.18;         // gentle inward darkening that fades with distance
+                float cov = sumInk / max(sumW, 1e-4);                      // ink coverage around this pixel, 0 .. 1
+                float gl = 1.0 - exp(-cov * 7.0);                          // saturating: a thin line still gives a full-strength glow right beside it
+                gl = gl * gl * (3.0 - 2.0 * gl);                           // C1 start and end
+                gl *= (1.0 - selfInk);
+                float hl = smoothstep(0.30, 0.85, luma(layerColor));       // bright fills keep their shine
+                float amt = clamp(gl * ed * igOp * 0.95 * (1.0 - clamp(IG(i, 6), 0.0, 1.0) * hl * 0.8), 0.0, 1.0);
+                vec3 gcol = packedRGB(IG(i, 4));                           // glow colour, black by default (linear)
+                vec3 viaMul = layerColor * mix(vec3(1.0), gcol, amt);      // darkens / tints and keeps the shading detail
+                vec3 viaMix = mix(layerColor, gcol, amt);                  // flat colour towards the glow colour
+                layerColor = mix(viaMix, viaMul, clamp(IG(i, 5), 0.0, 1.0));
             }
         }
 
