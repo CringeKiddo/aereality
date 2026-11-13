@@ -4043,15 +4043,18 @@ void moWrite(int plane, ivec2 c, int gw, int gh, vec3 B, vec3 F) {
 }
 
 // Patch SAD: the current frame's 6 x 6 luma patch (moRef, tap spacing ts) against frame nSlot displaced by d (displacement current -> neighbour).
-float moPatchSad(int nSlot, vec2 pc, vec2 d, float ts, int w, int h) {
+// pn = taps per side (6, from MOS(25) so the loop bound is a RUNTIME value: a constant bound lets the driver unroll the 36 bilinear taps into every one of the ~84 calls below,
+// and that bloated the one-time pipeline compile until the phone ran out of memory).
+float moPatchSad(int nSlot, vec2 pc, vec2 d, float ts, int pn, int w, int h) {
     float s = 0.0;
-    for (int j = 0; j < 6; j++) {
-        for (int i = 0; i < 6; i++) {
-            vec2 o = (vec2(float(i), float(j)) - 2.5) * ts;
+    float c0 = (float(pn) - 1.0) * 0.5;
+    for (int j = 0; j < pn; j++) {
+        for (int i = 0; i < pn; i++) {
+            vec2 o = (vec2(float(i), float(j)) - c0) * ts;
             s += abs(moRef[j * 6 + i] - moGLumBi(nSlot, pc + o + d, w, h));
         }
     }
-    return s * (1.0 / 36.0);
+    return s / float(pn * pn);
 }
 
 // Batch 20: DENSE FLOW. The old pass trusted the global spin / zoom fit and only searched a few px around it, so a plain x / y move of the picture (or of one
@@ -4062,19 +4065,24 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
     int cur = int(MOS(6));
     vec2 pc = min((vec2(cell) + 0.5) * float(C), vec2(float(w - 1), float(h - 1)));
     float ts = max(float(C) * 0.25, 2.0);
+    int pn = clamp(int(MOS(25) + 0.5), 2, 6);
+    float pc0 = (float(pn) - 1.0) * 0.5;
     float mean = 0.0;
-    for (int j = 0; j < 6; j++) {
-        for (int i = 0; i < 6; i++) {
-            vec2 o = (vec2(float(i), float(j)) - 2.5) * ts;
+    for (int j = 0; j < pn; j++) {
+        for (int i = 0; i < pn; i++) {
+            vec2 o = (vec2(float(i), float(j)) - pc0) * ts;
             float v = moGLumBi(cur, pc + o, w, h);
             moRef[j * 6 + i] = v;
             mean += v;
         }
     }
-    mean /= 36.0;
+    float nTapsF = float(pn * pn);
+    mean /= nTapsF;
     float tex = 0.0;
-    for (int k = 0; k < 36; k++) tex += abs(moRef[k] - mean);
-    tex /= 36.0;
+    for (int j = 0; j < pn; j++) {
+        for (int i = 0; i < pn; i++) tex += abs(moRef[j * 6 + i] - mean);
+    }
+    tex /= nTapsF;
 
     float R = clamp(MOS(13), 4.0, 40.0);
     float st0 = clamp(exp2(floor(log2(R / 1.5))), 2.0, 16.0);
@@ -4082,29 +4090,31 @@ void executeMotionFlow(ivec2 cell, int gw, int gh, int w, int h) {
 
     vec3 outB = vec3(0.0);
     vec3 outF = vec3(0.0);
-    for (int dirI = 0; dirI < 2; dirI++) {
+    int nDirs = (MOS(10) >= 0.5) ? 2 : 1;                           // runtime bound (see moPatchSad)
+    int nSteps = clamp(int(MOS(15) + 0.5), 1, 5);
+    int nbR = clamp(int(MOS(14) + 0.5), 1, 2);
+    for (int dirI = 0; dirI < nDirs; dirI++) {
         int nSlot = (dirI == 0) ? int(MOS(7)) : int(MOS(8));
         if (nSlot < 0) continue;
-        if (dirI == 1 && MOS(10) < 0.5) continue;
         MoT T = moLoadT(dirI == 0 ? MO_TPREV : MO_TNEXT);
         vec2 g0 = moMapT(T, pc) - pc;
-        float s0 = moPatchSad(nSlot, pc, vec2(0.0), ts, w, h);
+        float s0 = moPatchSad(nSlot, pc, vec2(0.0), ts, pn, w, h);
         float bestS = s0;
         vec2 bestD = vec2(0.0);
         if (dot(g0, g0) > 0.04) {
-            float sg = moPatchSad(nSlot, pc, g0, ts, w, h) + biasNZ;
+            float sg = moPatchSad(nSlot, pc, g0, ts, pn, w, h) + biasNZ;
             if (sg < bestS) { bestS = sg; bestD = g0; }
         }
         if (s0 > 0.010) {                                   // standing still already explains it (static or flat): nothing to search
             float st = st0;
-            for (int si = 0; si < 5; si++) {
+            for (int si = 0; si < nSteps; si++) {
                 if (st < 1.0) break;
                 vec2 c0 = bestD;
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -nbR; dy <= nbR; dy++) {
+                    for (int dx = -nbR; dx <= nbR; dx++) {
                         if (dx == 0 && dy == 0) continue;
-                        vec2 d = c0 + vec2(float(dx), float(dy)) * st;
-                        float sc = moPatchSad(nSlot, pc, d, ts, w, h) + biasNZ;
+                        vec2 d = c0 + vec2(float(dx), float(dy)) * (st / float(nbR));
+                        float sc = moPatchSad(nSlot, pc, d, ts, pn, w, h) + biasNZ;
                         if (sc < bestS) { bestS = sc; bestD = d; }
                     }
                 }
@@ -5165,8 +5175,7 @@ void executeChroma(ivec2 coord, int width, int height) {
         float bal = clamp(CA(l, 12), -1.0, 1.0);
         vec3 acc = vec3(0.0);
         vec3 wsum = vec3(0.0);
-        for (int i = 0; i < 17; i++) {
-            if (i >= n) break;
+        for (int i = 0; i < n; i++) {                              // n is a runtime value: the compiler does not unroll it
             float u = (float(i) + 0.5) / float(n);
             float k = 1.0 - 2.0 * u;                               // +1 red end .. -1 blue end
             k = (k > 0.0) ? k * (1.0 + 0.6 * bal) : k * (1.0 - 0.6 * bal);
@@ -5184,13 +5193,14 @@ void executeChroma(ivec2 coord, int width, int height) {
         float rad = (0.8 + 5.0 * clamp(CA(l, 10), 0.0, 1.0)) * max(gRes, 1.0);
         float sumR = base.r;
         float sumB = base.b;
-        for (int k = 0; k < 8; k++) {
-            float ang = 0.7853982 * float(k) + 0.3;
+        int na = clamp(int(CA(l, 15) + 0.5), 4, 8);                // ring taps (8 by default), runtime bound
+        for (int k = 0; k < na; k++) {
+            float ang = (6.2831853 / float(na)) * float(k) + 0.3;
             vec2 o = vec2(cos(ang), sin(ang));
             sumR += caFetch(p + o * (rad * 0.65), width, height).r;
             sumB += caFetch(p + o * rad, width, height).b;
         }
-        vec3 blurRB = vec3(sumR / 9.0, base.g, sumB / 9.0);
+        vec3 blurRB = vec3(sumR / float(na + 1), base.g, sumB / float(na + 1));
         outc.r += (blurRB.r - base.r) * ax;
         outc.b += (blurRB.b - base.b) * ax;
     }
@@ -5755,8 +5765,9 @@ void main() {
                 float pw = clamp(IG(i, 2), 0.5, 4.0);
                 float sumInk = 0.0;
                 float sumW = 0.0;
-                for (int kI = 0; kI < 36; kI++) {
-                    float fr = (float(kI) + 0.5) / 36.0;
+                int nTaps = clamp(int(IG(i, 9) + 0.5), 8, 48);             // runtime bound (36 by default): a constant bound is unrolled by the GPU compiler
+                for (int kI = 0; kI < nTaps; kI++) {
+                    float fr = (float(kI) + 0.5) / float(nTaps);
                     float rr = sqrt(fr);                                   // equal area per tap (Vogel disk)
                     float ang = float(kI) * 2.39996323;                    // golden angle
                     vec2 o = vec2(cos(ang), sin(ang)) * (rr * reach);
