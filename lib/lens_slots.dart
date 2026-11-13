@@ -32,7 +32,7 @@ class ChromaAb {
   static const int layers = 10;
 
   static const int on = 0, amount = 1, mode = 2, angle = 3, cx = 4, cy = 5, start = 6, curve = 7, smooth = 8, axial = 9, axialSize = 10,
-      hiBias = 11, balance = 12, fringeSat = 13, mix = 14;
+      hiBias = 11, balance = 12, fringeSat = 13, mix = 14, ringTaps = 15; // ringTaps: taps of the depth-fringe blur ring (a runtime loop bound in the shader)
   static const List<String> modes = ['Radial (lens)', 'Linear (angle)'];
 
   static List<double> defaults() {
@@ -51,6 +51,7 @@ class ChromaAb {
     f[balance] = 0.0;
     f[fringeSat] = 1.0;
     f[mix] = 1.0;
+    f[ringTaps] = 8.0;
     return f;
   }
 
@@ -71,6 +72,7 @@ class ChromaAb {
     d[balance] = _c(d[balance], -1.0, 1.0);
     d[fringeSat] = _c(d[fringeSat], 0.0, 2.0);
     d[mix] = _c(d[mix], 0.0, 1.0);
+    d[ringTaps] = _c(d[ringTaps].roundToDouble(), 4.0, 8.0);
     return d;
   }
 
@@ -93,7 +95,7 @@ class InnerGlow {
   static const int packBase = 9376; // + layer * 16
   static const int layers = 10;
 
-  static const int inkLevel = 0, inkSoft = 1, rolloff = 2, core = 3, colour = 4, multiply = 5, hiProtect = 6, opacity = 8;
+  static const int inkLevel = 0, inkSoft = 1, rolloff = 2, core = 3, colour = 4, multiply = 5, hiProtect = 6, opacity = 8, taps = 9; // taps: spiral taps of the glow (a runtime loop bound in the shader)
 
   static List<double> defaults() {
     final f = List<double>.filled(size, 0.0);
@@ -105,11 +107,13 @@ class InnerGlow {
     f[multiply] = 0.80;
     f[hiProtect] = 0.30;
     f[opacity] = 1.0;
+    f[taps] = 36.0;
     return f;
   }
 
   static List<double> sanitize(List<double>? src) {
     final d = _fix(src, defaults());
+    d[taps] = _c(d[taps].roundToDouble(), 8.0, 48.0);
     d[inkLevel] = _c(d[inkLevel], 0.03, 0.55);
     d[inkSoft] = _c(d[inkSoft], 0.03, 0.40);
     d[rolloff] = _c(d[rolloff], 0.5, 4.0);

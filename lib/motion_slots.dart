@@ -239,6 +239,9 @@ class MotionS {
     u[b + needFlowSlot] = plan.needFlow ? 1.0 : 0.0;
     u[b + needFwdSlot] = (plan.needFlow && plan.needFwd && plan.nextSlot >= 0) ? 1.0 : 0.0;
     u[b + cell] = 16.0;
+    u[b + 14] = 1.0; // batch 20: dense flow search neighbour radius (runtime loop bound in the shader)
+    u[b + 15] = 5.0; // batch 20: dense flow search steps (16, 8, 4, 2, 1 px)
+    u[b + 25] = 6.0; // batch 20: dense flow patch taps per side
     final longEdge = math.max(w, h);
     u[b + flowRange] = (longEdge / 60.0).round().clamp(8, 40).toDouble(); // batch 20: search range of the dense flow (log search 16, 8, 4, 2, 1 px steps: about +-31 px per frame at 2K); was 4..12
 
