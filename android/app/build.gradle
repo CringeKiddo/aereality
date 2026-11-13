@@ -14,10 +14,6 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     defaultConfig {
         applicationId "com.aereality"
         minSdk 26
@@ -57,10 +53,14 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17   // replaces kotlinOptions { jvmTarget = "17" } (removed in Kotlin 2.2)
+    }
+}
+
 flutter {
     source '../..'
 }
 
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
-}
+// (the old kotlin-stdlib:1.9.22 pin is gone: the Kotlin plugin adds the matching stdlib itself)
